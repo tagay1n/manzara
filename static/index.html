@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Manzara</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-wrap">
+        <div class="brand">Manzara</div>
+        <div class="subtitle">Bird-eye view of Tatar content pipelines</div>
+      </div>
+      <div class="top-controls">
+        <div id="global-status" class="status-pill">Active: 0</div>
+        <button
+          id="stop-all-btn"
+          class="icon-btn amber"
+          title="Graceful stop all running tasks; press again to force stop"
+          aria-label="Stop all tasks"
+          disabled
+        >
+          <i data-lucide="square"></i>
+        </button>
+      </div>
+    </header>
+
+    <main class="dashboard">
+      <section id="panel-grid" class="panel-grid"></section>
+
+      <section class="runs-card">
+        <h2>Recent Runs</h2>
+        <div id="runs-list" class="runs-list"></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>manzara v0.1.0</span>
+      <span id="last-event">Last event: n/a</span>
+    </footer>
+
+    <dialog id="log-dialog" class="log-dialog">
+      <div class="log-head">
+        <h3 id="log-title">Run Logs</h3>
+        <button id="close-logs" class="icon-btn" title="Close logs" aria-label="Close logs">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <pre id="log-content" class="log-content"></pre>
+      <div class="log-controls">
+        <button id="copy-logs" class="small-btn">Copy</button>
+      </div>
+    </dialog>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
