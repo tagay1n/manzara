@@ -36,12 +36,6 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-## Test Setup
-
-```bash
-.venv/bin/pip install -r requirements-dev.txt
-```
-
 Run tests:
 
 ```bash
