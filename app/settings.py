@@ -15,9 +15,19 @@ class Settings:
 
     db_path: Path
     shayan: ShayanSettings
+    scheduler_enabled: bool
 
 
 def load_settings() -> Settings:
     """Load runtime settings from env with practical local defaults."""
     db_path = Path(os.environ.get("MANZARA_DB_PATH", "data/manzara.db")).expanduser()
-    return Settings(db_path=db_path, shayan=load_shayan_settings())
+    scheduler_enabled = os.environ.get("MANZARA_ENABLE_SCHEDULER", "1").strip() not in {
+        "0",
+        "false",
+        "False",
+    }
+    return Settings(
+        db_path=db_path,
+        shayan=load_shayan_settings(),
+        scheduler_enabled=scheduler_enabled,
+    )

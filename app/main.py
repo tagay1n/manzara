@@ -4,22 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
 from app.modules.shayan.panel import build_shayan_panel
 from app.modules.shayan.tasks import shayan_task_definitions
+from app.modules.shayan.workflow import (
+    shayan_workflow_bundle,
+)
 from app.settings import Settings, load_settings
 from app.tasks import TaskRunner
+from app.workflows import WorkflowService
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = APP_ROOT / "static"
+_TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
 class AppState:
@@ -29,6 +35,11 @@ class AppState:
         self.settings = settings
         self.db = Database(settings.db_path)
         self.runner = TaskRunner(self.db)
+        self.workflow_service = WorkflowService(
+            self.db,
+            self.runner,
+            shayan_snapshot_file=settings.shayan.latest_snapshot_file,
+        )
 
 
 settings = load_settings()
@@ -39,18 +50,39 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.on_event("startup")
 def on_startup() -> None:
-    """Initialize schema and seed known task definitions."""
+    """Initialize schema and seed known task/workflow definitions."""
     state.db.init_schema()
     state.db.seed_tasks(shayan_task_definitions(state.settings.shayan))
-    recovered = state.db.recover_active_runs()
-    if recovered > 0:
+    state.db.seed_workflow_bundle(shayan_workflow_bundle(state.settings.shayan))
+
+    recovered_runs = state.db.recover_active_runs()
+    if recovered_runs > 0:
         state.db.insert_event(
             "system.recovery",
             task_id=None,
             run_id=None,
             panel_id=None,
-            payload={"recovered_runs": recovered},
+            payload={"recovered_runs": recovered_runs},
         )
+
+    recovered_workflows = state.db.recover_active_workflow_runs()
+    if recovered_workflows > 0:
+        state.db.insert_event(
+            "system.workflow_recovery",
+            task_id=None,
+            run_id=None,
+            panel_id=None,
+            payload={"recovered_workflow_runs": recovered_workflows},
+        )
+
+    if state.settings.scheduler_enabled:
+        state.workflow_service.start()
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    """Stop background scheduler worker on app shutdown."""
+    state.workflow_service.stop()
 
 
 @app.get("/")
@@ -91,10 +123,12 @@ def build_dashboard_payload() -> Dict[str, Any]:
             }
         )
 
+    workflows = state.db.list_workflows_with_latest_run(panel_id="shayan")
     shayan_panel = build_shayan_panel(
         db=state.db,
         shayan=state.settings.shayan,
         tasks=tasks_by_panel.get("shayan", []),
+        workflows=workflows,
     )
 
     active_runs = state.db.list_active_runs()
@@ -106,15 +140,27 @@ def build_dashboard_payload() -> Dict[str, Any]:
             else "armed"
         )
 
+    active_workflow_runs = len(
+        [
+            row
+            for row in workflows
+            if row.get("run_status") in {"starting", "running"}
+        ]
+    )
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "global": {
             "active_tasks": len(active_runs),
+            "active_workflows": active_workflow_runs,
             "failed_runs": len([r for r in state.db.list_recent_runs(50) if r["status"] == "failed"]),
             "stop_all_state": stop_all_state,
         },
         "panels": [shayan_panel],
         "recent_runs": state.db.list_recent_runs(20),
+        "scheduler": {
+            "enabled": state.settings.scheduler_enabled,
+        },
     }
 
 
@@ -133,6 +179,85 @@ def toggle_task(task_id: str) -> JSONResponse:
 
     result = state.runner.toggle_task(task_id)
     return JSONResponse(result)
+
+
+@app.post("/api/workflows/{workflow_id}/run")
+def run_workflow_now(workflow_id: str) -> JSONResponse:
+    """Trigger one workflow immediately."""
+    workflow = state.db.get_workflow(workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    result = state.workflow_service.trigger_workflow(
+        workflow_id,
+        trigger_source="manual",
+    )
+    return JSONResponse(result)
+
+
+@app.get("/api/workflows/{workflow_id}")
+def get_workflow(workflow_id: str) -> JSONResponse:
+    """Get one workflow with schedule and steps."""
+    workflow = state.db.get_workflow(workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    return JSONResponse(
+        {
+            "workflow": workflow,
+            "schedule": state.db.get_schedule_by_workflow(workflow_id),
+            "steps": state.db.list_workflow_steps(workflow_id),
+            "recent_runs": state.db.list_recent_workflow_runs(workflow_id, limit=10),
+        }
+    )
+
+
+@app.patch("/api/schedules/{schedule_id}")
+def update_schedule(schedule_id: str, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    """Patch schedule config and recalculate next run time."""
+    schedule = state.db.get_schedule(schedule_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    updates: Dict[str, Any] = {}
+    if "enabled" in payload:
+        raw_enabled = payload["enabled"]
+        if isinstance(raw_enabled, bool):
+            updates["enabled"] = raw_enabled
+        elif isinstance(raw_enabled, (int, float)):
+            updates["enabled"] = bool(raw_enabled)
+        elif isinstance(raw_enabled, str):
+            updates["enabled"] = raw_enabled.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            raise HTTPException(status_code=400, detail="enabled must be a boolean-like value")
+
+    if "day_of_week" in payload:
+        try:
+            day = int(payload["day_of_week"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="day_of_week must be an integer 1..7")
+        if day < 1 or day > 7:
+            raise HTTPException(status_code=400, detail="day_of_week must be an integer 1..7")
+        updates["day_of_week"] = day
+
+    if "time_of_day" in payload:
+        value = str(payload["time_of_day"]).strip()
+        if not _TIME_PATTERN.match(value):
+            raise HTTPException(status_code=400, detail="time_of_day must match HH:MM (24h)")
+        updates["time_of_day"] = value
+
+    if "timezone" in payload:
+        timezone_name = str(payload["timezone"]).strip() or "UTC"
+        updates["timezone"] = timezone_name
+
+    if not updates:
+        return JSONResponse({"schedule": schedule})
+
+    updated = state.workflow_service.configure_schedule(schedule_id, updates)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    return JSONResponse({"schedule": updated})
 
 
 @app.post("/api/system/stop-all")

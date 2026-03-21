@@ -8,6 +8,7 @@ This first MVP slice includes:
 - Start -> graceful stop -> force stop toggles.
 - Header-level two-step stop-all control.
 - Live updates via SSE (`/api/events/stream`).
+- Weekly workflow scheduler (`scan -> conditional download`).
 
 ## Implemented MVP Scope
 
@@ -15,6 +16,8 @@ This first MVP slice includes:
 - Panel: `Shayan`
 - Task: `scan for changes`
 - Task: `download new`
+- Workflow: `Weekly Sync` (`shayan.weekly_sync`)
+- Schedule: weekly, overlap skip, catch-up once after downtime
 - Run history + live logs
 - Basic metrics from Shayan artifacts (`status.json`, `last-main-run-summary.json`)
 
@@ -55,6 +58,7 @@ Open:
 
 Environment variables:
 - `MANZARA_DB_PATH` (default: `data/manzara.db`)
+- `MANZARA_ENABLE_SCHEDULER` (default: `1`; set `0` to disable scheduled triggers)
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
 - `SHAYAN_OUTPUT_PATH` (default: `/home/tans1q/video-archive`)
 
@@ -63,6 +67,9 @@ Environment variables:
 - `GET /api/health`
 - `GET /api/dashboard`
 - `POST /api/tasks/{task_id}/toggle`
+- `POST /api/workflows/{workflow_id}/run`
+- `GET /api/workflows/{workflow_id}`
+- `PATCH /api/schedules/{schedule_id}`
 - `POST /api/system/stop-all`
 - `GET /api/runs/{run_id}/logs`
 - `GET /api/events/stream`

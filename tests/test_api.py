@@ -6,6 +6,8 @@ import asyncio
 import json
 import time
 
+from app.modules.shayan.workflow import SHAYAN_WEEKLY_SCHEDULE_ID, SHAYAN_WEEKLY_WORKFLOW_ID
+
 
 def _wait_for_status(main_app, run_id: int, expected: set[str], timeout_seconds: float = 4.0):
     deadline = time.time() + timeout_seconds
@@ -27,7 +29,48 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     panel = payload["panels"][0]
     assert panel["panel_id"] == "shayan"
     task_ids = {task["task_id"] for task in panel["tasks"]}
-    assert task_ids == {"shayan.quick", "shayan.long", "shayan.ignore_sigint"}
+    assert {"shayan.quick", "shayan.long", "shayan.ignore_sigint"} <= task_ids
+    assert {"shayan.scan_changes", "shayan.download_new"} <= task_ids
+    assert panel["workflows"][0]["workflow_id"] == SHAYAN_WEEKLY_WORKFLOW_ID
+
+
+def test_update_schedule_and_recompute_next_run(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.patch(
+        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
+        json={"enabled": True, "day_of_week": 5, "time_of_day": "10:45"},
+    )
+    assert response.status_code == 200
+    schedule = response.json()["schedule"]
+    assert schedule["enabled"] is True
+    assert int(schedule["day_of_week"]) == 5
+    assert schedule["time_of_day"] == "10:45"
+    assert schedule["next_run_at"] is not None
+
+
+def test_workflow_run_skips_download_when_no_new(
+    test_client,
+    wait_for_terminal_workflow_run,
+) -> None:
+    client, main_app = test_client
+
+    response = client.post(f"/api/workflows/{SHAYAN_WEEKLY_WORKFLOW_ID}/run")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "start"
+
+    workflow_run_id = int(payload["workflow_run"]["workflow_run_id"])
+    workflow_run = wait_for_terminal_workflow_run(main_app, workflow_run_id)
+    assert workflow_run["status"] == "completed"
+    assert int(workflow_run["context"].get("scan_new_items_count", -1)) == 0
+
+    step_runs = main_app.state.db.list_workflow_step_runs(workflow_run_id)
+    assert len(step_runs) == 2
+    assert step_runs[0]["task_id"] == "shayan.scan_changes"
+    assert step_runs[0]["status"] == "completed"
+    assert step_runs[1]["task_id"] == "shayan.download_new"
+    assert step_runs[1]["status"] == "skipped"
 
 
 def test_toggle_task_start_and_complete(test_client, wait_for_terminal_run) -> None:

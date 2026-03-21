@@ -6,6 +6,16 @@ const state = {
   logPollTimer: null,
 };
 
+const WEEKDAY_LABELS = {
+  1: "Mon",
+  2: "Tue",
+  3: "Wed",
+  4: "Thu",
+  5: "Fri",
+  6: "Sat",
+  7: "Sun",
+};
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -43,6 +53,19 @@ function cssName(name, fallback = "unknown") {
   const value = String(name || "").trim().toLowerCase();
   if (!value) return fallback;
   return value.replace(/[^a-z0-9_-]+/g, "-");
+}
+
+function isActiveStatus(status) {
+  return (
+    status === "starting" ||
+    status === "running" ||
+    status === "stopping_graceful" ||
+    status === "stopping_force"
+  );
+}
+
+function isWorkflowActive(status) {
+  return status === "starting" || status === "running";
 }
 
 function taskControlModel(task) {
@@ -99,7 +122,198 @@ function taskControlModel(task) {
   };
 }
 
+function workflowStatusModel(workflow) {
+  const status = workflow.run?.status || "idle";
+  if (status === "running" || status === "starting") {
+    return {
+      label: status === "starting" ? "Starting" : "Running",
+      className: "state-running",
+      runDisabled: true,
+      icon: "loader-circle",
+    };
+  }
+  if (status === "failed") {
+    return {
+      label: "Failed",
+      className: "state-attention",
+      runDisabled: false,
+      icon: "circle-alert",
+    };
+  }
+  if (status === "completed") {
+    return {
+      label: "Completed",
+      className: "state-healthy",
+      runDisabled: false,
+      icon: "circle-check",
+    };
+  }
+  if (status === "stopped") {
+    return {
+      label: "Stopped",
+      className: "state-attention",
+      runDisabled: false,
+      icon: "square",
+    };
+  }
+  return {
+    label: "Idle",
+    className: "",
+    runDisabled: false,
+    icon: "play",
+  };
+}
+
+function panelHealth(panel) {
+  const counts = panel.status_counts || {};
+  const active =
+    (counts.starting || 0) +
+    (counts.running || 0) +
+    (counts.stopping_graceful || 0) +
+    (counts.stopping_force || 0);
+  const failed = counts.failed || 0;
+
+  if (active > 0) {
+    return {
+      label: "Running",
+      className: "state-running",
+      active,
+      failed,
+    };
+  }
+  if (failed > 0) {
+    return {
+      label: "Attention",
+      className: "state-attention",
+      active,
+      failed,
+    };
+  }
+  return {
+    label: "Healthy",
+    className: "state-healthy",
+    active,
+    failed,
+  };
+}
+
+function renderWorkflowCard(workflow) {
+  const model = workflowStatusModel(workflow);
+  const schedule = workflow.schedule;
+
+  const scheduleEnabled = Boolean(schedule?.enabled);
+  const scheduleId = schedule?.schedule_id || "";
+  const dayOfWeek = Number(schedule?.day_of_week || 1);
+  const timeOfDay = schedule?.time_of_day || "03:00";
+  const timezone = schedule?.timezone || "UTC";
+
+  const scheduleToggleTitle = scheduleEnabled
+    ? "Disable weekly schedule"
+    : "Enable weekly schedule";
+
+  const weekdayOptions = Object.entries(WEEKDAY_LABELS)
+    .map(([value, label]) => {
+      const selected = Number(value) === dayOfWeek ? "selected" : "";
+      return `<option value="${value}" ${selected}>${label}</option>`;
+    })
+    .join("");
+
+  return `
+    <section class="workflow-card workflow-status-${cssName(workflow.run?.status || "idle")}">
+      <div class="workflow-card-head">
+        <div>
+          <div class="workflow-title">${escapeHtml(workflow.title)}</div>
+          <div class="workflow-description">${escapeHtml(workflow.description || "")}</div>
+        </div>
+        <div class="panel-pill ${model.className}">${escapeHtml(model.label)}</div>
+      </div>
+
+      <div class="workflow-meta-grid">
+        <div><span class="meta-k">Last Run</span><span class="meta-v">${escapeHtml(formatDateTime(workflow.run?.finished_at || workflow.run?.started_at))}</span></div>
+        <div><span class="meta-k">Next Run</span><span class="meta-v">${escapeHtml(formatDateTime(schedule?.next_run_at))}</span></div>
+      </div>
+
+      <div class="workflow-controls">
+        <button
+          class="icon-btn workflow-run-now ${model.runDisabled ? "" : "active"}"
+          title="Run workflow now"
+          aria-label="Run workflow now"
+          data-workflow-id="${escapeHtml(workflow.workflow_id)}"
+          ${model.runDisabled ? "disabled" : ""}
+        >
+          <i data-lucide="${model.icon}"></i>
+        </button>
+
+        <button
+          class="icon-btn schedule-toggle ${scheduleEnabled ? "active" : ""}"
+          title="${escapeHtml(scheduleToggleTitle)}"
+          aria-label="${escapeHtml(scheduleToggleTitle)}"
+          data-schedule-id="${escapeHtml(scheduleId)}"
+          data-schedule-enabled="${scheduleEnabled ? "1" : "0"}"
+          ${schedule ? "" : "disabled"}
+        >
+          <i data-lucide="${scheduleEnabled ? "calendar-check" : "calendar"}"></i>
+        </button>
+
+        <select class="schedule-day" data-schedule-id="${escapeHtml(scheduleId)}" ${schedule ? "" : "disabled"}>
+          ${weekdayOptions}
+        </select>
+
+        <input
+          type="time"
+          class="schedule-time"
+          value="${escapeHtml(timeOfDay)}"
+          data-schedule-id="${escapeHtml(scheduleId)}"
+          ${schedule ? "" : "disabled"}
+        />
+
+        <button
+          class="icon-btn schedule-save"
+          title="Save schedule"
+          aria-label="Save schedule"
+          data-schedule-id="${escapeHtml(scheduleId)}"
+          ${schedule ? "" : "disabled"}
+        >
+          <i data-lucide="save"></i>
+        </button>
+      </div>
+
+      <div class="workflow-footnote">Weekly in ${escapeHtml(timezone)} | overlap: skip | catch-up: once</div>
+    </section>
+  `;
+}
+
 function renderPanel(panel) {
+  const health = panelHealth(panel);
+  const scanActive = panel.tasks.some(
+    (task) => task.task_type === "scan" && isActiveStatus(task.run?.status || "idle")
+  );
+  const downloadActive = panel.tasks.some(
+    (task) =>
+      task.task_type === "download" && isActiveStatus(task.run?.status || "idle")
+  );
+
+  const workflowHtml = `
+    <div class="workflow">
+      <div class="workflow-step ${scanActive ? "active" : ""}">
+        <span class="step-dot"></span>
+        <span class="step-label">Catalog Scan</span>
+      </div>
+      <div class="workflow-step ${downloadActive ? "active" : ""}">
+        <span class="step-dot"></span>
+        <span class="step-label">Download Sync</span>
+      </div>
+      <div class="workflow-step">
+        <span class="step-dot"></span>
+        <span class="step-label">Archive Review</span>
+      </div>
+      <div class="workflow-step">
+        <span class="step-dot"></span>
+        <span class="step-label">Distribution</span>
+      </div>
+    </div>
+  `;
+
   const tasksHtml = panel.tasks
     .map((task) => {
       const model = taskControlModel(task);
@@ -115,6 +329,7 @@ function renderPanel(panel) {
       return `
         <div class="${taskClass}">
           <div class="task-card-head">
+            <div class="task-type-chip">${escapeHtml(task.task_type)}</div>
             <div class="task-title">${escapeHtml(task.title)}</div>
             <div class="task-status">${escapeHtml(statusText)}</div>
           </div>
@@ -145,12 +360,23 @@ function renderPanel(panel) {
     })
     .join("");
 
+  const workflowsHtml = (panel.workflows || []).map(renderWorkflowCard).join("");
   const stats = panel.stats;
+
   return `
     <section class="panel">
       <div class="panel-head">
-        <h2>${escapeHtml(panel.title)}</h2>
+        <div class="panel-head-left">
+          <div class="panel-kicker">Service</div>
+          <h2>${escapeHtml(panel.title)}</h2>
+        </div>
+        <div class="panel-head-right">
+          <span class="panel-pill ${health.className}">${health.label}</span>
+          <span class="panel-pill">Active ${health.active}</span>
+          <span class="panel-pill">Failed ${health.failed}</span>
+        </div>
       </div>
+      ${workflowHtml}
       <div class="stats">
         <div class="stat"><div class="stat-label">Downloaded Files</div><div class="stat-value">${stats.downloaded_files_total}</div></div>
         <div class="stat"><div class="stat-label">New Last Run</div><div class="stat-value">${stats.newly_downloaded_last_run}</div></div>
@@ -158,6 +384,7 @@ function renderPanel(panel) {
         <div class="stat"><div class="stat-label">Last Success</div><div class="stat-value">${escapeHtml(formatDateTime(stats.last_successful_run))}</div></div>
       </div>
       <div class="tasks">${tasksHtml}</div>
+      <div class="workflow-stack">${workflowsHtml}</div>
     </section>
   `;
 }
@@ -185,7 +412,8 @@ function renderDashboard(payload) {
   document.getElementById("runs-list").innerHTML = renderRuns(payload.recent_runs || []);
 
   const active = payload.global.active_tasks || 0;
-  document.getElementById("global-status").textContent = `Active: ${active}`;
+  const activeWorkflows = payload.global.active_workflows || 0;
+  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
 
   const stopBtn = document.getElementById("stop-all-btn");
   stopBtn.disabled = payload.global.stop_all_state === "disabled";
@@ -227,12 +455,23 @@ async function toggleTask(taskId) {
   queueRefresh(0);
 }
 
+async function runWorkflowNow(workflowId) {
+  await api(`/api/workflows/${encodeURIComponent(workflowId)}/run`, { method: "POST" });
+  queueRefresh(0);
+}
+
+async function patchSchedule(scheduleId, patch) {
+  await api(`/api/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+  queueRefresh(0);
+}
+
 async function stopAll() {
   const stopState = state.dashboard?.global?.stop_all_state;
   if (stopState === "armed") {
-    const confirmed = window.confirm(
-      "Force stop all running tasks immediately?"
-    );
+    const confirmed = window.confirm("Force stop all running tasks immediately?");
     if (!confirmed) return;
   }
   await api("/api/system/stop-all", { method: "POST" });
@@ -296,7 +535,19 @@ function setupEventStream() {
     "task.stopped",
     "task.completed",
     "task.failed",
+    "workflow.started",
+    "workflow.step_started",
+    "workflow.step_completed",
+    "workflow.step_skipped",
+    "workflow.stopped",
+    "workflow.completed",
+    "workflow.failed",
+    "schedule.triggered",
+    "schedule.updated",
+    "schedule.skipped",
+    "schedule.skipped_overlap",
     "system.stop_all_requested",
+    "system.workflow_recovery",
   ];
 
   eventTypes.forEach((name) => {
@@ -335,6 +586,39 @@ function attachUiHandlers() {
       if (runId > 0) {
         openLogs(runId, taskTitle).catch((error) => console.error(error));
       }
+      return;
+    }
+
+    if (target.classList.contains("workflow-run-now")) {
+      const workflowId = target.dataset.workflowId;
+      if (workflowId) {
+        runWorkflowNow(workflowId).catch((error) => console.error(error));
+      }
+      return;
+    }
+
+    if (target.classList.contains("schedule-toggle")) {
+      const scheduleId = target.dataset.scheduleId;
+      if (scheduleId) {
+        const enabled = target.dataset.scheduleEnabled === "1";
+        patchSchedule(scheduleId, { enabled: !enabled }).catch((error) => console.error(error));
+      }
+      return;
+    }
+
+    if (target.classList.contains("schedule-save")) {
+      const card = target.closest(".workflow-card");
+      const scheduleId = target.dataset.scheduleId;
+      if (!card || !scheduleId) return;
+
+      const day = Number(card.querySelector(".schedule-day")?.value || "1");
+      const time = String(card.querySelector(".schedule-time")?.value || "03:00").trim();
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+        window.alert("Time must be HH:MM");
+        return;
+      }
+
+      patchSchedule(scheduleId, { day_of_week: day, time_of_day: time }).catch((error) => console.error(error));
     }
   });
 

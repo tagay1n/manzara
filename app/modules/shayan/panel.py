@@ -34,11 +34,47 @@ def build_shayan_panel(
     db: Database,
     shayan: ShayanSettings,
     tasks: List[Dict[str, Any]],
+    workflows: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Build dashboard panel payload for Shayan."""
     shayan_status = _read_json_file(shayan.status_file)
     shayan_summary = _read_json_file(shayan.summary_file)
     latest_snapshot = _read_json_file(shayan.latest_snapshot_file)
+
+    workflow_items: List[Dict[str, Any]] = []
+    for workflow in workflows:
+        schedule: Dict[str, Any] | None = None
+        if workflow.get("schedule_id"):
+            schedule = {
+                "schedule_id": workflow.get("schedule_id"),
+                "schedule_type": workflow.get("schedule_type"),
+                "day_of_week": workflow.get("day_of_week"),
+                "time_of_day": workflow.get("time_of_day"),
+                "timezone": workflow.get("timezone"),
+                "enabled": bool(workflow.get("schedule_enabled", False)),
+                "overlap_policy": workflow.get("overlap_policy"),
+                "catchup_policy": workflow.get("catchup_policy"),
+                "next_run_at": workflow.get("next_run_at"),
+                "last_run_at": workflow.get("last_run_at"),
+            }
+
+        workflow_items.append(
+            {
+                "workflow_id": workflow["workflow_id"],
+                "title": workflow["title"],
+                "description": workflow.get("description") or "",
+                "enabled": bool(workflow.get("enabled", True)),
+                "run": {
+                    "workflow_run_id": workflow.get("workflow_run_id"),
+                    "status": workflow.get("run_status") or "idle",
+                    "trigger_source": workflow.get("trigger_source"),
+                    "started_at": workflow.get("started_at"),
+                    "finished_at": workflow.get("finished_at"),
+                    "error_text": workflow.get("error_text"),
+                },
+                "schedule": schedule,
+            }
+        )
 
     return {
         "panel_id": "shayan",
@@ -53,5 +89,6 @@ def build_shayan_panel(
             "last_scan": latest_snapshot.get("generated_at"),
         },
         "status_counts": db.run_count_by_status("shayan"),
+        "workflows": workflow_items,
         "tasks": tasks,
     }

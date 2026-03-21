@@ -16,6 +16,38 @@ from app.settings import Settings
 def _test_task_defs(shayan: ShayanSettings):
     return [
         {
+            "task_id": "shayan.scan_changes",
+            "panel_id": "shayan",
+            "title": "Scan for changes",
+            "task_type": "scan",
+            "icon_idle": "RefreshCw",
+            "icon_running": "Square",
+            "cwd": str(shayan.repo_path),
+            "command": {
+                "mode": "shell",
+                "value": (
+                    "python3 -c \"import pathlib; "
+                    "p=pathlib.Path('_artifacts/snapshots/latest.json'); "
+                    "p.parent.mkdir(parents=True, exist_ok=True); "
+                    "p.write_text('{\\\"entries\\\": {}}', encoding='utf-8'); "
+                    "print('scan-ok')\""
+                ),
+            },
+        },
+        {
+            "task_id": "shayan.download_new",
+            "panel_id": "shayan",
+            "title": "Download new",
+            "task_type": "download",
+            "icon_idle": "Play",
+            "icon_running": "Square",
+            "cwd": str(shayan.repo_path),
+            "command": {
+                "mode": "shell",
+                "value": "python3 -c \"print('download-ok')\"",
+            },
+        },
+        {
             "task_id": "shayan.quick",
             "panel_id": "shayan",
             "title": "Quick",
@@ -89,6 +121,7 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
     settings = Settings(
         db_path=tmp_path / "manzara-test.db",
         shayan=shayan,
+        scheduler_enabled=False,
     )
 
     monkeypatch.setattr(main_app, "shayan_task_definitions", _test_task_defs)
@@ -127,6 +160,26 @@ def wait_for_terminal_run() -> callable:
         raise AssertionError(
             f"Run {run_id} did not reach terminal state; "
             f"last_run={run}; logs={logs}"
+        )
+
+    return _wait
+
+
+@pytest.fixture()
+def wait_for_terminal_workflow_run() -> callable:
+    """Wait helper for workflow completion in tests."""
+
+    def _wait(main_app, workflow_run_id: int, timeout_seconds: float = 15.0):
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            run = main_app.state.db.get_workflow_run(workflow_run_id)
+            if run and run["status"] not in {"starting", "running"}:
+                return run
+            time.sleep(0.05)
+        run = main_app.state.db.get_workflow_run(workflow_run_id)
+        raise AssertionError(
+            f"Workflow run {workflow_run_id} did not reach terminal state; "
+            f"last_run={run}"
         )
 
     return _wait
