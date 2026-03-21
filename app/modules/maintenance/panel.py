@@ -19,15 +19,19 @@ def _last_run_for_panel(db: Database, panel_id: str) -> Dict[str, Any] | None:
     return None
 
 
-def build_maintenance_panel(
+def _build_ops_panel(
     db: Database,
     maintenance: MaintenanceSettings,
+    *,
+    panel_id: str,
+    title: str,
+    description: str,
     tasks: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Build dashboard panel payload for maintenance tasks."""
-    counts = db.run_count_by_status("maintenance")
+    """Build dashboard payload for non-shayan operations panels."""
+    counts = db.run_count_by_status(panel_id)
     total_runs = _sum_counts(counts)
-    last_run = _last_run_for_panel(db, "maintenance")
+    last_run = _last_run_for_panel(db, panel_id)
 
     stats_cards = [
         {
@@ -40,7 +44,7 @@ def build_maintenance_panel(
         },
         {
             "label": "Last Success",
-            "value": db.last_successful_run("maintenance") or "-",
+            "value": db.last_successful_run(panel_id) or "-",
         },
         {
             "label": "Repo Exists",
@@ -49,10 +53,42 @@ def build_maintenance_panel(
     ]
 
     return {
-        "panel_id": "maintenance",
-        "title": "Maintenance",
-        "description": "Operational tasks for auxiliary repositories.",
+        "panel_id": panel_id,
+        "title": title,
+        "description": description,
         "status_counts": counts,
         "stats_cards": stats_cards,
         "tasks": tasks,
     }
+
+
+def build_maintenance_panel(
+    db: Database,
+    maintenance: MaintenanceSettings,
+    tasks: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build dashboard panel payload for maintenance tasks."""
+    return _build_ops_panel(
+        db=db,
+        maintenance=maintenance,
+        panel_id="maintenance",
+        title="Maintenance",
+        description="Repository operations and health checks.",
+        tasks=tasks,
+    )
+
+
+def build_library_panel(
+    db: Database,
+    maintenance: MaintenanceSettings,
+    tasks: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build dashboard panel payload for library-related tasks."""
+    return _build_ops_panel(
+        db=db,
+        maintenance=maintenance,
+        panel_id="library",
+        title="Library",
+        description="Metadata and curation workflows.",
+        tasks=tasks,
+    )

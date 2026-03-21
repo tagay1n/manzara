@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 
+from app.modules.maintenance.workflow import LIBRARY_WORKFLOW_ID
 from app.modules.shayan.workflow import SHAYAN_WEEKLY_SCHEDULE_ID, SHAYAN_WEEKLY_WORKFLOW_ID
 
 
@@ -39,6 +40,11 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     maintenance = panels["maintenance"]
     maintenance_task_ids = {task["task_id"] for task in maintenance["tasks"]}
     assert "maintenance.monocorpus_sync" in maintenance_task_ids
+    assert "maintenance.monocorpus_meta_evaluate" not in maintenance_task_ids
+
+    library = panels["library"]
+    library_task_ids = {task["task_id"] for task in library["tasks"]}
+    assert "maintenance.monocorpus_meta_evaluate" in library_task_ids
 
 
 def test_update_schedule_and_recompute_next_run(test_client) -> None:
@@ -65,6 +71,7 @@ def test_schedules_endpoint_returns_workflows(test_client) -> None:
     assert "workflows" in payload
     workflow_ids = {item["workflow_id"] for item in payload["workflows"]}
     assert SHAYAN_WEEKLY_WORKFLOW_ID in workflow_ids
+    assert LIBRARY_WORKFLOW_ID in workflow_ids
 
 
 def test_workflow_run_skips_download_when_no_new(

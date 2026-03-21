@@ -19,6 +19,7 @@ This first MVP slice includes:
 - Task: `download new`
 - Task: `maintenance monocorpus sync`
 - Workflow: `Weekly Sync` (`shayan.weekly_sync`)
+- Workflow: `Library` (`library.meta_evaluate`)
 - Schedule: weekly, overlap skip, catch-up once after downtime
 - Run history + live logs
 - Basic metrics from Shayan artifacts (`status.json`, `last-main-run-summary.json`)
@@ -65,6 +66,9 @@ Environment variables:
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
 - `SHAYAN_OUTPUT_PATH` (default: `/home/tans1q/video-archive`)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
+
+Monocorpus embedded runtimes (`sync` and `meta evaluate`) read shared YAML config from repo root:
+- `./config.yaml`
 
 ## API Endpoints
 

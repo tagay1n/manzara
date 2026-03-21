@@ -1,0 +1,119 @@
+gemini_api_keys:
+  # tt
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+#  foobar5754
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+ # foobar5755
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+# mjoef992
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+# gdt10148
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+# rfhf8723:
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  # fkfye68:
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  # kjeit637:
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+  - "<REDACTED>"
+
+yandex:
+  disk:
+    oauth_token: "<REDACTED>"
+    entry_points: 
+      tt: /neurotatarlar/kitaplar/monocorpus
+      # crh: /НейроТатарлар/other_turkic_langs/Крымскотатарский
+    filtered_out: /neurotatarlar/kitaplar/filtered_out
+    hidden: /neurotatarlar/kitaplar/monocorpus/__ТАРАТМАСКА_DONT_SHARE_НЕ_ДЕЛИТЬСЯ
+  cloud:
+    aws_access_key_id: "<REDACTED>"
+    aws_secret_access_key: "<REDACTED>"
+    bucket:
+      document: ttdoc
+      metadata: ttmeta
+      content: ttcontent
+      upstream_metadata: upstream-metadata
+      content_chunks: ttcontent-chunks
+      image: ttimg
+encryption_key: "<REDACTED>"
+
+database_url: "<REDACTED>"
+
+sup_langs:
+  tt: 
+    codes: ['tt-Latn-x-zamanalif', 'tt-Cyrl', 'tt-Latn-x-yanalif', 'tt-Arab', 'tt-Latn']
+
+proxy:

@@ -247,7 +247,6 @@ function renderPanel(panel) {
     <section class="panel">
       <div class="panel-head">
         <div class="panel-head-left">
-          <div class="panel-kicker">Service</div>
           <h2>${escapeHtml(panel.title)}</h2>
           ${panel.description ? `<div class="subtitle-lite">${escapeHtml(panel.description)}</div>` : ""}
         </div>

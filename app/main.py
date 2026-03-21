@@ -14,8 +14,9 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
-from app.modules.maintenance.panel import build_maintenance_panel
+from app.modules.maintenance.panel import build_library_panel, build_maintenance_panel
 from app.modules.maintenance.tasks import maintenance_task_definitions
+from app.modules.maintenance.workflow import library_workflow_bundle
 from app.modules.shayan.panel import build_shayan_panel
 from app.modules.shayan.tasks import shayan_task_definitions
 from app.modules.shayan.workflow import (
@@ -60,6 +61,7 @@ def on_startup() -> None:
     ]
     state.db.seed_tasks(task_defs)
     state.db.seed_workflow_bundle(shayan_workflow_bundle(state.settings.shayan))
+    state.db.seed_workflow_bundle(library_workflow_bundle())
 
     recovered_runs = state.db.recover_active_runs()
     if recovered_runs > 0:
@@ -154,6 +156,11 @@ def build_dashboard_payload() -> Dict[str, Any]:
         maintenance=state.settings.maintenance,
         tasks=tasks_by_panel.get("maintenance", []),
     )
+    library_panel = build_library_panel(
+        db=state.db,
+        maintenance=state.settings.maintenance,
+        tasks=tasks_by_panel.get("library", []),
+    )
 
     active_runs = state.db.list_active_runs()
     stop_all_state = "disabled"
@@ -180,7 +187,7 @@ def build_dashboard_payload() -> Dict[str, Any]:
             "failed_runs": len([r for r in state.db.list_recent_runs(50) if r["status"] == "failed"]),
             "stop_all_state": stop_all_state,
         },
-        "panels": [shayan_panel, maintenance_panel],
+        "panels": [shayan_panel, maintenance_panel, library_panel],
         "recent_runs": state.db.list_recent_runs(20),
         "scheduler": {
             "enabled": state.settings.scheduler_enabled,

@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List
 
 from app.modules.maintenance.config import MaintenanceSettings
 
 
 MONOCORPUS_SYNC_TASK_ID = "maintenance.monocorpus_sync"
+MONOCORPUS_META_EVALUATE_TASK_ID = "maintenance.monocorpus_meta_evaluate"
 
 
 def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str, Any]]:
     """Return Maintenance task definitions for dashboard and runtime."""
+    app_root = Path(__file__).resolve().parents[3]
+    sync_runner = app_root / "app" / "modules" / "maintenance" / "runtime" / "run_sync.py"
+    meta_eval_runner = app_root / "app" / "modules" / "library" / "runtime" / "run_meta_evaluate.py"
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
-    sync_cmd = py_bootstrap + '"$PY_BIN" src/main.py sync'
+    sync_cmd = py_bootstrap + f'"$PY_BIN" "{sync_runner}"'
+    meta_eval_cmd = (
+        py_bootstrap
+        + f'"$PY_BIN" "{meta_eval_runner}" --workers 1; '
+        + 'if command -v spd-say >/dev/null 2>&1; then spd-say complete; fi'
+    )
 
     return [
         {
@@ -23,7 +33,17 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
             "task_type": "sync",
             "icon_idle": "RefreshCw",
             "icon_running": "Square",
-            "cwd": str(settings.monocorpus_repo_path),
+            "cwd": str(app_root),
             "command": {"mode": "shell", "value": sync_cmd},
+        },
+        {
+            "task_id": MONOCORPUS_META_EVALUATE_TASK_ID,
+            "panel_id": "library",
+            "title": "Monocorpus meta evaluate",
+            "task_type": "metadata",
+            "icon_idle": "Brain",
+            "icon_running": "Square",
+            "cwd": str(app_root),
+            "command": {"mode": "shell", "value": meta_eval_cmd},
         },
     ]
