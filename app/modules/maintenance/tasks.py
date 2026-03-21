@@ -19,11 +19,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
     meta_eval_runner = app_root / "app" / "modules" / "library" / "runtime" / "run_meta_evaluate.py"
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
     sync_cmd = py_bootstrap + f'"$PY_BIN" "{sync_runner}"'
-    meta_eval_cmd = (
-        py_bootstrap
-        + f'"$PY_BIN" "{meta_eval_runner}" --workers 1; '
-        + 'if command -v spd-say >/dev/null 2>&1; then spd-say complete; fi'
-    )
+    meta_eval_cmd = py_bootstrap + f'"$PY_BIN" "{meta_eval_runner}" --workers 1'
 
     return [
         {
@@ -41,7 +37,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
             "panel_id": "library",
             "title": "Monocorpus meta evaluate",
             "task_type": "metadata",
-            "icon_idle": "Brain",
+            "icon_idle": "ClipboardCheck",
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": meta_eval_cmd},

@@ -236,7 +236,6 @@ class Database:
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(task_id) DO UPDATE SET
                             panel_id=excluded.panel_id,
-                            title=excluded.title,
                             task_type=excluded.task_type,
                             icon_idle=excluded.icon_idle,
                             icon_running=excluded.icon_running,

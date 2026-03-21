@@ -3,6 +3,7 @@ const state = {
   refreshTimer: null,
   eventStream: null,
   eventStreamReconnectTimer: null,
+  soundNotifier: null,
 };
 
 const WEEKDAY_LABELS = {
@@ -45,6 +46,23 @@ function formatDateTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleString();
+}
+
+function initSoundNotifier() {
+  const createNotifier = window.ManzaraSound?.createNotifier;
+  if (typeof createNotifier !== "function") return;
+  state.soundNotifier = createNotifier({ repeatGapMs: 2000 });
+}
+
+function maybePlayTaskNotification(eventPayload, lastEventId = "") {
+  state.soundNotifier?.handleEvent(eventPayload, lastEventId);
+}
+
+function teardownSoundNotifier() {
+  if (state.soundNotifier && typeof state.soundNotifier.teardown === "function") {
+    state.soundNotifier.teardown();
+  }
+  state.soundNotifier = null;
 }
 
 function workflowStatusModel(workflow) {
@@ -303,6 +321,7 @@ function setupEventStream() {
       try {
         const payload = JSON.parse(event.data);
         document.getElementById("last-event").textContent = `Last event: ${payload.type} @ ${new Date(payload.ts).toLocaleTimeString()}`;
+        maybePlayTaskNotification(payload, event.lastEventId || "");
       } catch (_error) {
         // ignore malformed events
       }
@@ -370,7 +389,9 @@ function attachUiHandlers() {
 }
 
 async function bootstrap() {
+  initSoundNotifier();
   window.addEventListener("beforeunload", () => {
+    teardownSoundNotifier();
     if (state.eventStreamReconnectTimer) {
       clearTimeout(state.eventStreamReconnectTimer);
       state.eventStreamReconnectTimer = null;

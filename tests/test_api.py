@@ -48,7 +48,7 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
 
 
 def test_rename_flow_and_task_title(test_client) -> None:
-    client, _main_app = test_client
+    client, main_app = test_client
 
     flow_resp = client.patch("/api/flows/shayan/title", json={"title": "Shayan Flow"})
     assert flow_resp.status_code == 200
@@ -65,6 +65,19 @@ def test_rename_flow_and_task_title(test_client) -> None:
     assert panels["shayan"]["title"] == "Shayan Flow"
     quick_task = next(task for task in panels["shayan"]["tasks"] if task["task_id"] == "shayan.quick")
     assert quick_task["title"] == "Quick Runner"
+
+    # Simulate startup reseeding and verify user-renamed labels remain persisted.
+    main_app.state.db.seed_panels(main_app._PANEL_DEFS)
+    main_app.state.db.seed_tasks(main_app.shayan_task_definitions(main_app.state.settings.shayan))
+    main_app.state.db.seed_tasks(main_app.maintenance_task_definitions(main_app.state.settings.maintenance))
+
+    payload_after_seed = client.get("/api/dashboard").json()
+    panels_after_seed = {panel["panel_id"]: panel for panel in payload_after_seed["panels"]}
+    assert panels_after_seed["shayan"]["title"] == "Shayan Flow"
+    quick_task_after_seed = next(
+        task for task in panels_after_seed["shayan"]["tasks"] if task["task_id"] == "shayan.quick"
+    )
+    assert quick_task_after_seed["title"] == "Quick Runner"
 
 
 def test_update_schedule_and_recompute_next_run(test_client) -> None:

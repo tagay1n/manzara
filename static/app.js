@@ -10,6 +10,7 @@ const state = {
   editId: null,
   editValue: "",
   pendingRefresh: false,
+  soundNotifier: null,
 };
 
 async function api(path, options = {}) {
@@ -40,6 +41,23 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+
+function initSoundNotifier() {
+  const createNotifier = window.ManzaraSound?.createNotifier;
+  if (typeof createNotifier !== "function") return;
+  state.soundNotifier = createNotifier({ repeatGapMs: 2000 });
+}
+
+function maybePlayTaskNotification(eventPayload, lastEventId = "") {
+  state.soundNotifier?.handleEvent(eventPayload, lastEventId);
+}
+
+function teardownSoundNotifier() {
+  if (state.soundNotifier && typeof state.soundNotifier.teardown === "function") {
+    state.soundNotifier.teardown();
+  }
+  state.soundNotifier = null;
 }
 
 function lucideName(name) {
@@ -601,6 +619,7 @@ function setupEventStream() {
       try {
         const payload = JSON.parse(event.data);
         document.getElementById("last-event").textContent = `Last event: ${payload.type} @ ${new Date(payload.ts).toLocaleTimeString()}`;
+        maybePlayTaskNotification(payload, event.lastEventId || "");
       } catch (_error) {
         // ignore malformed events
       }
@@ -712,7 +731,9 @@ function attachUiHandlers() {
 }
 
 async function bootstrap() {
+  initSoundNotifier();
   window.addEventListener("beforeunload", () => {
+    teardownSoundNotifier();
     if (state.eventStreamReconnectTimer) {
       clearTimeout(state.eventStreamReconnectTimer);
       state.eventStreamReconnectTimer = null;

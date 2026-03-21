@@ -31,7 +31,6 @@ STATIC_DIR = APP_ROOT / "static"
 _TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 _SSE_POLL_INTERVAL_SECONDS = 1.0
 _SSE_HEARTBEAT_EVERY_EMPTY_POLLS = 15
-_SSE_CONNECTION_MAX_SECONDS = 3.0
 _TITLE_MAX_LENGTH = 80
 _PANEL_DEFS = [
     {"panel_id": "shayan", "title": "Shayan"},
@@ -47,6 +46,7 @@ class AppState:
         self.settings = settings
         self.db = Database(settings.db_path)
         self.runner = TaskRunner(self.db)
+        self.shutting_down = False
         self.workflow_service = WorkflowService(
             self.db,
             self.runner,
@@ -63,6 +63,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.on_event("startup")
 def on_startup() -> None:
     """Initialize schema and seed known task/workflow definitions."""
+    state.shutting_down = False
     state.db.init_schema()
     state.db.seed_panels(_PANEL_DEFS)
     task_defs = [
@@ -100,6 +101,7 @@ def on_startup() -> None:
 @app.on_event("shutdown")
 def on_shutdown() -> None:
     """Stop background scheduler worker on app shutdown."""
+    state.shutting_down = True
     state.workflow_service.stop()
 
 
@@ -485,16 +487,13 @@ async def events_stream(
 
     async def event_generator():
         nonlocal cursor
-        loop = asyncio.get_running_loop()
-        started_at = loop.time()
         heartbeat_counter = 0
         try:
             while True:
-                if await request.is_disconnected():
+                if state.shutting_down:
                     break
 
-                # Periodically rotate SSE connection to unblock graceful reload/shutdown.
-                if (loop.time() - started_at) >= _SSE_CONNECTION_MAX_SECONDS:
+                if await request.is_disconnected():
                     break
 
                 events = state.db.get_events_after(cursor, limit=200)
@@ -504,6 +503,8 @@ async def events_stream(
                         data = json.dumps(event, ensure_ascii=False)
                         yield f"id: {cursor}\nevent: {event['type']}\ndata: {data}\n\n"
                     heartbeat_counter = 0
+                    # Keep loop cooperative for cancellation/shutdown.
+                    await asyncio.sleep(0)
                 else:
                     heartbeat_counter += 1
                     if heartbeat_counter >= _SSE_HEARTBEAT_EVERY_EMPTY_POLLS:
