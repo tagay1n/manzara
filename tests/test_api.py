@@ -47,6 +47,26 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     assert "maintenance.monocorpus_meta_evaluate" in library_task_ids
 
 
+def test_rename_flow_and_task_title(test_client) -> None:
+    client, _main_app = test_client
+
+    flow_resp = client.patch("/api/flows/shayan/title", json={"title": "Shayan Flow"})
+    assert flow_resp.status_code == 200
+    assert flow_resp.json()["updated"] is True
+    assert flow_resp.json()["flow"]["title"] == "Shayan Flow"
+
+    task_resp = client.patch("/api/tasks/shayan.quick/title", json={"title": "Quick Runner"})
+    assert task_resp.status_code == 200
+    assert task_resp.json()["updated"] is True
+    assert task_resp.json()["task"]["title"] == "Quick Runner"
+
+    payload = client.get("/api/dashboard").json()
+    panels = {panel["panel_id"]: panel for panel in payload["panels"]}
+    assert panels["shayan"]["title"] == "Shayan Flow"
+    quick_task = next(task for task in panels["shayan"]["tasks"] if task["task_id"] == "shayan.quick")
+    assert quick_task["title"] == "Quick Runner"
+
+
 def test_update_schedule_and_recompute_next_run(test_client) -> None:
     client, _main_app = test_client
 

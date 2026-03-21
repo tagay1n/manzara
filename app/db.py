@@ -66,6 +66,13 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS panel_definitions (
+                    panel_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS runs (
                     run_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task_id TEXT NOT NULL,
@@ -174,6 +181,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
                 CREATE INDEX IF NOT EXISTS idx_run_logs_run_id ON run_logs(run_id, log_id);
                 CREATE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
+                CREATE INDEX IF NOT EXISTS idx_panels_title ON panel_definitions(title);
                 CREATE INDEX IF NOT EXISTS idx_workflow_schedules_enabled_next
                     ON workflow_schedules(enabled, next_run_at);
                 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
@@ -245,6 +253,26 @@ class Database:
                             item["icon_running"],
                             json.dumps(item["command"]),
                             item["cwd"],
+                            now,
+                            now,
+                        ),
+                    )
+
+    def seed_panels(self, panel_defs: List[Dict[str, Any]]) -> None:
+        """Insert panel definitions when missing; preserve user-renamed titles."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                for item in panel_defs:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO panel_definitions (
+                            panel_id, title, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            item["panel_id"],
+                            item["title"],
                             now,
                             now,
                         ),
@@ -332,7 +360,58 @@ class Database:
                             now,
                             now,
                         ),
-                    )
+                )
+
+    def get_panel(self, panel_id: str) -> Optional[Dict[str, Any]]:
+        """Return one panel definition by id."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM panel_definitions WHERE panel_id = ?",
+                (panel_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_panel_title_map(self) -> Dict[str, str]:
+        """Return mapping of panel id to display title."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT panel_id, title FROM panel_definitions ORDER BY panel_id"
+            ).fetchall()
+        return {str(row["panel_id"]): str(row["title"]) for row in rows}
+
+    def update_panel_title(self, panel_id: str, title: str) -> Optional[Dict[str, Any]]:
+        """Update one panel title and return updated panel row."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE panel_definitions
+                    SET title = ?, updated_at = ?
+                    WHERE panel_id = ?
+                    """,
+                    (title, now, panel_id),
+                )
+                if int(cur.rowcount or 0) == 0:
+                    return None
+        return self.get_panel(panel_id)
+
+    def update_task_title(self, task_id: str, title: str) -> Optional[Dict[str, Any]]:
+        """Update one task title and return updated task definition."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE task_definitions
+                    SET title = ?, updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (title, now, task_id),
+                )
+                if int(cur.rowcount or 0) == 0:
+                    return None
+        return self.get_task(task_id)
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Return task definition by id."""

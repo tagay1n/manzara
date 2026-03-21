@@ -35,6 +35,8 @@ def build_shayan_panel(
     shayan: ShayanSettings,
     tasks: List[Dict[str, Any]],
     workflows: List[Dict[str, Any]],
+    *,
+    title: str = "Shayan",
 ) -> Dict[str, Any]:
     """Build dashboard panel payload for Shayan."""
     shayan_status = _read_json_file(shayan.status_file)
@@ -78,7 +80,7 @@ def build_shayan_panel(
 
     return {
         "panel_id": "shayan",
-        "title": "Shayan",
+        "title": title,
         "stats": {
             "downloaded_files_total": _status_entry_count(shayan_status),
             "newly_downloaded_last_run": int(

@@ -29,6 +29,15 @@ from app.workflows import WorkflowService
 APP_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = APP_ROOT / "static"
 _TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+_SSE_POLL_INTERVAL_SECONDS = 1.0
+_SSE_HEARTBEAT_EVERY_EMPTY_POLLS = 15
+_SSE_CONNECTION_MAX_SECONDS = 3.0
+_TITLE_MAX_LENGTH = 80
+_PANEL_DEFS = [
+    {"panel_id": "shayan", "title": "Shayan"},
+    {"panel_id": "maintenance", "title": "Maintenance"},
+    {"panel_id": "library", "title": "Library"},
+]
 
 
 class AppState:
@@ -55,6 +64,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 def on_startup() -> None:
     """Initialize schema and seed known task/workflow definitions."""
     state.db.init_schema()
+    state.db.seed_panels(_PANEL_DEFS)
     task_defs = [
         *shayan_task_definitions(state.settings.shayan),
         *maintenance_task_definitions(state.settings.maintenance),
@@ -117,8 +127,25 @@ def health() -> Dict[str, str]:
     return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
 
 
+def _parse_title(payload: Dict[str, Any], field_name: str = "title") -> str:
+    value = payload.get(field_name)
+    if value is None:
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    title = str(value).strip()
+    if not title:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be non-empty")
+    if len(title) > _TITLE_MAX_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} must be at most {_TITLE_MAX_LENGTH} characters",
+        )
+    return title
+
+
 def build_dashboard_payload() -> Dict[str, Any]:
     """Compose dashboard payload from DB and Shayan artifacts."""
+    panel_titles = state.db.get_panel_title_map()
+
     tasks = state.db.list_tasks_with_latest_run()
     tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
     for task in tasks:
@@ -150,16 +177,19 @@ def build_dashboard_payload() -> Dict[str, Any]:
         shayan=state.settings.shayan,
         tasks=tasks_by_panel.get("shayan", []),
         workflows=shayan_workflows,
+        title=panel_titles.get("shayan", "Shayan"),
     )
     maintenance_panel = build_maintenance_panel(
         db=state.db,
         maintenance=state.settings.maintenance,
         tasks=tasks_by_panel.get("maintenance", []),
+        title=panel_titles.get("maintenance", "Maintenance"),
     )
     library_panel = build_library_panel(
         db=state.db,
         maintenance=state.settings.maintenance,
         tasks=tasks_by_panel.get("library", []),
+        title=panel_titles.get("library", "Library"),
     )
 
     active_runs = state.db.list_active_runs()
@@ -280,6 +310,56 @@ def toggle_task(task_id: str) -> JSONResponse:
 
     result = state.runner.toggle_task(task_id)
     return JSONResponse(result)
+
+
+@app.patch("/api/tasks/{task_id}/title")
+def rename_task(task_id: str, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    """Rename one task definition."""
+    task = state.db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    title = _parse_title(payload)
+    if title == task["title"]:
+        return JSONResponse({"task": task, "updated": False})
+
+    updated = state.db.update_task_title(task_id, title)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    state.db.insert_event(
+        "task.renamed",
+        task_id=task_id,
+        run_id=None,
+        panel_id=task["panel_id"],
+        payload={"old_title": task["title"], "new_title": title},
+    )
+    return JSONResponse({"task": updated, "updated": True})
+
+
+@app.patch("/api/flows/{panel_id}/title")
+def rename_flow(panel_id: str, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    """Rename one dashboard flow (panel)."""
+    panel = state.db.get_panel(panel_id)
+    if not panel:
+        raise HTTPException(status_code=404, detail="Flow not found")
+
+    title = _parse_title(payload)
+    if title == panel["title"]:
+        return JSONResponse({"flow": panel, "updated": False})
+
+    updated = state.db.update_panel_title(panel_id, title)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Flow not found")
+
+    state.db.insert_event(
+        "flow.renamed",
+        task_id=None,
+        run_id=None,
+        panel_id=panel_id,
+        payload={"old_title": panel["title"], "new_title": title},
+    )
+    return JSONResponse({"flow": updated, "updated": True})
 
 
 @app.post("/api/workflows/{workflow_id}/run")
@@ -405,24 +485,33 @@ async def events_stream(
 
     async def event_generator():
         nonlocal cursor
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
         heartbeat_counter = 0
-        while True:
-            if await request.is_disconnected():
-                break
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
 
-            events = state.db.get_events_after(cursor, limit=200)
-            if events:
-                for event in events:
-                    cursor = int(event["event_id"])
-                    data = json.dumps(event, ensure_ascii=False)
-                    yield f"id: {cursor}\nevent: {event['type']}\ndata: {data}\n\n"
-                heartbeat_counter = 0
-            else:
-                heartbeat_counter += 1
-                if heartbeat_counter >= 15:
-                    yield ": heartbeat\n\n"
+                # Periodically rotate SSE connection to unblock graceful reload/shutdown.
+                if (loop.time() - started_at) >= _SSE_CONNECTION_MAX_SECONDS:
+                    break
+
+                events = state.db.get_events_after(cursor, limit=200)
+                if events:
+                    for event in events:
+                        cursor = int(event["event_id"])
+                        data = json.dumps(event, ensure_ascii=False)
+                        yield f"id: {cursor}\nevent: {event['type']}\ndata: {data}\n\n"
                     heartbeat_counter = 0
-                await asyncio.sleep(1)
+                else:
+                    heartbeat_counter += 1
+                    if heartbeat_counter >= _SSE_HEARTBEAT_EVERY_EMPTY_POLLS:
+                        yield ": heartbeat\n\n"
+                        heartbeat_counter = 0
+                    await asyncio.sleep(_SSE_POLL_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            return
 
     return StreamingResponse(
         event_generator(),

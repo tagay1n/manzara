@@ -4,6 +4,12 @@ const state = {
   logRunId: null,
   logAfterId: 0,
   logPollTimer: null,
+  eventStream: null,
+  eventStreamReconnectTimer: null,
+  editMode: null,
+  editId: null,
+  editValue: "",
+  pendingRefresh: false,
 };
 
 async function api(path, options = {}) {
@@ -30,6 +36,10 @@ function escapeHtml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 function lucideName(name) {
@@ -141,6 +151,104 @@ function panelHealth(panel) {
   };
 }
 
+function findTaskTitle(taskId) {
+  for (const panel of state.dashboard?.panels || []) {
+    for (const task of panel.tasks || []) {
+      if (task.task_id === taskId) return task.title || "";
+    }
+  }
+  return "";
+}
+
+function findFlowTitle(panelId) {
+  for (const panel of state.dashboard?.panels || []) {
+    if (panel.panel_id === panelId) return panel.title || "";
+  }
+  return "";
+}
+
+function focusInlineInput() {
+  if (!state.editMode || !state.editId) return;
+  const selector = `.inline-edit-input[data-edit-kind="${state.editMode}"][data-edit-id="${state.editId}"]`;
+  const input = document.querySelector(selector);
+  if (input instanceof HTMLInputElement) {
+    input.focus();
+    input.select();
+  }
+}
+
+function startInlineEdit(kind, id, currentTitle) {
+  state.editMode = kind;
+  state.editId = id;
+  state.editValue = String(currentTitle || "");
+  if (state.dashboard) {
+    renderDashboard(state.dashboard);
+    requestAnimationFrame(focusInlineInput);
+  }
+}
+
+function resumePendingRefresh() {
+  if (state.pendingRefresh) {
+    state.pendingRefresh = false;
+    queueRefresh(0);
+  }
+}
+
+function cancelInlineEdit() {
+  if (!state.editMode) return;
+  state.editMode = null;
+  state.editId = null;
+  state.editValue = "";
+  if (state.dashboard) {
+    renderDashboard(state.dashboard);
+  }
+  resumePendingRefresh();
+}
+
+async function renameTask(taskId, title) {
+  await api(`/api/tasks/${encodeURIComponent(taskId)}/title`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
+async function renameFlow(panelId, title) {
+  await api(`/api/flows/${encodeURIComponent(panelId)}/title`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
+async function saveInlineEdit() {
+  if (!state.editMode || !state.editId) return;
+
+  const mode = state.editMode;
+  const id = state.editId;
+  const title = state.editValue.trim();
+  if (!title) {
+    cancelInlineEdit();
+    return;
+  }
+
+  const currentTitle = mode === "task" ? findTaskTitle(id) : findFlowTitle(id);
+  if (title === currentTitle) {
+    cancelInlineEdit();
+    return;
+  }
+
+  if (mode === "task") {
+    await renameTask(id, title);
+  } else {
+    await renameFlow(id, title);
+  }
+
+  state.editMode = null;
+  state.editId = null;
+  state.editValue = "";
+  state.pendingRefresh = false;
+  queueRefresh(0);
+}
+
 function renderPanel(panel) {
   const health = panelHealth(panel);
   const isShayan = panel.panel_id === "shayan";
@@ -184,6 +292,33 @@ function renderPanel(panel) {
       const logsDisabled = !runId;
       const statusText = model.label;
       const taskClass = `task-card task-type-${cssName(task.task_type, "generic")} task-status-${cssName(runStatus, "idle")}`;
+      const isTaskEditing = state.editMode === "task" && state.editId === task.task_id;
+      const taskTitleHtml = isTaskEditing
+        ? `
+          <div class="inline-edit">
+            <input
+              class="inline-edit-input"
+              data-edit-kind="task"
+              data-edit-id="${escapeAttr(task.task_id)}"
+              value="${escapeAttr(state.editValue)}"
+              maxlength="80"
+            />
+          </div>
+        `
+        : `
+          <div class="task-title-row">
+            <div class="task-title">${escapeHtml(task.title)}</div>
+            <button
+              class="icon-btn rename-inline-btn task-rename-start"
+              data-task-id="${escapeAttr(task.task_id)}"
+              data-task-title="${escapeAttr(task.title)}"
+              title="Rename task"
+              aria-label="Rename task"
+            >
+              <i data-lucide="pencil"></i>
+            </button>
+          </div>
+        `;
       const progressHtml = model.showProgress
         ? `<div class="progress-wrap"><div class="progress-indeterminate ${model.progressClass}"></div></div>`
         : "";
@@ -192,7 +327,7 @@ function renderPanel(panel) {
         <div class="${taskClass}">
           <div class="task-card-head">
             <div class="task-type-chip">${escapeHtml(task.task_type)}</div>
-            <div class="task-title">${escapeHtml(task.title)}</div>
+            ${taskTitleHtml}
             <div class="task-status">${escapeHtml(statusText)}</div>
           </div>
           ${progressHtml}
@@ -243,11 +378,39 @@ function renderPanel(panel) {
         })
         .join("");
 
+  const isFlowEditing = state.editMode === "flow" && state.editId === panel.panel_id;
+  const panelTitleHtml = isFlowEditing
+    ? `
+      <div class="inline-edit panel-inline-edit">
+        <input
+          class="inline-edit-input"
+          data-edit-kind="flow"
+          data-edit-id="${escapeAttr(panel.panel_id)}"
+          value="${escapeAttr(state.editValue)}"
+          maxlength="80"
+        />
+      </div>
+    `
+    : `
+      <div class="panel-title-row">
+        <h2>${escapeHtml(panel.title)}</h2>
+        <button
+          class="icon-btn rename-inline-btn flow-rename-start"
+          data-panel-id="${escapeAttr(panel.panel_id)}"
+          data-panel-title="${escapeAttr(panel.title)}"
+          title="Rename flow"
+          aria-label="Rename flow"
+        >
+          <i data-lucide="pencil"></i>
+        </button>
+      </div>
+    `;
+
   return `
     <section class="panel">
       <div class="panel-head">
         <div class="panel-head-left">
-          <h2>${escapeHtml(panel.title)}</h2>
+          ${panelTitleHtml}
           ${panel.description ? `<div class="subtitle-lite">${escapeHtml(panel.description)}</div>` : ""}
         </div>
         <div class="panel-head-right">
@@ -316,6 +479,10 @@ async function refreshDashboard() {
 }
 
 function queueRefresh(delayMs = 250) {
+  if (state.editMode) {
+    state.pendingRefresh = true;
+    return;
+  }
   if (state.refreshTimer) return;
   state.refreshTimer = setTimeout(async () => {
     state.refreshTimer = null;
@@ -388,8 +555,21 @@ function closeLogs() {
   state.logAfterId = 0;
 }
 
+function scheduleEventStreamReconnect() {
+  if (state.eventStreamReconnectTimer) return;
+  state.eventStreamReconnectTimer = setTimeout(() => {
+    state.eventStreamReconnectTimer = null;
+    setupEventStream();
+  }, 1500);
+}
+
 function setupEventStream() {
+  if (state.eventStream) {
+    state.eventStream.close();
+    state.eventStream = null;
+  }
   const stream = new EventSource("/api/events/stream");
+  state.eventStream = stream;
   const eventTypes = [
     "task.started",
     "task.progress",
@@ -406,6 +586,8 @@ function setupEventStream() {
     "workflow.stopped",
     "workflow.completed",
     "workflow.failed",
+    "task.renamed",
+    "flow.renamed",
     "schedule.triggered",
     "schedule.updated",
     "schedule.skipped",
@@ -426,8 +608,19 @@ function setupEventStream() {
     });
   });
 
+  stream.onopen = () => {
+    if (state.eventStreamReconnectTimer) {
+      clearTimeout(state.eventStreamReconnectTimer);
+      state.eventStreamReconnectTimer = null;
+    }
+  };
+
   stream.onerror = () => {
-    setTimeout(setupEventStream, 1500);
+    if (state.eventStream === stream) {
+      stream.close();
+      state.eventStream = null;
+      scheduleEventStreamReconnect();
+    }
   };
 }
 
@@ -444,6 +637,24 @@ function attachUiHandlers() {
       return;
     }
 
+    if (target.classList.contains("task-rename-start")) {
+      const taskId = target.dataset.taskId;
+      const taskTitle = target.dataset.taskTitle || "";
+      if (taskId) {
+        startInlineEdit("task", taskId, taskTitle);
+      }
+      return;
+    }
+
+    if (target.classList.contains("flow-rename-start")) {
+      const panelId = target.dataset.panelId;
+      const panelTitle = target.dataset.panelTitle || "";
+      if (panelId) {
+        startInlineEdit("flow", panelId, panelTitle);
+      }
+      return;
+    }
+
     if (target.classList.contains("task-logs")) {
       const runId = Number(target.dataset.runId || "0");
       const taskTitle = target.dataset.taskTitle || "Task";
@@ -451,6 +662,40 @@ function attachUiHandlers() {
         openLogs(runId, taskTitle).catch((error) => console.error(error));
       }
     }
+  });
+
+  document.getElementById("panel-grid").addEventListener("input", (event) => {
+    const input = event.target.closest(".inline-edit-input");
+    if (!input) return;
+    const editKind = input.dataset.editKind || null;
+    const editId = input.dataset.editId || null;
+    if (editKind !== state.editMode || editId !== state.editId) return;
+    state.editValue = input.value;
+  });
+
+  document.getElementById("panel-grid").addEventListener("keydown", (event) => {
+    const input = event.target.closest(".inline-edit-input");
+    if (!input) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveInlineEdit().catch((error) => console.error(error));
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelInlineEdit();
+    }
+  });
+
+  document.getElementById("panel-grid").addEventListener("focusout", (event) => {
+    const input = event.target.closest(".inline-edit-input");
+    if (!input) return;
+    if (!state.editMode || !state.editId) return;
+    setTimeout(() => {
+      if (state.editMode) {
+        saveInlineEdit().catch((error) => console.error(error));
+      }
+    }, 0);
   });
 
   document.getElementById("stop-all-btn").addEventListener("click", () => {
@@ -467,6 +712,16 @@ function attachUiHandlers() {
 }
 
 async function bootstrap() {
+  window.addEventListener("beforeunload", () => {
+    if (state.eventStreamReconnectTimer) {
+      clearTimeout(state.eventStreamReconnectTimer);
+      state.eventStreamReconnectTimer = null;
+    }
+    if (state.eventStream) {
+      state.eventStream.close();
+      state.eventStream = null;
+    }
+  });
   attachUiHandlers();
   await refreshDashboard();
   setupEventStream();

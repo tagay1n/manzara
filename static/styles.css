@@ -175,6 +175,16 @@ body {
   font-size: 18px;
 }
 
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.panel-inline-edit {
+  max-width: 360px;
+}
+
 .subtitle-lite {
   margin-top: 2px;
   font-size: 12px;
@@ -384,6 +394,39 @@ body {
   font-weight: 600;
 }
 
+.task-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.inline-edit {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+}
+
+.inline-edit-input {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 28px;
+  border: 1px solid #c8d6e8;
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: #fff;
+}
+
+.inline-edit-input:focus {
+  outline: none;
+  border-color: #7da5d8;
+  box-shadow: 0 0 0 2px rgba(125, 165, 216, 0.18);
+}
+
 .task-status {
   font-size: 11px;
   color: var(--muted);
@@ -473,6 +516,18 @@ body {
 .icon-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.icon-btn.rename-inline-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: #6f7f95;
+}
+
+.icon-btn.rename-inline-btn:hover {
+  border-color: #a8bbd4;
+  color: #1f4d87;
 }
 
 .icon-btn.active {

@@ -1,6 +1,8 @@
 const state = {
   payload: null,
   refreshTimer: null,
+  eventStream: null,
+  eventStreamReconnectTimer: null,
 };
 
 const WEEKDAY_LABELS = {
@@ -255,8 +257,21 @@ async function stopAll() {
   queueRefresh(0);
 }
 
+function scheduleEventStreamReconnect() {
+  if (state.eventStreamReconnectTimer) return;
+  state.eventStreamReconnectTimer = setTimeout(() => {
+    state.eventStreamReconnectTimer = null;
+    setupEventStream();
+  }, 1500);
+}
+
 function setupEventStream() {
+  if (state.eventStream) {
+    state.eventStream.close();
+    state.eventStream = null;
+  }
   const stream = new EventSource("/api/events/stream");
+  state.eventStream = stream;
   const eventTypes = [
     "task.started",
     "task.progress",
@@ -273,6 +288,8 @@ function setupEventStream() {
     "workflow.stopped",
     "workflow.completed",
     "workflow.failed",
+    "task.renamed",
+    "flow.renamed",
     "schedule.triggered",
     "schedule.updated",
     "schedule.skipped",
@@ -293,8 +310,19 @@ function setupEventStream() {
     });
   });
 
+  stream.onopen = () => {
+    if (state.eventStreamReconnectTimer) {
+      clearTimeout(state.eventStreamReconnectTimer);
+      state.eventStreamReconnectTimer = null;
+    }
+  };
+
   stream.onerror = () => {
-    setTimeout(setupEventStream, 1500);
+    if (state.eventStream === stream) {
+      stream.close();
+      state.eventStream = null;
+      scheduleEventStreamReconnect();
+    }
   };
 }
 
@@ -342,6 +370,16 @@ function attachUiHandlers() {
 }
 
 async function bootstrap() {
+  window.addEventListener("beforeunload", () => {
+    if (state.eventStreamReconnectTimer) {
+      clearTimeout(state.eventStreamReconnectTimer);
+      state.eventStreamReconnectTimer = null;
+    }
+    if (state.eventStream) {
+      state.eventStream.close();
+      state.eventStream = null;
+    }
+  });
   attachUiHandlers();
   await refreshSchedules();
   setupEventStream();

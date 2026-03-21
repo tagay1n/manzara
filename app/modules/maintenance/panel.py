@@ -66,13 +66,15 @@ def build_maintenance_panel(
     db: Database,
     maintenance: MaintenanceSettings,
     tasks: List[Dict[str, Any]],
+    *,
+    title: str = "Maintenance",
 ) -> Dict[str, Any]:
     """Build dashboard panel payload for maintenance tasks."""
     return _build_ops_panel(
         db=db,
         maintenance=maintenance,
         panel_id="maintenance",
-        title="Maintenance",
+        title=title,
         description="Repository operations and health checks.",
         tasks=tasks,
     )
@@ -82,13 +84,15 @@ def build_library_panel(
     db: Database,
     maintenance: MaintenanceSettings,
     tasks: List[Dict[str, Any]],
+    *,
+    title: str = "Library",
 ) -> Dict[str, Any]:
     """Build dashboard panel payload for library-related tasks."""
     return _build_ops_panel(
         db=db,
         maintenance=maintenance,
         panel_id="library",
-        title="Library",
+        title=title,
         description="Metadata and curation workflows.",
         tasks=tasks,
     )
