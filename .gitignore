@@ -5,6 +5,7 @@ __pycache__/
 data/*.db
 data/*.db-*
 *.log
+_artifacts/
 config.yaml
 config.local.yaml
 config copy.yaml

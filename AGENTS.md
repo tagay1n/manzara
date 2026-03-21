@@ -39,6 +39,9 @@ Notes:
 - Prefer explicit module boundaries over ad-hoc scripts.
 - Prioritize operational visibility (run state, logs, artifacts, failures).
 - Keep secrets out of git: treat `config.yaml` as local-only and maintain masked `config.example.yaml` in sync with config structure changes.
+- Keep a single dependency file policy (`requirements.txt`) unless owner explicitly asks to split.
+- When copying/adjusting embedded runtime code, update dependencies in `requirements.txt` for any new external imports.
+- For runtime-heavy tasks (for example Library `meta evaluate`), keep automated coverage where practical and record manual smoke-test expectations in README when full E2E is not in tests.
 
 ## Agent Startup Checklist
 When starting a new session in this repo:
@@ -46,6 +49,7 @@ When starting a new session in this repo:
 2. Preserve monorepo-first + modular architecture direction unless explicitly changed by owner.
 3. Convert new requirements into concrete modules, task definitions, and MVP slices.
 4. Avoid introducing heavy architecture before requirements justify it.
+5. Verify dependency/runtime assumptions for embedded flows before shipping changes.
 
 ## Source of Truth
 If this file and other notes diverge, treat `AGENTS.md` as the current guidance file and update others to match.

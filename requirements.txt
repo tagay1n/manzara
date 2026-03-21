@@ -7,12 +7,15 @@ cryptography==46.0.4
 google-genai==1.62.0
 isbnlib==3.10.14
 pydantic==2.12.5
+psycopg2-binary==2.9.11
 pymupdf==1.26.7
 pyyaml==6.0.3
 requests==2.32.5
 rich==14.3.2
 sqlalchemy==2.0.46
 typer==0.21.1
+yadisk==3.4.0
+yadisk_client @ git+https://github.com/tagay1n/yadisk-client@dd7e957bf56837cb82aa1042ca0deb52596bdd79
 
 # Testing tools (single-file dependency policy).
 pytest==8.4.2

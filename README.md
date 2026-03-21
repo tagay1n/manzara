@@ -36,6 +36,15 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
+Dependency policy:
+- This repo uses a single dependency file: `requirements.txt`.
+- If embedded runtime code introduces a new external import, add it to `requirements.txt`.
+- After pulling dependency changes, re-run:
+
+```bash
+.venv/bin/pip install -r requirements.txt
+```
+
 Run tests:
 
 ```bash
@@ -72,6 +81,12 @@ Lookup order for embedded runtimes:
 4. `./config.example.yaml` (for shape/reference only; should stay masked)
 
 Rule: when config structure changes, update `config.example.yaml` with the same keys and masked secret values.
+
+## Test Coverage Notes
+
+- API/scheduler/task-control behavior is covered by `pytest`.
+- Current gap: there is no full end-to-end execution test for `maintenance.monocorpus_meta_evaluate` runtime.
+- When changing embedded monocorpus runtime code, run a manual smoke check of `Monocorpus meta evaluate`.
 
 ## API Endpoints
 
