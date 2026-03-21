@@ -45,7 +45,7 @@ Run tests:
 ## Run
 
 ```bash
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload --timeout-graceful-shutdown 10
 ```
 
 Open:

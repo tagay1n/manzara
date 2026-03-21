@@ -6,6 +6,7 @@ const state = {
   logPollTimer: null,
   eventStream: null,
   eventStreamReconnectTimer: null,
+  eventCursor: 0,
   editMode: null,
   editId: null,
   editValue: "",
@@ -581,12 +582,29 @@ function scheduleEventStreamReconnect() {
   }, 1500);
 }
 
+function streamUrl() {
+  const cursor = Number(state.eventCursor || 0);
+  if (Number.isFinite(cursor) && cursor > 0) {
+    return `/api/events/stream?after_event_id=${encodeURIComponent(String(cursor))}`;
+  }
+  return "/api/events/stream";
+}
+
+function updateEventCursor(event, payload) {
+  const fromSse = Number(String(event?.lastEventId || ""));
+  const fromPayload = Number(payload?.event_id || 0);
+  const candidate = Number.isFinite(fromSse) && fromSse > 0 ? fromSse : fromPayload;
+  if (Number.isFinite(candidate) && candidate > Number(state.eventCursor || 0)) {
+    state.eventCursor = candidate;
+  }
+}
+
 function setupEventStream() {
   if (state.eventStream) {
     state.eventStream.close();
     state.eventStream = null;
   }
-  const stream = new EventSource("/api/events/stream");
+  const stream = new EventSource(streamUrl());
   state.eventStream = stream;
   const eventTypes = [
     "task.started",
@@ -618,6 +636,7 @@ function setupEventStream() {
     stream.addEventListener(name, (event) => {
       try {
         const payload = JSON.parse(event.data);
+        updateEventCursor(event, payload);
         document.getElementById("last-event").textContent = `Last event: ${payload.type} @ ${new Date(payload.ts).toLocaleTimeString()}`;
         maybePlayTaskNotification(payload, event.lastEventId || "");
       } catch (_error) {
