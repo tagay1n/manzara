@@ -5,7 +5,7 @@ from dirs import Dirs
 import sys
 import yaml
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
 import hashlib
 from sqlalchemy import select
 from collections import deque
@@ -21,13 +21,53 @@ prefix = "enc:"
 
 workdir = "~/.monocorpus"
 REPO_ROOT = Path(__file__).resolve().parents[4]
+REDACTED_SENTINEL = "<REDACTED>"
 
 
 def read_config(config_file: str = "config.yaml"):
-    """Load YAML config from repo root (defaults to `config.yaml`)."""
-    config_path = REPO_ROOT / config_file
-    with open(config_path, 'r') as file:
-        return yaml.safe_load(file)
+    """Load YAML config with local-first precedence and redaction guard."""
+    env_override = os.environ.get("MANZARA_CONFIG_PATH")
+    candidates: list[Path]
+    if env_override:
+        candidates = [Path(env_override).expanduser()]
+    elif config_file != "config.yaml":
+        candidates = [REPO_ROOT / config_file]
+    else:
+        candidates = [
+            REPO_ROOT / "config.local.yaml",
+            REPO_ROOT / "config.yaml",
+            REPO_ROOT / "config.example.yaml",
+        ]
+
+    checked: list[str] = []
+    for config_path in candidates:
+        checked.append(str(config_path))
+        if not config_path.exists():
+            continue
+        with open(config_path, "r", encoding="utf-8") as file:
+            config = yaml.safe_load(file) or {}
+        if not isinstance(config, dict):
+            raise ValueError(f"Config at {config_path} must be a YAML mapping")
+        if _contains_redacted(config):
+            raise ValueError(
+                f"Config at {config_path} contains '{REDACTED_SENTINEL}'. "
+                "Use a local unmasked config (config.local.yaml or config.yaml)."
+            )
+        return config
+
+    searched = ", ".join(checked)
+    raise FileNotFoundError(f"No config file found. Checked: {searched}")
+
+
+def _contains_redacted(node: Any) -> bool:
+    """Return True if config node contains placeholder redacted values."""
+    if isinstance(node, str):
+        return REDACTED_SENTINEL in node
+    if isinstance(node, dict):
+        return any(_contains_redacted(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_contains_redacted(value) for value in node)
+    return False
 
 
 def get_engine(echo: bool = False):

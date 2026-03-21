@@ -38,6 +38,7 @@ Notes:
 - Keep complexity controlled and architecture understandable.
 - Prefer explicit module boundaries over ad-hoc scripts.
 - Prioritize operational visibility (run state, logs, artifacts, failures).
+- Keep secrets out of git: treat `config.yaml` as local-only and maintain masked `config.example.yaml` in sync with config structure changes.
 
 ## Agent Startup Checklist
 When starting a new session in this repo:

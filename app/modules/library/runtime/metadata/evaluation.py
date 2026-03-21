@@ -15,7 +15,10 @@ from queue import Empty, Queue
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
-import fitz
+try:
+    import pymupdf as fitz
+except ModuleNotFoundError:  # pragma: no cover - compatibility fallback
+    import fitz  # type: ignore[no-redef]
 import requests
 from google.genai.errors import ClientError
 from google.genai.errors import ServerError

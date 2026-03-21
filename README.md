@@ -68,7 +68,16 @@ Environment variables:
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 
 Monocorpus embedded runtimes (`sync` and `meta evaluate`) read shared YAML config from repo root:
-- `./config.yaml`
+- Local real config (gitignored): `./config.yaml` (or `./config.local.yaml`)
+- Safe committed copy: `./config.example.yaml`
+
+Lookup order for embedded runtimes:
+1. `MANZARA_CONFIG_PATH` (if set)
+2. `./config.local.yaml`
+3. `./config.yaml`
+4. `./config.example.yaml` (for shape/reference only; should stay masked)
+
+Rule: when config structure changes, update `config.example.yaml` with the same keys and masked secret values.
 
 ## API Endpoints
 
