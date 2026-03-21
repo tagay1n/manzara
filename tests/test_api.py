@@ -26,12 +26,19 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     assert response.status_code == 200
     payload = response.json()
 
-    panel = payload["panels"][0]
-    assert panel["panel_id"] == "shayan"
-    task_ids = {task["task_id"] for task in panel["tasks"]}
+    panels = {panel["panel_id"]: panel for panel in payload["panels"]}
+    assert "shayan" in panels
+    assert "maintenance" in panels
+
+    shayan = panels["shayan"]
+    task_ids = {task["task_id"] for task in shayan["tasks"]}
     assert {"shayan.quick", "shayan.long", "shayan.ignore_sigint"} <= task_ids
     assert {"shayan.scan_changes", "shayan.download_new"} <= task_ids
-    assert panel["workflows"][0]["workflow_id"] == SHAYAN_WEEKLY_WORKFLOW_ID
+    assert shayan["workflows"][0]["workflow_id"] == SHAYAN_WEEKLY_WORKFLOW_ID
+
+    maintenance = panels["maintenance"]
+    maintenance_task_ids = {task["task_id"] for task in maintenance["tasks"]}
+    assert "maintenance.monocorpus_sync" in maintenance_task_ids
 
 
 def test_update_schedule_and_recompute_next_run(test_client) -> None:
@@ -47,6 +54,17 @@ def test_update_schedule_and_recompute_next_run(test_client) -> None:
     assert int(schedule["day_of_week"]) == 5
     assert schedule["time_of_day"] == "10:45"
     assert schedule["next_run_at"] is not None
+
+
+def test_schedules_endpoint_returns_workflows(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.get("/api/schedules")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "workflows" in payload
+    workflow_ids = {item["workflow_id"] for item in payload["workflows"]}
+    assert SHAYAN_WEEKLY_WORKFLOW_ID in workflow_ids
 
 
 def test_workflow_run_skips_download_when_no_new(

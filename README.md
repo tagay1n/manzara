@@ -4,6 +4,7 @@ Manzara is a cloud-console style dashboard for managing long-running content wor
 
 This first MVP slice includes:
 - Shayan panel with icon-only task controls.
+- Maintenance panel with operations task controls.
 - SQLite-backed task/runs/logs/events storage.
 - Start -> graceful stop -> force stop toggles.
 - Header-level two-step stop-all control.
@@ -16,6 +17,7 @@ This first MVP slice includes:
 - Panel: `Shayan`
 - Task: `scan for changes`
 - Task: `download new`
+- Task: `maintenance monocorpus sync`
 - Workflow: `Weekly Sync` (`shayan.weekly_sync`)
 - Schedule: weekly, overlap skip, catch-up once after downtime
 - Run history + live logs
@@ -52,7 +54,8 @@ Run tests:
 ```
 
 Open:
-- `http://127.0.0.1:8080`
+- `http://127.0.0.1:8080/dashboard`
+- `http://127.0.0.1:8080/schedules`
 
 ## Configuration
 
@@ -61,11 +64,13 @@ Environment variables:
 - `MANZARA_ENABLE_SCHEDULER` (default: `1`; set `0` to disable scheduled triggers)
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
 - `SHAYAN_OUTPUT_PATH` (default: `/home/tans1q/video-archive`)
+- `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 
 ## API Endpoints
 
 - `GET /api/health`
 - `GET /api/dashboard`
+- `GET /api/schedules`
 - `POST /api/tasks/{task_id}/toggle`
 - `POST /api/workflows/{workflow_id}/run`
 - `GET /api/workflows/{workflow_id}`

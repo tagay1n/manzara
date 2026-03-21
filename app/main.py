@@ -10,10 +10,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
+from app.modules.maintenance.panel import build_maintenance_panel
+from app.modules.maintenance.tasks import maintenance_task_definitions
 from app.modules.shayan.panel import build_shayan_panel
 from app.modules.shayan.tasks import shayan_task_definitions
 from app.modules.shayan.workflow import (
@@ -52,7 +54,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 def on_startup() -> None:
     """Initialize schema and seed known task/workflow definitions."""
     state.db.init_schema()
-    state.db.seed_tasks(shayan_task_definitions(state.settings.shayan))
+    task_defs = [
+        *shayan_task_definitions(state.settings.shayan),
+        *maintenance_task_definitions(state.settings.maintenance),
+    ]
+    state.db.seed_tasks(task_defs)
     state.db.seed_workflow_bundle(shayan_workflow_bundle(state.settings.shayan))
 
     recovered_runs = state.db.recover_active_runs()
@@ -86,9 +92,21 @@ def on_shutdown() -> None:
 
 
 @app.get("/")
-def index() -> FileResponse:
-    """Serve dashboard entrypoint."""
-    return FileResponse(STATIC_DIR / "index.html")
+def index() -> RedirectResponse:
+    """Redirect root to dashboard page."""
+    return RedirectResponse(url="/dashboard", status_code=307)
+
+
+@app.get("/dashboard")
+def dashboard_page() -> FileResponse:
+    """Serve dashboard page."""
+    return FileResponse(STATIC_DIR / "dashboard.html")
+
+
+@app.get("/schedules")
+def schedules_page() -> FileResponse:
+    """Serve schedules page."""
+    return FileResponse(STATIC_DIR / "schedules.html")
 
 
 @app.get("/api/health")
@@ -123,12 +141,18 @@ def build_dashboard_payload() -> Dict[str, Any]:
             }
         )
 
-    workflows = state.db.list_workflows_with_latest_run(panel_id="shayan")
+    workflows = state.db.list_workflows_with_latest_run()
+    shayan_workflows = [item for item in workflows if item.get("panel_id") == "shayan"]
     shayan_panel = build_shayan_panel(
         db=state.db,
         shayan=state.settings.shayan,
         tasks=tasks_by_panel.get("shayan", []),
-        workflows=workflows,
+        workflows=shayan_workflows,
+    )
+    maintenance_panel = build_maintenance_panel(
+        db=state.db,
+        maintenance=state.settings.maintenance,
+        tasks=tasks_by_panel.get("maintenance", []),
     )
 
     active_runs = state.db.list_active_runs()
@@ -156,7 +180,7 @@ def build_dashboard_payload() -> Dict[str, Any]:
             "failed_runs": len([r for r in state.db.list_recent_runs(50) if r["status"] == "failed"]),
             "stop_all_state": stop_all_state,
         },
-        "panels": [shayan_panel],
+        "panels": [shayan_panel, maintenance_panel],
         "recent_runs": state.db.list_recent_runs(20),
         "scheduler": {
             "enabled": state.settings.scheduler_enabled,
@@ -164,10 +188,80 @@ def build_dashboard_payload() -> Dict[str, Any]:
     }
 
 
+def build_schedules_payload() -> Dict[str, Any]:
+    """Compose schedules page payload from workflow/schedule state."""
+    workflows = state.db.list_workflows_with_latest_run()
+    workflow_items: list[Dict[str, Any]] = []
+    for workflow in workflows:
+        schedule: Dict[str, Any] | None = None
+        if workflow.get("schedule_id"):
+            schedule = {
+                "schedule_id": workflow.get("schedule_id"),
+                "schedule_type": workflow.get("schedule_type"),
+                "day_of_week": workflow.get("day_of_week"),
+                "time_of_day": workflow.get("time_of_day"),
+                "timezone": workflow.get("timezone"),
+                "enabled": bool(workflow.get("schedule_enabled", False)),
+                "overlap_policy": workflow.get("overlap_policy"),
+                "catchup_policy": workflow.get("catchup_policy"),
+                "next_run_at": workflow.get("next_run_at"),
+                "last_run_at": workflow.get("last_run_at"),
+            }
+
+        workflow_items.append(
+            {
+                "workflow_id": workflow["workflow_id"],
+                "panel_id": workflow["panel_id"],
+                "title": workflow["title"],
+                "description": workflow.get("description") or "",
+                "enabled": bool(workflow.get("enabled", True)),
+                "run": {
+                    "workflow_run_id": workflow.get("workflow_run_id"),
+                    "status": workflow.get("run_status") or "idle",
+                    "trigger_source": workflow.get("trigger_source"),
+                    "started_at": workflow.get("started_at"),
+                    "finished_at": workflow.get("finished_at"),
+                    "error_text": workflow.get("error_text"),
+                },
+                "schedule": schedule,
+            }
+        )
+
+    active_runs = state.db.list_active_runs()
+    stop_all_state = "disabled"
+    if active_runs:
+        stop_all_state = (
+            "normal"
+            if any(run.get("stop_mode") is None for run in active_runs)
+            else "armed"
+        )
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "global": {
+            "active_tasks": len(active_runs),
+            "active_workflows": len(
+                [w for w in workflow_items if w["run"]["status"] in {"starting", "running"}]
+            ),
+            "stop_all_state": stop_all_state,
+        },
+        "scheduler": {
+            "enabled": state.settings.scheduler_enabled,
+        },
+        "workflows": workflow_items,
+    }
+
+
 @app.get("/api/dashboard")
 def get_dashboard() -> JSONResponse:
     """Return current dashboard state."""
     return JSONResponse(build_dashboard_payload())
+
+
+@app.get("/api/schedules")
+def get_schedules() -> JSONResponse:
+    """Return workflows and schedule configuration state."""
+    return JSONResponse(build_schedules_payload())
 
 
 @app.post("/api/tasks/{task_id}/toggle")

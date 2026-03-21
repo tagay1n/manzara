@@ -6,6 +6,10 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.modules.maintenance.config import (
+    MaintenanceSettings,
+    load_maintenance_settings,
+)
 from app.modules.shayan.config import ShayanSettings, load_shayan_settings
 
 
@@ -15,6 +19,7 @@ class Settings:
 
     db_path: Path
     shayan: ShayanSettings
+    maintenance: MaintenanceSettings
     scheduler_enabled: bool
 
 
@@ -29,5 +34,6 @@ def load_settings() -> Settings:
     return Settings(
         db_path=db_path,
         shayan=load_shayan_settings(),
+        maintenance=load_maintenance_settings(),
         scheduler_enabled=scheduler_enabled,
     )

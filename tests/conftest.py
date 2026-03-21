@@ -9,6 +9,7 @@ from typing import Iterator, Tuple
 import pytest
 from fastapi.testclient import TestClient
 
+from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.shayan.config import ShayanSettings
 from app.settings import Settings
 
@@ -118,9 +119,11 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
         summary_file=artifacts / "last-main-run-summary.json",
         latest_snapshot_file=artifacts / "snapshots" / "latest.json",
     )
+    maintenance = MaintenanceSettings(monocorpus_repo_path=tmp_path / "monocorpus")
     settings = Settings(
         db_path=tmp_path / "manzara-test.db",
         shayan=shayan,
+        maintenance=maintenance,
         scheduler_enabled=False,
     )
 

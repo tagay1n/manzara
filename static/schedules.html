@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Manzara Schedules</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand-wrap">
+          <div class="brand">Manzara</div>
+          <div class="subtitle">Bird-eye view of Tatar content pipelines</div>
+        </div>
+        <nav class="top-nav" aria-label="Main navigation">
+          <a href="/dashboard" class="nav-link">Dashboard</a>
+          <a href="/schedules" class="nav-link active" aria-current="page">Schedules</a>
+        </nav>
+      </div>
+      <div class="top-controls">
+        <div id="global-status" class="status-pill">Tasks: 0 • Flows: 0</div>
+        <button
+          id="stop-all-btn"
+          class="icon-btn amber"
+          title="Graceful stop all running tasks; press again to force stop"
+          aria-label="Stop all tasks"
+          disabled
+        >
+          <i data-lucide="square"></i>
+        </button>
+      </div>
+    </header>
+
+    <main class="dashboard">
+      <section class="runs-card schedules-card">
+        <h2>Workflow Schedules</h2>
+        <div id="schedule-grid" class="workflow-stack"></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>manzara v0.1.0</span>
+      <span id="last-event">Last event: n/a</span>
+    </footer>
+
+    <script src="/static/schedules.js"></script>
+  </body>
+</html>
