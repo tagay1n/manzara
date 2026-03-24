@@ -1,14 +1,16 @@
-"""SQLite access layer for Manzara."""
+"""PostgreSQL access layer for Manzara."""
 
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extras import RealDictCursor
 
 ACTIVE_STATUSES = (
     "starting",
@@ -28,263 +30,339 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class Database:
-    """Thin repository layer over SQLite with thread-safe writes."""
+class _CursorResult:
+    """SQLite-like cursor result wrapper over psycopg2 cursors."""
 
-    def __init__(self, db_path: Path):
-        self.db_path = db_path
+    def __init__(self, conn: psycopg2.extensions.connection, cursor: RealDictCursor):
+        self._conn = conn
+        self._cursor = cursor
+
+    def fetchone(self) -> Optional[Dict[str, Any]]:
+        return self._cursor.fetchone()
+
+    def fetchall(self) -> List[Dict[str, Any]]:
+        return self._cursor.fetchall()
+
+    def scalar(self) -> Any:
+        row = self.fetchone()
+        if row is None:
+            return None
+        return next(iter(row.values()), None)
+
+    @property
+    def rowcount(self) -> int:
+        return int(self._cursor.rowcount or 0)
+
+    @property
+    def lastrowid(self) -> int:
+        with self._conn.cursor() as cursor:
+            cursor.execute("SELECT LASTVAL()")
+            row = cursor.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def __del__(self) -> None:
+        try:
+            self._cursor.close()
+        except Exception:
+            pass
+
+
+class _ConnectionAdapter:
+    """Connection wrapper with qmark placeholder compatibility."""
+
+    def __init__(self, conn: psycopg2.extensions.connection):
+        self._conn = conn
+
+    @staticmethod
+    def _convert_qmark(query: str) -> str:
+        return query.replace("?", "%s")
+
+    def execute(
+        self,
+        query: str,
+        params: Optional[Sequence[Any]] = None,
+    ) -> _CursorResult:
+        cursor = self._conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(self._convert_qmark(query), tuple(params or ()))
+        return _CursorResult(self._conn, cursor)
+
+
+class Database:
+    """Thin repository layer over PostgreSQL with thread-safe writes."""
+
+    def __init__(self, database_url: str, schema: str = "monocorpus"):
+        self.database_url = str(database_url).strip()
+        if not self.database_url:
+            raise ValueError("database_url must be non-empty")
+        if self.database_url.startswith("postgresql+psycopg2://"):
+            self.database_url = "postgresql://" + self.database_url.split("://", 1)[1]
+        if self.database_url.startswith("postgresql+psycopg://"):
+            self.database_url = "postgresql://" + self.database_url.split("://", 1)[1]
+        self.schema = str(schema or "monocorpus").strip() or "monocorpus"
         self._lock = threading.Lock()
 
     @contextmanager
-    def _connect(self) -> Iterable[sqlite3.Connection]:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA foreign_keys=ON;")
+    def _connect(self) -> Iterable[_ConnectionAdapter]:
+        conn = psycopg2.connect(self.database_url)
         try:
-            yield conn
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema))
+                )
+                cursor.execute(
+                    sql.SQL("SET search_path TO {}, public").format(sql.Identifier(self.schema))
+                )
+            yield _ConnectionAdapter(conn)
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
     def init_schema(self) -> None:
         """Create required tables and indexes if they do not exist."""
-        with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS task_definitions (
-                    task_id TEXT PRIMARY KEY,
-                    panel_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    task_type TEXT NOT NULL,
-                    icon_idle TEXT NOT NULL,
-                    icon_running TEXT NOT NULL,
-                    command_json TEXT NOT NULL,
-                    cwd TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS panel_definitions (
-                    panel_id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS runs (
-                    run_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id TEXT NOT NULL,
-                    panel_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    stop_mode TEXT,
-                    started_at TEXT NOT NULL,
-                    finished_at TEXT,
-                    heartbeat_at TEXT,
-                    pid INTEGER,
-                    exit_code INTEGER,
-                    progress_current INTEGER,
-                    progress_total INTEGER,
-                    error_text TEXT,
-                    FOREIGN KEY (task_id) REFERENCES task_definitions(task_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS run_logs (
-                    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id INTEGER NOT NULL,
-                    ts TEXT NOT NULL,
-                    stream TEXT NOT NULL,
-                    line TEXT NOT NULL,
-                    FOREIGN KEY (run_id) REFERENCES runs(run_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS events (
-                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    task_id TEXT,
-                    run_id INTEGER,
-                    panel_id TEXT,
-                    payload_json TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS workflows (
-                    workflow_id TEXT PRIMARY KEY,
-                    panel_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    enabled INTEGER NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS workflow_steps (
-                    workflow_id TEXT NOT NULL,
-                    step_order INTEGER NOT NULL,
-                    step_type TEXT NOT NULL,
-                    task_id TEXT,
-                    condition_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (workflow_id, step_order),
-                    FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE
-                );
-
-                CREATE TABLE IF NOT EXISTS workflow_schedules (
-                    schedule_id TEXT PRIMARY KEY,
-                    workflow_id TEXT NOT NULL,
-                    schedule_type TEXT NOT NULL,
-                    day_of_week INTEGER NOT NULL,
-                    time_of_day TEXT NOT NULL,
-                    timezone TEXT NOT NULL,
-                    enabled INTEGER NOT NULL,
-                    overlap_policy TEXT NOT NULL,
-                    catchup_policy TEXT NOT NULL,
-                    next_run_at TEXT,
-                    last_run_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE
-                );
-
-                CREATE TABLE IF NOT EXISTS workflow_runs (
-                    workflow_run_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    workflow_id TEXT NOT NULL,
-                    schedule_id TEXT,
-                    trigger_source TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    finished_at TEXT,
-                    context_json TEXT NOT NULL,
-                    error_text TEXT,
-                    FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id),
-                    FOREIGN KEY (schedule_id) REFERENCES workflow_schedules(schedule_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS workflow_step_runs (
-                    step_run_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    workflow_run_id INTEGER NOT NULL,
-                    step_order INTEGER NOT NULL,
-                    task_id TEXT,
-                    status TEXT NOT NULL,
-                    task_run_id INTEGER,
-                    started_at TEXT NOT NULL,
-                    finished_at TEXT,
-                    output_json TEXT NOT NULL,
-                    error_text TEXT,
-                    FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(workflow_run_id) ON DELETE CASCADE,
-                    FOREIGN KEY (task_run_id) REFERENCES runs(run_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS normalization_canonicals (
-                    canonical_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    entity_type TEXT NOT NULL,
-                    display_name TEXT NOT NULL,
-                    normalized_name TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'active',
-                    merged_into_id INTEGER,
-                    notes TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS normalization_aliases (
-                    alias_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    entity_type TEXT NOT NULL,
-                    raw_name TEXT NOT NULL,
-                    normalized_name TEXT NOT NULL,
-                    script_label TEXT NOT NULL,
-                    docs_count INTEGER NOT NULL DEFAULT 0,
-                    mentions_count INTEGER NOT NULL DEFAULT 0,
-                    marker_count INTEGER NOT NULL DEFAULT 0,
-                    decision_status TEXT NOT NULL DEFAULT 'pending',
-                    canonical_id INTEGER,
-                    confidence REAL,
-                    source TEXT,
-                    reason TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE(entity_type, raw_name),
-                    FOREIGN KEY (canonical_id) REFERENCES normalization_canonicals(canonical_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS normalization_suggestions (
-                    suggestion_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    entity_type TEXT NOT NULL,
-                    raw_name TEXT NOT NULL,
-                    normalized_name TEXT NOT NULL,
-                    target_canonical_id INTEGER,
-                    suggestion_kind TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    confidence_band TEXT NOT NULL,
-                    model TEXT,
-                    rationale TEXT,
-                    status TEXT NOT NULL DEFAULT 'open',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (target_canonical_id) REFERENCES normalization_canonicals(canonical_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS normalization_events (
-                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    entity_type TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    reverted INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_runs_task_status ON runs(task_id, status);
-                CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
-                CREATE INDEX IF NOT EXISTS idx_run_logs_run_id ON run_logs(run_id, log_id);
-                CREATE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
-                CREATE INDEX IF NOT EXISTS idx_panels_title ON panel_definitions(title);
-                CREATE INDEX IF NOT EXISTS idx_workflow_schedules_enabled_next
-                    ON workflow_schedules(enabled, next_run_at);
-                CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
-                    ON workflow_runs(workflow_id, status);
-                CREATE INDEX IF NOT EXISTS idx_workflow_step_runs_workflow_run
-                    ON workflow_step_runs(workflow_run_id, step_order);
-                CREATE INDEX IF NOT EXISTS idx_norm_canonicals_entity_status
-                    ON normalization_canonicals(entity_type, status);
-                CREATE INDEX IF NOT EXISTS idx_norm_aliases_entity_status
-                    ON normalization_aliases(entity_type, decision_status);
-                CREATE INDEX IF NOT EXISTS idx_norm_aliases_entity_raw
-                    ON normalization_aliases(entity_type, raw_name);
-                CREATE INDEX IF NOT EXISTS idx_norm_suggestions_entity_status
-                    ON normalization_suggestions(entity_type, status);
-                CREATE INDEX IF NOT EXISTS idx_norm_events_entity_created
-                    ON normalization_events(entity_type, created_at DESC);
-                """
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS task_definitions (
+                task_id TEXT PRIMARY KEY,
+                panel_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                task_type TEXT NOT NULL,
+                icon_idle TEXT NOT NULL,
+                icon_running TEXT NOT NULL,
+                command_json TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS panel_definitions (
+                panel_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS runs (
+                run_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                panel_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                stop_mode TEXT,
+                pid BIGINT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                heartbeat_at TEXT,
+                exit_code BIGINT,
+                error_text TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES task_definitions(task_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS run_logs (
+                log_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                run_id BIGINT NOT NULL,
+                stream TEXT NOT NULL,
+                line TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                event_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                type TEXT NOT NULL,
+                task_id TEXT,
+                run_id BIGINT,
+                panel_id TEXT,
+                ts TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS workflows (
+                workflow_id TEXT PRIMARY KEY,
+                panel_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                enabled BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS workflow_steps (
+                workflow_id TEXT NOT NULL,
+                step_order BIGINT NOT NULL,
+                step_type TEXT NOT NULL,
+                task_id TEXT,
+                condition_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (workflow_id, step_order),
+                FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS workflow_schedules (
+                schedule_id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                schedule_type TEXT NOT NULL,
+                day_of_week BIGINT NOT NULL,
+                time_of_day TEXT NOT NULL,
+                timezone TEXT NOT NULL,
+                enabled BIGINT NOT NULL,
+                overlap_policy TEXT NOT NULL,
+                catchup_policy TEXT NOT NULL,
+                next_run_at TEXT,
+                last_run_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+                workflow_run_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                schedule_id TEXT,
+                trigger_source TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                context_json TEXT NOT NULL,
+                error_text TEXT,
+                FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id),
+                FOREIGN KEY (schedule_id) REFERENCES workflow_schedules(schedule_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS workflow_step_runs (
+                step_run_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                workflow_run_id BIGINT NOT NULL,
+                step_order BIGINT NOT NULL,
+                task_id TEXT,
+                status TEXT NOT NULL,
+                task_run_id BIGINT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                output_json TEXT NOT NULL,
+                error_text TEXT,
+                FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(workflow_run_id) ON DELETE CASCADE,
+                FOREIGN KEY (task_run_id) REFERENCES runs(run_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS normalization_canonicals (
+                canonical_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                merged_into_id BIGINT,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS normalization_aliases (
+                alias_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                raw_name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                script_label TEXT NOT NULL,
+                docs_count BIGINT NOT NULL DEFAULT 0,
+                mentions_count BIGINT NOT NULL DEFAULT 0,
+                marker_count BIGINT NOT NULL DEFAULT 0,
+                decision_status TEXT NOT NULL DEFAULT 'pending',
+                canonical_id BIGINT,
+                confidence DOUBLE PRECISION,
+                source TEXT,
+                reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(entity_type, raw_name),
+                FOREIGN KEY (canonical_id) REFERENCES normalization_canonicals(canonical_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS normalization_suggestions (
+                suggestion_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                raw_name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                target_canonical_id BIGINT,
+                suggestion_kind TEXT NOT NULL,
+                confidence DOUBLE PRECISION NOT NULL,
+                confidence_band TEXT NOT NULL,
+                model TEXT,
+                rationale TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (target_canonical_id) REFERENCES normalization_canonicals(canonical_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS normalization_events (
+                event_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                action TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                reverted BIGINT NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_runs_task_status ON runs(task_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)",
+            "CREATE INDEX IF NOT EXISTS idx_run_logs_run_id ON run_logs(run_id, log_id)",
+            "CREATE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id)",
+            "CREATE INDEX IF NOT EXISTS idx_panels_title ON panel_definitions(title)",
+            "CREATE INDEX IF NOT EXISTS idx_workflow_schedules_enabled_next ON workflow_schedules(enabled, next_run_at)",
+            "CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(workflow_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_workflow_step_runs_workflow_run ON workflow_step_runs(workflow_run_id, step_order)",
+            "CREATE INDEX IF NOT EXISTS idx_norm_canonicals_entity_status ON normalization_canonicals(entity_type, status)",
+            "CREATE INDEX IF NOT EXISTS idx_norm_aliases_entity_status ON normalization_aliases(entity_type, decision_status)",
+            "CREATE INDEX IF NOT EXISTS idx_norm_aliases_entity_raw ON normalization_aliases(entity_type, raw_name)",
+            "CREATE INDEX IF NOT EXISTS idx_norm_suggestions_entity_status ON normalization_suggestions(entity_type, status)",
+            "CREATE INDEX IF NOT EXISTS idx_norm_events_entity_created ON normalization_events(entity_type, created_at DESC)",
+        ]
+        with self._connect() as conn:
+            for statement in statements:
+                conn.execute(statement)
 
-    def _row_to_task(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_task(self, row: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(row)
         payload["command"] = json.loads(payload.pop("command_json"))
         return payload
 
-    def _row_to_workflow(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_workflow(self, row: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(row)
         payload["enabled"] = bool(payload.get("enabled", 0))
         return payload
 
-    def _row_to_step(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_step(self, row: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(row)
         payload["condition"] = json.loads(payload.pop("condition_json") or "{}")
         return payload
 
-    def _row_to_schedule(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_schedule(self, row: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(row)
         payload["enabled"] = bool(payload.get("enabled", 0))
         return payload
 
-    def _row_to_workflow_run(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_workflow_run(self, row: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(row)
         payload["context"] = json.loads(payload.pop("context_json") or "{}")
         return payload
 
-    def _row_to_workflow_step_run(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_workflow_step_run(self, row: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(row)
         payload["output"] = json.loads(payload.pop("output_json") or "{}")
         return payload
@@ -333,9 +411,10 @@ class Database:
                 for item in panel_defs:
                     conn.execute(
                         """
-                        INSERT OR IGNORE INTO panel_definitions (
+                        INSERT INTO panel_definitions (
                             panel_id, title, created_at, updated_at
                         ) VALUES (?, ?, ?, ?)
+                        ON CONFLICT(panel_id) DO NOTHING
                         """,
                         (
                             item["panel_id"],
@@ -404,13 +483,14 @@ class Database:
                 if schedule:
                     conn.execute(
                         """
-                        INSERT OR IGNORE INTO workflow_schedules (
+                        INSERT INTO workflow_schedules (
                             schedule_id, workflow_id, schedule_type,
                             day_of_week, time_of_day, timezone,
                             enabled, overlap_policy, catchup_policy,
                             next_run_at, last_run_at,
                             created_at, updated_at
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(schedule_id) DO NOTHING
                         """,
                         (
                             schedule["schedule_id"],
@@ -894,14 +974,16 @@ class Database:
                     """
                     INSERT INTO runs (
                         task_id, panel_id, status, stop_mode,
-                        started_at, heartbeat_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        started_at, heartbeat_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task["task_id"],
                         task["panel_id"],
                         "starting",
                         None,
+                        now,
+                        now,
                         now,
                         now,
                     ),
@@ -916,10 +998,10 @@ class Database:
                 conn.execute(
                     """
                     UPDATE runs
-                    SET status = ?, pid = ?, heartbeat_at = ?
+                    SET status = ?, pid = ?, heartbeat_at = ?, updated_at = ?
                     WHERE run_id = ?
                     """,
-                    ("running", pid, now, run_id),
+                    ("running", pid, now, now, run_id),
                 )
 
     def heartbeat(self, run_id: int) -> None:
@@ -928,24 +1010,25 @@ class Database:
         with self._lock:
             with self._connect() as conn:
                 conn.execute(
-                    "UPDATE runs SET heartbeat_at = ? WHERE run_id = ?",
-                    (now, run_id),
+                    "UPDATE runs SET heartbeat_at = ?, updated_at = ? WHERE run_id = ?",
+                    (now, now, run_id),
                 )
 
     def set_stop_mode(self, run_id: int, mode: str) -> bool:
         """Move an active run into graceful or force stopping mode."""
         status = "stopping_graceful" if mode == "graceful" else "stopping_force"
+        now = utc_now()
         placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
         with self._lock:
             with self._connect() as conn:
                 cur = conn.execute(
                     f"""
                     UPDATE runs
-                    SET stop_mode = ?, status = ?, heartbeat_at = ?
+                    SET stop_mode = ?, status = ?, heartbeat_at = ?, updated_at = ?
                     WHERE run_id = ?
                       AND status IN ({placeholders})
                     """,
-                    (mode, status, utc_now(), run_id, *ACTIVE_STATUSES),
+                    (mode, status, now, now, run_id, *ACTIVE_STATUSES),
                 )
                 return int(cur.rowcount or 0) > 0
 
@@ -964,10 +1047,10 @@ class Database:
                     """
                     UPDATE runs
                     SET status = ?, exit_code = ?, error_text = ?,
-                        finished_at = ?, heartbeat_at = ?
+                        finished_at = ?, heartbeat_at = ?, updated_at = ?
                     WHERE run_id = ?
                     """,
-                    (status, exit_code, error_text, now, now, run_id),
+                    (status, exit_code, error_text, now, now, now, run_id),
                 )
 
     def append_log(self, run_id: int, stream: str, line: str) -> int:
@@ -1216,13 +1299,14 @@ class Database:
                     SET status = 'failed',
                         finished_at = ?,
                         heartbeat_at = ?,
+                        updated_at = ?,
                         error_text = COALESCE(
                             error_text,
                             'Recovered after Manzara restart; previous process state is unknown.'
                         )
                     WHERE status IN ({placeholders})
                     """,
-                    (now, now, *ACTIVE_STATUSES),
+                    (now, now, now, *ACTIVE_STATUSES),
                 )
                 return int(cur.rowcount or 0)
 

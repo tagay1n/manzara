@@ -91,7 +91,7 @@ class AppState:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.db = Database(settings.db_path)
+        self.db = Database(settings.database_url, schema=settings.database_schema)
         self.runner = TaskRunner(self.db)
         self.shutting_down = False
         self.workflow_service = WorkflowService(

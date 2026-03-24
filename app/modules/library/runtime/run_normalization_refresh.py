@@ -35,7 +35,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     settings = load_settings()
-    db = Database(settings.db_path)
+    db = Database(settings.database_url, schema=settings.database_schema)
     db.init_schema()
     result = refresh_suggestions(
         db,
@@ -48,4 +48,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

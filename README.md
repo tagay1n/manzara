@@ -12,7 +12,7 @@ English:
 
 Current architecture:
 - FastAPI backend
-- SQLite state store (tasks, runs, logs, events, workflows, schedules)
+- PostgreSQL state store (tasks, runs, logs, events, workflows, schedules)
 - Modular flows in one monorepo (`shayan`, `maintenance`, `library`)
 - Live updates via SSE (`/api/events/stream`)
 
@@ -102,7 +102,8 @@ Dependency policy:
 ## Configuration
 
 Environment variables:
-- `MANZARA_DB_PATH` (default: `data/manzara.db`)
+- `MANZARA_DATABASE_URL` (PostgreSQL URL; required unless available in local YAML config)
+- `MANZARA_DB_SCHEMA` (default: `monocorpus`)
 - `MANZARA_ENABLE_SCHEDULER` (default: `1`; set `0` to disable scheduler)
 - `MANZARA_CONFIG_PATH` (optional explicit YAML config path for embedded runtimes)
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)

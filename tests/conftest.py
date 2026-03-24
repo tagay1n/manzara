@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import time
+import uuid
 from pathlib import Path
 from typing import Iterator, Tuple
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
 
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.shayan.config import ShayanSettings
@@ -100,10 +104,65 @@ def _test_task_defs(shayan: ShayanSettings):
     ]
 
 
+def _contains_redacted(node: object) -> bool:
+    if isinstance(node, str):
+        return "<REDACTED>" in node
+    if isinstance(node, dict):
+        return any(_contains_redacted(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_contains_redacted(value) for value in node)
+    return False
+
+
+def _resolve_test_database_url() -> str:
+    for env_name in ("MANZARA_TEST_DATABASE_URL", "MANZARA_DATABASE_URL"):
+        value = str(os.environ.get(env_name) or "").strip()
+        if value:
+            return value
+
+    config_override = os.environ.get("MANZARA_CONFIG_PATH")
+    candidates: list[Path]
+    if config_override:
+        candidates = [Path(config_override).expanduser()]
+    else:
+        candidates = [
+            Path("config.local.yaml"),
+            Path("config.yaml"),
+            Path("config.example.yaml"),
+        ]
+
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict):
+            continue
+        if _contains_redacted(data):
+            continue
+        database_url = str(data.get("database_url") or "").strip()
+        if database_url:
+            return database_url
+    raise RuntimeError(
+        "Tests require database_url. Set MANZARA_TEST_DATABASE_URL or MANZARA_DATABASE_URL."
+    )
+
+
+def _drop_schema(database_url: str, schema_name: str) -> None:
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture()
 def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tuple[TestClient, object]]:
     """Return isolated TestClient and app.main module with temporary state."""
     from app import main as main_app
+
+    database_url = _resolve_test_database_url()
+    schema_name = f"manzara_test_{uuid.uuid4().hex[:10]}"
 
     shayan_repo = tmp_path / "shayan"
     artifacts = shayan_repo / "_artifacts"
@@ -121,7 +180,8 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
     )
     maintenance = MaintenanceSettings(monocorpus_repo_path=tmp_path / "monocorpus")
     settings = Settings(
-        db_path=tmp_path / "manzara-test.db",
+        database_url=database_url,
+        database_schema=schema_name,
         shayan=shayan,
         maintenance=maintenance,
         scheduler_enabled=False,
@@ -140,6 +200,8 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
             break
         main_app.state.runner.stop_all_toggle()
         time.sleep(0.15)
+
+    _drop_schema(database_url, schema_name)
 
 
 @pytest.fixture()

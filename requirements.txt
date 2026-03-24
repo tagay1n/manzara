@@ -1,5 +1,6 @@
 fastapi==0.118.0
 uvicorn==0.37.0
+alembic==1.16.5
 
 # Embedded runtime dependencies for copied monocorpus flows.
 boto3==1.42.44

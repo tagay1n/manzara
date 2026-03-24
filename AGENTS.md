@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last updated: 2026-03-21  
+Last updated: 2026-03-24  
 Owner: tans1q
 
 ## Purpose
@@ -38,6 +38,7 @@ Notes:
 - Keep complexity controlled and architecture understandable.
 - Prefer explicit module boundaries over ad-hoc scripts.
 - Prioritize operational visibility (run state, logs, artifacts, failures).
+- Runtime state store is PostgreSQL only (`MANZARA_DATABASE_URL`) in schema `monocorpus` by default (`MANZARA_DB_SCHEMA`); do not reintroduce SQLite runtime paths.
 - Keep secrets out of git: treat `config.yaml` as local-only and maintain masked `config.example.yaml` in sync with config structure changes.
 - Keep a single dependency file policy (`requirements.txt`) unless owner explicitly asks to split.
 - When copying/adjusting embedded runtime code, update dependencies in `requirements.txt` for any new external imports.
