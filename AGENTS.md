@@ -43,6 +43,43 @@ Notes:
 - Keep a single dependency file policy (`requirements.txt`) unless owner explicitly asks to split.
 - When copying/adjusting embedded runtime code, update dependencies in `requirements.txt` for any new external imports.
 - For runtime-heavy tasks (for example Library `meta evaluate`), keep automated coverage where practical and record manual smoke-test expectations in README when full E2E is not in tests.
+- Frontend work should follow TDD where applicable:
+  - Add/adjust tests first for frontend behavior that is testable and meaningful.
+  - Skip forced tests for purely cosmetic or low-value visual tweaks when tests would be brittle; document manual verification instead.
+- Backend is the source of truth for business/data state.
+- Do not duplicate business state or decision logic on frontend when backend already owns it.
+- Keep frontend thin ("stupid frontend"): focus on rendering, interaction, and transport of user intent; keep domain decisions on backend.
+- Frontend-local state is acceptable only for UI concerns (for example view toggles, transient input, optimistic UX markers), not as an alternate domain truth.
+
+## Frontend Standards
+- Treat backend API/event contracts as authoritative; align frontend types and adapters to backend schemas.
+- Bootstrap page state with API on initial load, then apply important runtime state transitions from SSE events.
+- Route all HTTP calls through a shared client layer (timeouts, retries, auth headers, error normalization).
+- Model view states explicitly: `loading`, `ready`, `empty`, `error`.
+- Keep server-driven state synchronized from API/SSE; avoid shadow copies of domain truth on frontend.
+- Use optimistic UI only when needed and always reconcile/rollback from backend-confirmed state.
+- Keep task actions idempotent from UX perspective (safe re-click behavior, disabled/guarded pending states).
+- Prefer behavior-focused frontend tests (user flows, state transitions, API mapping) over brittle visual snapshots.
+- Document manual verification for purely visual/cosmetic changes when automated tests add low value.
+- Enforce accessibility baseline (keyboard navigation, visible focus, semantic structure, label/contrast checks).
+- Keep rendering safe by default; do not inject unsanitized HTML.
+- Reuse design tokens/components for consistency across pages; avoid one-off styling drift.
+- Add lightweight client observability for failures with route/task/run context where possible.
+
+## Backend Standards
+- Backend changes are TDD-first by default:
+  - Write or adjust failing tests first for behavior changes, then implement, then refactor.
+  - If full automation is impractical (external/runtime-heavy dependencies), add focused unit/integration coverage for core logic and document the exact manual smoke checks in `README`.
+- Keep backend as the only source of domain truth; do not move business decisions to frontend.
+- Prefer explicit contracts for API/SSE payloads and backward-compatible schema changes.
+- Keep flow modules isolated (`app/modules/<flow>/...`) with clear ownership boundaries.
+- No silent failures: surface actionable error context in run state, logs, and SSE events.
+- Logging/observability is mandatory for task execution paths:
+  - Every task run must have a dedicated artifact log file under `_artifacts/task_runs/<task_id>/run-<run_id>.log`.
+  - Use one uniform structured line format for runtime-emitted lines: timestamp, level, run/task/panel/source context, message.
+  - Persist user-visible stdout/stderr lines to DB logs and mirror them into artifact run logs with context metadata.
+  - Include explicit start/final status lines in runtime logs so long-running task outcomes are auditable offline.
+  - Keep secrets out of logs (mask/redact credentials and tokens).
 
 ## Agent Startup Checklist
 When starting a new session in this repo:

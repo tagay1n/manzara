@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
 import shlex
 import signal
 import subprocess
 import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Optional, TextIO
 
 from app.db import Database
+from app.modules.maintenance.backup_s3_verify import verify_backup_objects_in_s3
 
 
 @dataclass
@@ -21,6 +27,8 @@ class ProcessHandle:
     task_id: str
     panel_id: str
     proc: subprocess.Popen[str]
+    log_file: Optional[TextIO] = None
+    log_path: Optional[str] = None
 
 
 class TaskRunner:
@@ -30,6 +38,8 @@ class TaskRunner:
         self.db = db
         self._lock = threading.Lock()
         self._processes: Dict[int, ProcessHandle] = {}
+        self._artifacts_root = Path(__file__).resolve().parent.parent / "_artifacts" / "task_runs"
+        self._artifacts_root.mkdir(parents=True, exist_ok=True)
 
     def check_task_start(
         self,
@@ -223,11 +233,23 @@ class TaskRunner:
         sudo_password: Optional[str] = None,
     ) -> None:
         """Run task process and persist logs/events until completion."""
+        run_log_file: Optional[TextIO] = None
+        run_log_path: Optional[str] = None
         try:
             command = task["command"]
             cwd = task["cwd"]
             if command.get("mode") != "shell":
                 raise ValueError("Unsupported command mode")
+
+            run_log_file, run_log_path = self._open_run_log(task, run_id)
+
+            backup_state_before: Optional[Dict[str, Any]] = None
+            if self._is_pgbackrest_backup_task(task):
+                backup_state_before = self._capture_pgbackrest_repo_state(
+                    command_value=command["value"],
+                    cwd=cwd,
+                    sudo_password=sudo_password,
+                )
 
             command_text, stdin_text = self._prepare_command(command["value"], sudo_password)
 
@@ -248,9 +270,20 @@ class TaskRunner:
                 task_id=task["task_id"],
                 panel_id=task["panel_id"],
                 proc=proc,
+                log_file=run_log_file,
+                log_path=run_log_path,
             )
             with self._lock:
                 self._processes[run_id] = handle
+
+            self._write_run_log(
+                run_id=run_id,
+                task_id=task["task_id"],
+                panel_id=task["panel_id"],
+                level="INFO",
+                source="runtime",
+                message=f"spawned pid={proc.pid} cwd={cwd}",
+            )
 
             self.db.mark_run_started(run_id, proc.pid)
             self.db.insert_event(
@@ -273,24 +306,46 @@ class TaskRunner:
                     except OSError:
                         pass
 
-            if proc.stdout:
-                for raw_line in proc.stdout:
-                    line = raw_line.rstrip("\n")
-                    if not line:
-                        continue
-                    self.db.append_log(run_id, stream="stdout", line=line)
-                    self.db.heartbeat(run_id)
-                    self.db.insert_event(
-                        "task.log",
-                        task_id=task["task_id"],
-                        run_id=run_id,
-                        panel_id=task["panel_id"],
-                        payload={"line": line},
-                    )
+            log_thread: Optional[threading.Thread] = None
+            if proc.stdout is not None:
+                log_thread = threading.Thread(
+                    target=self._stream_stdout_lines,
+                    args=(proc, run_id, task["task_id"], task["panel_id"]),
+                    daemon=True,
+                    name=f"run-{run_id}-log-stream",
+                )
+                log_thread.start()
 
             exit_code = proc.wait()
+            if proc.stdout is not None:
+                try:
+                    proc.stdout.close()
+                except OSError:
+                    pass
+            if log_thread is not None and log_thread.is_alive():
+                log_thread.join(timeout=1.5)
+
             final_run = self.db.get_run(run_id)
             stop_mode = final_run.get("stop_mode") if final_run else None
+            validation_error = None
+
+            if stop_mode is None and exit_code == 0:
+                validation_error = self._validate_success_conditions(
+                    run_id=run_id,
+                    task=task,
+                    command_value=command["value"],
+                    cwd=cwd,
+                    sudo_password=sudo_password,
+                    backup_state_before=backup_state_before,
+                )
+                if validation_error:
+                    self._emit_task_log(
+                        run_id=run_id,
+                        task_id=task["task_id"],
+                        panel_id=task["panel_id"],
+                        line=validation_error,
+                    )
+                    exit_code = 90
 
             if stop_mode is not None:
                 status = "stopped"
@@ -304,7 +359,19 @@ class TaskRunner:
 
             error_text = None
             if status == "failed":
-                error_text = f"Process exited with code {exit_code}"
+                error_text = validation_error or f"Process exited with code {exit_code}"
+
+            self._write_run_log(
+                run_id=run_id,
+                task_id=task["task_id"],
+                panel_id=task["panel_id"],
+                level="INFO" if status != "failed" else "ERROR",
+                source="runtime",
+                message=(
+                    f"final status={status} exit_code={exit_code}"
+                    + (f" error={error_text}" if error_text else "")
+                ),
+            )
 
             self.db.finish_run(
                 run_id=run_id,
@@ -320,6 +387,17 @@ class TaskRunner:
                 payload={"exit_code": exit_code, "status": status},
             )
         except Exception as exc:  # pragma: no cover - defensive runtime path
+            self._write_run_log_to_handle(
+                run_log_file,
+                self._format_run_log(
+                    level="ERROR",
+                    run_id=run_id,
+                    task_id=task.get("task_id", "unknown"),
+                    panel_id=task.get("panel_id", "unknown"),
+                    source="runtime",
+                    message=f"exception={exc}",
+                ),
+            )
             self.db.finish_run(
                 run_id=run_id,
                 status="failed",
@@ -335,7 +413,353 @@ class TaskRunner:
             )
         finally:
             with self._lock:
+                handle = self._processes.get(run_id)
+            log_file_to_close = handle.log_file if handle and handle.log_file is not None else run_log_file
+            if log_file_to_close is not None:
+                try:
+                    log_file_to_close.flush()
+                    log_file_to_close.close()
+                except Exception:
+                    pass
+            with self._lock:
                 self._processes.pop(run_id, None)
+
+    def _validate_success_conditions(
+        self,
+        *,
+        run_id: int,
+        task: Dict[str, Any],
+        command_value: str,
+        cwd: str,
+        sudo_password: Optional[str],
+        backup_state_before: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Return error message when task-specific success criteria are not met."""
+        task_id = str(task.get("task_id") or "")
+        if not task_id.startswith("maintenance.pgbackrest_backup_"):
+            return None
+
+        logs = self.db.get_logs(run_id, after_log_id=0, limit=5000)
+        raw_lines = [str(row.get("line") or "") for row in logs]
+        lines = [line.lower() for line in raw_lines]
+
+        has_new_label = any("new backup label =" in line for line in lines)
+        has_backup_size = any(" backup size =" in line for line in lines)
+        if not (has_new_label and has_backup_size):
+            missing: list[str] = []
+            if not has_new_label:
+                missing.append("new backup label")
+            if not has_backup_size:
+                missing.append("backup size")
+            missing_text = ", ".join(missing)
+            return (
+                "Backup finished without repository-change evidence "
+                f"({missing_text} marker not found in pgBackRest logs)."
+            )
+
+        if not backup_state_before or not backup_state_before.get("ok"):
+            reason = str((backup_state_before or {}).get("error") or "unable to capture pre-backup state")
+            return f"Backup repository state check failed before run: {reason}"
+
+        backup_state_after = self._capture_pgbackrest_repo_state(
+            command_value=command_value,
+            cwd=cwd,
+            sudo_password=sudo_password,
+        )
+        if not backup_state_after.get("ok"):
+            reason = str(backup_state_after.get("error") or "unable to capture post-backup state")
+            return f"Backup repository state check failed after run: {reason}"
+
+        before_fp = str(backup_state_before.get("fingerprint") or "")
+        after_fp = str(backup_state_after.get("fingerprint") or "")
+        before_labels = set(backup_state_before.get("labels") or [])
+        after_labels = set(backup_state_after.get("labels") or [])
+        labels_added = sorted(after_labels - before_labels)
+
+        # A changed repo fingerprint means pgBackRest repository metadata changed,
+        # which implies object storage files were added/modified.
+        if before_fp == after_fp:
+            return (
+                "Backup command exited successfully, but pgBackRest repository state did not change. "
+                "Object storage appears unchanged."
+            )
+
+        self._emit_task_log(
+            run_id=run_id,
+            task_id=task["task_id"],
+            panel_id=task["panel_id"],
+            line=(
+                "Backup repository state changed: "
+                f"labels_before={len(before_labels)}, labels_after={len(after_labels)}, "
+                f"labels_added={labels_added if labels_added else '[]'}"
+            ),
+        )
+
+        s3_result = verify_backup_objects_in_s3(
+            raw_lines,
+            monocorpus_repo_path=Path(
+                str(os.environ.get("MONOCORPUS_REPO_PATH") or "/home/tans1q/projects/monocorpus")
+            ),
+        )
+        if not s3_result.get("ok"):
+            reason = str(s3_result.get("error") or "backup files not found in S3")
+            return f"S3 backup verification failed: {reason}"
+
+        self._emit_task_log(
+            run_id=run_id,
+            task_id=task["task_id"],
+            panel_id=task["panel_id"],
+            line=(
+                "S3 backup verification passed: "
+                f"bucket={s3_result.get('bucket')}, "
+                f"prefix={s3_result.get('prefix')}, "
+                f"objects={s3_result.get('object_count')}"
+            ),
+        )
+        return None
+
+    def _emit_task_log(
+        self,
+        *,
+        run_id: int,
+        task_id: str,
+        panel_id: str,
+        line: str,
+    ) -> None:
+        """Persist one runtime log line and broadcast over SSE."""
+        self.db.append_log(run_id, stream="stdout", line=line)
+        self.db.insert_event(
+            "task.log",
+            task_id=task_id,
+            run_id=run_id,
+            panel_id=panel_id,
+            payload={"line": line},
+        )
+        self._write_run_log(
+            run_id=run_id,
+            task_id=task_id,
+            panel_id=panel_id,
+            level="INFO",
+            source="runtime",
+            message=line,
+        )
+
+    def _is_pgbackrest_backup_task(self, task: Dict[str, Any]) -> bool:
+        task_id = str(task.get("task_id") or "")
+        return task_id.startswith("maintenance.pgbackrest_backup_")
+
+    def _capture_pgbackrest_repo_state(
+        self,
+        *,
+        command_value: str,
+        cwd: str,
+        sudo_password: Optional[str],
+    ) -> Dict[str, Any]:
+        info_command = self._derive_pgbackrest_info_command(command_value)
+        if not info_command:
+            return {
+                "ok": False,
+                "error": "could not derive pgBackRest info command from task command",
+            }
+
+        prepared_command, stdin_text = self._prepare_command(info_command, sudo_password)
+        try:
+            result = subprocess.run(
+                prepared_command,
+                cwd=cwd,
+                shell=True,
+                input=stdin_text,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except FileNotFoundError:
+            return {"ok": False, "error": "pgBackRest command not found"}
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "pgBackRest info command timed out"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+        if int(result.returncode) != 0:
+            stderr = (result.stderr or "").strip()
+            stdout = (result.stdout or "").strip()
+            reason = stderr or stdout or f"exit code {result.returncode}"
+            return {"ok": False, "error": reason[:400]}
+
+        try:
+            payload = json.loads((result.stdout or "").strip() or "[]")
+        except json.JSONDecodeError as exc:
+            return {"ok": False, "error": f"invalid pgBackRest info JSON: {exc}"}
+
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        labels = sorted(self._extract_pgbackrest_labels(payload))
+        return {
+            "ok": True,
+            "fingerprint": fingerprint,
+            "labels": labels,
+        }
+
+    def _derive_pgbackrest_info_command(self, command_value: str) -> Optional[str]:
+        try:
+            tokens = shlex.split(command_value, posix=True)
+        except ValueError:
+            return None
+        if not tokens:
+            return None
+
+        if tokens[-1] == "backup":
+            tokens = tokens[:-1]
+
+        filtered: list[str] = []
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if token.startswith("--type="):
+                i += 1
+                continue
+            if token == "--type":
+                i += 2
+                continue
+            filtered.append(token)
+            i += 1
+
+        if "pgbackrest" not in filtered:
+            return None
+        filtered.extend(["info", "--output=json"])
+        return shlex.join(filtered)
+
+    def _extract_pgbackrest_labels(self, payload: Any) -> set[str]:
+        labels: set[str] = set()
+        items = payload if isinstance(payload, list) else [payload]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            backups = item.get("backup")
+            if not isinstance(backups, list):
+                continue
+            for backup in backups:
+                if not isinstance(backup, dict):
+                    continue
+                label = backup.get("label")
+                if isinstance(label, str) and label.strip():
+                    labels.add(label.strip())
+        return labels
+
+    def _stream_stdout_lines(
+        self,
+        proc: subprocess.Popen[str],
+        run_id: int,
+        task_id: str,
+        panel_id: str,
+    ) -> None:
+        """Stream stdout lines into run logs/events without blocking task finalization."""
+        stream = proc.stdout
+        if stream is None:
+            return
+        try:
+            for raw_line in stream:
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                self.db.append_log(run_id, stream="stdout", line=line)
+                self.db.heartbeat(run_id)
+                self.db.insert_event(
+                    "task.log",
+                    task_id=task_id,
+                    run_id=run_id,
+                    panel_id=panel_id,
+                    payload={"line": line},
+                )
+                self._write_run_log(
+                    run_id=run_id,
+                    task_id=task_id,
+                    panel_id=panel_id,
+                    level="INFO",
+                    source="stdout",
+                    message=line,
+                )
+        except Exception:
+            # Do not break task lifecycle on log-stream errors.
+            return
+
+    def _open_run_log(self, task: Dict[str, Any], run_id: int) -> tuple[Optional[TextIO], Optional[str]]:
+        task_id = str(task.get("task_id") or "unknown")
+        task_dir = self._artifacts_root / self._safe_slug(task_id)
+        task_dir.mkdir(parents=True, exist_ok=True)
+        log_path = task_dir / f"run-{run_id}.log"
+        try:
+            handle = log_path.open("a", encoding="utf-8")
+            header = self._format_run_log(
+                level="INFO",
+                run_id=run_id,
+                task_id=task_id,
+                panel_id=str(task.get("panel_id") or "unknown"),
+                source="runtime",
+                message=f"log_path={log_path}",
+            )
+            handle.write(header + "\n")
+            handle.flush()
+            return handle, str(log_path)
+        except Exception:
+            return None, None
+
+    def _write_run_log(
+        self,
+        *,
+        run_id: int,
+        task_id: str,
+        panel_id: str,
+        level: str,
+        source: str,
+        message: str,
+    ) -> None:
+        with self._lock:
+            handle = self._processes.get(run_id)
+            log_file = handle.log_file if handle else None
+        line = self._format_run_log(
+            level=level,
+            run_id=run_id,
+            task_id=task_id,
+            panel_id=panel_id,
+            source=source,
+            message=message,
+        )
+        self._write_run_log_to_handle(log_file, line)
+
+    def _write_run_log_to_handle(self, log_file: Optional[TextIO], line: str) -> None:
+        """Write one already-formatted line to a run artifact log handle."""
+        if log_file is None:
+            return
+        try:
+            log_file.write(line + "\n")
+            log_file.flush()
+        except Exception:
+            return
+
+    def _format_run_log(
+        self,
+        *,
+        level: str,
+        run_id: int,
+        task_id: str,
+        panel_id: str,
+        source: str,
+        message: str,
+    ) -> str:
+        ts = datetime.now(timezone.utc).isoformat()
+        safe_message = str(message or "").replace("\n", "\\n")
+        return (
+            f"{ts} | {level.upper()} | "
+            f"run_id={run_id} task_id={task_id} panel_id={panel_id} source={source} | "
+            f"{safe_message}"
+        )
+
+    def _safe_slug(self, value: str) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return "unknown"
+        return re.sub(r"[^a-z0-9._-]+", "_", text)
 
     def _check_sudo_requirements(
         self,
@@ -349,9 +773,10 @@ class TaskRunner:
         if not parsed:
             return {"ok": True}
 
-        options, _command_tokens = parsed
+        options, command_tokens = parsed
         probe_tokens, probe_input = self._build_sudo_probe(
             options=options,
+            command_tokens=command_tokens,
             sudo_password=sudo_password,
         )
         try:
@@ -462,6 +887,7 @@ class TaskRunner:
         self,
         *,
         options: list[str],
+        command_tokens: list[str],
         sudo_password: Optional[str],
     ) -> tuple[list[str], Optional[str]]:
         sanitized: list[str] = []
@@ -480,9 +906,11 @@ class TaskRunner:
             sanitized.append(token)
             i += 1
 
+        # Validate sudo policy for this exact command without executing it.
+        probe_suffix = ["-l", "--", *command_tokens]
         if sudo_password:
-            return ["sudo", "-S", "-p", "", *sanitized, "true"], f"{sudo_password}\n"
-        return ["sudo", "-n", *sanitized, "true"], None
+            return ["sudo", "-S", "-p", "", *sanitized, *probe_suffix], f"{sudo_password}\n"
+        return ["sudo", "-n", *sanitized, *probe_suffix], None
 
     def _split_leading_sudo_command(self, command: str) -> Optional[tuple[list[str], list[str]]]:
         try:

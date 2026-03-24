@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 
+import app.tasks as task_runtime
 from app.modules.maintenance.workflow import (
     LIBRARY_WORKFLOW_ID,
     MAINTENANCE_BACKUP_FULL_WORKFLOW_ID,
@@ -206,6 +208,20 @@ def test_library_endpoint_returns_dataset_stats(test_client, monkeypatch) -> Non
     assert payload["dataset"]["available"] is True
     assert payload["dataset"]["stats"]["applicable_docs"] == 25
     assert payload["dataset"]["top_classifications"][0]["ddc"] == "891.7"
+
+
+def test_database_state_endpoint_returns_snapshot_shape(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.get("/api/database/state")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "database_state" in payload
+    snapshot = payload["database_state"]
+    assert "available" in snapshot
+    assert "backup" in snapshot
+    assert "full" in snapshot["backup"]
+    assert "incremental" in snapshot["backup"]
 
 
 def test_library_classifications_table_endpoint(test_client, monkeypatch) -> None:
@@ -747,6 +763,33 @@ def test_toggle_task_reports_sudo_password_required(test_client, monkeypatch) ->
     assert payload["reason"] == "sudo_password_required"
 
 
+def test_sudo_preflight_checks_exact_command_policy(test_client, monkeypatch) -> None:
+    client, _main_app = test_client
+    captured = {}
+
+    class _Result:
+        returncode = 1
+        stdout = ""
+        stderr = "sudo: a password is required"
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        captured["kwargs"] = dict(kwargs)
+        return _Result()
+
+    monkeypatch.setattr(task_runtime.subprocess, "run", _fake_run)
+
+    response = client.post("/api/tasks/maintenance.pgbackrest_backup_incr/toggle")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "sudo_password_required"
+
+    probe_cmd = captured["cmd"]
+    assert "-l" in probe_cmd
+    assert "--" in probe_cmd
+    assert any("pgbackrest" in token for token in probe_cmd)
+
+
 def test_run_workflow_now_passes_sudo_password(test_client, monkeypatch) -> None:
     client, main_app = test_client
     captured = {}
@@ -783,6 +826,102 @@ def test_toggle_task_start_and_complete(test_client, wait_for_terminal_run) -> N
 
     logs = client.get(f"/api/runs/{run_id}/logs").json()["lines"]
     assert any("quick-ok" in line["line"] for line in logs)
+
+
+def test_task_run_writes_artifact_log_with_uniform_format(
+    test_client,
+    wait_for_terminal_run,
+    tmp_path,
+) -> None:
+    client, main_app = test_client
+    artifacts_root = tmp_path / "_artifacts" / "task_runs"
+    artifacts_root.mkdir(parents=True, exist_ok=True)
+    main_app.state.runner._artifacts_root = artifacts_root
+
+    response = client.post("/api/tasks/shayan.quick/toggle")
+    assert response.status_code == 200
+    run_id = int(response.json()["run"]["run_id"])
+    run = wait_for_terminal_run(main_app, run_id)
+    assert run["status"] == "completed"
+
+    run_log_path = artifacts_root / "shayan.quick" / f"run-{run_id}.log"
+    assert run_log_path.exists()
+
+    lines = run_log_path.read_text(encoding="utf-8").splitlines()
+    assert lines
+    assert any("source=stdout | quick-ok" in line for line in lines)
+    assert any("final status=completed exit_code=0" in line for line in lines)
+
+    # Uniform log schema: timestamp | LEVEL | run/task/panel/source context | message
+    assert re.match(
+        (
+            r"^\d{4}-\d{2}-\d{2}T.*\|\s+[A-Z]+\s+\|\s+"
+            r"run_id=\d+\s+task_id=[^\s]+\s+panel_id=[^\s]+\s+source=[^\s]+\s+\|\s+.+$"
+        ),
+        lines[0],
+    )
+
+
+def test_task_run_artifact_log_captures_startup_exception(
+    test_client,
+    wait_for_terminal_run,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    client, main_app = test_client
+    artifacts_root = tmp_path / "_artifacts" / "task_runs"
+    artifacts_root.mkdir(parents=True, exist_ok=True)
+    main_app.state.runner._artifacts_root = artifacts_root
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("popen-boom")
+
+    monkeypatch.setattr(task_runtime.subprocess, "Popen", _boom)
+
+    response = client.post("/api/tasks/shayan.quick/toggle")
+    assert response.status_code == 200
+    run_id = int(response.json()["run"]["run_id"])
+    run = wait_for_terminal_run(main_app, run_id)
+    assert run["status"] == "failed"
+    assert "popen-boom" in str(run.get("error_text") or "")
+
+    run_log_path = artifacts_root / "shayan.quick" / f"run-{run_id}.log"
+    assert run_log_path.exists()
+    log_text = run_log_path.read_text(encoding="utf-8")
+    assert "source=runtime | exception=popen-boom" in log_text
+
+
+def test_task_completion_not_blocked_by_open_stdout_fd(test_client, wait_for_terminal_run) -> None:
+    client, main_app = test_client
+
+    main_app.state.db.seed_tasks(
+        [
+            {
+                "task_id": "maintenance.stdout_fd_open",
+                "panel_id": "maintenance",
+                "title": "stdout fd open",
+                "task_type": "backup",
+                "icon_idle": "Play",
+                "icon_running": "Square",
+                "cwd": ".",
+                "command": {
+                    "mode": "shell",
+                    "value": (
+                        "python3 -c \"import subprocess,sys; "
+                        "subprocess.Popen(['python3','-c','import time; time.sleep(8)'], "
+                        "stdout=sys.stdout, stderr=sys.stderr); "
+                        "print('parent-exit', flush=True)\""
+                    ),
+                },
+            }
+        ]
+    )
+
+    response = client.post("/api/tasks/maintenance.stdout_fd_open/toggle")
+    assert response.status_code == 200
+    run_id = int(response.json()["run"]["run_id"])
+    run = wait_for_terminal_run(main_app, run_id, timeout_seconds=3.0)
+    assert run["status"] == "completed"
 
 
 def test_toggle_task_graceful_then_force(test_client, wait_for_terminal_run) -> None:

@@ -68,6 +68,7 @@ Runtime control behavior:
 - Task toggle: `start -> graceful stop -> force stop`
 - Header stop-all button: first press graceful, second press force
 - Run logs stream into DB and are visible in UI
+- Each run also writes a dedicated artifact log file under `_artifacts/task_runs/<task_id>/run-<run_id>.log`
 
 Library data tooling currently includes:
 - Classification views and merge/normalization previews
@@ -171,6 +172,23 @@ sudo -u postgres psql -d postgres -c "REVOKE pg_read_all_settings FROM tans1q;"
   - `.venv/bin/python app/modules/maintenance/runtime/check_backup_s3.py --task-id maintenance.pgbackrest_backup_full`
 
 ## Useful Runtime Commands
+
+Inspect artifact run logs:
+
+```bash
+ls -lah _artifacts/task_runs
+tail -f _artifacts/task_runs/<task_id>/run-<run_id>.log
+```
+
+Artifact log line standard:
+
+```text
+<ISO8601-UTC timestamp> | <LEVEL> | run_id=<id> task_id=<task_id> panel_id=<panel_id> source=<runtime|stdout> | <message>
+```
+
+Observability notes:
+- DB run logs (`/api/runs/{run_id}/logs`) remain the UI/SSE source.
+- Artifact run logs are durable per-run files for offline auditing and long-task troubleshooting.
 
 Manual normalization suggestion refresh:
 
