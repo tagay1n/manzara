@@ -1,6 +1,7 @@
 const state = {
   payload: null,
   classificationId: null,
+  viewState: "loading",
   docsPage: 1,
   docsPageSize: 40,
   refreshTimer: null,
@@ -14,10 +15,7 @@ async function api(path, options = {}) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return window.ManzaraCore.escapeHtml(value);
 }
 
 function formatDateTime(value) {
@@ -44,7 +42,10 @@ function teardownSoundNotifier() {
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
-  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
+    active,
+    activeWorkflows
+  );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
@@ -88,6 +89,7 @@ function renderMetaRuns(items) {
 }
 
 function renderDetail(payload) {
+  state.viewState = "ready";
   state.payload = payload;
   const detail = payload.detail || {};
   const classification = detail.classification;
@@ -143,17 +145,59 @@ function renderDetail(payload) {
   lucide.createIcons();
 }
 
+function renderDetailLoading() {
+  state.viewState = "loading";
+  document.getElementById("classification-title").textContent = "Classification";
+  const statusNode = document.getElementById("classification-status");
+  statusNode.textContent = "Loading classification details...";
+  statusNode.classList.remove("library-status-error");
+  document.getElementById("classification-stat-grid").innerHTML = "";
+  document.getElementById("linked-docs-body").innerHTML = "";
+  document.getElementById("language-root").innerHTML =
+    '<div class="workflow-footnote">Loading language distribution...</div>';
+  document.getElementById("meta-runs-root").innerHTML =
+    '<div class="run-row">Loading recent meta evaluate runs...</div>';
+  document.getElementById("docs-page-label").textContent = "Page - / -";
+  document.getElementById("docs-prev").disabled = true;
+  document.getElementById("docs-next").disabled = true;
+}
+
+function renderDetailError(error) {
+  state.viewState = "error";
+  const message = String(error?.message || error || "Failed to load classification.");
+  document.getElementById("classification-title").textContent = "Classification";
+  const statusNode = document.getElementById("classification-status");
+  statusNode.textContent = `Classification unavailable: ${message}`;
+  statusNode.classList.add("library-status-error");
+  document.getElementById("classification-stat-grid").innerHTML = "";
+  document.getElementById("linked-docs-body").innerHTML = "";
+  document.getElementById("language-root").innerHTML =
+    `<div class="workflow-footnote library-status-error">${escapeHtml(message)}</div>`;
+  document.getElementById("meta-runs-root").innerHTML = "";
+  document.getElementById("docs-page-label").textContent = "Page - / -";
+  document.getElementById("docs-prev").disabled = true;
+  document.getElementById("docs-next").disabled = true;
+}
+
 function classificationIdFromPath() {
   const parts = window.location.pathname.split("/").filter(Boolean);
   const id = Number(parts[parts.length - 1] || "0");
   return Number.isFinite(id) && id > 0 ? id : 0;
 }
 
-async function refreshDetail() {
-  const payload = await api(
-    `/api/library/classifications/${encodeURIComponent(String(state.classificationId))}?docs_page=${state.docsPage}&docs_page_size=${state.docsPageSize}`
-  );
-  renderDetail(payload);
+async function refreshDetail({ showLoading = false } = {}) {
+  if (showLoading) {
+    renderDetailLoading();
+  }
+  try {
+    const payload = await api(
+      `/api/library/classifications/${encodeURIComponent(String(state.classificationId))}?docs_page=${state.docsPage}&docs_page_size=${state.docsPageSize}`
+    );
+    renderDetail(payload);
+  } catch (error) {
+    renderDetailError(error);
+    throw error;
+  }
 }
 
 function queueRefresh(delayMs = 250) {
@@ -233,7 +277,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
-  await refreshDetail();
+  await refreshDetail({ showLoading: true });
   setupEventStream();
 }
 

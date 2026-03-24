@@ -219,7 +219,7 @@ node --test tests/frontend/*.mjs
 
 Coverage notes:
 - API/scheduler/task-control behavior is covered by `pytest`.
-- Shared frontend helpers and page behavior are covered by `node:test` (`tests/frontend/*.mjs`, currently `dashboard`, `schedules`, `tasks`, `task`, `library`, `database`, `library/classifications`, `library/personalities`, and `library/publishers` pages).
+- Shared frontend helpers and page behavior are covered by `node:test` (`tests/frontend/*.mjs`, currently `dashboard`, `schedules`, `tasks`, `task`, `library`, `database`, `library/classifications`, `library/classifications/{id}`, `library/personalities`, `library/publishers`, and normalization pages).
 - Runtime-heavy external flows still require manual smoke checks, especially:
   - `maintenance.monocorpus_meta_evaluate`
   - normalization refresh with real config + Gemini keys

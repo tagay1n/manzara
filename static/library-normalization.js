@@ -2,6 +2,7 @@ const state = {
   entityType: "personality",
   entityLabel: "Personalities",
   pageTitle: "Normalization",
+  viewState: "loading",
   globalPayload: null,
   summaryPayload: null,
   queuePayload: null,
@@ -31,10 +32,7 @@ async function api(path, options = {}) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return window.ManzaraCore.escapeHtml(value);
 }
 
 function formatDateTime(value) {
@@ -91,7 +89,10 @@ function teardownSoundNotifier() {
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
-  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
+    active,
+    activeWorkflows
+  );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
@@ -532,17 +533,94 @@ async function refreshTab(tab) {
 }
 
 async function refreshAll() {
-  await refreshSummary();
-  await refreshCanonicals();
-  await Promise.all([
-    refreshQueue(),
-    refreshSuggestions(),
-    refreshMergeCandidates(),
-    refreshQuality(),
-    refreshHistory(),
-  ]);
-  applyActiveTab();
-  lucide.createIcons();
+  await refreshAllWithState({});
+}
+
+function renderPageLoading() {
+  state.viewState = "loading";
+  const statusIds = [
+    "normalization-status",
+    "canonical-status",
+    "queue-status",
+    "suggestions-status",
+    "merge-status",
+    "quality-status",
+    "history-status",
+  ];
+  for (const id of statusIds) {
+    const node = document.getElementById(id);
+    node.classList.remove("library-status-error");
+    node.textContent = "Loading...";
+  }
+  document.getElementById("normalization-stat-grid").innerHTML =
+    '<div class="run-row">Loading summary...</div>';
+  document.getElementById("canonical-table-body").innerHTML =
+    '<tr><td colspan="6">Loading canonical registry...</td></tr>';
+  document.getElementById("queue-table-body").innerHTML =
+    '<tr><td colspan="9">Loading queue...</td></tr>';
+  document.getElementById("suggestions-table-body").innerHTML =
+    '<tr><td colspan="6">Loading suggestions...</td></tr>';
+  document.getElementById("merge-root").innerHTML =
+    '<div class="run-row">Loading merge candidates...</div>';
+  document.getElementById("quality-stat-grid").innerHTML =
+    '<div class="run-row">Loading quality metrics...</div>';
+  document.getElementById("quality-unresolved").innerHTML = "";
+  document.getElementById("history-root").innerHTML = '<div class="run-row">Loading history...</div>';
+}
+
+function renderPageError(error) {
+  state.viewState = "error";
+  const message = String(error?.message || error || "Failed to load normalization.");
+  document.getElementById("normalization-status").textContent = `Normalization unavailable: ${message}`;
+  document.getElementById("normalization-status").classList.add("library-status-error");
+
+  document.getElementById("canonical-status").textContent = `Canonical registry unavailable: ${message}`;
+  document.getElementById("canonical-status").classList.add("library-status-error");
+  document.getElementById("queue-status").textContent = `Queue unavailable: ${message}`;
+  document.getElementById("queue-status").classList.add("library-status-error");
+  document.getElementById("suggestions-status").textContent = `Suggestions unavailable: ${message}`;
+  document.getElementById("suggestions-status").classList.add("library-status-error");
+  document.getElementById("merge-status").textContent = `Merge candidates unavailable: ${message}`;
+  document.getElementById("merge-status").classList.add("library-status-error");
+  document.getElementById("quality-status").textContent = `Quality unavailable: ${message}`;
+  document.getElementById("quality-status").classList.add("library-status-error");
+  document.getElementById("history-status").textContent = `History unavailable: ${message}`;
+  document.getElementById("history-status").classList.add("library-status-error");
+
+  const safe = escapeHtml(message);
+  document.getElementById("normalization-stat-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("canonical-table-body").innerHTML = "";
+  document.getElementById("queue-table-body").innerHTML = "";
+  document.getElementById("suggestions-table-body").innerHTML = "";
+  document.getElementById("merge-root").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("quality-stat-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("quality-unresolved").innerHTML = "";
+  document.getElementById("history-root").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("tab-badge-canonicals").textContent = "0";
+  document.getElementById("tab-badge-suggestions").textContent = "0";
+}
+
+async function refreshAllWithState({ showLoading = false } = {}) {
+  if (showLoading) {
+    renderPageLoading();
+  }
+  try {
+    await refreshSummary();
+    await refreshCanonicals();
+    await Promise.all([
+      refreshQueue(),
+      refreshSuggestions(),
+      refreshMergeCandidates(),
+      refreshQuality(),
+      refreshHistory(),
+    ]);
+    state.viewState = "ready";
+    applyActiveTab();
+    lucide.createIcons();
+  } catch (error) {
+    renderPageError(error);
+    throw error;
+  }
 }
 
 function queueRefresh(delayMs = 250) {
@@ -964,7 +1042,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
-  await refreshAll();
+  await refreshAllWithState({ showLoading: true });
   setupEventStream();
 }
 
@@ -972,4 +1050,3 @@ bootstrap().catch((error) => {
   console.error(error);
   alert(error.message || String(error));
 });
-

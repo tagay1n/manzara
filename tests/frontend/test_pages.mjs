@@ -21,6 +21,14 @@ const LIBRARY_PUBLISHERS_SOURCE = readFileSync(
   new URL("../../static/library-publishers.js", import.meta.url),
   "utf-8",
 );
+const LIBRARY_CLASSIFICATION_SOURCE = readFileSync(
+  new URL("../../static/library-classification.js", import.meta.url),
+  "utf-8",
+);
+const LIBRARY_NORMALIZATION_SOURCE = readFileSync(
+  new URL("../../static/library-normalization.js", import.meta.url),
+  "utf-8",
+);
 
 class FakeClassList {
   constructor() {
@@ -232,6 +240,13 @@ function createHarness({
       }
       return elements.get(key);
     },
+    querySelectorAll(selector) {
+      const key = `selectorAll:${String(selector)}`;
+      if (!elements.has(key)) {
+        elements.set(key, new FakeElement(key));
+      }
+      return [elements.get(key)];
+    },
   };
 
   const sandbox = {
@@ -240,6 +255,7 @@ function createHarness({
     console,
     alert: (...args) => windowObj.alert(...args),
     confirm: (...args) => windowObj.confirm(...args),
+    prompt: () => null,
     lucide: { createIcons() {} },
     navigator: {
       clipboard: {
@@ -813,4 +829,125 @@ test("library publishers page renders API error state", async () => {
     /publishers unavailable/,
   );
   assert.match(harness.elements.get("scripts-root").innerHTML, /publishers unavailable/);
+});
+
+test("library classification detail page renders API error state", async () => {
+  const harness = createHarness({
+    source: LIBRARY_CLASSIFICATION_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "last-event",
+      "classification-status",
+      "classification-title",
+      "classification-stat-grid",
+      "linked-docs-body",
+      "language-root",
+      "meta-runs-root",
+      "docs-page-label",
+      "docs-prev",
+      "docs-next",
+    ],
+    locationPathname: "/library/classifications/42",
+    apiResolver(path) {
+      if (path.startsWith("/api/library/classifications/42?")) {
+        throw new Error("classification detail unavailable");
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(
+    harness.elements.get("classification-status").textContent,
+    /Classification unavailable/,
+  );
+  assert.equal(harness.elements.get("classification-title").textContent, "Classification");
+});
+
+test("library normalization page renders API error state", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "last-event",
+      "normalization-title",
+      "entity-source-link",
+      "normalization-status",
+      "normalization-stat-grid",
+      "canonical-status",
+      "canonical-table-body",
+      "tab-badge-canonicals",
+      "queue-bulk-canonical",
+      "queue-filter-search",
+      "queue-filter-status",
+      "queue-filter-script",
+      "queue-filter-min-docs",
+      "queue-status",
+      "queue-table-body",
+      "queue-page-label",
+      "queue-page-prev",
+      "queue-page-next",
+      "suggestions-status",
+      "tab-badge-suggestions",
+      "suggestions-table-body",
+      "merge-min-score",
+      "merge-status",
+      "merge-root",
+      "quality-status",
+      "quality-stat-grid",
+      "quality-unresolved",
+      "history-status",
+      "history-root",
+      "queue-filter-apply",
+      "queue-select-all",
+      "queue-bulk-link",
+      "queue-bulk-reject",
+      "queue-clear-selection",
+      "canonical-create-btn",
+      "canonical-create-name",
+      "canonical-create-notes",
+      "canonical-search-apply",
+      "canonical-search",
+      "suggestions-refresh-btn",
+      "suggestions-limit",
+      "suggestions-use-gemini",
+      "merge-load-btn",
+      "evidence-dialog",
+      "evidence-title",
+      "evidence-content",
+      "evidence-close-btn",
+      "evidence-close-footer-btn",
+      "tab-btn-queue",
+      "tab-btn-canonicals",
+      "tab-btn-suggestions",
+      "tab-btn-merge",
+      "tab-btn-quality",
+      "tab-btn-history",
+      "tab-panel-queue",
+      "tab-panel-canonicals",
+      "tab-panel-suggestions",
+      "tab-panel-merge",
+      "tab-panel-quality",
+      "tab-panel-history",
+    ],
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver(path) {
+      if (path.startsWith("/api/library/normalization/personality")) {
+        throw new Error("normalization unavailable");
+      }
+      if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(
+    harness.elements.get("normalization-status").textContent,
+    /Normalization unavailable/,
+  );
+  assert.match(
+    harness.elements.get("queue-status").textContent,
+    /Queue unavailable|normalization unavailable/,
+  );
 });
