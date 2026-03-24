@@ -1,33 +1,86 @@
 # manzara
 
-Manzara is a cloud-console style dashboard for managing long-running content workflows.
+Manzara is a cloud-console style operations dashboard for Tatar-content workflows.
 
-This first MVP slice includes:
-- Shayan panel with icon-only task controls.
-- Maintenance panel with operations task controls.
-- SQLite-backed task/runs/logs/events storage.
-- Start -> graceful stop -> force stop toggles.
-- Header-level two-step stop-all control.
-- Live updates via SSE (`/api/events/stream`).
-- Weekly workflow scheduler (`scan -> conditional download`).
+## Name Meaning
 
-## Implemented MVP Scope
+Tatar:
+- `Манзара: Билгеле ноктадан күз алдында ачыла торган панорама, табигать күренеше, пейзаж`.
 
-- Backend: FastAPI + SQLite
-- Panel: `Shayan`
-- Task: `scan for changes`
-- Task: `download new`
-- Task: `maintenance monocorpus sync`
-- Workflow: `Weekly Sync` (`shayan.weekly_sync`)
-- Workflow: `Library` (`library.meta_evaluate`)
-- Schedule: weekly, overlap skip, catch-up once after downtime
-- Run history + live logs
-- Basic metrics from Shayan artifacts (`status.json`, `last-main-run-summary.json`)
+English:
+- `Manzara: A panorama or landscape view that opens before the eyes from a specific point`.
+
+Current architecture:
+- FastAPI backend
+- SQLite state store (tasks, runs, logs, events, workflows, schedules)
+- Modular flows in one monorepo (`shayan`, `maintenance`, `library`)
+- Live updates via SSE (`/api/events/stream`)
+
+## UI Reference
+
+Frontend visual direction is inspired by:
+- https://github.com/builderz-labs/mission-control
+
+Manzara is an independent implementation tailored to this repository's workflow model and APIs.
+
+## Current Product Scope
+
+Pages:
+- `/dashboard`
+- `/schedules`
+- `/tasks`
+- `/tasks/{task-slug-or-id}`
+- `/library`
+- `/library/classifications`
+- `/library/classifications/{classification_id}`
+- `/library/personalities`
+- `/library/publishers`
+- `/library/normalization/personality`
+- `/library/normalization/publisher`
+
+Flow tasks (seeded at startup):
+- `shayan.scan_changes`
+- `shayan.download_new`
+- `maintenance.monocorpus_sync`
+- `maintenance.monocorpus_meta_evaluate`
+- `library.personality_suggestions_refresh`
+- `library.publisher_suggestions_refresh`
+
+Workflows (seeded at startup):
+- `shayan.weekly_sync` (scan -> conditional download)
+- `library.meta_evaluate`
+- `library.personality_normalization_refresh`
+- `library.publisher_normalization_refresh`
+
+Scheduler policy:
+- Weekly schedule type
+- Overlap policy: `skip`
+- Catch-up policy on downtime: `once`
+- Timezone field is stored per schedule (default `UTC`)
+
+Runtime control behavior:
+- Task toggle: `start -> graceful stop -> force stop`
+- Header stop-all button: first press graceful, second press force
+- Run logs stream into DB and are visible in UI
+
+Library data tooling currently includes:
+- Classification views and merge/normalization previews
+- Personality and publisher views
+- Normalization workbench:
+  - Review queue
+  - Canonical registry
+  - Suggestions refresh (heuristics + optional Gemini)
+  - Bulk link/reject
+  - Merge candidates and merge action
+  - Audit history with undo
+  - Evidence samples
 
 ## Requirements
 
 - Python 3.10+
-- Access to local downloader repo (default: `/home/tans1q/projects/shayan-video-downloader`)
+- Access to local repositories:
+  - Shayan downloader repo (default: `/home/tans1q/projects/shayan-video-downloader`)
+  - Monocorpus repo (default: `/home/tans1q/projects/monocorpus`)
 
 ## Setup
 
@@ -37,19 +90,8 @@ python3 -m venv .venv
 ```
 
 Dependency policy:
-- This repo uses a single dependency file: `requirements.txt`.
-- If embedded runtime code introduces a new external import, add it to `requirements.txt`.
-- After pulling dependency changes, re-run:
-
-```bash
-.venv/bin/pip install -r requirements.txt
-```
-
-Run tests:
-
-```bash
-.venv/bin/python -m pytest -q
-```
+- Keep a single dependency file: `requirements.txt`.
+- If embedded runtime code adds a new external import, add it to `requirements.txt`.
 
 ## Run
 
@@ -57,43 +99,66 @@ Run tests:
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload --timeout-graceful-shutdown 10
 ```
 
-Open:
-- `http://127.0.0.1:8080/dashboard`
-- `http://127.0.0.1:8080/schedules`
-
 ## Configuration
 
 Environment variables:
 - `MANZARA_DB_PATH` (default: `data/manzara.db`)
-- `MANZARA_ENABLE_SCHEDULER` (default: `1`; set `0` to disable scheduled triggers)
+- `MANZARA_ENABLE_SCHEDULER` (default: `1`; set `0` to disable scheduler)
+- `MANZARA_CONFIG_PATH` (optional explicit YAML config path for embedded runtimes)
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
 - `SHAYAN_OUTPUT_PATH` (default: `/home/tans1q/video-archive`)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 
-Monocorpus embedded runtimes (`sync` and `meta evaluate`) read shared YAML config from repo root:
-- Local real config (gitignored): `./config.yaml` (or `./config.local.yaml`)
-- Safe committed copy: `./config.example.yaml`
-
-Lookup order for embedded runtimes:
+Embedded runtimes read YAML config in this order:
 1. `MANZARA_CONFIG_PATH` (if set)
 2. `./config.local.yaml`
 3. `./config.yaml`
-4. `./config.example.yaml` (for shape/reference only; should stay masked)
+4. `./config.example.yaml` (masked, reference only)
 
-Rule: when config structure changes, update `config.example.yaml` with the same keys and masked secret values.
+Secrets policy:
+- `config.yaml` and `config.local.yaml` are local-only (gitignored).
+- Keep `config.example.yaml` masked and in sync with real config structure.
 
-## Test Coverage Notes
+## Useful Runtime Commands
 
+Manual normalization suggestion refresh:
+
+```bash
+.venv/bin/python app/modules/library/runtime/run_normalization_refresh.py --entity-type personality --limit 180
+.venv/bin/python app/modules/library/runtime/run_normalization_refresh.py --entity-type publisher --limit 180
+```
+
+Disable Gemini suggestions for refresh:
+
+```bash
+.venv/bin/python app/modules/library/runtime/run_normalization_refresh.py --entity-type personality --limit 180 --no-gemini
+```
+
+## Tests
+
+Run test suite:
+
+```bash
+.venv/bin/python -m pytest -q
+```
+
+Coverage notes:
 - API/scheduler/task-control behavior is covered by `pytest`.
-- Current gap: there is no full end-to-end execution test for `maintenance.monocorpus_meta_evaluate` runtime.
-- When changing embedded monocorpus runtime code, run a manual smoke check of `Monocorpus meta evaluate`.
+- Runtime-heavy external flows still require manual smoke checks, especially:
+  - `maintenance.monocorpus_meta_evaluate`
+  - normalization refresh with real config + Gemini keys
 
-## API Endpoints
+## API Summary
 
+Core:
 - `GET /api/health`
 - `GET /api/dashboard`
 - `GET /api/schedules`
+- `GET /api/tasks`
+- `GET /api/tasks/{task_id_or_slug}`
 - `POST /api/tasks/{task_id}/toggle`
+- `PATCH /api/tasks/{task_id}/title`
+- `PATCH /api/flows/{panel_id}/title`
 - `POST /api/workflows/{workflow_id}/run`
 - `GET /api/workflows/{workflow_id}`
 - `PATCH /api/schedules/{schedule_id}`
@@ -101,10 +166,35 @@ Rule: when config structure changes, update `config.example.yaml` with the same 
 - `GET /api/runs/{run_id}/logs`
 - `GET /api/events/stream`
 
-## Notes
+Library:
+- `GET /api/library`
+- `GET /api/library/classifications`
+- `GET /api/library/classifications/insights`
+- `GET /api/library/classifications/normalization-preview`
+- `GET /api/library/classifications/merge-candidates`
+- `GET /api/library/classifications/{classification_id}`
+- `GET /api/library/personalities`
+- `GET /api/library/personalities/table`
+- `GET /api/library/personalities/insights`
+- `GET /api/library/publishers`
+- `GET /api/library/publishers/table`
+- `GET /api/library/publishers/insights`
 
-- Task commands are seeded at startup into SQLite.
-- Shayan commands are executed in the Shayan repo working directory.
-- Shayan-specific code is isolated under `app/modules/shayan/`.
-- Stop behavior: first toggle on running task is graceful stop.
-- Stop behavior: second toggle is force stop.
+Normalization API (`{entity_type}` = `personality|publisher`):
+- `GET /api/library/normalization/{entity_type}`
+- `GET /api/library/normalization/{entity_type}/queue`
+- `GET /api/library/normalization/{entity_type}/canonicals`
+- `POST /api/library/normalization/{entity_type}/canonicals`
+- `POST /api/library/normalization/{entity_type}/decisions/link`
+- `POST /api/library/normalization/{entity_type}/decisions/create-link`
+- `POST /api/library/normalization/{entity_type}/decisions/reject`
+- `POST /api/library/normalization/{entity_type}/bulk/link`
+- `POST /api/library/normalization/{entity_type}/bulk/reject`
+- `GET /api/library/normalization/{entity_type}/suggestions`
+- `POST /api/library/normalization/{entity_type}/suggestions/refresh`
+- `GET /api/library/normalization/{entity_type}/merge-candidates`
+- `POST /api/library/normalization/{entity_type}/merge`
+- `GET /api/library/normalization/{entity_type}/history`
+- `POST /api/library/normalization/{entity_type}/history/{event_id}/undo`
+- `GET /api/library/normalization/{entity_type}/quality`
+- `GET /api/library/normalization/{entity_type}/evidence`
