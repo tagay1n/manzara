@@ -16,6 +16,13 @@ from pathlib import Path
 from typing import Any, Dict, Optional, TextIO
 
 from app.db import Database
+from app.runtime_states import (
+    TASK_RUN_STATUS_FAILED,
+    TASK_RUN_STATUS_RUNNING,
+    TASK_RUN_STATUS_STARTING,
+    resolve_task_terminal_status,
+    task_terminal_event_type,
+)
 from app.modules.maintenance.backup_s3_verify import verify_backup_objects_in_s3
 
 
@@ -155,7 +162,7 @@ class TaskRunner:
             task_id=task_id,
             run_id=run_id,
             panel_id=task["panel_id"],
-            payload={"status": "starting"},
+            payload={"status": TASK_RUN_STATUS_STARTING},
         )
 
         thread = threading.Thread(
@@ -348,7 +355,7 @@ class TaskRunner:
                 task_id=task["task_id"],
                 run_id=run_id,
                 panel_id=task["panel_id"],
-                payload={"status": "running"},
+                payload={"status": TASK_RUN_STATUS_RUNNING},
             )
 
             if stdin_text is not None and proc.stdin is not None:
@@ -404,25 +411,18 @@ class TaskRunner:
                     )
                     exit_code = 90
 
-            if stop_mode is not None:
-                status = "stopped"
-                event_type = "task.stopped"
-            elif exit_code == 0:
-                status = "completed"
-                event_type = "task.completed"
-            else:
-                status = "failed"
-                event_type = "task.failed"
+            status = resolve_task_terminal_status(exit_code=exit_code, stop_mode=stop_mode)
+            event_type = task_terminal_event_type(status)
 
             error_text = None
-            if status == "failed":
+            if status == TASK_RUN_STATUS_FAILED:
                 error_text = validation_error or f"Process exited with code {exit_code}"
 
             self._write_run_log(
                 run_id=run_id,
                 task_id=task["task_id"],
                 panel_id=task["panel_id"],
-                level="INFO" if status != "failed" else "ERROR",
+                level="INFO" if status != TASK_RUN_STATUS_FAILED else "ERROR",
                 source="runtime",
                 message=(
                     f"final status={status} exit_code={exit_code}"
@@ -457,12 +457,12 @@ class TaskRunner:
             )
             self.db.finish_run(
                 run_id=run_id,
-                status="failed",
+                status=TASK_RUN_STATUS_FAILED,
                 exit_code=None,
                 error_text=str(exc),
             )
             self.db.insert_event(
-                "task.failed",
+                task_terminal_event_type(TASK_RUN_STATUS_FAILED),
                 task_id=task["task_id"],
                 run_id=run_id,
                 panel_id=task["panel_id"],

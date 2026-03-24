@@ -15,16 +15,16 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 
-ACTIVE_STATUSES = (
-    "starting",
-    "running",
-    "stopping_graceful",
-    "stopping_force",
-)
-
-ACTIVE_WORKFLOW_STATUSES = (
-    "starting",
-    "running",
+from app.runtime_states import (
+    TASK_RUN_ACTIVE_STATUSES as ACTIVE_STATUSES,
+    TASK_RUN_STATUS_FAILED,
+    TASK_RUN_STATUS_RUNNING,
+    TASK_RUN_STATUS_STARTING,
+    WORKFLOW_RUN_ACTIVE_STATUSES as ACTIVE_WORKFLOW_STATUSES,
+    WORKFLOW_RUN_STATUS_FAILED,
+    WORKFLOW_RUN_STATUS_RUNNING,
+    WORKFLOW_RUN_STATUS_STARTING,
+    task_status_from_stop_mode,
 )
 
 
@@ -592,7 +592,7 @@ class Database:
                         workflow_id,
                         schedule_id,
                         trigger_source,
-                        "starting",
+                        WORKFLOW_RUN_STATUS_STARTING,
                         now,
                         json.dumps(context or {}, ensure_ascii=False),
                     ),
@@ -711,7 +711,10 @@ class Database:
                         status,
                         task_run_id,
                         now,
-                        now if status not in {"starting", "running"} else None,
+                        now
+                        if status
+                        not in {WORKFLOW_RUN_STATUS_STARTING, WORKFLOW_RUN_STATUS_RUNNING}
+                        else None,
                         json.dumps(output or {}, ensure_ascii=False),
                         error_text,
                     ),
@@ -791,7 +794,7 @@ class Database:
                     (
                         task["task_id"],
                         task["panel_id"],
-                        "starting",
+                        TASK_RUN_STATUS_STARTING,
                         None,
                         now,
                         now,
@@ -812,7 +815,7 @@ class Database:
                     SET status = ?, pid = ?, heartbeat_at = ?, updated_at = ?
                     WHERE run_id = ?
                     """,
-                    ("running", pid, now, now, run_id),
+                    (TASK_RUN_STATUS_RUNNING, pid, now, now, run_id),
                 )
 
     def heartbeat(self, run_id: int) -> None:
@@ -827,7 +830,7 @@ class Database:
 
     def set_stop_mode(self, run_id: int, mode: str) -> bool:
         """Move an active run into graceful or force stopping mode."""
-        status = "stopping_graceful" if mode == "graceful" else "stopping_force"
+        status = task_status_from_stop_mode(mode)
         now = utc_now()
         placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
         with self._lock:
@@ -1171,7 +1174,7 @@ class Database:
                 cur = conn.execute(
                     f"""
                     UPDATE runs
-                    SET status = 'failed',
+                    SET status = ?,
                         finished_at = ?,
                         heartbeat_at = ?,
                         updated_at = ?,
@@ -1181,7 +1184,7 @@ class Database:
                         )
                     WHERE status IN ({placeholders})
                     """,
-                    (now, now, now, *ACTIVE_STATUSES),
+                    (TASK_RUN_STATUS_FAILED, now, now, now, *ACTIVE_STATUSES),
                 )
                 return int(cur.rowcount or 0)
 
@@ -1194,7 +1197,7 @@ class Database:
                 cur = conn.execute(
                     f"""
                     UPDATE workflow_runs
-                    SET status = 'failed',
+                    SET status = ?,
                         finished_at = ?,
                         error_text = COALESCE(
                             error_text,
@@ -1202,7 +1205,7 @@ class Database:
                         )
                     WHERE status IN ({placeholders})
                     """,
-                    (now, *ACTIVE_WORKFLOW_STATUSES),
+                    (WORKFLOW_RUN_STATUS_FAILED, now, *ACTIVE_WORKFLOW_STATUSES),
                 )
                 return int(cur.rowcount or 0)
 

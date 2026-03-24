@@ -13,6 +13,7 @@ import yaml
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
+from app.db import ACTIVE_STATUSES, ACTIVE_WORKFLOW_STATUSES
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.shayan.config import ShayanSettings
 from app.settings import Settings
@@ -215,12 +216,7 @@ def wait_for_terminal_run() -> callable:
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             run = main_app.state.db.get_run(run_id)
-            if run and run["status"] not in {
-                "starting",
-                "running",
-                "stopping_graceful",
-                "stopping_force",
-            }:
+            if run and run["status"] not in ACTIVE_STATUSES:
                 return run
             time.sleep(0.05)
         run = main_app.state.db.get_run(run_id)
@@ -241,7 +237,7 @@ def wait_for_terminal_workflow_run() -> callable:
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             run = main_app.state.db.get_workflow_run(workflow_run_id)
-            if run and run["status"] not in {"starting", "running"}:
+            if run and run["status"] not in ACTIVE_WORKFLOW_STATUSES:
                 return run
             time.sleep(0.05)
         run = main_app.state.db.get_workflow_run(workflow_run_id)

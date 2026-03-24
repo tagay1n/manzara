@@ -11,6 +11,15 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.db import ACTIVE_STATUSES, Database
+from app.runtime_states import (
+    TASK_RUN_STATUS_COMPLETED,
+    TASK_RUN_STATUS_FAILED,
+    TASK_RUN_STATUS_STOPPED,
+    WORKFLOW_RUN_STATUS_COMPLETED,
+    WORKFLOW_RUN_STATUS_FAILED,
+    WORKFLOW_RUN_STATUS_RUNNING,
+    WORKFLOW_RUN_STATUS_STOPPED,
+)
 from app.tasks import TaskRunner
 
 
@@ -311,7 +320,7 @@ class WorkflowService:
         if not workflow:
             self.db.update_workflow_run(
                 workflow_run_id,
-                status="failed",
+                status=WORKFLOW_RUN_STATUS_FAILED,
                 error_text="Workflow definition not found.",
                 finished=True,
             )
@@ -319,7 +328,11 @@ class WorkflowService:
 
         panel_id = workflow.get("panel_id")
         context = dict(workflow_run.get("context") or {})
-        self.db.update_workflow_run(workflow_run_id, status="running", context=context)
+        self.db.update_workflow_run(
+            workflow_run_id,
+            status=WORKFLOW_RUN_STATUS_RUNNING,
+            context=context,
+        )
 
         try:
             for step in self.db.list_workflow_steps(workflow["workflow_id"]):
@@ -371,13 +384,13 @@ class WorkflowService:
                         workflow_run_id=workflow_run_id,
                         step_order=int(step["step_order"]),
                         task_id=task_id,
-                        status="failed",
+                        status=TASK_RUN_STATUS_FAILED,
                         output={"reason": reason},
                         error_text=f"Task did not start: {reason}",
                     )
                     self.db.update_workflow_run(
                         workflow_run_id,
-                        status="failed",
+                        status=WORKFLOW_RUN_STATUS_FAILED,
                         context=context,
                         error_text=f"Step {step['step_order']} failed to start task {task_id}: {reason}",
                         finished=True,
@@ -400,7 +413,7 @@ class WorkflowService:
                     workflow_run_id=workflow_run_id,
                     step_order=int(step["step_order"]),
                     task_id=task_id,
-                    status="running",
+                    status=WORKFLOW_RUN_STATUS_RUNNING,
                     task_run_id=task_run_id,
                     output={},
                 )
@@ -423,10 +436,10 @@ class WorkflowService:
                 context.update(updates)
                 self.db.update_workflow_run(workflow_run_id, context=context)
 
-                if task_run["status"] == "completed":
+                if task_run["status"] == TASK_RUN_STATUS_COMPLETED:
                     self.db.finish_workflow_step_run(
                         step_run_id,
-                        status="completed",
+                        status=WORKFLOW_RUN_STATUS_COMPLETED,
                         output=output,
                     )
                     self.db.insert_event(
@@ -443,15 +456,15 @@ class WorkflowService:
                     )
                     continue
 
-                if task_run["status"] == "stopped":
+                if task_run["status"] == TASK_RUN_STATUS_STOPPED:
                     self.db.finish_workflow_step_run(
                         step_run_id,
-                        status="stopped",
+                        status=WORKFLOW_RUN_STATUS_STOPPED,
                         output=output,
                     )
                     self.db.update_workflow_run(
                         workflow_run_id,
-                        status="stopped",
+                        status=WORKFLOW_RUN_STATUS_STOPPED,
                         context=context,
                         finished=True,
                     )
@@ -470,13 +483,13 @@ class WorkflowService:
 
                 self.db.finish_workflow_step_run(
                     step_run_id,
-                    status="failed",
+                    status=WORKFLOW_RUN_STATUS_FAILED,
                     output=output,
                     error_text=task_run.get("error_text") or "Task failed",
                 )
                 self.db.update_workflow_run(
                     workflow_run_id,
-                    status="failed",
+                    status=WORKFLOW_RUN_STATUS_FAILED,
                     context=context,
                     error_text=(task_run.get("error_text") or f"Task {task_id} failed"),
                     finished=True,
@@ -497,7 +510,7 @@ class WorkflowService:
 
             self.db.update_workflow_run(
                 workflow_run_id,
-                status="completed",
+                status=WORKFLOW_RUN_STATUS_COMPLETED,
                 context=context,
                 finished=True,
             )
@@ -515,7 +528,7 @@ class WorkflowService:
         except Exception as exc:  # pragma: no cover - defensive runtime path
             self.db.update_workflow_run(
                 workflow_run_id,
-                status="failed",
+                status=WORKFLOW_RUN_STATUS_FAILED,
                 context=context,
                 error_text=str(exc),
                 finished=True,
@@ -574,7 +587,7 @@ class WorkflowService:
             if not run:
                 return {
                     "run_id": run_id,
-                    "status": "failed",
+                    "status": TASK_RUN_STATUS_FAILED,
                     "error_text": "Task run not found",
                 }
             if run["status"] not in ACTIVE_STATUSES:
@@ -586,7 +599,7 @@ class WorkflowService:
             return run
         return {
             "run_id": run_id,
-            "status": "failed",
+            "status": TASK_RUN_STATUS_FAILED,
             "error_text": "Task timeout",
         }
 

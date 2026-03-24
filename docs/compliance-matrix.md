@@ -10,7 +10,7 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 - `N/A`: policy/process requirement, not directly verifiable in code.
 
 ## Automated Baseline (current)
-- `pytest`: `41 passed` (`.venv/bin/python -m pytest -q`)
+- `pytest`: `46 passed` (`.venv/bin/python -m pytest -q`)
 - `frontend tests`: `node --test tests/frontend/*.mjs` passed (`core helpers` + `dashboard/schedules/tasks/task/library/database/classification-list/classification-detail/personality/publisher/normalization page behavior`)
 - `requirements files`: only `requirements.txt` found (`rg --files -g 'requirements*.txt'`)
 
@@ -40,7 +40,7 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 | FE-09 | Keep rendering safe; no unsanitized HTML injection | PASS | Escaping helpers across page scripts + malicious-payload regression checks in `tests/frontend/test_pages.mjs` (`library classifications page escapes dangerous strings in rendered html`, `library classification detail escapes dangerous strings in stats`) | Render paths now have automated regression coverage for unsafe payloads. |
 | LC-BE-01 | Prefer declarative registries/maps over branching for flow/task definitions | PASS | `app/modules/shayan/tasks.py`, `app/modules/maintenance/tasks.py`, workflow bundles in `app/modules/*/workflow.py` | Task/workflow seeds are declarative dict/list structures. |
 | LC-BE-02 | Move overlap/catchup schedule behavior into policy data | PASS | schedule fields in workflow bundles (`overlap_policy`, `catchup_policy`) | Policy values stored in schedule config. |
-| LC-BE-03 | Shared run/workflow state machine definitions | PARTIAL | `app/db.py` constants (`ACTIVE_STATUSES`, `ACTIVE_WORKFLOW_STATUSES`) | Transitions still spread across runtime/service methods. |
+| LC-BE-03 | Shared run/workflow state machine definitions | PASS | `app/runtime_states.py` (task/workflow statuses, transitions, terminal/event resolution) + adoption in `app/db.py`, `app/tasks.py`, `app/workflows.py`, and regression tests in `tests/test_runtime_states.py` | Runtime statuses and transition maps now have a single backend source. |
 | LC-FE-01 | Centralize data/event handling utilities to reduce page-level branching | PARTIAL | Shared utilities in `static/core.js` (`api`, datetime/event banner, `applyStopAllButton`, `createSseController`, `createTabController`, `escapeHtml`, `cssName`, status helpers) and page adoption across all page scripts | Core transport/time/SSE/sanitization/status logic is centralized and tab orchestration moved to shared helper; render/state orchestration is still duplicated across page modules. |
 
 ## Priority Remediation Batches
