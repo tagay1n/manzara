@@ -45,21 +45,8 @@ function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
   document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
-
   const stopBtn = document.getElementById("stop-all-btn");
-  stopBtn.disabled = payload.global.stop_all_state === "disabled";
-  stopBtn.classList.remove("amber", "red");
-  if (payload.global.stop_all_state === "armed") {
-    stopBtn.classList.add("red");
-    stopBtn.title = "Force stop all running tasks";
-    stopBtn.setAttribute("aria-label", "Force stop all running tasks");
-    stopBtn.innerHTML = '<i data-lucide="octagon-x"></i>';
-  } else {
-    stopBtn.classList.add("amber");
-    stopBtn.title = "Graceful stop all running tasks";
-    stopBtn.setAttribute("aria-label", "Graceful stop all running tasks");
-    stopBtn.innerHTML = '<i data-lucide="square"></i>';
-  }
+  window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
 
 function renderLanguageDistribution(items) {
@@ -200,8 +187,7 @@ function setupEventStream() {
       state.eventCursor = Number(nextCursor || 0);
     },
     onEvent: (payload, event) => {
-      document.getElementById("last-event").textContent =
-        "Last event: " + payload.type + " @ " + window.ManzaraCore.formatTime(payload.ts, { includeZone: true });
+      document.getElementById("last-event").textContent = window.ManzaraCore.formatEventBanner(payload);
       maybePlayTaskNotification(payload, event.lastEventId || "");
       queueRefresh(150);
     },

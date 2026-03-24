@@ -48,6 +48,55 @@ test("formatDateTime uses EU-style date/time with timezone and 24h clock", () =>
   assert.match(formatted, /(GMT|UTC)/);
 });
 
+test("formatEventBanner includes event type and timezone-aware time", () => {
+  const core = loadCore();
+  const text = core.formatEventBanner({
+    type: "task.completed",
+    ts: "2026-03-24T12:34:56Z",
+  });
+  assert.match(text, /^Last event: task\.completed @ /);
+  assert.match(text, /(GMT|UTC)/);
+});
+
+test("applyStopAllButton renders force/graceful states", () => {
+  const core = loadCore();
+  const classes = new Set();
+  const attrs = new Map();
+  const button = {
+    disabled: false,
+    title: "",
+    innerHTML: "",
+    classList: {
+      add(name) {
+        classes.add(name);
+      },
+      remove(...names) {
+        names.forEach((name) => classes.delete(name));
+      },
+    },
+    setAttribute(name, value) {
+      attrs.set(name, value);
+    },
+  };
+
+  core.applyStopAllButton(button, "armed");
+  assert.equal(button.disabled, false);
+  assert.equal(classes.has("red"), true);
+  assert.equal(button.title, "Force stop all running tasks");
+  assert.match(button.innerHTML, /octagon-x/);
+  assert.equal(attrs.get("aria-label"), "Force stop all running tasks");
+
+  core.applyStopAllButton(button, "normal");
+  assert.equal(button.disabled, false);
+  assert.equal(classes.has("amber"), true);
+  assert.equal(button.title, "Graceful stop all running tasks");
+  assert.match(button.innerHTML, /square/);
+  assert.equal(attrs.get("aria-label"), "Graceful stop all running tasks");
+
+  core.applyStopAllButton(button, "disabled");
+  assert.equal(button.disabled, true);
+});
+
 test("api returns parsed json and raises meaningful HTTP errors", async () => {
   const okCore = loadCore({
     fetchImpl: async () => ({

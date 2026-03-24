@@ -34,6 +34,45 @@ class ProcessHandle:
 class TaskRunner:
     """Runtime that starts/stops long-running task processes."""
 
+    _LOG_REDACTION_PATTERNS = (
+        (
+            re.compile(
+                r"(?i)(--repo1-s3-key-secret=)([^\s]+)"
+            ),
+            r"\1<redacted>",
+        ),
+        (
+            re.compile(
+                r"(?i)(--repo1-s3-key=)([^\s]+)"
+            ),
+            r"\1<redacted>",
+        ),
+        (
+            re.compile(
+                r"(?i)(\b(?:aws_secret_access_key|aws_access_key_id)\b\s*[=:]\s*)([^\s,;]+)"
+            ),
+            r"\1<redacted>",
+        ),
+        (
+            re.compile(
+                r"(?i)(\b(?:password|passwd|token|access_token|refresh_token|secret|api[_-]?key)\b\s*[=:]\s*)([^\s,;]+)"
+            ),
+            r"\1<redacted>",
+        ),
+        (
+            re.compile(
+                r'(?i)("?(?:password|passwd|token|access_token|refresh_token|secret|api[_-]?key|aws_secret_access_key|aws_access_key_id)"?\s*:\s*")([^"]+)(")'
+            ),
+            r"\1<redacted>\3",
+        ),
+        (
+            re.compile(
+                r"(?i)(://[^:/\s]+:)([^@/\s]+)(@)"
+            ),
+            r"\1<redacted>\3",
+        ),
+    )
+
     def __init__(self, db: Database):
         self.db = db
         self._lock = threading.Lock()
@@ -395,7 +434,7 @@ class TaskRunner:
                     task_id=task.get("task_id", "unknown"),
                     panel_id=task.get("panel_id", "unknown"),
                     source="runtime",
-                    message=f"exception={exc}",
+                    message=self._sanitize_log_line(f"exception={exc}"),
                 ),
             )
             self.db.finish_run(
@@ -527,13 +566,14 @@ class TaskRunner:
         line: str,
     ) -> None:
         """Persist one runtime log line and broadcast over SSE."""
-        self.db.append_log(run_id, stream="stdout", line=line)
+        safe_line = self._sanitize_log_line(line)
+        self.db.append_log(run_id, stream="stdout", line=safe_line)
         self.db.insert_event(
             "task.log",
             task_id=task_id,
             run_id=run_id,
             panel_id=panel_id,
-            payload={"line": line},
+            payload={"line": safe_line},
         )
         self._write_run_log(
             run_id=run_id,
@@ -541,7 +581,7 @@ class TaskRunner:
             panel_id=panel_id,
             level="INFO",
             source="runtime",
-            message=line,
+            message=safe_line,
         )
 
     def _is_pgbackrest_backup_task(self, task: Dict[str, Any]) -> bool:
@@ -662,14 +702,15 @@ class TaskRunner:
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
-                self.db.append_log(run_id, stream="stdout", line=line)
+                safe_line = self._sanitize_log_line(line)
+                self.db.append_log(run_id, stream="stdout", line=safe_line)
                 self.db.heartbeat(run_id)
                 self.db.insert_event(
                     "task.log",
                     task_id=task_id,
                     run_id=run_id,
                     panel_id=panel_id,
-                    payload={"line": line},
+                    payload={"line": safe_line},
                 )
                 self._write_run_log(
                     run_id=run_id,
@@ -677,7 +718,7 @@ class TaskRunner:
                     panel_id=panel_id,
                     level="INFO",
                     source="stdout",
-                    message=line,
+                    message=safe_line,
                 )
         except Exception:
             # Do not break task lifecycle on log-stream errors.
@@ -717,13 +758,14 @@ class TaskRunner:
         with self._lock:
             handle = self._processes.get(run_id)
             log_file = handle.log_file if handle else None
+        safe_message = self._sanitize_log_line(message)
         line = self._format_run_log(
             level=level,
             run_id=run_id,
             task_id=task_id,
             panel_id=panel_id,
             source=source,
-            message=message,
+            message=safe_message,
         )
         self._write_run_log_to_handle(log_file, line)
 
@@ -760,6 +802,15 @@ class TaskRunner:
         if not text:
             return "unknown"
         return re.sub(r"[^a-z0-9._-]+", "_", text)
+
+    def _sanitize_log_line(self, line: str) -> str:
+        """Mask common secret/token patterns before persisting user-visible logs."""
+        text = str(line or "")
+        if not text:
+            return ""
+        for pattern, replacement in self._LOG_REDACTION_PATTERNS:
+            text = pattern.sub(replacement, text)
+        return text
 
     def _check_sudo_requirements(
         self,

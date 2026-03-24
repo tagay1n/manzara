@@ -63,6 +63,30 @@
     }).format(date);
   }
 
+  function formatEventBanner(payload) {
+    const eventType = String(payload?.type || "event");
+    return `Last event: ${eventType} @ ${formatTime(payload?.ts, { includeZone: true })}`;
+  }
+
+  function applyStopAllButton(button, stopAllState) {
+    if (!button) return;
+    const state = String(stopAllState || "disabled");
+    const armed = state === "armed";
+    button.disabled = state === "disabled";
+    button.classList.remove("amber", "red");
+    if (armed) {
+      button.classList.add("red");
+      button.title = "Force stop all running tasks";
+      button.setAttribute("aria-label", "Force stop all running tasks");
+      button.innerHTML = '<i data-lucide="octagon-x"></i>';
+      return;
+    }
+    button.classList.add("amber");
+    button.title = "Graceful stop all running tasks";
+    button.setAttribute("aria-label", "Graceful stop all running tasks");
+    button.innerHTML = '<i data-lucide="square"></i>';
+  }
+
   async function api(path, options = {}) {
     const response = await fetch(path, {
       headers: { "Content-Type": "application/json" },
@@ -190,9 +214,11 @@
   }
 
   window.ManzaraCore = {
+    applyStopAllButton,
     api,
     createSseController,
     DEFAULT_EVENT_TYPES: [...DEFAULT_EVENT_TYPES],
+    formatEventBanner,
     formatDateTime,
     formatTime,
   };

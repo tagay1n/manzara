@@ -891,6 +891,66 @@ def test_task_run_artifact_log_captures_startup_exception(
     assert "source=runtime | exception=popen-boom" in log_text
 
 
+def test_task_logs_are_redacted_in_db_and_artifact_files(
+    test_client,
+    wait_for_terminal_run,
+    tmp_path,
+) -> None:
+    client, main_app = test_client
+    artifacts_root = tmp_path / "_artifacts" / "task_runs"
+    artifacts_root.mkdir(parents=True, exist_ok=True)
+    main_app.state.runner._artifacts_root = artifacts_root
+
+    main_app.state.db.seed_tasks(
+        [
+            {
+                "task_id": "maintenance.secret_log_redaction",
+                "panel_id": "maintenance",
+                "title": "Secret log redaction",
+                "task_type": "backup",
+                "icon_idle": "Play",
+                "icon_running": "Square",
+                "cwd": ".",
+                "command": {
+                    "mode": "shell",
+                    "value": (
+                        "python3 -c \"print('token=abc123 "
+                        "aws_secret_access_key=SECRETVALUE "
+                        "--repo1-s3-key-secret=SECRETKEY "
+                        "--repo1-s3-key=ACCESSKEY "
+                        "https://user:plainpass@example.com/path')\""
+                    ),
+                },
+            }
+        ]
+    )
+
+    response = client.post("/api/tasks/maintenance.secret_log_redaction/toggle")
+    assert response.status_code == 200
+    run_id = int(response.json()["run"]["run_id"])
+    run = wait_for_terminal_run(main_app, run_id)
+    assert run["status"] == "completed"
+
+    logs = client.get(f"/api/runs/{run_id}/logs").json()["lines"]
+    combined = "\n".join(str(line.get("line") or "") for line in logs)
+    assert "<redacted>" in combined
+    assert "abc123" not in combined
+    assert "SECRETVALUE" not in combined
+    assert "SECRETKEY" not in combined
+    assert "ACCESSKEY" not in combined
+    assert "plainpass" not in combined
+
+    run_log_path = artifacts_root / "maintenance.secret_log_redaction" / f"run-{run_id}.log"
+    assert run_log_path.exists()
+    artifact_text = run_log_path.read_text(encoding="utf-8")
+    assert "<redacted>" in artifact_text
+    assert "abc123" not in artifact_text
+    assert "SECRETVALUE" not in artifact_text
+    assert "SECRETKEY" not in artifact_text
+    assert "ACCESSKEY" not in artifact_text
+    assert "plainpass" not in artifact_text
+
+
 def test_task_completion_not_blocked_by_open_stdout_fd(test_client, wait_for_terminal_run) -> None:
     client, main_app = test_client
 
