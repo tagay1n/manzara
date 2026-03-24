@@ -1028,6 +1028,20 @@ function createNormalizationResolver({
     if (path === "/api/library/normalization/personality/suggestions/refresh") {
       return { accepted: true };
     }
+    if (path.startsWith("/api/library/normalization/personality/evidence?")) {
+      return {
+        available: true,
+        items: [
+          {
+            md5: "abc123",
+            language: "tt",
+            ya_path: "/library/file.pdf",
+            document_url: "https://example.test/doc",
+            content_url: "https://example.test/content",
+          },
+        ],
+      };
+    }
     if (path === "/api/library/normalization/personality/bulk/link") {
       return { accepted: true };
     }
@@ -1335,4 +1349,92 @@ test("library normalization history undo posts undo request", async () => {
   );
   assert.equal(Boolean(call), true);
   assert.equal(call.options.method, "POST");
+});
+
+test("library normalization suggestion queue action switches context and filters queue", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver({
+      suggestionsItems: [
+        {
+          raw_name: "Alias One",
+          suggestion_id: 15,
+          suggestion_kind: "link",
+          target_canonical_id: 1,
+          confidence: 0.88,
+          confidence_band: "medium",
+          rationale: "normalized_match",
+        },
+      ],
+    }),
+  });
+  await harness.flush();
+
+  const tabSwitcher = harness.elements.get("selectorAll:.classification-tab");
+  tabSwitcher.setAttribute("data-tab", "suggestions");
+  tabSwitcher.dispatch("click");
+  await harness.flush();
+
+  harness.elements.get("suggestions-table-body").dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== ".suggestion-action-btn") return null;
+        return {
+          dataset: {
+            action: "queue",
+            raw: encodeURIComponent("Alias One"),
+            suggestionId: "15",
+          },
+        };
+      },
+    },
+  });
+  await harness.flush();
+
+  assert.equal(harness.elements.get("queue-filter-search").value, "Alias One");
+  assert.equal(harness.elements.get("tab-btn-queue").classList.contains("active"), true);
+  const queueCalls = harness.apiCalls
+    .map((entry) => entry.path)
+    .filter((path) => path.startsWith("/api/library/normalization/personality/queue?"));
+  const hasSearchAlias = queueCalls.some(
+    (path) => new URL(`http://local${path}`).searchParams.get("search") === "Alias One",
+  );
+  assert.equal(hasSearchAlias, true);
+});
+
+test("library normalization evidence action opens dialog and loads evidence text", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver(),
+  });
+  await harness.flush();
+
+  harness.elements.get("queue-table-body").dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== ".queue-action-btn") return null;
+        return {
+          dataset: {
+            action: "evidence",
+            raw: encodeURIComponent("Alias One"),
+          },
+        };
+      },
+    },
+  });
+  await harness.flush();
+
+  assert.equal(harness.elements.get("evidence-dialog").open, true);
+  assert.match(harness.elements.get("evidence-title").textContent, /Alias Evidence: Alias One/);
+  assert.match(harness.elements.get("evidence-content").textContent, /md5=abc123/);
+  const evidenceCall = harness.apiCalls.find((entry) =>
+    entry.path.startsWith("/api/library/normalization/personality/evidence?"),
+  );
+  assert.equal(Boolean(evidenceCall), true);
 });

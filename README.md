@@ -220,7 +220,7 @@ node --test tests/frontend/*.mjs
 Coverage notes:
 - API/scheduler/task-control behavior is covered by `pytest`.
 - Shared frontend helpers and page behavior are covered by `node:test` (`tests/frontend/*.mjs`, currently `dashboard`, `schedules`, `tasks`, `task`, `library`, `database`, `library/classifications`, `library/classifications/{id}`, `library/personalities`, `library/publishers`, and normalization pages).
-- Normalization interaction coverage includes queue pagination, stop-all force-confirmation guard, suggestions refresh payload checks, bulk queue actions, suggestion accept/reject, merge, and history undo calls.
+- Normalization interaction coverage includes queue pagination, stop-all force-confirmation guard, suggestions refresh payload checks, bulk queue actions, suggestion accept/reject, merge, history undo calls, cross-tab queue-open transitions, and evidence dialog fetch/render checks.
 - Runtime-heavy external flows still require manual smoke checks, especially:
   - `maintenance.monocorpus_meta_evaluate`
   - normalization refresh with real config + Gemini keys
