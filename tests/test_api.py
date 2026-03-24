@@ -149,6 +149,41 @@ def test_task_detail_endpoint_accepts_human_slug(test_client) -> None:
     assert payload["task"]["slug"] == "quick"
 
 
+def test_library_endpoint_returns_dataset_stats(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_library_dataset_stats",
+        lambda: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "stats": {
+                "total_documents": 100,
+                "metadata_rows": 80,
+                "applicable_docs": 25,
+                "non_applicable_docs": 10,
+                "pending_evaluation": 45,
+                "classified_docs": 20,
+                "evaluated_docs": 35,
+                "acceptance_rate": 71.43,
+                "classification_coverage": 80.0,
+            },
+            "top_classifications": [
+                {"ddc": "891.7", "path": "Language / Tatar", "usage_count": 7},
+            ],
+        },
+    )
+
+    response = client.get("/api/library")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dataset"]["available"] is True
+    assert payload["dataset"]["stats"]["applicable_docs"] == 25
+    assert payload["dataset"]["top_classifications"][0]["ddc"] == "891.7"
+
+
 def test_workflow_run_skips_download_when_no_new(
     test_client,
     wait_for_terminal_workflow_run,

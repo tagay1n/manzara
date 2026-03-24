@@ -14,8 +14,12 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
+from app.modules.library.stats import get_library_dataset_stats
 from app.modules.maintenance.panel import build_library_panel, build_maintenance_panel
-from app.modules.maintenance.tasks import maintenance_task_definitions
+from app.modules.maintenance.tasks import (
+    MONOCORPUS_META_EVALUATE_TASK_ID,
+    maintenance_task_definitions,
+)
 from app.modules.maintenance.workflow import library_workflow_bundle
 from app.modules.shayan.panel import build_shayan_panel
 from app.modules.shayan.tasks import shayan_task_definitions
@@ -129,6 +133,12 @@ def schedules_page() -> FileResponse:
 def tasks_page() -> FileResponse:
     """Serve task index page."""
     return FileResponse(STATIC_DIR / "tasks.html")
+
+
+@app.get("/library")
+def library_page() -> FileResponse:
+    """Serve library insights page."""
+    return FileResponse(STATIC_DIR / "library.html")
 
 
 @app.get("/tasks/{task_id:path}")
@@ -494,6 +504,36 @@ def build_task_detail_payload(task_key: str, limit: int = 100) -> Dict[str, Any]
     }
 
 
+def build_library_payload() -> Dict[str, Any]:
+    """Compose library page payload with external dataset stats."""
+    active_runs = state.db.list_active_runs()
+    stop_all_state = "disabled"
+    if active_runs:
+        stop_all_state = (
+            "normal"
+            if any(run.get("stop_mode") is None for run in active_runs)
+            else "armed"
+        )
+
+    last_eval_run = state.db.get_latest_run_for_task(MONOCORPUS_META_EVALUATE_TASK_ID)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "global": {
+            "active_tasks": len(active_runs),
+            "active_workflows": len(
+                [
+                    row
+                    for row in state.db.list_workflows_with_latest_run()
+                    if row.get("run_status") in {"starting", "running"}
+                ]
+            ),
+            "stop_all_state": stop_all_state,
+        },
+        "dataset": get_library_dataset_stats(),
+        "last_eval_run": last_eval_run,
+    }
+
+
 @app.get("/api/dashboard")
 def get_dashboard() -> JSONResponse:
     """Return current dashboard state."""
@@ -519,6 +559,12 @@ def get_task_detail(
 ) -> JSONResponse:
     """Return one task with run history (task id or slug)."""
     return JSONResponse(build_task_detail_payload(task_id, limit=limit))
+
+
+@app.get("/api/library")
+def get_library() -> JSONResponse:
+    """Return library applicability dataset statistics."""
+    return JSONResponse(build_library_payload())
 
 
 @app.post("/api/tasks/{task_id}/toggle")
