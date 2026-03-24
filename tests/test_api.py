@@ -411,6 +411,94 @@ def test_library_personalities_insights_endpoint(test_client, monkeypatch) -> No
     assert payload["ambiguous_queue"]["total"] == 1
 
 
+def test_library_publishers_overview_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_publisher_overview",
+        lambda: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "stats": {
+                "total_mentions": 90,
+                "docs_with_publishers": 70,
+                "unique_raw_names": 35,
+                "unique_normalized_names": 28,
+                "mixed_script_mentions": 4,
+                "org_marker_mentions": 17,
+            },
+            "top_publishers": [{"raw_name": "Таткнигоиздат", "docs_count": 11}],
+        },
+    )
+
+    response = client.get("/api/library/publishers")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["overview"]["available"] is True
+    assert payload["overview"]["stats"]["docs_with_publishers"] == 70
+    assert payload["overview"]["top_publishers"][0]["raw_name"] == "Таткнигоиздат"
+
+
+def test_library_publishers_table_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "list_publishers",
+        lambda **_kwargs: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "page": 1,
+            "page_size": 25,
+            "total": 1,
+            "total_pages": 1,
+            "items": [
+                {
+                    "raw_name": "Таткнигоиздат",
+                    "normalized_name": "таткнигоиздат",
+                    "script_label": "cyrillic",
+                    "docs_count": 11,
+                    "mentions_count": 12,
+                    "org_marker_mentions": 0,
+                }
+            ],
+        },
+    )
+
+    response = client.get("/api/library/publishers/table?page=1&page_size=25")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["items"][0]["raw_name"] == "Таткнигоиздат"
+
+
+def test_library_publishers_insights_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_publisher_insights",
+        lambda **_kwargs: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "script_distribution": [{"script_label": "cyrillic", "mentions_count": 15, "share_pct": 100.0}],
+            "variant_clusters": [{"normalized_name": "таткнигоиздат", "variants_count": 2}],
+            "ambiguous_queue": {"total": 1, "items": [{"raw_name": "Татиздат"}]},
+        },
+    )
+
+    response = client.get("/api/library/publishers/insights")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["script_distribution"][0]["script_label"] == "cyrillic"
+    assert payload["ambiguous_queue"]["total"] == 1
+
+
 def test_library_classification_detail_endpoint(test_client, monkeypatch) -> None:
     client, main_app = test_client
 

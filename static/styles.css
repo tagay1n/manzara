@@ -770,6 +770,10 @@ button {
   grid-template-columns: minmax(180px, 1.3fr) minmax(110px, 0.8fr) minmax(100px, 0.7fr) minmax(120px, 0.8fr) auto;
 }
 
+.classification-filters.publisher-filters {
+  grid-template-columns: minmax(180px, 1.3fr) minmax(110px, 0.8fr) minmax(100px, 0.7fr) minmax(120px, 0.8fr) auto;
+}
+
 .classification-tabs {
   margin-top: 10px;
   display: flex;
@@ -1296,6 +1300,10 @@ button {
   }
 
   .classification-filters.personality-filters {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .classification-filters.publisher-filters {
     grid-template-columns: 1fr 1fr;
   }
 
