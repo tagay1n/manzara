@@ -101,7 +101,7 @@ def sync():
     config = read_config()
     s3client = create_session(config)
 
-    with YaDisk(config['yandex']['disk']['oauth_token'], proxy=config['proxy']) as yaclient: 
+    with YaDisk(config['yandex']['disk']['oauth_token']) as yaclient:
         print("Requesting all upstream metadata urls") 
         upstream_metas = lookup_upstream_metadata(s3client, config)
         print("Requesting all md5s") 

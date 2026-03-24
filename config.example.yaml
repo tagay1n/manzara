@@ -115,5 +115,3 @@ database_url: "<REDACTED>"
 sup_langs:
   tt: 
     codes: ['tt-Latn-x-zamanalif', 'tt-Cyrl', 'tt-Latn-x-yanalif', 'tt-Arab', 'tt-Latn']
-
-proxy:

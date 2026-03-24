@@ -18,10 +18,10 @@
           <a href="/dashboard" class="rail-link" title="Dashboard">
             <i data-lucide="layout-grid"></i>
           </a>
-          <a href="/schedules" class="rail-link active" aria-current="page" title="Schedules">
+          <a href="/schedules" class="rail-link" title="Schedules">
             <i data-lucide="calendar-range"></i>
           </a>
-          <a href="/tasks" class="rail-link" title="Tasks">
+          <a href="/tasks" class="rail-link active" aria-current="page" title="Tasks">
             <i data-lucide="list-checks"></i>
           </a>
         </nav>
@@ -54,14 +54,14 @@
         </header>
 
         <div class="alert-strip">
-          <i data-lucide="timer"></i>
-          <span>Schedules are timezone-agnostic weekly jobs with overlap policy = skip.</span>
+          <i data-lucide="book-open-check"></i>
+          <span>Task index is grouped by flow. Open any task to inspect execution history.</span>
         </div>
 
         <main class="dashboard">
-          <section class="runs-card schedules-card">
-            <h2>Workflow Schedules</h2>
-            <div id="schedule-grid" class="workflow-stack"></div>
+          <section class="runs-card">
+            <h2>Task Catalog</h2>
+            <div id="task-flow-grid" class="task-flow-grid"></div>
           </section>
         </main>
 
@@ -73,6 +73,6 @@
     </div>
 
     <script src="/static/sound-notifier.js"></script>
-    <script src="/static/schedules.js"></script>
+    <script src="/static/tasks.js"></script>
   </body>
 </html>

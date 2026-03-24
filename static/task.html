@@ -18,10 +18,10 @@
           <a href="/dashboard" class="rail-link" title="Dashboard">
             <i data-lucide="layout-grid"></i>
           </a>
-          <a href="/schedules" class="rail-link active" aria-current="page" title="Schedules">
+          <a href="/schedules" class="rail-link" title="Schedules">
             <i data-lucide="calendar-range"></i>
           </a>
-          <a href="/tasks" class="rail-link" title="Tasks">
+          <a href="/tasks" class="rail-link active" aria-current="page" title="Tasks">
             <i data-lucide="list-checks"></i>
           </a>
         </nav>
@@ -54,14 +54,38 @@
         </header>
 
         <div class="alert-strip">
-          <i data-lucide="timer"></i>
-          <span>Schedules are timezone-agnostic weekly jobs with overlap policy = skip.</span>
+          <i data-lucide="activity"></i>
+          <span>Run history is newest first. Select any run to inspect result and logs.</span>
         </div>
 
         <main class="dashboard">
-          <section class="runs-card schedules-card">
-            <h2>Workflow Schedules</h2>
-            <div id="schedule-grid" class="workflow-stack"></div>
+          <section class="runs-card task-detail-card">
+            <div class="task-detail-head">
+              <div>
+                <h2 id="task-title">Task</h2>
+                <div id="task-subtitle" class="subtitle-lite">Task details</div>
+              </div>
+              <div class="task-detail-actions">
+                <a href="/tasks" class="small-btn task-back-link">Back to tasks</a>
+                <button id="task-toggle-btn" class="icon-btn task-detail-toggle" title="Start task" aria-label="Start task">
+                  <i data-lucide="play"></i>
+                </button>
+              </div>
+            </div>
+
+            <div id="task-stat-grid" class="stat-grid-compact"></div>
+          </section>
+
+          <section class="task-detail-layout">
+            <section class="runs-card">
+              <h2>Run History</h2>
+              <div id="task-run-list" class="task-run-list"></div>
+            </section>
+
+            <section class="runs-card">
+              <h2>Run Result</h2>
+              <div id="run-result" class="run-result">Select a run.</div>
+            </section>
           </section>
         </main>
 
@@ -72,7 +96,20 @@
       </div>
     </div>
 
+    <dialog id="log-dialog" class="log-dialog">
+      <div class="log-head">
+        <h3 id="log-title">Run Logs</h3>
+        <button id="close-logs" class="icon-btn" title="Close logs" aria-label="Close logs">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <pre id="log-content" class="log-content"></pre>
+      <div class="log-controls">
+        <button id="copy-logs" class="small-btn">Copy</button>
+      </div>
+    </dialog>
+
     <script src="/static/sound-notifier.js"></script>
-    <script src="/static/schedules.js"></script>
+    <script src="/static/task.js"></script>
   </body>
 </html>

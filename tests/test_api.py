@@ -107,6 +107,48 @@ def test_schedules_endpoint_returns_workflows(test_client) -> None:
     assert LIBRARY_WORKFLOW_ID in workflow_ids
 
 
+def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.get("/api/tasks")
+    assert response.status_code == 200
+    payload = response.json()
+    flow_ids = {flow["panel_id"] for flow in payload["flows"]}
+    assert {"shayan", "maintenance", "library"} <= flow_ids
+
+    shayan = next(item for item in payload["flows"] if item["panel_id"] == "shayan")
+    task_ids = {task["task_id"] for task in shayan["tasks"]}
+    assert {"shayan.scan_changes", "shayan.download_new"} <= task_ids
+    assert any(task["task_id"] == "shayan.quick" and task["slug"] == "quick" for task in shayan["tasks"])
+
+
+def test_task_detail_endpoint_returns_run_history(test_client, wait_for_terminal_run) -> None:
+    client, main_app = test_client
+
+    response = client.post("/api/tasks/shayan.quick/toggle")
+    assert response.status_code == 200
+    run_id = int(response.json()["run"]["run_id"])
+    run = wait_for_terminal_run(main_app, run_id)
+    assert run["status"] == "completed"
+
+    detail = client.get("/api/tasks/shayan.quick?limit=10")
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["task"]["task_id"] == "shayan.quick"
+    assert payload["panel"]["panel_id"] == "shayan"
+    assert payload["stats"]["total_runs"] >= 1
+    assert len(payload["runs"]) >= 1
+    assert payload["runs"][0]["task_id"] == "shayan.quick"
+
+
+def test_task_detail_endpoint_accepts_human_slug(test_client) -> None:
+    client, _main_app = test_client
+
+    payload = client.get("/api/tasks/quick").json()
+    assert payload["task"]["task_id"] == "shayan.quick"
+    assert payload["task"]["slug"] == "quick"
+
+
 def test_workflow_run_skips_download_when_no_new(
     test_client,
     wait_for_terminal_workflow_run,

@@ -1088,6 +1088,23 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_recent_runs_for_task(self, task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Return recent runs for one task."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT run_id, task_id, panel_id, status, stop_mode,
+                       started_at, finished_at, heartbeat_at,
+                       pid, exit_code, error_text
+                FROM runs
+                WHERE task_id = ?
+                ORDER BY run_id DESC
+                LIMIT ?
+                """,
+                (task_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def run_count_by_status(self, panel_id: str) -> Dict[str, int]:
         """Return run status counters for one panel."""
         with self._connect() as conn:

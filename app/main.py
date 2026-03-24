@@ -32,6 +32,8 @@ _TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 _SSE_POLL_INTERVAL_SECONDS = 1.0
 _SSE_HEARTBEAT_EVERY_EMPTY_POLLS = 15
 _TITLE_MAX_LENGTH = 80
+_SLUG_SEPARATOR_PATTERN = re.compile(r"[\s_]+")
+_SLUG_CLEAN_PATTERN = re.compile(r"[^\w-]+", flags=re.UNICODE)
 _PANEL_DEFS = [
     {"panel_id": "shayan", "title": "Shayan"},
     {"panel_id": "maintenance", "title": "Maintenance"},
@@ -123,6 +125,19 @@ def schedules_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "schedules.html")
 
 
+@app.get("/tasks")
+def tasks_page() -> FileResponse:
+    """Serve task index page."""
+    return FileResponse(STATIC_DIR / "tasks.html")
+
+
+@app.get("/tasks/{task_id:path}")
+def task_detail_page(task_id: str) -> FileResponse:
+    """Serve task detail page shell."""
+    _ = task_id
+    return FileResponse(STATIC_DIR / "task.html")
+
+
 @app.get("/api/health")
 def health() -> Dict[str, str]:
     """Simple health probe endpoint."""
@@ -144,9 +159,66 @@ def _parse_title(payload: Dict[str, Any], field_name: str = "title") -> str:
     return title
 
 
+def _slugify(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = _SLUG_SEPARATOR_PATTERN.sub("-", text)
+    text = _SLUG_CLEAN_PATTERN.sub("-", text)
+    text = re.sub(r"-{2,}", "-", text)
+    return text.strip("-")
+
+
+def _task_slug_maps() -> tuple[Dict[str, str], Dict[str, str]]:
+    """Return deterministic task_id<->slug maps."""
+    tasks = sorted(
+        state.db.list_tasks(),
+        key=lambda item: (
+            str(item.get("panel_id") or ""),
+            str(item.get("title") or ""),
+            str(item.get("task_id") or ""),
+        ),
+    )
+    used: set[str] = set()
+    task_to_slug: Dict[str, str] = {}
+    slug_to_task: Dict[str, str] = {}
+
+    for task in tasks:
+        task_id = str(task["task_id"])
+        base = _slugify(task.get("title")) or _slugify(task_id) or "task"
+        panel_slug = _slugify(task.get("panel_id")) or "flow"
+        candidate = base
+        attempt = 1
+        while candidate in used:
+            if attempt == 1:
+                candidate = f"{base}-{panel_slug}"
+            else:
+                candidate = f"{base}-{panel_slug}-{attempt}"
+            attempt += 1
+        used.add(candidate)
+        task_to_slug[task_id] = candidate
+        slug_to_task[candidate] = task_id
+
+    return task_to_slug, slug_to_task
+
+
+def _resolve_task_identifier(task_key: str) -> Dict[str, Any]:
+    """Resolve task by id or human slug."""
+    task = state.db.get_task(task_key)
+    if task:
+        return task
+    _, slug_to_task = _task_slug_maps()
+    task_id = slug_to_task.get(task_key)
+    if not task_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    resolved = state.db.get_task(task_id)
+    if not resolved:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return resolved
+
+
 def build_dashboard_payload() -> Dict[str, Any]:
     """Compose dashboard payload from DB and Shayan artifacts."""
     panel_titles = state.db.get_panel_title_map()
+    task_slug_map, _ = _task_slug_maps()
 
     tasks = state.db.list_tasks_with_latest_run()
     tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
@@ -155,6 +227,7 @@ def build_dashboard_payload() -> Dict[str, Any]:
         tasks_by_panel.setdefault(panel_id, []).append(
             {
                 "task_id": task["task_id"],
+                "slug": task_slug_map.get(str(task["task_id"]), str(task["task_id"])),
                 "title": task["title"],
                 "task_type": task["task_type"],
                 "icon_idle": task["icon_idle"],
@@ -211,6 +284,11 @@ def build_dashboard_payload() -> Dict[str, Any]:
         ]
     )
 
+    recent_runs = state.db.list_recent_runs(20)
+    for run in recent_runs:
+        task_id = str(run.get("task_id") or "")
+        run["task_slug"] = task_slug_map.get(task_id, task_id)
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "global": {
@@ -220,7 +298,7 @@ def build_dashboard_payload() -> Dict[str, Any]:
             "stop_all_state": stop_all_state,
         },
         "panels": [shayan_panel, maintenance_panel, library_panel],
-        "recent_runs": state.db.list_recent_runs(20),
+        "recent_runs": recent_runs,
         "scheduler": {
             "enabled": state.settings.scheduler_enabled,
         },
@@ -291,6 +369,131 @@ def build_schedules_payload() -> Dict[str, Any]:
     }
 
 
+def build_tasks_payload() -> Dict[str, Any]:
+    """Compose tasks page payload grouped by flow."""
+    panel_titles = state.db.get_panel_title_map()
+    task_slug_map, _ = _task_slug_maps()
+    tasks = state.db.list_tasks_with_latest_run()
+    task_groups: Dict[str, Dict[str, Any]] = {}
+    for task in tasks:
+        panel_id = str(task["panel_id"])
+        group = task_groups.setdefault(
+            panel_id,
+            {
+                "panel_id": panel_id,
+                "title": panel_titles.get(panel_id, panel_id),
+                "tasks": [],
+            },
+        )
+        group["tasks"].append(
+            {
+                "task_id": task["task_id"],
+                "slug": task_slug_map.get(str(task["task_id"]), str(task["task_id"])),
+                "title": task["title"],
+                "task_type": task["task_type"],
+                "icon_idle": task["icon_idle"],
+                "icon_running": task["icon_running"],
+                "run": {
+                    "run_id": task.get("run_id"),
+                    "status": task.get("run_status") or "idle",
+                    "stop_mode": task.get("stop_mode"),
+                    "started_at": task.get("started_at"),
+                    "finished_at": task.get("finished_at"),
+                    "heartbeat_at": task.get("heartbeat_at"),
+                    "exit_code": task.get("exit_code"),
+                    "error_text": task.get("error_text"),
+                },
+            }
+        )
+
+    active_runs = state.db.list_active_runs()
+    stop_all_state = "disabled"
+    if active_runs:
+        stop_all_state = (
+            "normal"
+            if any(run.get("stop_mode") is None for run in active_runs)
+            else "armed"
+        )
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "global": {
+            "active_tasks": len(active_runs),
+            "active_workflows": len(
+                [
+                    row
+                    for row in state.db.list_workflows_with_latest_run()
+                    if row.get("run_status") in {"starting", "running"}
+                ]
+            ),
+            "stop_all_state": stop_all_state,
+        },
+        "flows": sorted(task_groups.values(), key=lambda item: str(item.get("title", "")).lower()),
+    }
+
+
+def build_task_detail_payload(task_key: str, limit: int = 100) -> Dict[str, Any]:
+    """Compose one task detail payload with run history."""
+    task = _resolve_task_identifier(task_key)
+    task_slug_map, _ = _task_slug_maps()
+    task_id = str(task["task_id"])
+
+    panel = state.db.get_panel(str(task["panel_id"])) or {
+        "panel_id": task["panel_id"],
+        "title": str(task["panel_id"]),
+    }
+    runs = state.db.list_recent_runs_for_task(task_id, limit=limit)
+    status_counts: Dict[str, int] = {}
+    for run in runs:
+        key = str(run.get("status") or "unknown")
+        status_counts[key] = int(status_counts.get(key, 0)) + 1
+
+    active_runs = state.db.list_active_runs()
+    stop_all_state = "disabled"
+    if active_runs:
+        stop_all_state = (
+            "normal"
+            if any(run.get("stop_mode") is None for run in active_runs)
+            else "armed"
+        )
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "global": {
+            "active_tasks": len(active_runs),
+            "active_workflows": len(
+                [
+                    row
+                    for row in state.db.list_workflows_with_latest_run()
+                    if row.get("run_status") in {"starting", "running"}
+                ]
+            ),
+            "stop_all_state": stop_all_state,
+        },
+        "task": {
+            "task_id": task["task_id"],
+            "slug": task_slug_map.get(task_id, task_id),
+            "panel_id": task["panel_id"],
+            "title": task["title"],
+            "task_type": task["task_type"],
+            "icon_idle": task["icon_idle"],
+            "icon_running": task["icon_running"],
+            "cwd": task["cwd"],
+        },
+        "panel": panel,
+        "stats": {
+            "total_runs": len(runs),
+            "status_counts": status_counts,
+            "last_run_at": runs[0].get("started_at") if runs else None,
+            "last_success_at": next(
+                (run.get("finished_at") for run in runs if run.get("status") == "completed"),
+                None,
+            ),
+        },
+        "runs": runs,
+    }
+
+
 @app.get("/api/dashboard")
 def get_dashboard() -> JSONResponse:
     """Return current dashboard state."""
@@ -301,6 +504,21 @@ def get_dashboard() -> JSONResponse:
 def get_schedules() -> JSONResponse:
     """Return workflows and schedule configuration state."""
     return JSONResponse(build_schedules_payload())
+
+
+@app.get("/api/tasks")
+def get_tasks() -> JSONResponse:
+    """Return all tasks grouped by flow."""
+    return JSONResponse(build_tasks_payload())
+
+
+@app.get("/api/tasks/{task_id}")
+def get_task_detail(
+    task_id: str,
+    limit: int = Query(100, ge=1, le=400),
+) -> JSONResponse:
+    """Return one task with run history (task id or slug)."""
+    return JSONResponse(build_task_detail_payload(task_id, limit=limit))
 
 
 @app.post("/api/tasks/{task_id}/toggle")

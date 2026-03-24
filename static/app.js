@@ -305,6 +305,7 @@ function renderPanel(panel) {
 
   const tasksHtml = panel.tasks
     .map((task) => {
+      const taskPathKey = encodeURIComponent(task.slug || task.task_id);
       const model = taskControlModel(task);
       const runStatus = task.run?.status || "idle";
       const runId = task.run?.run_id || "";
@@ -326,7 +327,7 @@ function renderPanel(panel) {
         `
         : `
           <div class="task-title-row">
-            <div class="task-title">${escapeHtml(task.title)}</div>
+            <a class="task-title task-detail-link" href="/tasks/${taskPathKey}">${escapeHtml(task.title)}</a>
             <button
               class="icon-btn rename-inline-btn task-rename-start"
               data-task-id="${escapeAttr(task.task_id)}"
@@ -370,6 +371,14 @@ function renderPanel(panel) {
             >
               <i data-lucide="terminal"></i>
             </button>
+            <a
+              class="icon-btn task-detail-btn"
+              href="/tasks/${taskPathKey}"
+              title="Task details"
+              aria-label="Task details"
+            >
+              <i data-lucide="panel-right-open"></i>
+            </a>
           </div>
         </div>
       `;
@@ -455,7 +464,7 @@ function renderRuns(runs) {
     .map(
       (run) => `
       <div class="run-row">
-        <div>${escapeHtml(run.task_id)} • ${escapeHtml(run.status)}</div>
+        <div><a class="run-task-link" href="/tasks/${encodeURIComponent(run.task_slug || run.task_id)}">${escapeHtml(run.task_id)}</a> • ${escapeHtml(run.status)}</div>
         <div>${escapeHtml(formatDateTime(run.started_at))}</div>
       </div>
     `
