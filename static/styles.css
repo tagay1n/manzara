@@ -749,6 +749,12 @@ button {
   gap: 8px;
 }
 
+.library-head-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .classification-filters {
   margin-top: 10px;
   display: grid;
@@ -758,6 +764,10 @@ button {
 
 .classification-filters.compact {
   grid-template-columns: minmax(240px, 1.2fr) minmax(120px, 0.8fr);
+}
+
+.classification-filters.personality-filters {
+  grid-template-columns: minmax(180px, 1.3fr) minmax(110px, 0.8fr) minmax(100px, 0.7fr) minmax(120px, 0.8fr) auto;
 }
 
 .classification-tabs {
@@ -1282,6 +1292,10 @@ button {
   }
 
   .classification-filters {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .classification-filters.personality-filters {
     grid-template-columns: 1fr 1fr;
   }
 

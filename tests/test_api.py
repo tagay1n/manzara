@@ -323,6 +323,94 @@ def test_library_classification_merge_candidates_endpoint(
     assert payload["candidates"][0]["recommended_primary_classification_id"] == 3
 
 
+def test_library_personalities_overview_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_personality_overview",
+        lambda: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "stats": {
+                "total_mentions": 120,
+                "docs_with_authors": 80,
+                "unique_raw_names": 40,
+                "unique_normalized_names": 30,
+                "mixed_script_mentions": 5,
+                "patronymic_mentions": 12,
+            },
+            "top_personalities": [{"raw_name": "Габдулла Тукай", "docs_count": 9}],
+        },
+    )
+
+    response = client.get("/api/library/personalities")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["overview"]["available"] is True
+    assert payload["overview"]["stats"]["total_mentions"] == 120
+    assert payload["overview"]["top_personalities"][0]["raw_name"] == "Габдулла Тукай"
+
+
+def test_library_personalities_table_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "list_personalities",
+        lambda **_kwargs: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "page": 1,
+            "page_size": 25,
+            "total": 1,
+            "total_pages": 1,
+            "items": [
+                {
+                    "raw_name": "Габдулла Тукай",
+                    "normalized_name": "габдулла тукай",
+                    "script_label": "cyrillic",
+                    "docs_count": 9,
+                    "mentions_count": 10,
+                    "patronymic_mentions": 0,
+                }
+            ],
+        },
+    )
+
+    response = client.get("/api/library/personalities/table?page=1&page_size=25")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["items"][0]["raw_name"] == "Габдулла Тукай"
+
+
+def test_library_personalities_insights_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_personality_insights",
+        lambda **_kwargs: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "script_distribution": [{"script_label": "cyrillic", "mentions_count": 10, "share_pct": 100.0}],
+            "variant_clusters": [{"normalized_name": "габдулла тукай", "variants_count": 2}],
+            "ambiguous_queue": {"total": 1, "items": [{"raw_name": "Тукай"}]},
+        },
+    )
+
+    response = client.get("/api/library/personalities/insights")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["script_distribution"][0]["script_label"] == "cyrillic"
+    assert payload["ambiguous_queue"]["total"] == 1
+
+
 def test_library_classification_detail_endpoint(test_client, monkeypatch) -> None:
     client, main_app = test_client
 

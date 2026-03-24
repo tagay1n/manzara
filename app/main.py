@@ -21,6 +21,11 @@ from app.modules.library.insights import (
     get_normalization_preview,
     list_classifications,
 )
+from app.modules.library.personalities import (
+    get_personality_insights,
+    get_personality_overview,
+    list_personalities,
+)
 from app.modules.library.stats import get_library_dataset_stats
 from app.modules.maintenance.panel import build_library_panel, build_maintenance_panel
 from app.modules.maintenance.tasks import (
@@ -159,6 +164,12 @@ def library_classification_detail_page(classification_id: int) -> FileResponse:
     """Serve one classification detail page shell."""
     _ = classification_id
     return FileResponse(STATIC_DIR / "library-classification.html")
+
+
+@app.get("/library/personalities")
+def library_personalities_page() -> FileResponse:
+    """Serve personality control page."""
+    return FileResponse(STATIC_DIR / "library-personalities.html")
 
 
 @app.get("/tasks/{task_id:path}")
@@ -600,6 +611,34 @@ def build_classification_detail_payload(
     }
 
 
+def build_personality_payload() -> Dict[str, Any]:
+    """Compose personality page payload with global state and overview metrics."""
+    active_runs = state.db.list_active_runs()
+    stop_all_state = "disabled"
+    if active_runs:
+        stop_all_state = (
+            "normal"
+            if any(run.get("stop_mode") is None for run in active_runs)
+            else "armed"
+        )
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "global": {
+            "active_tasks": len(active_runs),
+            "active_workflows": len(
+                [
+                    row
+                    for row in state.db.list_workflows_with_latest_run()
+                    if row.get("run_status") in {"starting", "running"}
+                ]
+            ),
+            "stop_all_state": stop_all_state,
+        },
+        "overview": get_personality_overview(),
+    }
+
+
 @app.get("/api/dashboard")
 def get_dashboard() -> JSONResponse:
     """Return current dashboard state."""
@@ -631,6 +670,46 @@ def get_task_detail(
 def get_library() -> JSONResponse:
     """Return library applicability dataset statistics."""
     return JSONResponse(build_library_payload())
+
+
+@app.get("/api/library/personalities")
+def get_library_personalities() -> JSONResponse:
+    """Return personality overview payload."""
+    return JSONResponse(build_personality_payload())
+
+
+@app.get("/api/library/personalities/table")
+def get_library_personalities_table(
+    search: str = Query("", max_length=120),
+    script_label: str = Query("", max_length=40),
+    min_docs: int = Query(0, ge=0),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    sort: str = Query("docs_desc", max_length=40),
+) -> JSONResponse:
+    """Return paginated personalities table."""
+    payload = list_personalities(
+        search=search,
+        script_label=script_label,
+        min_docs=min_docs,
+        page=page,
+        page_size=page_size,
+        sort=sort,
+    )
+    return JSONResponse(payload)
+
+
+@app.get("/api/library/personalities/insights")
+def get_library_personalities_insights(
+    cluster_limit: int = Query(24, ge=1, le=100),
+    queue_limit: int = Query(40, ge=1, le=200),
+) -> JSONResponse:
+    """Return personalities insight tabs payload."""
+    payload = get_personality_insights(
+        cluster_limit=cluster_limit,
+        queue_limit=queue_limit,
+    )
+    return JSONResponse(payload)
 
 
 @app.get("/api/library/classifications")
