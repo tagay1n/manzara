@@ -58,6 +58,8 @@ from app.modules.maintenance.tasks import (
     maintenance_task_definitions,
 )
 from app.modules.maintenance.workflow import (
+    maintenance_backup_full_workflow_bundle,
+    maintenance_backup_incr_workflow_bundle,
     library_personality_normalization_workflow_bundle,
     library_publisher_normalization_workflow_bundle,
     library_workflow_bundle,
@@ -119,6 +121,8 @@ def on_startup() -> None:
     ]
     state.db.seed_tasks(task_defs)
     state.db.seed_workflow_bundle(shayan_workflow_bundle(state.settings.shayan))
+    state.db.seed_workflow_bundle(maintenance_backup_full_workflow_bundle())
+    state.db.seed_workflow_bundle(maintenance_backup_incr_workflow_bundle())
     state.db.seed_workflow_bundle(library_workflow_bundle())
     state.db.seed_workflow_bundle(library_personality_normalization_workflow_bundle())
     state.db.seed_workflow_bundle(library_publisher_normalization_workflow_bundle())
@@ -243,6 +247,21 @@ def _parse_title(payload: Dict[str, Any], field_name: str = "title") -> str:
             detail=f"{field_name} must be at most {_TITLE_MAX_LENGTH} characters",
         )
     return title
+
+
+def _parse_optional_sudo_password(payload: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Parse optional sudo password from request body."""
+    if not payload or "sudo_password" not in payload:
+        return None
+    raw_value = payload.get("sudo_password")
+    if raw_value is None:
+        return None
+    value = str(raw_value)
+    if value == "":
+        return None
+    if len(value) > 1024:
+        raise HTTPException(status_code=400, detail="sudo_password is too long")
+    return value
 
 
 def _slugify(value: Any) -> str:
@@ -404,6 +423,7 @@ def build_schedules_payload() -> Dict[str, Any]:
                 "day_of_week": workflow.get("day_of_week"),
                 "time_of_day": workflow.get("time_of_day"),
                 "timezone": workflow.get("timezone"),
+                "interval_minutes": workflow.get("interval_minutes"),
                 "enabled": bool(workflow.get("schedule_enabled", False)),
                 "overlap_policy": workflow.get("overlap_policy"),
                 "catchup_policy": workflow.get("catchup_policy"),
@@ -1292,13 +1312,14 @@ def get_library_classification_detail(
 
 
 @app.post("/api/tasks/{task_id}/toggle")
-def toggle_task(task_id: str) -> JSONResponse:
+def toggle_task(task_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)) -> JSONResponse:
     """Start task or request stop/force-stop for active run."""
     task = state.db.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    result = state.runner.toggle_task(task_id)
+    sudo_password = _parse_optional_sudo_password(payload)
+    result = state.runner.toggle_task(task_id, sudo_password=sudo_password)
     return JSONResponse(result)
 
 
@@ -1353,15 +1374,20 @@ def rename_flow(panel_id: str, payload: Dict[str, Any] = Body(...)) -> JSONRespo
 
 
 @app.post("/api/workflows/{workflow_id}/run")
-def run_workflow_now(workflow_id: str) -> JSONResponse:
+def run_workflow_now(
+    workflow_id: str,
+    payload: Optional[Dict[str, Any]] = Body(default=None),
+) -> JSONResponse:
     """Trigger one workflow immediately."""
     workflow = state.db.get_workflow(workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
+    sudo_password = _parse_optional_sudo_password(payload)
     result = state.workflow_service.trigger_workflow(
         workflow_id,
         trigger_source="manual",
+        sudo_password=sudo_password,
     )
     return JSONResponse(result)
 
@@ -1391,6 +1417,15 @@ def update_schedule(schedule_id: str, payload: Dict[str, Any] = Body(...)) -> JS
         raise HTTPException(status_code=404, detail="Schedule not found")
 
     updates: Dict[str, Any] = {}
+    schedule_type = str(schedule.get("schedule_type") or "weekly")
+
+    if "schedule_type" in payload:
+        parsed = str(payload["schedule_type"]).strip().lower()
+        if parsed not in {"weekly", "interval"}:
+            raise HTTPException(status_code=400, detail="schedule_type must be 'weekly' or 'interval'")
+        updates["schedule_type"] = parsed
+        schedule_type = parsed
+
     if "enabled" in payload:
         raw_enabled = payload["enabled"]
         if isinstance(raw_enabled, bool):
@@ -1417,9 +1452,30 @@ def update_schedule(schedule_id: str, payload: Dict[str, Any] = Body(...)) -> JS
             raise HTTPException(status_code=400, detail="time_of_day must match HH:MM (24h)")
         updates["time_of_day"] = value
 
+    if "interval_minutes" in payload:
+        raw_interval = payload["interval_minutes"]
+        if raw_interval in {None, ""}:
+            updates["interval_minutes"] = None
+        else:
+            try:
+                interval_minutes = int(raw_interval)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="interval_minutes must be an integer >= 1")
+            if interval_minutes < 1:
+                raise HTTPException(status_code=400, detail="interval_minutes must be an integer >= 1")
+            updates["interval_minutes"] = interval_minutes
+
     if "timezone" in payload:
         timezone_name = str(payload["timezone"]).strip() or "UTC"
         updates["timezone"] = timezone_name
+
+    if schedule_type == "interval":
+        effective_interval = updates.get("interval_minutes", schedule.get("interval_minutes"))
+        if effective_interval is None:
+            raise HTTPException(
+                status_code=400,
+                detail="interval_minutes is required when schedule_type is 'interval'",
+            )
 
     if not updates:
         return JSONResponse({"schedule": schedule})

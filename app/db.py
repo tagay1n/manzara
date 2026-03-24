@@ -286,11 +286,11 @@ class Database:
                         """
                         INSERT INTO workflow_schedules (
                             schedule_id, workflow_id, schedule_type,
-                            day_of_week, time_of_day, timezone,
+                            day_of_week, time_of_day, timezone, interval_minutes,
                             enabled, overlap_policy, catchup_policy,
                             next_run_at, last_run_at,
                             created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(schedule_id) DO NOTHING
                         """,
                         (
@@ -300,6 +300,11 @@ class Database:
                             int(schedule.get("day_of_week", 1)),
                             schedule.get("time_of_day", "03:00"),
                             schedule.get("timezone", "UTC"),
+                            (
+                                int(schedule.get("interval_minutes"))
+                                if schedule.get("interval_minutes") is not None
+                                else None
+                            ),
                             int(schedule.get("enabled", 0)),
                             schedule.get("overlap_policy", "skip"),
                             schedule.get("catchup_policy", "once"),
@@ -432,6 +437,7 @@ class Database:
                     s.day_of_week,
                     s.time_of_day,
                     s.timezone,
+                    s.interval_minutes,
                     s.enabled AS schedule_enabled,
                     s.overlap_policy,
                     s.catchup_policy,
@@ -523,9 +529,11 @@ class Database:
         """Patch a schedule row and return updated row."""
         allowed = {
             "enabled",
+            "schedule_type",
             "day_of_week",
             "time_of_day",
             "timezone",
+            "interval_minutes",
             "overlap_policy",
             "catchup_policy",
             "next_run_at",
@@ -540,6 +548,8 @@ class Database:
         for field in fields:
             value = updates[field]
             if field == "enabled" and isinstance(value, bool):
+                value = int(value)
+            if field == "interval_minutes" and value is not None:
                 value = int(value)
             assignments.append(f"{field} = ?")
             values.append(value)

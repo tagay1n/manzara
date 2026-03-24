@@ -178,7 +178,10 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
         summary_file=artifacts / "last-main-run-summary.json",
         latest_snapshot_file=artifacts / "snapshots" / "latest.json",
     )
-    maintenance = MaintenanceSettings(monocorpus_repo_path=tmp_path / "monocorpus")
+    maintenance = MaintenanceSettings(
+        monocorpus_repo_path=tmp_path / "monocorpus",
+        pgbackrest_stanza="monocorpus",
+    )
     settings = Settings(
         database_url=database_url,
         database_schema=schema_name,

@@ -12,6 +12,7 @@ class MaintenanceSettings:
     """Paths required by the maintenance panel integration."""
 
     monocorpus_repo_path: Path
+    pgbackrest_stanza: str
 
 
 def load_maintenance_settings() -> MaintenanceSettings:
@@ -20,5 +21,9 @@ def load_maintenance_settings() -> MaintenanceSettings:
     repo_path = Path(
         os.environ.get("MONOCORPUS_REPO_PATH", str(repo_default))
     ).expanduser()
+    pgbackrest_stanza = str(os.environ.get("PG_BACKREST_STANZA", "monocorpus")).strip() or "monocorpus"
 
-    return MaintenanceSettings(monocorpus_repo_path=repo_path)
+    return MaintenanceSettings(
+        monocorpus_repo_path=repo_path,
+        pgbackrest_stanza=pgbackrest_stanza,
+    )

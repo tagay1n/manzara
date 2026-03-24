@@ -5,6 +5,7 @@ const state = {
   eventStreamReconnectTimer: null,
   eventCursor: 0,
   soundNotifier: null,
+  sudoPrompt: null,
 };
 
 const WEEKDAY_LABELS = {
@@ -64,6 +65,39 @@ function teardownSoundNotifier() {
     state.soundNotifier.teardown();
   }
   state.soundNotifier = null;
+}
+
+function initSudoPrompt() {
+  const createPrompt = window.ManzaraSudoPrompt?.createPrompt;
+  if (typeof createPrompt !== "function") return;
+  state.sudoPrompt = createPrompt();
+}
+
+function teardownSudoPrompt() {
+  if (state.sudoPrompt && typeof state.sudoPrompt.teardown === "function") {
+    state.sudoPrompt.teardown();
+  }
+  state.sudoPrompt = null;
+}
+
+async function runWithSudoPrompt(requestExecutor, contextLabel) {
+  const runWithPrompt = window.ManzaraSudoPrompt?.runWithSudoPrompt;
+  if (typeof runWithPrompt !== "function") {
+    return requestExecutor(null);
+  }
+  return runWithPrompt({
+    execute: requestExecutor,
+    prompt: state.sudoPrompt,
+    contextLabel,
+  });
+}
+
+function maybeShowSudoError(result) {
+  const reason = String(result?.reason || "");
+  if (reason === "sudo_prompt_cancelled") return;
+  if (reason.startsWith("sudo_") && result?.message) {
+    window.alert(String(result.message));
+  }
 }
 
 function workflowStatusModel(workflow) {
@@ -132,10 +166,13 @@ function renderWorkflowCard(workflow) {
   const dayOfWeek = Number(schedule.day_of_week || 1);
   const timeOfDay = schedule.time_of_day || "03:00";
   const timezone = schedule.timezone || "UTC";
+  const scheduleType = String(schedule.schedule_type || "weekly").toLowerCase();
+  const isInterval = scheduleType === "interval";
+  const intervalMinutes = Number(schedule.interval_minutes || 180);
 
   const scheduleToggleTitle = scheduleEnabled
-    ? "Disable weekly schedule"
-    : "Enable weekly schedule";
+    ? `Disable ${isInterval ? "interval" : "weekly"} schedule`
+    : `Enable ${isInterval ? "interval" : "weekly"} schedule`;
 
   const weekdayOptions = Object.entries(WEEKDAY_LABELS)
     .map(([value, label]) => {
@@ -143,6 +180,35 @@ function renderWorkflowCard(workflow) {
       return `<option value="${value}" ${selected}>${label}</option>`;
     })
     .join("");
+
+  const scheduleControls = isInterval
+    ? `
+        <input
+          type="number"
+          class="schedule-interval"
+          min="1"
+          step="1"
+          value="${escapeHtml(String(Math.max(1, intervalMinutes)))}"
+          data-schedule-id="${escapeHtml(scheduleId)}"
+          title="Interval minutes"
+        />
+      `
+    : `
+        <select class="schedule-day" data-schedule-id="${escapeHtml(scheduleId)}">
+          ${weekdayOptions}
+        </select>
+
+        <input
+          type="time"
+          class="schedule-time"
+          value="${escapeHtml(timeOfDay)}"
+          data-schedule-id="${escapeHtml(scheduleId)}"
+        />
+      `;
+
+  const scheduleFootnote = isInterval
+    ? `Every ${Math.max(1, intervalMinutes)} min in ${escapeHtml(timezone)} | overlap: ${escapeHtml(schedule.overlap_policy || "skip")} | catch-up: ${escapeHtml(schedule.catchup_policy || "once")}`
+    : `Weekly in ${escapeHtml(timezone)} | overlap: ${escapeHtml(schedule.overlap_policy || "skip")} | catch-up: ${escapeHtml(schedule.catchup_policy || "once")}`;
 
   return `
     <section class="workflow-card workflow-status-${cssName(workflow.run?.status || "idle")}">
@@ -159,7 +225,7 @@ function renderWorkflowCard(workflow) {
         <div><span class="meta-k">Next Run</span><span class="meta-v">${escapeHtml(formatDateTime(schedule.next_run_at))}</span></div>
       </div>
 
-      <div class="workflow-controls">
+      <div class="workflow-controls" data-schedule-type="${escapeHtml(scheduleType)}">
         <button
           class="icon-btn workflow-run-now ${model.runDisabled ? "" : "active"}"
           title="Run workflow now"
@@ -179,17 +245,7 @@ function renderWorkflowCard(workflow) {
         >
           <i data-lucide="${scheduleEnabled ? "calendar-check" : "calendar"}"></i>
         </button>
-
-        <select class="schedule-day" data-schedule-id="${escapeHtml(scheduleId)}">
-          ${weekdayOptions}
-        </select>
-
-        <input
-          type="time"
-          class="schedule-time"
-          value="${escapeHtml(timeOfDay)}"
-          data-schedule-id="${escapeHtml(scheduleId)}"
-        />
+        ${scheduleControls}
 
         <button
           class="icon-btn schedule-save"
@@ -201,7 +257,7 @@ function renderWorkflowCard(workflow) {
         </button>
       </div>
 
-      <div class="workflow-footnote">Weekly in ${escapeHtml(timezone)} | overlap: ${escapeHtml(schedule.overlap_policy || "skip")} | catch-up: ${escapeHtml(schedule.catchup_policy || "once")}</div>
+      <div class="workflow-footnote">${scheduleFootnote}</div>
     </section>
   `;
 }
@@ -254,7 +310,15 @@ function queueRefresh(delayMs = 250) {
 }
 
 async function runWorkflowNow(workflowId) {
-  await api(`/api/workflows/${encodeURIComponent(workflowId)}/run`, { method: "POST" });
+  const result = await runWithSudoPrompt(
+    (sudoPassword) =>
+      api(`/api/workflows/${encodeURIComponent(workflowId)}/run`, {
+        method: "POST",
+        body: JSON.stringify(sudoPassword ? { sudo_password: sudoPassword } : {}),
+      }),
+    "Workflow requires sudo access"
+  );
+  maybeShowSudoError(result);
   queueRefresh(0);
 }
 
@@ -390,6 +454,22 @@ function attachUiHandlers() {
       const card = target.closest(".workflow-card");
       const scheduleId = target.dataset.scheduleId;
       if (!card || !scheduleId) return;
+      const scheduleType = String(
+        card.querySelector(".workflow-controls")?.dataset.scheduleType || "weekly",
+      ).toLowerCase();
+
+      if (scheduleType === "interval") {
+        const interval = Number(card.querySelector(".schedule-interval")?.value || "0");
+        if (!Number.isFinite(interval) || interval < 1) {
+          window.alert("Interval must be an integer >= 1 minute");
+          return;
+        }
+        patchSchedule(scheduleId, {
+          schedule_type: "interval",
+          interval_minutes: Math.floor(interval),
+        }).catch((error) => console.error(error));
+        return;
+      }
 
       const day = Number(card.querySelector(".schedule-day")?.value || "1");
       const time = String(card.querySelector(".schedule-time")?.value || "03:00").trim();
@@ -398,7 +478,11 @@ function attachUiHandlers() {
         return;
       }
 
-      patchSchedule(scheduleId, { day_of_week: day, time_of_day: time }).catch((error) => console.error(error));
+      patchSchedule(scheduleId, {
+        schedule_type: "weekly",
+        day_of_week: day,
+        time_of_day: time,
+      }).catch((error) => console.error(error));
     }
   });
 
@@ -409,8 +493,10 @@ function attachUiHandlers() {
 
 async function bootstrap() {
   initSoundNotifier();
+  initSudoPrompt();
   window.addEventListener("beforeunload", () => {
     teardownSoundNotifier();
+    teardownSudoPrompt();
     if (state.eventStreamReconnectTimer) {
       clearTimeout(state.eventStreamReconnectTimer);
       state.eventStreamReconnectTimer = null;

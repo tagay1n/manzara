@@ -640,13 +640,18 @@ button {
   align-items: center;
 }
 
+.workflow-controls[data-schedule-type="interval"] {
+  grid-template-columns: 40px 40px minmax(96px, 132px) 40px;
+}
+
 .workflow-controls .icon-btn {
   width: 40px;
   height: 40px;
 }
 
 .schedule-day,
-.schedule-time {
+.schedule-time,
+.schedule-interval {
   height: 36px;
   border: 1px solid #2f5485;
   border-radius: 8px;
@@ -1286,6 +1291,51 @@ button {
   padding: 8px 12px;
 }
 
+.sudo-dialog {
+  width: min(420px, 92vw);
+  border: 1px solid #2a4876;
+  border-radius: 12px;
+  padding: 0;
+  background: #070f1f;
+  color: var(--text);
+}
+
+.sudo-head {
+  border-bottom: 1px solid #233d66;
+  padding: 10px 12px;
+}
+
+.sudo-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.sudo-body {
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.sudo-body p {
+  margin: 0;
+  color: #9bb6dd;
+  font-size: 12px;
+}
+
+.sudo-error {
+  min-height: 16px;
+  color: #ffbac3;
+  font-size: 11px;
+}
+
+.sudo-controls {
+  border-top: 1px solid #233d66;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 @media (max-width: 960px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -1369,7 +1419,8 @@ button {
   }
 
   .workflow-controls .schedule-day,
-  .workflow-controls .schedule-time {
+  .workflow-controls .schedule-time,
+  .workflow-controls .schedule-interval {
     grid-column: span 3;
   }
 

@@ -166,6 +166,7 @@ def upgrade() -> None:
             day_of_week BIGINT NOT NULL,
             time_of_day TEXT NOT NULL,
             timezone TEXT NOT NULL,
+            interval_minutes BIGINT,
             enabled BIGINT NOT NULL,
             overlap_policy TEXT NOT NULL,
             catchup_policy TEXT NOT NULL,

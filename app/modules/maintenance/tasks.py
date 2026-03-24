@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -12,6 +13,8 @@ MONOCORPUS_SYNC_TASK_ID = "maintenance.monocorpus_sync"
 MONOCORPUS_META_EVALUATE_TASK_ID = "maintenance.monocorpus_meta_evaluate"
 LIBRARY_PERSONALITY_SUGGESTIONS_REFRESH_TASK_ID = "library.personality_suggestions_refresh"
 LIBRARY_PUBLISHER_SUGGESTIONS_REFRESH_TASK_ID = "library.publisher_suggestions_refresh"
+MAINTENANCE_PGBACKREST_FULL_TASK_ID = "maintenance.pgbackrest_backup_full"
+MAINTENANCE_PGBACKREST_INCR_TASK_ID = "maintenance.pgbackrest_backup_incr"
 
 
 def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str, Any]]:
@@ -20,9 +23,18 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
     sync_runner = app_root / "app" / "modules" / "maintenance" / "runtime" / "run_sync.py"
     meta_eval_runner = app_root / "app" / "modules" / "library" / "runtime" / "run_meta_evaluate.py"
     norm_refresh_runner = app_root / "app" / "modules" / "library" / "runtime" / "run_normalization_refresh.py"
+    stanza = shlex.quote(settings.pgbackrest_stanza)
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
     sync_cmd = py_bootstrap + f'"$PY_BIN" "{sync_runner}"'
     meta_eval_cmd = py_bootstrap + f'"$PY_BIN" "{meta_eval_runner}" --workers 1'
+    backup_full_cmd = (
+        "sudo -n -u postgres "
+        f"pgbackrest --stanza={stanza} --type=full backup"
+    )
+    backup_incr_cmd = (
+        "sudo -n -u postgres "
+        f"pgbackrest --stanza={stanza} --type=incr backup"
+    )
     personality_refresh_cmd = (
         py_bootstrap + f'"$PY_BIN" "{norm_refresh_runner}" --entity-type personality --limit 180'
     )
@@ -40,6 +52,26 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": sync_cmd},
+        },
+        {
+            "task_id": MAINTENANCE_PGBACKREST_FULL_TASK_ID,
+            "panel_id": "maintenance",
+            "title": "Postgres full backup",
+            "task_type": "backup",
+            "icon_idle": "Database",
+            "icon_running": "Square",
+            "cwd": str(app_root),
+            "command": {"mode": "shell", "value": backup_full_cmd},
+        },
+        {
+            "task_id": MAINTENANCE_PGBACKREST_INCR_TASK_ID,
+            "panel_id": "maintenance",
+            "title": "Postgres incremental backup",
+            "task_type": "backup",
+            "icon_idle": "Clock3",
+            "icon_running": "Square",
+            "cwd": str(app_root),
+            "command": {"mode": "shell", "value": backup_incr_cmd},
         },
         {
             "task_id": MONOCORPUS_META_EVALUATE_TASK_ID,

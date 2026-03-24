@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import signal
 import subprocess
 import threading
@@ -30,7 +31,28 @@ class TaskRunner:
         self._lock = threading.Lock()
         self._processes: Dict[int, ProcessHandle] = {}
 
-    def start_task(self, task_id: str) -> Dict[str, Any]:
+    def check_task_start(
+        self,
+        task_id: str,
+        *,
+        sudo_password: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Preflight one task without creating a run row."""
+        task = self.db.get_task(task_id)
+        if not task:
+            return {
+                "ok": False,
+                "reason": "task_not_found",
+                "message": f"Unknown task id: {task_id}",
+            }
+        return self._check_sudo_requirements(task, sudo_password=sudo_password)
+
+    def start_task(
+        self,
+        task_id: str,
+        *,
+        sudo_password: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Start a task when no active run exists."""
         task = self.db.get_task(task_id)
         if not task:
@@ -44,6 +66,22 @@ class TaskRunner:
                 "run": active,
             }
 
+        preflight = self._check_sudo_requirements(task, sudo_password=sudo_password)
+        if not preflight.get("ok", False):
+            reason = str(preflight.get("reason") or "task_not_started")
+            if reason in {"sudo_password_required", "sudo_password_invalid"}:
+                return {
+                    "action": reason,
+                    "reason": reason,
+                    "message": preflight.get("message"),
+                    "task_id": task_id,
+                }
+            return {
+                "action": "noop",
+                "reason": reason,
+                "message": preflight.get("message"),
+            }
+
         run_id = self.db.create_run(task)
         self.db.insert_event(
             "task.started",
@@ -55,7 +93,7 @@ class TaskRunner:
 
         thread = threading.Thread(
             target=self._run_task,
-            args=(run_id, task),
+            args=(run_id, task, sudo_password),
             daemon=True,
             name=f"run-{run_id}",
         )
@@ -67,11 +105,16 @@ class TaskRunner:
             "run": run,
         }
 
-    def toggle_task(self, task_id: str) -> Dict[str, Any]:
+    def toggle_task(
+        self,
+        task_id: str,
+        *,
+        sudo_password: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Toggle task state: start or stop/force-stop active run."""
         active = self.db.get_active_run_for_task(task_id)
         if not active:
-            return self.start_task(task_id)
+            return self.start_task(task_id, sudo_password=sudo_password)
 
         run_id = int(active["run_id"])
         current_mode = active.get("stop_mode")
@@ -173,7 +216,12 @@ class TaskRunner:
         except (ProcessLookupError, PermissionError):
             return
 
-    def _run_task(self, run_id: int, task: Dict[str, Any]) -> None:
+    def _run_task(
+        self,
+        run_id: int,
+        task: Dict[str, Any],
+        sudo_password: Optional[str] = None,
+    ) -> None:
         """Run task process and persist logs/events until completion."""
         try:
             command = task["command"]
@@ -181,10 +229,13 @@ class TaskRunner:
             if command.get("mode") != "shell":
                 raise ValueError("Unsupported command mode")
 
+            command_text, stdin_text = self._prepare_command(command["value"], sudo_password)
+
             proc = subprocess.Popen(
-                command["value"],
+                command_text,
                 cwd=cwd,
                 shell=True,
+                stdin=subprocess.PIPE if stdin_text is not None else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -209,6 +260,18 @@ class TaskRunner:
                 panel_id=task["panel_id"],
                 payload={"status": "running"},
             )
+
+            if stdin_text is not None and proc.stdin is not None:
+                try:
+                    proc.stdin.write(stdin_text)
+                    proc.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    pass
+                finally:
+                    try:
+                        proc.stdin.close()
+                    except OSError:
+                        pass
 
             if proc.stdout:
                 for raw_line in proc.stdout:
@@ -273,3 +336,209 @@ class TaskRunner:
         finally:
             with self._lock:
                 self._processes.pop(run_id, None)
+
+    def _check_sudo_requirements(
+        self,
+        task: Dict[str, Any],
+        *,
+        sudo_password: Optional[str],
+    ) -> Dict[str, Any]:
+        """Detect whether command requires sudo password before task start."""
+        command = str((task.get("command") or {}).get("value") or "")
+        parsed = self._split_leading_sudo_command(command)
+        if not parsed:
+            return {"ok": True}
+
+        options, _command_tokens = parsed
+        probe_tokens, probe_input = self._build_sudo_probe(
+            options=options,
+            sudo_password=sudo_password,
+        )
+        try:
+            result = subprocess.run(
+                probe_tokens,
+                input=probe_input,
+                capture_output=True,
+                text=True,
+                timeout=12,
+            )
+        except FileNotFoundError:
+            return {
+                "ok": False,
+                "reason": "sudo_missing",
+                "message": "sudo is not installed on this machine.",
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "ok": False,
+                "reason": "sudo_probe_timeout",
+                "message": "Timed out while checking sudo access.",
+            }
+
+        if int(result.returncode) == 0:
+            return {"ok": True}
+
+        output = f"{result.stdout}\n{result.stderr}".strip().lower()
+        if self._sudo_password_invalid(output):
+            return {
+                "ok": False,
+                "reason": "sudo_password_invalid",
+                "message": "Sudo password is incorrect.",
+            }
+
+        if self._sudo_password_required(output):
+            if sudo_password:
+                return {
+                    "ok": False,
+                    "reason": "sudo_password_invalid",
+                    "message": "Sudo password is incorrect.",
+                }
+            return {
+                "ok": False,
+                "reason": "sudo_password_required",
+                "message": "Sudo password is required for this command.",
+            }
+
+        if self._sudo_access_denied(output):
+            return {
+                "ok": False,
+                "reason": "sudo_access_denied",
+                "message": "Current user is not allowed to run this sudo command.",
+            }
+
+        return {
+            "ok": False,
+            "reason": "sudo_unavailable",
+            "message": "Unable to validate sudo access for this command.",
+        }
+
+    def _prepare_command(
+        self,
+        command: str,
+        sudo_password: Optional[str],
+    ) -> tuple[str, Optional[str]]:
+        if not sudo_password:
+            return command, None
+
+        parsed = self._split_leading_sudo_command(command)
+        if not parsed:
+            return command, None
+
+        options, command_tokens = parsed
+        rebuilt_options: list[str] = []
+        i = 0
+        saw_stdin_flag = False
+        saw_prompt = False
+        while i < len(options):
+            token = options[i]
+            if token == "-n":
+                i += 1
+                continue
+            if token == "-S":
+                saw_stdin_flag = True
+                rebuilt_options.append(token)
+                i += 1
+                continue
+            if token == "-p":
+                saw_prompt = True
+                i += 2
+                continue
+            if token.startswith("--prompt="):
+                saw_prompt = True
+                i += 1
+                continue
+            rebuilt_options.append(token)
+            i += 1
+
+        if not saw_stdin_flag:
+            rebuilt_options.insert(0, "-S")
+        if not saw_prompt:
+            rebuilt_options[0:0] = ["-p", ""]
+
+        rebuilt = ["sudo", *rebuilt_options, *command_tokens]
+        return shlex.join(rebuilt), f"{sudo_password}\n"
+
+    def _build_sudo_probe(
+        self,
+        *,
+        options: list[str],
+        sudo_password: Optional[str],
+    ) -> tuple[list[str], Optional[str]]:
+        sanitized: list[str] = []
+        i = 0
+        while i < len(options):
+            token = options[i]
+            if token in {"-n", "-S"}:
+                i += 1
+                continue
+            if token == "-p":
+                i += 2
+                continue
+            if token.startswith("--prompt="):
+                i += 1
+                continue
+            sanitized.append(token)
+            i += 1
+
+        if sudo_password:
+            return ["sudo", "-S", "-p", "", *sanitized, "true"], f"{sudo_password}\n"
+        return ["sudo", "-n", *sanitized, "true"], None
+
+    def _split_leading_sudo_command(self, command: str) -> Optional[tuple[list[str], list[str]]]:
+        try:
+            tokens = shlex.split(command, posix=True)
+        except ValueError:
+            return None
+        if not tokens or tokens[0] != "sudo":
+            return None
+
+        options: list[str] = []
+        i = 1
+        while i < len(tokens):
+            token = tokens[i]
+            if token == "--":
+                i += 1
+                break
+            if not token.startswith("-"):
+                break
+            options.append(token)
+            if token in {"-u", "-g", "-h", "-p", "-r", "-t", "-C", "-T"} and i + 1 < len(tokens):
+                options.append(tokens[i + 1])
+                i += 2
+                continue
+            i += 1
+
+        command_tokens = tokens[i:]
+        if not command_tokens:
+            return None
+        return options, command_tokens
+
+    def _sudo_password_required(self, text: str) -> bool:
+        return any(
+            marker in text
+            for marker in (
+                "a password is required",
+                "password is required",
+                "terminal is required",
+                "no tty present and no askpass program specified",
+            )
+        )
+
+    def _sudo_password_invalid(self, text: str) -> bool:
+        return any(
+            marker in text
+            for marker in (
+                "incorrect password",
+                "sorry, try again",
+            )
+        )
+
+    def _sudo_access_denied(self, text: str) -> bool:
+        return any(
+            marker in text
+            for marker in (
+                "not in the sudoers",
+                "is not allowed to execute",
+                "is not allowed to run sudo",
+            )
+        )

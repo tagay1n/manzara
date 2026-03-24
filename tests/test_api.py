@@ -6,7 +6,12 @@ import asyncio
 import json
 import time
 
-from app.modules.maintenance.workflow import LIBRARY_WORKFLOW_ID
+from app.modules.maintenance.workflow import (
+    LIBRARY_WORKFLOW_ID,
+    MAINTENANCE_BACKUP_FULL_WORKFLOW_ID,
+    MAINTENANCE_BACKUP_INCR_SCHEDULE_ID,
+    MAINTENANCE_BACKUP_INCR_WORKFLOW_ID,
+)
 from app.modules.shayan.workflow import SHAYAN_WEEKLY_SCHEDULE_ID, SHAYAN_WEEKLY_WORKFLOW_ID
 
 
@@ -40,6 +45,8 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     maintenance = panels["maintenance"]
     maintenance_task_ids = {task["task_id"] for task in maintenance["tasks"]}
     assert "maintenance.monocorpus_sync" in maintenance_task_ids
+    assert "maintenance.pgbackrest_backup_full" in maintenance_task_ids
+    assert "maintenance.pgbackrest_backup_incr" in maintenance_task_ids
     assert "maintenance.monocorpus_meta_evaluate" not in maintenance_task_ids
 
     library = panels["library"]
@@ -105,6 +112,23 @@ def test_schedules_endpoint_returns_workflows(test_client) -> None:
     workflow_ids = {item["workflow_id"] for item in payload["workflows"]}
     assert SHAYAN_WEEKLY_WORKFLOW_ID in workflow_ids
     assert LIBRARY_WORKFLOW_ID in workflow_ids
+    assert MAINTENANCE_BACKUP_FULL_WORKFLOW_ID in workflow_ids
+    assert MAINTENANCE_BACKUP_INCR_WORKFLOW_ID in workflow_ids
+
+
+def test_update_interval_schedule_minutes(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.patch(
+        f"/api/schedules/{MAINTENANCE_BACKUP_INCR_SCHEDULE_ID}",
+        json={"schedule_type": "interval", "interval_minutes": 180, "enabled": True},
+    )
+    assert response.status_code == 200
+    schedule = response.json()["schedule"]
+    assert schedule["schedule_type"] == "interval"
+    assert int(schedule["interval_minutes"]) == 180
+    assert schedule["enabled"] is True
+    assert schedule["next_run_at"] is not None
 
 
 def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
@@ -702,6 +726,49 @@ def test_workflow_run_skips_download_when_no_new(
     assert step_runs[0]["status"] == "completed"
     assert step_runs[1]["task_id"] == "shayan.download_new"
     assert step_runs[1]["status"] == "skipped"
+
+
+def test_toggle_task_reports_sudo_password_required(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    def _always_require(_task, *, sudo_password=None):
+        _ = sudo_password
+        return {
+            "ok": False,
+            "reason": "sudo_password_required",
+            "message": "Sudo password is required for this command.",
+        }
+
+    monkeypatch.setattr(main_app.state.runner, "_check_sudo_requirements", _always_require)
+    response = client.post("/api/tasks/maintenance.pgbackrest_backup_full/toggle")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "sudo_password_required"
+    assert payload["reason"] == "sudo_password_required"
+
+
+def test_run_workflow_now_passes_sudo_password(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+    captured = {}
+
+    def _trigger(workflow_id, *, trigger_source, schedule_id=None, sudo_password=None):
+        captured["workflow_id"] = workflow_id
+        captured["trigger_source"] = trigger_source
+        captured["schedule_id"] = schedule_id
+        captured["sudo_password"] = sudo_password
+        return {"action": "noop", "reason": "captured"}
+
+    monkeypatch.setattr(main_app.state.workflow_service, "trigger_workflow", _trigger)
+    response = client.post(
+        f"/api/workflows/{MAINTENANCE_BACKUP_FULL_WORKFLOW_ID}/run",
+        json={"sudo_password": "secret-pass"},
+    )
+    assert response.status_code == 200
+    assert response.json()["reason"] == "captured"
+    assert captured["workflow_id"] == MAINTENANCE_BACKUP_FULL_WORKFLOW_ID
+    assert captured["trigger_source"] == "manual"
+    assert captured["schedule_id"] is None
+    assert captured["sudo_password"] == "secret-pass"
 
 
 def test_toggle_task_start_and_complete(test_client, wait_for_terminal_run) -> None:

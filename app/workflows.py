@@ -61,6 +61,7 @@ class WorkflowService:
         *,
         trigger_source: str,
         schedule_id: Optional[str] = None,
+        sudo_password: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Start one workflow run if there is no overlapping active run."""
         workflow = self.db.get_workflow(workflow_id)
@@ -84,6 +85,27 @@ class WorkflowService:
                 "workflow_run": active,
             }
 
+        if trigger_source == "manual":
+            preflight = self._check_manual_sudo_requirements(
+                workflow_id,
+                sudo_password=sudo_password,
+            )
+            if not preflight.get("ok", False):
+                reason = str(preflight.get("reason") or "workflow_not_started")
+                if reason in {"sudo_password_required", "sudo_password_invalid"}:
+                    return {
+                        "action": reason,
+                        "reason": reason,
+                        "message": preflight.get("message"),
+                        "workflow_id": workflow_id,
+                        "task_id": preflight.get("task_id"),
+                    }
+                return {
+                    "action": "noop",
+                    "reason": reason,
+                    "message": preflight.get("message"),
+                }
+
         workflow_run_id = self.db.create_workflow_run(
             workflow_id=workflow_id,
             schedule_id=schedule_id,
@@ -105,7 +127,7 @@ class WorkflowService:
 
         thread = threading.Thread(
             target=self._run_workflow,
-            args=(workflow_run_id,),
+            args=(workflow_run_id, sudo_password),
             name=f"workflow-run-{workflow_run_id}",
             daemon=True,
         )
@@ -138,9 +160,11 @@ class WorkflowService:
                 "schedule_id": schedule_id,
                 "workflow_id": schedule["workflow_id"],
                 "enabled": bool(schedule.get("enabled")),
+                "schedule_type": schedule.get("schedule_type"),
                 "day_of_week": int(schedule["day_of_week"]),
                 "time_of_day": schedule["time_of_day"],
                 "timezone": schedule["timezone"],
+                "interval_minutes": schedule.get("interval_minutes"),
                 "next_run_at": schedule.get("next_run_at"),
             },
         )
@@ -163,7 +187,16 @@ class WorkflowService:
             zone = ZoneInfo("UTC")
             timezone_name = "UTC"
 
-        if schedule.get("schedule_type") != "weekly":
+        schedule_type = str(schedule.get("schedule_type") or "weekly")
+        if schedule_type == "interval":
+            try:
+                interval_minutes = int(schedule.get("interval_minutes") or 180)
+            except (TypeError, ValueError):
+                interval_minutes = 180
+            interval_minutes = max(1, interval_minutes)
+            return (now_utc + timedelta(minutes=interval_minutes)).isoformat()
+
+        if schedule_type != "weekly":
             return now_utc.isoformat()
 
         day_of_week = int(schedule.get("day_of_week") or 1)
@@ -265,7 +298,11 @@ class WorkflowService:
             },
         )
 
-    def _run_workflow(self, workflow_run_id: int) -> None:
+    def _run_workflow(
+        self,
+        workflow_run_id: int,
+        sudo_password: Optional[str] = None,
+    ) -> None:
         workflow_run = self.db.get_workflow_run(workflow_run_id)
         if not workflow_run:
             return
@@ -327,7 +364,7 @@ class WorkflowService:
                     continue
 
                 pre_state = self._collect_pre_state(task_id)
-                started = self.runner.start_task(task_id)
+                started = self.runner.start_task(task_id, sudo_password=sudo_password)
                 if started.get("action") != "start":
                     reason = started.get("reason", "task_not_started")
                     self.db.create_workflow_step_run(
@@ -494,6 +531,30 @@ class WorkflowService:
                     "error": str(exc),
                 },
             )
+
+    def _check_manual_sudo_requirements(
+        self,
+        workflow_id: str,
+        *,
+        sudo_password: Optional[str],
+    ) -> Dict[str, Any]:
+        """Validate sudo requirements for manual workflow start."""
+        for step in self.db.list_workflow_steps(workflow_id):
+            if step.get("step_type") != "task":
+                continue
+            task_id = step.get("task_id")
+            if not task_id:
+                continue
+            check = self.runner.check_task_start(task_id, sudo_password=sudo_password)
+            if check.get("ok", False):
+                continue
+            return {
+                "ok": False,
+                "reason": check.get("reason"),
+                "message": check.get("message"),
+                "task_id": task_id,
+            }
+        return {"ok": True}
 
     def _evaluate_step_condition(self, condition: Dict[str, Any], context: Dict[str, Any]) -> bool:
         if not condition:

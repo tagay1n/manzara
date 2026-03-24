@@ -112,7 +112,29 @@
       </div>
     </dialog>
 
+    <dialog id="sudo-dialog" class="sudo-dialog">
+      <div class="sudo-head">
+        <h3 id="sudo-title">Sudo Authentication</h3>
+      </div>
+      <div class="sudo-body">
+        <p id="sudo-message">This action requires sudo privileges. Enter your password.</p>
+        <input
+          id="sudo-password-input"
+          class="filter-input"
+          type="password"
+          autocomplete="current-password"
+          placeholder="Sudo password"
+        />
+        <div id="sudo-error" class="sudo-error" aria-live="polite"></div>
+      </div>
+      <div class="sudo-controls">
+        <button id="sudo-cancel-btn" class="small-btn" type="button">Cancel</button>
+        <button id="sudo-submit-btn" class="small-btn" type="button">Unlock</button>
+      </div>
+    </dialog>
+
     <script src="/static/sound-notifier.js"></script>
+    <script src="/static/sudo-prompt.js"></script>
     <script src="/static/task.js"></script>
   </body>
 </html>

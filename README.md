@@ -43,18 +43,22 @@ Flow tasks (seeded at startup):
 - `shayan.scan_changes`
 - `shayan.download_new`
 - `maintenance.monocorpus_sync`
+- `maintenance.pgbackrest_backup_full`
+- `maintenance.pgbackrest_backup_incr`
 - `maintenance.monocorpus_meta_evaluate`
 - `library.personality_suggestions_refresh`
 - `library.publisher_suggestions_refresh`
 
 Workflows (seeded at startup):
 - `shayan.weekly_sync` (scan -> conditional download)
+- `maintenance.pgbackrest_full_weekly`
+- `maintenance.pgbackrest_incr_3h`
 - `library.meta_evaluate`
 - `library.personality_normalization_refresh`
 - `library.publisher_normalization_refresh`
 
 Scheduler policy:
-- Weekly schedule type
+- Weekly and interval schedule types
 - Overlap policy: `skip`
 - Catch-up policy on downtime: `once`
 - Timezone field is stored per schedule (default `UTC`)
@@ -112,6 +116,7 @@ Environment variables:
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
 - `SHAYAN_OUTPUT_PATH` (default: `/home/tans1q/video-archive`)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
+- `PG_BACKREST_STANZA` (default: `monocorpus`)
 
 Embedded runtimes read YAML config in this order:
 1. `MANZARA_CONFIG_PATH` (if set)
@@ -122,6 +127,11 @@ Embedded runtimes read YAML config in this order:
 Secrets policy:
 - `config.yaml` and `config.local.yaml` are local-only (gitignored).
 - Keep `config.example.yaml` masked and in sync with real config structure.
+
+Backup task note:
+- Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.
+- Manual task/workflow runs can prompt for sudo password in UI when required.
+- Scheduled runs are non-interactive; configure passwordless sudo for backup commands if they must run on schedule.
 
 ## Useful Runtime Commands
 
