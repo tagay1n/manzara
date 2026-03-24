@@ -22,6 +22,21 @@ function escapeHtml(value) {
   return window.ManzaraCore.escapeHtml(value);
 }
 
+function encodePathSegment(value) {
+  return encodeURIComponent(String(value ?? ""));
+}
+
+function toInt(value, fallback = 0) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.trunc(num);
+}
+
+function toId(value) {
+  const num = toInt(value, 0);
+  return num > 0 ? num : null;
+}
+
 function formatDateTime(value) {
   return window.ManzaraCore.formatDateTime(value);
 }
@@ -118,19 +133,21 @@ function renderTable(payload) {
   statusNode.textContent = `Loaded ${payload.items.length} rows from ${payload.total} total`;
 
   document.getElementById("classification-table-body").innerHTML = (payload.items || [])
-    .map(
-      (item) => `
+    .map((item) => {
+      const classificationId = toId(item.classification_id);
+      const href = classificationId ? `/library/classifications/${encodePathSegment(classificationId)}` : "#";
+      return `
       <tr>
-        <td>${item.classification_id}</td>
-        <td><a href="/library/classifications/${item.classification_id}" class="run-task-link">${escapeHtml(item.ddc || "-")}</a></td>
+        <td>${escapeHtml(String(classificationId ?? "-"))}</td>
+        <td><a href="${href}" class="run-task-link">${escapeHtml(item.ddc || "-")}</a></td>
         <td title="${escapeHtml(item.path || "-")}">${escapeHtml(item.path || "-")}</td>
-        <td>${item.usage_count}</td>
+        <td>${escapeHtml(String(toInt(item.usage_count, 0)))}</td>
         <td>${escapeHtml(item.status || "-")}</td>
         <td>${escapeHtml(item.created_by || "-")}</td>
         <td>${escapeHtml(formatDateTime(item.created_at))}</td>
       </tr>
-    `
-    )
+    `;
+    })
     .join("");
 
   document.getElementById("page-label").textContent = `Page ${payload.page} / ${payload.total_pages}`;
@@ -239,14 +256,18 @@ function renderDuplicates(items) {
         <div class="workflow-footnote">Usage ${group.total_usage} • DDC variants ${group.distinct_ddc_count}</div>
         <div class="duplicate-items">
           ${(group.items || [])
-            .map(
-              (item) => `
-            <a class="duplicate-item" href="/library/classifications/${item.classification_id}">
+            .map((item) => {
+              const classificationId = toId(item.classification_id);
+              const href = classificationId
+                ? `/library/classifications/${encodePathSegment(classificationId)}`
+                : "#";
+              return `
+            <a class="duplicate-item" href="${href}">
               <span>${escapeHtml(item.ddc || "-")}</span>
               <span>${escapeHtml(String(item.usage_count || 0))}</span>
             </a>
-          `
-            )
+          `;
+            })
             .join("")}
         </div>
       </div>
@@ -335,9 +356,9 @@ function renderNormalization(payload) {
             <div class="duplicate-card">
               <div class="duplicate-head">
                 <span class="duplicate-path">${escapeHtml(item.original_path || "-")}</span>
-                <span class="panel-pill">#${item.classification_id}</span>
+                <span class="panel-pill">#${escapeHtml(String(toId(item.classification_id) ?? "-"))}</span>
               </div>
-              <div class="workflow-footnote">→ ${escapeHtml(item.normalized_path || "-")} • usage ${item.usage_count}</div>
+              <div class="workflow-footnote">→ ${escapeHtml(item.normalized_path || "-")} • usage ${escapeHtml(String(item.usage_count ?? 0))}</div>
             </div>
           `
             )
@@ -377,27 +398,33 @@ function renderMergeCandidates(payload) {
   `;
   rootNode.innerHTML = (payload.candidates || []).length
     ? (payload.candidates || [])
-        .map(
-          (candidate) => `
+        .map((candidate) => {
+          const primaryId = toId(candidate.primary.classification_id);
+          const secondaryId = toId(candidate.secondary.classification_id);
+          const primaryHref = primaryId ? `/library/classifications/${encodePathSegment(primaryId)}` : "#";
+          const secondaryHref = secondaryId
+            ? `/library/classifications/${encodePathSegment(secondaryId)}`
+            : "#";
+          return `
         <div class="duplicate-card">
           <div class="duplicate-head">
             <span class="duplicate-path">${escapeHtml(candidate.primary.path || "-")} ↔ ${escapeHtml(candidate.secondary.path || "-")}</span>
             <span class="panel-pill">${escapeHtml(candidate.issue || "-")}</span>
           </div>
-          <div class="workflow-footnote">Score ${candidate.score} • Impact ${candidate.impact} • Primary ${candidate.recommended_primary_classification_id}</div>
+          <div class="workflow-footnote">Score ${escapeHtml(String(candidate.score ?? 0))} • Impact ${escapeHtml(String(candidate.impact ?? 0))} • Primary ${escapeHtml(String(toId(candidate.recommended_primary_classification_id) ?? "-"))}</div>
           <div class="duplicate-items">
-            <a class="duplicate-item" href="/library/classifications/${candidate.primary.classification_id}">
-              <span>#${candidate.primary.classification_id} ${escapeHtml(candidate.primary.ddc || "-")}</span>
-              <span>${candidate.primary.usage_count}</span>
+            <a class="duplicate-item" href="${primaryHref}">
+              <span>#${escapeHtml(String(primaryId ?? "-"))} ${escapeHtml(candidate.primary.ddc || "-")}</span>
+              <span>${escapeHtml(String(candidate.primary.usage_count ?? 0))}</span>
             </a>
-            <a class="duplicate-item" href="/library/classifications/${candidate.secondary.classification_id}">
-              <span>#${candidate.secondary.classification_id} ${escapeHtml(candidate.secondary.ddc || "-")}</span>
-              <span>${candidate.secondary.usage_count}</span>
+            <a class="duplicate-item" href="${secondaryHref}">
+              <span>#${escapeHtml(String(secondaryId ?? "-"))} ${escapeHtml(candidate.secondary.ddc || "-")}</span>
+              <span>${escapeHtml(String(candidate.secondary.usage_count ?? 0))}</span>
             </a>
           </div>
         </div>
-      `
-        )
+      `;
+        })
         .join("")
     : '<div class="workflow-footnote">No merge candidates at this threshold.</div>';
 

@@ -22,6 +22,17 @@ function formatDateTime(value) {
   return window.ManzaraCore.formatDateTime(value);
 }
 
+function toInt(value, fallback = 0) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.trunc(num);
+}
+
+function toId(value) {
+  const num = toInt(value, 0);
+  return num > 0 ? num : null;
+}
+
 function initSoundNotifier() {
   const createNotifier = window.ManzaraSound?.createNotifier;
   if (typeof createNotifier !== "function") return;
@@ -109,10 +120,12 @@ function renderDetail(payload) {
   statusNode.classList.remove("library-status-error");
   statusNode.textContent = `Loaded from ${escapeHtml(detail.config_source || "-")}`;
   document.getElementById("classification-title").textContent = `Classification ${classification.ddc || "#"}`;
+  const classificationId = toId(classification.classification_id);
+  const usageCount = toInt(classification.usage_count, 0);
   document.getElementById("classification-stat-grid").innerHTML = `
-    <div class="library-stat-card"><span class="library-stat-label">ID</span><span class="library-stat-value">${classification.classification_id}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">ID</span><span class="library-stat-value">${escapeHtml(String(classificationId ?? "-"))}</span></div>
     <div class="library-stat-card"><span class="library-stat-label">DDC</span><span class="library-stat-value">${escapeHtml(classification.ddc || "-")}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Usage</span><span class="library-stat-value">${classification.usage_count || 0}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Usage</span><span class="library-stat-value">${escapeHtml(String(usageCount))}</span></div>
     <div class="library-stat-card"><span class="library-stat-label">Status</span><span class="library-stat-value">${escapeHtml(classification.status || "-")}</span></div>
     <div class="library-stat-card"><span class="library-stat-label">Path (EN)</span><span class="library-stat-value">${escapeHtml(classification.path || "-")}</span></div>
     <div class="library-stat-card"><span class="library-stat-label">Path (TT)</span><span class="library-stat-value">${escapeHtml(classification.path_tt || "-")}</span></div>

@@ -95,6 +95,44 @@ const NORMALIZATION_PAGE_IDS = [
   "tab-panel-history",
 ];
 
+const CLASSIFICATIONS_PAGE_IDS = [
+  "global-status",
+  "stop-all-btn",
+  "last-event",
+  "classification-table-body",
+  "classification-table-status",
+  "distribution-root",
+  "duplicates-root",
+  "filter-apply",
+  "filter-ddc-prefix",
+  "filter-min-usage",
+  "filter-search",
+  "filter-sort",
+  "filter-status",
+  "merge-limit",
+  "merge-min-score",
+  "merge-refresh",
+  "merge-root",
+  "merge-status",
+  "merge-summary",
+  "normalization-affected",
+  "normalization-drop-segments",
+  "normalization-groups",
+  "normalization-limit",
+  "normalization-refresh",
+  "normalization-status",
+  "normalization-summary",
+  "page-label",
+  "page-next",
+  "page-prev",
+  "tab-badge-duplicates",
+  "tab-badge-merge",
+  "tab-badge-normalization",
+  "tab-badge-unclassified",
+  "tree-root",
+  "unclassified-root",
+];
+
 class FakeClassList {
   constructor() {
     this._set = new Set();
@@ -744,43 +782,7 @@ test("database page renders loading then API error state", async () => {
 test("library classifications page renders API error state", async () => {
   const harness = createHarness({
     source: LIBRARY_CLASSIFICATIONS_SOURCE,
-    ids: [
-      "global-status",
-      "stop-all-btn",
-      "last-event",
-      "classification-table-body",
-      "classification-table-status",
-      "distribution-root",
-      "duplicates-root",
-      "filter-apply",
-      "filter-ddc-prefix",
-      "filter-min-usage",
-      "filter-search",
-      "filter-sort",
-      "filter-status",
-      "merge-limit",
-      "merge-min-score",
-      "merge-refresh",
-      "merge-root",
-      "merge-status",
-      "merge-summary",
-      "normalization-affected",
-      "normalization-drop-segments",
-      "normalization-groups",
-      "normalization-limit",
-      "normalization-refresh",
-      "normalization-status",
-      "normalization-summary",
-      "page-label",
-      "page-next",
-      "page-prev",
-      "tab-badge-duplicates",
-      "tab-badge-merge",
-      "tab-badge-normalization",
-      "tab-badge-unclassified",
-      "tree-root",
-      "unclassified-root",
-    ],
+    ids: CLASSIFICATIONS_PAGE_IDS,
     selectors: [".classification-tabs"],
     apiResolver(path) {
       if (path.startsWith("/api/library/")) {
@@ -799,6 +801,128 @@ test("library classifications page renders API error state", async () => {
     harness.elements.get("normalization-status").textContent,
     /classifications unavailable/,
   );
+});
+
+function createClassificationsResolver({ malicious = false } = {}) {
+  return (path) => {
+    if (path.startsWith("/api/library/classifications?")) {
+      return {
+        available: true,
+        page: 1,
+        total_pages: 1,
+        total: 1,
+        items: [
+          {
+            classification_id: malicious ? '1" onclick="alert(1)' : 1,
+            ddc: malicious ? '<img src=x onerror=alert(1)>' : "891.7",
+            path: malicious ? '<script>alert("x")</script>' : "Language / Tatar",
+            usage_count: 5,
+            status: "active",
+            created_by: malicious ? "<b>seed</b>" : "seed",
+            created_at: "2026-03-24T12:00:00Z",
+          },
+        ],
+      };
+    }
+    if (path === "/api/library/classifications/insights") {
+      return {
+        available: true,
+        tree: [],
+        distribution: [],
+        duplicates: [
+          {
+            path: malicious ? '<svg onload=alert(1)>' : "Language / Tatar",
+            issue: "duplicate_path",
+            total_usage: 2,
+            distinct_ddc_count: 2,
+            items: [
+              {
+                classification_id: malicious ? '2" onclick="alert(2)' : 2,
+                ddc: malicious ? "<iframe>" : "891.7",
+                usage_count: 2,
+              },
+            ],
+          },
+        ],
+        unclassified_queue: { total: 0, items: [] },
+      };
+    }
+    if (path.startsWith("/api/library/classifications/normalization-preview?")) {
+      return {
+        available: true,
+        rules: { drop_segments: ["Turkic literature"] },
+        summary: {
+          total_rows_scanned: 1,
+          affected_classifications: 1,
+          estimated_reassigned_documents: 1,
+          merge_group_candidates: 0,
+        },
+        merge_groups: [],
+        affected_preview: [
+          {
+            classification_id: malicious ? "3<script>" : 3,
+            original_path: malicious ? "<script>orig</script>" : "orig",
+            normalized_path: malicious ? "<img src=x>" : "norm",
+            usage_count: 1,
+          },
+        ],
+      };
+    }
+    if (path.startsWith("/api/library/classifications/merge-candidates?")) {
+      return {
+        available: true,
+        summary: { candidate_count: 1, rows_scanned: 1, min_score: 0.8 },
+        candidates: [
+          {
+            issue: "duplicate_path",
+            score: 0.9,
+            impact: 1,
+            recommended_primary_classification_id: 10,
+            primary: {
+              classification_id: malicious ? '10" onclick="alert(3)' : 10,
+              ddc: malicious ? "<script>p</script>" : "891.7",
+              path: malicious ? "<img src=x>" : "path-primary",
+              usage_count: 1,
+            },
+            secondary: {
+              classification_id: malicious ? '11" onclick="alert(4)' : 11,
+              ddc: malicious ? "<script>s</script>" : "891.8",
+              path: "path-secondary",
+              usage_count: 1,
+            },
+          },
+        ],
+      };
+    }
+    if (path === "/api/library") {
+      return {
+        global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+      };
+    }
+    throw new Error(`unexpected path: ${path}`);
+  };
+}
+
+test("library classifications page escapes dangerous strings in rendered html", async () => {
+  const harness = createHarness({
+    source: LIBRARY_CLASSIFICATIONS_SOURCE,
+    ids: CLASSIFICATIONS_PAGE_IDS,
+    selectors: [".classification-tabs"],
+    apiResolver: createClassificationsResolver({ malicious: true }),
+  });
+  await harness.flush();
+
+  const tableHtml = harness.elements.get("classification-table-body").innerHTML;
+  const duplicatesHtml = harness.elements.get("duplicates-root").innerHTML;
+  const normalizationHtml = harness.elements.get("normalization-affected").innerHTML;
+  const mergeHtml = harness.elements.get("merge-root").innerHTML;
+  const combined = `${tableHtml}\n${duplicatesHtml}\n${normalizationHtml}\n${mergeHtml}`;
+
+  assert.equal(combined.includes("<img"), false);
+  assert.equal(combined.includes("<script"), false);
+  assert.equal(combined.includes("onclick="), false);
+  assert.match(combined, /&lt;img/);
+  assert.match(combined, /&lt;script/);
 });
 
 test("library personalities page renders API error state", async () => {
@@ -928,6 +1052,59 @@ test("library classification detail page renders API error state", async () => {
     /Classification unavailable/,
   );
   assert.equal(harness.elements.get("classification-title").textContent, "Classification");
+});
+
+test("library classification detail escapes dangerous strings in stats", async () => {
+  const harness = createHarness({
+    source: LIBRARY_CLASSIFICATION_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "last-event",
+      "classification-status",
+      "classification-title",
+      "classification-stat-grid",
+      "linked-docs-body",
+      "language-root",
+      "meta-runs-root",
+      "docs-page-label",
+      "docs-prev",
+      "docs-next",
+    ],
+    locationPathname: "/library/classifications/42",
+    apiResolver(path) {
+      if (path.startsWith("/api/library/classifications/42?")) {
+        return {
+          global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+          detail: {
+            available: true,
+            config_source: "<script>cfg</script>",
+            classification: {
+              classification_id: '42" onmouseover="alert(1)',
+              ddc: "<img src=x onerror=alert(1)>",
+              usage_count: "<script>1</script>",
+              status: "<b>active</b>",
+              path: "<script>path</script>",
+              path_tt: "<script>path-tt</script>",
+              created_by: "<img src=x>",
+              created_at: "2026-03-24T12:00:00Z",
+            },
+            linked_docs: { items: [], page: 1, total_pages: 1 },
+            language_distribution: [],
+          },
+          recent_meta_evaluate_runs: [],
+        };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  const html = harness.elements.get("classification-stat-grid").innerHTML;
+  assert.equal(html.includes("<img"), false);
+  assert.equal(html.includes("<script"), false);
+  assert.equal(html.includes("onmouseover="), false);
+  assert.match(html, /&lt;img/);
+  assert.match(html, /&lt;script/);
 });
 
 test("library normalization page renders API error state", async () => {
