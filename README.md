@@ -13,6 +13,7 @@ English:
 Current architecture:
 - FastAPI backend
 - PostgreSQL state store (tasks, runs, logs, events, workflows, schedules)
+- Schema management via Alembic migrations (no runtime DDL bootstrap)
 - Modular flows in one monorepo (`shayan`, `maintenance`, `library`)
 - Live updates via SSE (`/api/events/stream`)
 
@@ -98,6 +99,8 @@ Dependency policy:
 ```bash
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload --timeout-graceful-shutdown 10
 ```
+
+On startup, Manzara applies pending Alembic migrations to `MANZARA_DB_SCHEMA` before seeding task/workflow definitions.
 
 ## Configuration
 

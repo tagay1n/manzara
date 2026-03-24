@@ -9,6 +9,7 @@ Last updated: 2026-03-24
 - SQLite operational data has been copied into PostgreSQL with row-count parity checks.
 - Application runtime DB layer now uses PostgreSQL (`MANZARA_DATABASE_URL`) with configurable schema (`MANZARA_DB_SCHEMA`, default `monocorpus`).
 - SQLite is no longer used by runtime or tests.
+- Schema lifecycle is Alembic-only; runtime applies `upgrade head` on startup (no embedded table-creation SQL in `app/db.py`).
 
 ## Decisions
 
