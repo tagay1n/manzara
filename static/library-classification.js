@@ -1,5 +1,8 @@
 const state = {
   payload: null,
+  classificationId: null,
+  docsPage: 1,
+  docsPageSize: 40,
   refreshTimer: null,
   eventStream: null,
   eventStreamReconnectTimer: null,
@@ -71,89 +74,111 @@ function renderGlobalState(payload) {
   }
 }
 
-function renderStatGrid(stats) {
-  return `
-    <div class="library-stat-card"><span class="library-stat-label">Applicable</span><span class="library-stat-value">${stats.applicable_docs || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Non-applicable</span><span class="library-stat-value">${stats.non_applicable_docs || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Pending</span><span class="library-stat-value">${stats.pending_evaluation || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Acceptance Rate</span><span class="library-stat-value">${Number(stats.acceptance_rate || 0).toFixed(2)}%</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Classified</span><span class="library-stat-value">${stats.classified_docs || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Classification Coverage</span><span class="library-stat-value">${Number(stats.classification_coverage || 0).toFixed(2)}%</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Metadata Rows</span><span class="library-stat-value">${stats.metadata_rows || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Total Documents</span><span class="library-stat-value">${stats.total_documents || 0}</span></div>
-  `;
-}
-
-function renderTopClassifications(items) {
+function renderLanguageDistribution(items) {
   if (!items || !items.length) {
-    return '<div class="run-row">No classifications yet.</div>';
+    return '<div class="workflow-footnote">No language stats.</div>';
   }
+  const total = items.reduce((acc, item) => acc + Number(item.count || 0), 0);
   return items
     .map((item) => {
-      const classificationId = Number(item.classification_id || 0);
-      const ddcHtml =
-        classificationId > 0
-          ? `<a class="library-top-ddc" href="/library/classifications/${encodeURIComponent(String(classificationId))}">${escapeHtml(item.ddc || "-")}</a>`
-          : `<span class="library-top-ddc">${escapeHtml(item.ddc || "-")}</span>`;
+      const count = Number(item.count || 0);
+      const share = total > 0 ? Math.round((count / total) * 10000) / 100 : 0;
       return `
-      <div class="library-top-row">
-        <div class="library-top-main">
-          ${ddcHtml}
-          <span class="library-top-path">${escapeHtml(item.path || "-")}</span>
+        <div class="distribution-row">
+          <div class="distribution-head">
+            <span>${escapeHtml(item.language || "-")}</span>
+            <span>${count} • ${share}%</span>
+          </div>
+          <div class="distribution-bar"><span style="width:${Math.max(0, Math.min(100, share))}%"></span></div>
         </div>
-        <span class="library-top-count">${escapeHtml(String(item.usage_count || 0))}</span>
-      </div>
-    `
+      `;
     })
     .join("");
 }
 
-function renderLastRun(run) {
-  if (!run) {
-    return '<div class="run-row">No run recorded yet.</div>';
+function renderMetaRuns(items) {
+  if (!items || !items.length) {
+    return '<div class="run-row">No recent meta evaluate runs.</div>';
   }
-  return `
-    <div class="run-result-grid">
-      <div><span class="meta-k">Status</span><span class="meta-v">${escapeHtml(run.status || "-")}</span></div>
-      <div><span class="meta-k">Run ID</span><span class="meta-v">${escapeHtml(String(run.run_id || "-"))}</span></div>
-      <div><span class="meta-k">Started</span><span class="meta-v">${escapeHtml(formatDateTime(run.started_at))}</span></div>
-      <div><span class="meta-k">Finished</span><span class="meta-v">${escapeHtml(formatDateTime(run.finished_at))}</span></div>
-      <div><span class="meta-k">Exit Code</span><span class="meta-v">${escapeHtml(String(run.exit_code ?? "-"))}</span></div>
-    </div>
-    ${
-      run.error_text
-        ? `<div class="run-error-box">${escapeHtml(run.error_text)}</div>`
-        : '<div class="workflow-footnote">No error text for last run.</div>'
-    }
-  `;
+  return items
+    .map(
+      (run) => `
+      <div class="run-row">
+        <div>#${run.run_id} • ${escapeHtml(run.status || "-")}</div>
+        <div>${escapeHtml(formatDateTime(run.started_at))}</div>
+      </div>
+    `
+    )
+    .join("");
 }
 
-function renderLibrary(payload) {
+function renderDetail(payload) {
   state.payload = payload;
-  const dataset = payload.dataset || {};
-  const stats = dataset.stats || {};
-  const statusNode = document.getElementById("library-status");
-  if (dataset.available) {
-    const source = dataset.config_source ? ` • source: ${dataset.config_source}` : "";
-    statusNode.textContent = `Dataset stats loaded${source}`;
-    statusNode.classList.remove("library-status-error");
-  } else {
-    statusNode.textContent = `Dataset unavailable: ${dataset.error || "unknown error"}`;
+  const detail = payload.detail || {};
+  const classification = detail.classification;
+  const statusNode = document.getElementById("classification-status");
+
+  if (!detail.available || !classification) {
+    document.getElementById("classification-title").textContent = "Classification";
+    statusNode.textContent = `Classification unavailable: ${detail.error || "unknown error"}`;
     statusNode.classList.add("library-status-error");
+    document.getElementById("classification-stat-grid").innerHTML = "";
+    document.getElementById("linked-docs-body").innerHTML = "";
+    document.getElementById("language-root").innerHTML = "";
+    document.getElementById("meta-runs-root").innerHTML = renderMetaRuns(payload.recent_meta_evaluate_runs || []);
+    return;
   }
 
-  document.getElementById("library-stat-grid").innerHTML = renderStatGrid(stats);
-  document.getElementById("library-top-list").innerHTML = renderTopClassifications(
-    dataset.top_classifications || []
+  statusNode.classList.remove("library-status-error");
+  statusNode.textContent = `Loaded from ${escapeHtml(detail.config_source || "-")}`;
+  document.getElementById("classification-title").textContent = `Classification ${classification.ddc || "#"}`;
+  document.getElementById("classification-stat-grid").innerHTML = `
+    <div class="library-stat-card"><span class="library-stat-label">ID</span><span class="library-stat-value">${classification.classification_id}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">DDC</span><span class="library-stat-value">${escapeHtml(classification.ddc || "-")}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Usage</span><span class="library-stat-value">${classification.usage_count || 0}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Status</span><span class="library-stat-value">${escapeHtml(classification.status || "-")}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Path (EN)</span><span class="library-stat-value">${escapeHtml(classification.path || "-")}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Path (TT)</span><span class="library-stat-value">${escapeHtml(classification.path_tt || "-")}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Created By</span><span class="library-stat-value">${escapeHtml(classification.created_by || "-")}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Created At</span><span class="library-stat-value">${escapeHtml(formatDateTime(classification.created_at))}</span></div>
+  `;
+
+  const docs = detail.linked_docs || { items: [], page: 1, total_pages: 1 };
+  document.getElementById("linked-docs-body").innerHTML = (docs.items || [])
+    .map(
+      (item) => `
+      <tr>
+        <td>${escapeHtml(item.md5 || "-")}</td>
+        <td>${escapeHtml(item.language || "-")}</td>
+        <td>${escapeHtml(item.mime_type || "-")}</td>
+        <td title="${escapeHtml(item.ya_path || "-")}">${escapeHtml(item.ya_path || "-")}</td>
+      </tr>
+    `
+    )
+    .join("");
+  document.getElementById("docs-page-label").textContent = `Page ${docs.page} / ${docs.total_pages}`;
+  document.getElementById("docs-prev").disabled = docs.page <= 1;
+  document.getElementById("docs-next").disabled = docs.page >= docs.total_pages;
+
+  document.getElementById("language-root").innerHTML = renderLanguageDistribution(
+    detail.language_distribution || []
   );
-  document.getElementById("library-last-run").innerHTML = renderLastRun(payload.last_eval_run);
+  document.getElementById("meta-runs-root").innerHTML = renderMetaRuns(payload.recent_meta_evaluate_runs || []);
   renderGlobalState(payload);
   lucide.createIcons();
 }
 
-async function refreshLibrary() {
-  const payload = await api("/api/library");
-  renderLibrary(payload);
+function classificationIdFromPath() {
+  const parts = window.location.pathname.split("/").filter(Boolean);
+  const id = Number(parts[parts.length - 1] || "0");
+  return Number.isFinite(id) && id > 0 ? id : 0;
+}
+
+async function refreshDetail() {
+  const payload = await api(
+    `/api/library/classifications/${encodeURIComponent(String(state.classificationId))}?docs_page=${state.docsPage}&docs_page_size=${state.docsPageSize}`
+  );
+  renderDetail(payload);
 }
 
 function queueRefresh(delayMs = 250) {
@@ -161,7 +186,7 @@ function queueRefresh(delayMs = 250) {
   state.refreshTimer = setTimeout(async () => {
     state.refreshTimer = null;
     try {
-      await refreshLibrary();
+      await refreshDetail();
     } catch (error) {
       console.error(error);
     }
@@ -246,7 +271,7 @@ function setupEventStream() {
       } catch (_error) {
         // ignore malformed events
       }
-      queueRefresh(100);
+      queueRefresh(150);
     });
   });
 
@@ -270,9 +295,29 @@ function attachUiHandlers() {
   document.getElementById("stop-all-btn").addEventListener("click", () => {
     stopAll().catch((error) => console.error(error));
   });
+
+  document.getElementById("docs-prev").addEventListener("click", () => {
+    const page = state.payload?.detail?.linked_docs?.page || 1;
+    if (page <= 1) return;
+    state.docsPage = page - 1;
+    queueRefresh(0);
+  });
+
+  document.getElementById("docs-next").addEventListener("click", () => {
+    const page = state.payload?.detail?.linked_docs?.page || 1;
+    const total = state.payload?.detail?.linked_docs?.total_pages || 1;
+    if (page >= total) return;
+    state.docsPage = page + 1;
+    queueRefresh(0);
+  });
 }
 
 async function bootstrap() {
+  state.classificationId = classificationIdFromPath();
+  if (!state.classificationId) {
+    throw new Error("Invalid classification id");
+  }
+
   initSoundNotifier();
   window.addEventListener("beforeunload", () => {
     teardownSoundNotifier();
@@ -286,7 +331,7 @@ async function bootstrap() {
     }
   });
   attachUiHandlers();
-  await refreshLibrary();
+  await refreshDetail();
   setupEventStream();
 }
 

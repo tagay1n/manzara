@@ -742,6 +742,232 @@ button {
   gap: 12px;
 }
 
+.library-overview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.classification-filters {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1.3fr) minmax(90px, 0.6fr) minmax(90px, 0.6fr) minmax(100px, 0.7fr) minmax(120px, 0.8fr) auto;
+  gap: 8px;
+}
+
+.classification-tabs {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.classification-tab {
+  border: 1px solid #2f5485;
+  border-radius: 999px;
+  background: rgba(12, 24, 46, 0.92);
+  color: #bdd7ff;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.classification-tab.active {
+  border-color: #3d8dff;
+  background: rgba(61, 141, 255, 0.2);
+  color: #e4f1ff;
+}
+
+.classification-tab-badge {
+  min-width: 19px;
+  height: 19px;
+  border-radius: 999px;
+  border: 1px solid #3a5f8f;
+  background: rgba(18, 36, 64, 0.95);
+  color: #9fc2ef;
+  font-size: 10px;
+  line-height: 17px;
+  text-align: center;
+  padding: 0 4px;
+}
+
+.classification-tab.active .classification-tab-badge {
+  border-color: #4a88cd;
+  color: #d9ebff;
+}
+
+.classification-tab-panel {
+  display: none;
+  margin-top: 10px;
+}
+
+.classification-tab-panel.active {
+  display: block;
+}
+
+.filter-input,
+.filter-select {
+  height: 34px;
+  border: 1px solid #2f5485;
+  border-radius: 8px;
+  background: rgba(12, 24, 46, 0.92);
+  color: #d8e8ff;
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.classification-table-wrap {
+  margin-top: 10px;
+  overflow: auto;
+  border: 1px solid #223a62;
+  border-radius: 10px;
+}
+
+.classification-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.classification-table th,
+.classification-table td {
+  border-bottom: 1px solid #1d3157;
+  padding: 7px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.classification-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #0d1a33;
+  color: #8fb0dd;
+  font-weight: 600;
+}
+
+.classification-table tbody tr:hover {
+  background: rgba(61, 141, 255, 0.08);
+}
+
+.classification-pagination {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.tree-root,
+.distribution-root,
+.duplicates-root,
+.unclassified-root {
+  display: grid;
+  gap: 8px;
+}
+
+.tree-list {
+  list-style: none;
+  margin: 0;
+  padding-left: 14px;
+  border-left: 1px dashed #27436f;
+  display: grid;
+  gap: 4px;
+}
+
+.tree-list.root {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.tree-row {
+  border: 1px solid #223a62;
+  border-radius: 8px;
+  background: rgba(14, 28, 52, 0.65);
+  padding: 6px 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tree-name {
+  color: #d5e7ff;
+}
+
+.tree-count {
+  color: #9bccff;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.distribution-row {
+  display: grid;
+  gap: 5px;
+}
+
+.distribution-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.distribution-bar {
+  border: 1px solid #233c65;
+  border-radius: 999px;
+  background: rgba(12, 24, 46, 0.9);
+  height: 12px;
+  overflow: hidden;
+}
+
+.distribution-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #3d8dff, #12bfd8);
+}
+
+.duplicate-card {
+  border: 1px solid #223a62;
+  border-radius: 9px;
+  background: rgba(14, 28, 52, 0.65);
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.duplicate-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.duplicate-path {
+  color: #cde3ff;
+  font-size: 12px;
+}
+
+.duplicate-items {
+  display: grid;
+  gap: 4px;
+}
+
+.duplicate-item {
+  text-decoration: none;
+  border: 1px solid #2c4f80;
+  border-radius: 7px;
+  padding: 5px 7px;
+  color: #b9d7ff;
+  display: flex;
+  justify-content: space-between;
+}
+
+.duplicate-item:hover {
+  border-color: #3d8dff;
+}
+
 .library-top-list {
   display: grid;
   gap: 6px;
@@ -1042,6 +1268,10 @@ button {
 
   .library-layout {
     grid-template-columns: 1fr;
+  }
+
+  .classification-filters {
+    grid-template-columns: 1fr 1fr;
   }
 }
 

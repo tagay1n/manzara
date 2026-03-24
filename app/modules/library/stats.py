@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable
 
 import yaml
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _REDACTED_SENTINEL = "<REDACTED>"
@@ -33,6 +34,23 @@ def _load_runtime_config() -> tuple[Dict[str, Any], Path]:
             continue
         return payload, path
     raise FileNotFoundError("No config file found for library stats")
+
+
+def get_runtime_database_url() -> tuple[str, str]:
+    """Return runtime database URL and source config filename."""
+    config, config_source = _load_runtime_config()
+    db_url = str(config.get("database_url") or "").strip()
+    if not db_url:
+        raise ValueError("database_url is missing in runtime config")
+    if _REDACTED_SENTINEL in db_url:
+        raise ValueError("database_url is masked; use local unmasked config")
+    return db_url, str(config_source.name)
+
+
+def create_runtime_engine() -> tuple[Engine, str]:
+    """Create SQLAlchemy engine for monocorpus runtime database."""
+    db_url, config_source = get_runtime_database_url()
+    return create_engine(db_url), config_source
 
 
 def _parse_json_path(path_value: Any) -> str:
@@ -64,14 +82,7 @@ def _safe_ratio(numerator: int, denominator: int) -> float:
 def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
     """Return aggregate Library metrics from the shared runtime database."""
     try:
-        config, config_source = _load_runtime_config()
-        db_url = str(config.get("database_url") or "").strip()
-        if not db_url:
-            raise ValueError("database_url is missing in runtime config")
-        if _REDACTED_SENTINEL in db_url:
-            raise ValueError("database_url is masked; use local unmasked config")
-
-        engine = create_engine(db_url)
+        engine, config_source = create_runtime_engine()
         with engine.connect() as conn:
             total_documents = int(conn.execute(text("SELECT COUNT(*) FROM document")).scalar() or 0)
             metadata_rows = int(conn.execute(text("SELECT COUNT(*) FROM metadata")).scalar() or 0)
@@ -103,6 +114,7 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
                         GROUP BY m.classification_id
                     )
                     SELECT
+                        c.id AS classification_id,
                         c.ddc AS ddc,
                         c.path_en AS path_en,
                         u.usage_count AS usage_count
@@ -120,7 +132,7 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
         return {
             "available": True,
             "error": None,
-            "config_source": str(config_source.name),
+            "config_source": str(config_source),
             "stats": {
                 "total_documents": total_documents,
                 "metadata_rows": metadata_rows,
@@ -134,6 +146,7 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
             },
             "top_classifications": [
                 {
+                    "classification_id": int(row.get("classification_id") or 0),
                     "ddc": str(row.get("ddc") or ""),
                     "path": _parse_json_path(row.get("path_en")),
                     "usage_count": int(row.get("usage_count") or 0),

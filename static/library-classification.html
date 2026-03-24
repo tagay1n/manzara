@@ -57,30 +57,52 @@
         </header>
 
         <div class="alert-strip">
-          <i data-lucide="book-marked"></i>
-          <span>Library page shows Gemini applicability outcomes from monocorpus database.</span>
+          <i data-lucide="book-key"></i>
+          <span>Classification detail shows linked documents and meta-evaluate context.</span>
         </div>
 
         <main class="dashboard">
           <section class="runs-card">
             <div class="library-overview-head">
-              <h2>Library Overview</h2>
-              <a href="/library/classifications" class="small-btn">Classifications</a>
+              <h2 id="classification-title">Classification</h2>
+              <a href="/library/classifications" class="small-btn">Back to Classifications</a>
             </div>
-            <div id="library-status" class="workflow-footnote">Loading...</div>
-            <div id="library-stat-grid" class="library-stat-grid"></div>
+            <div id="classification-status" class="workflow-footnote">Loading...</div>
+            <div id="classification-stat-grid" class="library-stat-grid"></div>
           </section>
 
           <section class="library-layout">
             <section class="runs-card">
-              <h2>Top Classifications</h2>
-              <div id="library-top-list" class="library-top-list"></div>
+              <h2>Linked Documents</h2>
+              <div class="classification-table-wrap">
+                <table class="classification-table">
+                  <thead>
+                    <tr>
+                      <th>MD5</th>
+                      <th>Language</th>
+                      <th>MIME</th>
+                      <th>Path</th>
+                    </tr>
+                  </thead>
+                  <tbody id="linked-docs-body"></tbody>
+                </table>
+              </div>
+              <div class="classification-pagination">
+                <button id="docs-prev" class="small-btn">Prev</button>
+                <span id="docs-page-label" class="workflow-footnote">Page 1 / 1</span>
+                <button id="docs-next" class="small-btn">Next</button>
+              </div>
             </section>
 
             <section class="runs-card">
-              <h2>Meta Evaluate</h2>
-              <div id="library-last-run" class="library-last-run"></div>
+              <h2>Language Distribution</h2>
+              <div id="language-root" class="distribution-root"></div>
             </section>
+          </section>
+
+          <section class="runs-card">
+            <h2>Recent Meta Evaluate Runs</h2>
+            <div id="meta-runs-root" class="runs-list"></div>
           </section>
         </main>
 
@@ -92,6 +114,6 @@
     </div>
 
     <script src="/static/sound-notifier.js"></script>
-    <script src="/static/library.js"></script>
+    <script src="/static/library-classification.js"></script>
   </body>
 </html>

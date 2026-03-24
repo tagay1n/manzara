@@ -184,6 +184,106 @@ def test_library_endpoint_returns_dataset_stats(test_client, monkeypatch) -> Non
     assert payload["dataset"]["top_classifications"][0]["ddc"] == "891.7"
 
 
+def test_library_classifications_table_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "list_classifications",
+        lambda **_kwargs: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "page": 2,
+            "page_size": 10,
+            "total": 23,
+            "total_pages": 3,
+            "items": [
+                {
+                    "classification_id": 7,
+                    "ddc": "891.7",
+                    "path": "Language / Tatar",
+                    "status": "approved",
+                    "created_by": "gemini",
+                    "created_at": "2026-03-01T10:00:00",
+                    "usage_count": 12,
+                }
+            ],
+        },
+    )
+
+    response = client.get("/api/library/classifications?page=2&page_size=10")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["page"] == 2
+    assert payload["items"][0]["classification_id"] == 7
+
+
+def test_library_classification_insights_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_classification_insights",
+        lambda **_kwargs: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "tree": [{"name": "Language", "usage_count": 10, "children": []}],
+            "distribution": [{"bucket": "800", "usage_count": 10, "share_pct": 100.0}],
+            "duplicates": [],
+            "unclassified_queue": {"total": 1, "items": [{"md5": "abc"}]},
+        },
+    )
+
+    response = client.get("/api/library/classifications/insights")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["distribution"][0]["bucket"] == "800"
+    assert payload["unclassified_queue"]["total"] == 1
+
+
+def test_library_classification_detail_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_classification_detail",
+        lambda classification_id, docs_page, docs_page_size: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "classification": {
+                "classification_id": classification_id,
+                "ddc": "891.7",
+                "path": "Language / Tatar",
+                "path_tt": "Тел / Татар",
+                "status": "approved",
+                "created_by": "gemini",
+                "created_at": "2026-03-01T10:00:00",
+                "usage_count": 9,
+            },
+            "linked_docs": {
+                "page": docs_page,
+                "page_size": docs_page_size,
+                "total": 1,
+                "total_pages": 1,
+                "items": [{"md5": "abc"}],
+            },
+            "language_distribution": [{"language": "tt-Cyrl", "count": 1}],
+        },
+    )
+
+    response = client.get("/api/library/classifications/7?docs_page=1&docs_page_size=20")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["detail"]["available"] is True
+    assert payload["detail"]["classification"]["classification_id"] == 7
+    assert payload["detail"]["linked_docs"]["items"][0]["md5"] == "abc"
+
+
 def test_workflow_run_skips_download_when_no_new(
     test_client,
     wait_for_terminal_workflow_run,

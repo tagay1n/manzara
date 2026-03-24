@@ -14,6 +14,11 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
+from app.modules.library.insights import (
+    get_classification_detail,
+    get_classification_insights,
+    list_classifications,
+)
 from app.modules.library.stats import get_library_dataset_stats
 from app.modules.maintenance.panel import build_library_panel, build_maintenance_panel
 from app.modules.maintenance.tasks import (
@@ -139,6 +144,19 @@ def tasks_page() -> FileResponse:
 def library_page() -> FileResponse:
     """Serve library insights page."""
     return FileResponse(STATIC_DIR / "library.html")
+
+
+@app.get("/library/classifications")
+def library_classifications_page() -> FileResponse:
+    """Serve classifications control page."""
+    return FileResponse(STATIC_DIR / "library-classifications.html")
+
+
+@app.get("/library/classifications/{classification_id}")
+def library_classification_detail_page(classification_id: int) -> FileResponse:
+    """Serve one classification detail page shell."""
+    _ = classification_id
+    return FileResponse(STATIC_DIR / "library-classification.html")
 
 
 @app.get("/tasks/{task_id:path}")
@@ -534,6 +552,52 @@ def build_library_payload() -> Dict[str, Any]:
     }
 
 
+def build_classification_detail_payload(
+    classification_id: int,
+    *,
+    docs_page: int = 1,
+    docs_page_size: int = 40,
+) -> Dict[str, Any]:
+    """Compose classification detail payload with local run context."""
+    detail = get_classification_detail(
+        classification_id,
+        docs_page=docs_page,
+        docs_page_size=docs_page_size,
+    )
+
+    active_runs = state.db.list_active_runs()
+    stop_all_state = "disabled"
+    if active_runs:
+        stop_all_state = (
+            "normal"
+            if any(run.get("stop_mode") is None for run in active_runs)
+            else "armed"
+        )
+
+    task_slug_map, _ = _task_slug_maps()
+    recent_eval_runs = state.db.list_recent_runs_for_task(MONOCORPUS_META_EVALUATE_TASK_ID, limit=10)
+    for run in recent_eval_runs:
+        task_id = str(run.get("task_id") or "")
+        run["task_slug"] = task_slug_map.get(task_id, task_id)
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "global": {
+            "active_tasks": len(active_runs),
+            "active_workflows": len(
+                [
+                    row
+                    for row in state.db.list_workflows_with_latest_run()
+                    if row.get("run_status") in {"starting", "running"}
+                ]
+            ),
+            "stop_all_state": stop_all_state,
+        },
+        "detail": detail,
+        "recent_meta_evaluate_runs": recent_eval_runs,
+    }
+
+
 @app.get("/api/dashboard")
 def get_dashboard() -> JSONResponse:
     """Return current dashboard state."""
@@ -565,6 +629,60 @@ def get_task_detail(
 def get_library() -> JSONResponse:
     """Return library applicability dataset statistics."""
     return JSONResponse(build_library_payload())
+
+
+@app.get("/api/library/classifications")
+def get_library_classifications(
+    search: str = Query("", max_length=120),
+    status: str = Query("", max_length=40),
+    ddc_prefix: str = Query("", max_length=40),
+    min_usage: int = Query(0, ge=0),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    sort: str = Query("usage_desc", max_length=40),
+) -> JSONResponse:
+    """Return paginated classification table."""
+    payload = list_classifications(
+        search=search,
+        status=status,
+        ddc_prefix=ddc_prefix,
+        min_usage=min_usage,
+        page=page,
+        page_size=page_size,
+        sort=sort,
+    )
+    return JSONResponse(payload)
+
+
+@app.get("/api/library/classifications/insights")
+def get_library_classification_insights(
+    row_limit: int = Query(5000, ge=1, le=20000),
+    duplicate_limit: int = Query(25, ge=1, le=200),
+    unclassified_limit: int = Query(30, ge=1, le=200),
+) -> JSONResponse:
+    """Return hierarchy, distribution, duplicates, and unclassified queue."""
+    payload = get_classification_insights(
+        row_limit=row_limit,
+        duplicate_limit=duplicate_limit,
+        unclassified_limit=unclassified_limit,
+    )
+    return JSONResponse(payload)
+
+
+@app.get("/api/library/classifications/{classification_id}")
+def get_library_classification_detail(
+    classification_id: int,
+    docs_page: int = Query(1, ge=1),
+    docs_page_size: int = Query(40, ge=1, le=200),
+) -> JSONResponse:
+    """Return one classification detail."""
+    return JSONResponse(
+        build_classification_detail_payload(
+            classification_id,
+            docs_page=docs_page,
+            docs_page_size=docs_page_size,
+        )
+    )
 
 
 @app.post("/api/tasks/{task_id}/toggle")
