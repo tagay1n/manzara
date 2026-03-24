@@ -1,5 +1,6 @@
 const state = {
   payload: null,
+  viewState: "loading",
   taskId: null,
   refreshTimer: null,
   eventCursor: 0,
@@ -16,16 +17,11 @@ async function api(path, options = {}) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return window.ManzaraCore.escapeHtml(value);
 }
 
 function cssName(name, fallback = "unknown") {
-  const value = String(name || "").trim().toLowerCase();
-  if (!value) return fallback;
-  return value.replace(/[^a-z0-9_-]+/g, "-");
+  return window.ManzaraCore.cssName(name, fallback);
 }
 
 function formatDateTime(value) {
@@ -63,12 +59,7 @@ function maybeShowTaskActionError(result) {
 }
 
 function isActiveStatus(status) {
-  return (
-    status === "starting" ||
-    status === "running" ||
-    status === "stopping_graceful" ||
-    status === "stopping_force"
-  );
+  return window.ManzaraCore.isActiveStatus(status);
 }
 
 function runDuration(run) {
@@ -149,12 +140,16 @@ function renderRunResult(run) {
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
-  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
+    active,
+    activeWorkflows
+  );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
 
 function renderTaskDetail(payload) {
+  state.viewState = "ready";
   state.payload = payload;
   const task = payload.task;
   const runs = payload.runs || [];
@@ -188,6 +183,26 @@ function renderTaskDetail(payload) {
   lucide.createIcons();
 }
 
+function renderTaskLoading() {
+  state.viewState = "loading";
+  document.getElementById("task-title").textContent = "Loading task...";
+  document.getElementById("task-subtitle").textContent = "";
+  document.getElementById("task-stat-grid").innerHTML = "";
+  document.getElementById("task-run-list").innerHTML = '<div class="run-row">Loading runs...</div>';
+  document.getElementById("run-result").innerHTML = '<div class="run-row">Loading run details...</div>';
+}
+
+function renderTaskError(error) {
+  state.viewState = "error";
+  const message = String(error?.message || error || "Failed to load task details.");
+  const safe = escapeHtml(message);
+  document.getElementById("task-title").textContent = "Task unavailable";
+  document.getElementById("task-subtitle").textContent = safe;
+  document.getElementById("task-stat-grid").innerHTML = "";
+  document.getElementById("task-run-list").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("run-result").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+}
+
 function ensureCanonicalTaskPath(taskPathKey) {
   const canonical = `/tasks/${encodeURIComponent(taskPathKey)}`;
   if (window.location.pathname !== canonical) {
@@ -201,9 +216,17 @@ function readTaskIdFromPath() {
   return decodeURIComponent(parts.slice(1).join("/"));
 }
 
-async function refreshTaskDetail() {
-  const payload = await api(`/api/tasks/${encodeURIComponent(state.taskId)}?limit=120`);
-  renderTaskDetail(payload);
+async function refreshTaskDetail({ showLoading = false } = {}) {
+  if (showLoading) {
+    renderTaskLoading();
+  }
+  try {
+    const payload = await api(`/api/tasks/${encodeURIComponent(state.taskId)}?limit=120`);
+    renderTaskDetail(payload);
+  } catch (error) {
+    renderTaskError(error);
+    throw error;
+  }
 }
 
 function queueRefresh(delayMs = 250) {
@@ -355,7 +378,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
-  await refreshTaskDetail();
+  await refreshTaskDetail({ showLoading: true });
   setupEventStream();
 }
 

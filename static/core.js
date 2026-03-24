@@ -68,6 +68,33 @@
     return `Last event: ${eventType} @ ${formatTime(payload?.ts, { includeZone: true })}`;
   }
 
+  function formatGlobalStatus(activeTasks, activeWorkflows) {
+    return `Tasks: ${Number(activeTasks || 0)} • Flows: ${Number(activeWorkflows || 0)}`;
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;");
+  }
+
+  function cssName(name, fallback = "unknown") {
+    const value = String(name || "").trim().toLowerCase();
+    if (!value) return fallback;
+    return value.replace(/[^a-z0-9_-]+/g, "-");
+  }
+
+  function isActiveStatus(status) {
+    const value = String(status || "");
+    return (
+      value === "starting" ||
+      value === "running" ||
+      value === "stopping_graceful" ||
+      value === "stopping_force"
+    );
+  }
+
   function applyStopAllButton(button, stopAllState) {
     if (!button) return;
     const state = String(stopAllState || "disabled");
@@ -216,10 +243,14 @@
   window.ManzaraCore = {
     applyStopAllButton,
     api,
+    cssName,
     createSseController,
     DEFAULT_EVENT_TYPES: [...DEFAULT_EVENT_TYPES],
+    escapeHtml,
     formatEventBanner,
     formatDateTime,
+    formatGlobalStatus,
     formatTime,
+    isActiveStatus,
   };
 })();

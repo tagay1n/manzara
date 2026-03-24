@@ -133,8 +133,31 @@ function createHarness({
         apiCalls.push({ path: String(path), options: { ...options } });
         return apiResolver(String(path), options);
       },
+      escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      },
+      cssName(name, fallback = "unknown") {
+        const value = String(name || "").trim().toLowerCase();
+        if (!value) return fallback;
+        return value.replace(/[^a-z0-9_-]+/g, "-");
+      },
+      isActiveStatus(status) {
+        const value = String(status || "");
+        return (
+          value === "starting" ||
+          value === "running" ||
+          value === "stopping_graceful" ||
+          value === "stopping_force"
+        );
+      },
       formatDateTime(value) {
         return `DT:${String(value)}`;
+      },
+      formatGlobalStatus(activeTasks, activeWorkflows) {
+        return `Tasks: ${Number(activeTasks || 0)} • Flows: ${Number(activeWorkflows || 0)}`;
       },
       formatEventBanner(payload) {
         return `BANNER:${String(payload?.type || "")}`;
@@ -262,6 +285,42 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
   assert.equal(harness.elements.get("last-event").textContent, "BANNER:task.completed");
 });
 
+test("tasks page renders empty state when no tasks exist", async () => {
+  const payload = {
+    global: {
+      active_tasks: 0,
+      active_workflows: 0,
+      stop_all_state: "disabled",
+    },
+    flows: [{ panel_id: "shayan", title: "Shayan", tasks: [] }],
+  };
+  const harness = createHarness({
+    source: TASKS_SOURCE,
+    ids: ["global-status", "stop-all-btn", "task-flow-grid", "last-event"],
+    apiResolver(path) {
+      if (path === "/api/tasks") return JSON.parse(JSON.stringify(payload));
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(harness.elements.get("task-flow-grid").innerHTML, /No tasks available yet/);
+});
+
+test("tasks page renders error state when API fails", async () => {
+  const harness = createHarness({
+    source: TASKS_SOURCE,
+    ids: ["global-status", "stop-all-btn", "task-flow-grid", "last-event"],
+    apiResolver(path) {
+      if (path === "/api/tasks") {
+        throw new Error("tasks unavailable");
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(harness.elements.get("task-flow-grid").innerHTML, /Error: tasks unavailable/);
+});
+
 test("tasks page stop-all does not call API when force-stop confirmation is rejected", async () => {
   const payload = {
     global: {
@@ -368,4 +427,36 @@ test("task page renders running control state and toggles task endpoint", async 
   assert.equal(toggleCalls.length, 1);
   const detailCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/quick?limit=120");
   assert.ok(detailCalls.length >= 2);
+});
+
+test("task page renders loading then error when task detail fetch fails", async () => {
+  const harness = createHarness({
+    source: TASK_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "task-toggle-btn",
+      "task-title",
+      "task-subtitle",
+      "task-stat-grid",
+      "task-run-list",
+      "run-result",
+      "last-event",
+      "close-logs",
+      "log-dialog",
+      "copy-logs",
+      "log-title",
+      "log-content",
+    ],
+    locationPathname: "/tasks/quick",
+    apiResolver(path) {
+      if (path === "/api/tasks/quick?limit=120") {
+        throw new Error("detail unavailable");
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.equal(harness.elements.get("task-title").textContent, "Task unavailable");
+  assert.match(harness.elements.get("task-run-list").innerHTML, /Error: detail unavailable/);
 });

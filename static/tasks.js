@@ -1,5 +1,6 @@
 const state = {
   payload: null,
+  viewState: "loading",
   refreshTimer: null,
   eventCursor: 0,
   eventStreamController: null,
@@ -8,19 +9,6 @@ const state = {
 
 async function api(path, options = {}) {
   return window.ManzaraCore.api(path, options);
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function cssName(name, fallback = "unknown") {
-  const value = String(name || "").trim().toLowerCase();
-  if (!value) return fallback;
-  return value.replace(/[^a-z0-9_-]+/g, "-");
 }
 
 function formatDateTime(value) {
@@ -44,27 +32,18 @@ function teardownSoundNotifier() {
   state.soundNotifier = null;
 }
 
-function isActiveStatus(status) {
-  return (
-    status === "starting" ||
-    status === "running" ||
-    status === "stopping_graceful" ||
-    status === "stopping_force"
-  );
-}
-
 function renderTaskItem(task) {
   const status = task.run?.status || "idle";
-  const active = isActiveStatus(status);
+  const active = window.ManzaraCore.isActiveStatus(status);
   const taskPathKey = encodeURIComponent(task.slug || task.task_id);
   return `
-    <a href="/tasks/${taskPathKey}" class="task-list-item task-status-${cssName(status, "idle")}">
-      <div class="task-list-title">${escapeHtml(task.title)}</div>
+    <a href="/tasks/${taskPathKey}" class="task-list-item task-status-${window.ManzaraCore.cssName(status, "idle")}">
+      <div class="task-list-title">${window.ManzaraCore.escapeHtml(task.title)}</div>
       <div class="task-list-meta">
-        <span>${escapeHtml(task.task_type)}</span>
-        <span>${escapeHtml(active ? "active" : status)}</span>
+        <span>${window.ManzaraCore.escapeHtml(task.task_type)}</span>
+        <span>${window.ManzaraCore.escapeHtml(active ? "active" : status)}</span>
       </div>
-      <div class="task-list-time">${escapeHtml(formatDateTime(task.run?.started_at || task.run?.finished_at))}</div>
+      <div class="task-list-time">${window.ManzaraCore.escapeHtml(formatDateTime(task.run?.started_at || task.run?.finished_at))}</div>
     </a>
   `;
 }
@@ -73,7 +52,7 @@ function renderTaskFlow(flow) {
   return `
     <section class="task-flow-card">
       <div class="task-flow-head">
-        <h3>${escapeHtml(flow.title)}</h3>
+        <h3>${window.ManzaraCore.escapeHtml(flow.title)}</h3>
         <span class="panel-pill">Tasks ${flow.tasks.length}</span>
       </div>
       <div class="task-list-grid">
@@ -86,23 +65,52 @@ function renderTaskFlow(flow) {
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
-  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
+    active,
+    activeWorkflows
+  );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
 
 function renderTasks(payload) {
   state.payload = payload;
-  document.getElementById("task-flow-grid").innerHTML = (payload.flows || [])
-    .map(renderTaskFlow)
-    .join("");
+  const flowGrid = document.getElementById("task-flow-grid");
+  const flows = payload.flows || [];
+  const taskCount = flows.reduce((acc, flow) => acc + Number(flow.tasks?.length || 0), 0);
+  if (taskCount === 0) {
+    state.viewState = "empty";
+    flowGrid.innerHTML = '<div class="run-row">No tasks available yet.</div>';
+  } else {
+    state.viewState = "ready";
+    flowGrid.innerHTML = flows.map(renderTaskFlow).join("");
+  }
   renderGlobalState(payload);
   lucide.createIcons();
 }
 
-async function refreshTasks() {
-  const payload = await api("/api/tasks");
-  renderTasks(payload);
+function renderTasksLoading() {
+  state.viewState = "loading";
+  document.getElementById("task-flow-grid").innerHTML = '<div class="run-row">Loading tasks...</div>';
+}
+
+function renderTasksError(error) {
+  state.viewState = "error";
+  const message = String(error?.message || error || "Failed to load tasks.");
+  document.getElementById("task-flow-grid").innerHTML = `<div class="run-row">Error: ${window.ManzaraCore.escapeHtml(message)}</div>`;
+}
+
+async function refreshTasks({ showLoading = false } = {}) {
+  if (showLoading) {
+    renderTasksLoading();
+  }
+  try {
+    const payload = await api("/api/tasks");
+    renderTasks(payload);
+  } catch (error) {
+    renderTasksError(error);
+    throw error;
+  }
 }
 
 function queueRefresh(delayMs = 250) {
@@ -162,7 +170,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
-  await refreshTasks();
+  await refreshTasks({ showLoading: true });
   setupEventStream();
 }
 
