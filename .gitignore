@@ -9,3 +9,4 @@ _artifacts/
 config.yaml
 config.local.yaml
 config copy.yaml
+.idea
