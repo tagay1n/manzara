@@ -1,5 +1,6 @@
 const state = {
   payload: null,
+  viewState: "loading",
   refreshTimer: null,
   eventCursor: 0,
   eventStreamController: null,
@@ -11,10 +12,7 @@ async function api(path, options = {}) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return window.ManzaraCore.escapeHtml(value);
 }
 
 function formatDateTime(value) {
@@ -41,7 +39,10 @@ function teardownSoundNotifier() {
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
-  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
+    active,
+    activeWorkflows
+  );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
@@ -104,6 +105,7 @@ function renderLastRun(run) {
 }
 
 function renderLibrary(payload) {
+  state.viewState = "ready";
   state.payload = payload;
   const dataset = payload.dataset || {};
   const stats = dataset.stats || {};
@@ -126,9 +128,39 @@ function renderLibrary(payload) {
   lucide.createIcons();
 }
 
-async function refreshLibrary() {
-  const payload = await api("/api/library");
-  renderLibrary(payload);
+function renderLibraryLoading() {
+  state.viewState = "loading";
+  const statusNode = document.getElementById("library-status");
+  statusNode.textContent = "Loading library dataset...";
+  statusNode.classList.remove("library-status-error");
+  document.getElementById("library-stat-grid").innerHTML = '<div class="run-row">Loading stats...</div>';
+  document.getElementById("library-top-list").innerHTML = '<div class="run-row">Loading classifications...</div>';
+  document.getElementById("library-last-run").innerHTML = '<div class="run-row">Loading last run...</div>';
+}
+
+function renderLibraryError(error) {
+  state.viewState = "error";
+  const message = String(error?.message || error || "Failed to load library.");
+  const safe = escapeHtml(message);
+  const statusNode = document.getElementById("library-status");
+  statusNode.textContent = `Library unavailable: ${message}`;
+  statusNode.classList.add("library-status-error");
+  document.getElementById("library-stat-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("library-top-list").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("library-last-run").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+}
+
+async function refreshLibrary({ showLoading = false } = {}) {
+  if (showLoading) {
+    renderLibraryLoading();
+  }
+  try {
+    const payload = await api("/api/library");
+    renderLibrary(payload);
+  } catch (error) {
+    renderLibraryError(error);
+    throw error;
+  }
 }
 
 function queueRefresh(delayMs = 250) {
@@ -188,7 +220,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
-  await refreshLibrary();
+  await refreshLibrary({ showLoading: true });
   setupEventStream();
 }
 

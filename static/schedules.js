@@ -1,5 +1,6 @@
 const state = {
   payload: null,
+  viewState: "loading",
   refreshTimer: null,
   eventCursor: 0,
   eventStreamController: null,
@@ -21,16 +22,11 @@ async function api(path, options = {}) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return window.ManzaraCore.escapeHtml(value);
 }
 
 function cssName(name, fallback = "unknown") {
-  const value = String(name || "").trim().toLowerCase();
-  if (!value) return fallback;
-  return value.replace(/[^a-z0-9_-]+/g, "-");
+  return window.ManzaraCore.cssName(name, fallback);
 }
 
 function formatDateTime(value) {
@@ -232,23 +228,51 @@ function renderWorkflowCard(workflow) {
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
-  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
+    active,
+    activeWorkflows
+  );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
 
 function renderSchedules(payload) {
+  state.viewState = "ready";
   state.payload = payload;
-  document.getElementById("schedule-grid").innerHTML = (payload.workflows || [])
-    .map(renderWorkflowCard)
-    .join("");
+  const scheduleGrid = document.getElementById("schedule-grid");
+  const workflows = payload.workflows || [];
+  if (!workflows.length) {
+    state.viewState = "empty";
+    scheduleGrid.innerHTML = '<div class="run-row">No schedules available yet.</div>';
+  } else {
+    scheduleGrid.innerHTML = workflows.map(renderWorkflowCard).join("");
+  }
   renderGlobalState(payload);
   lucide.createIcons();
 }
 
-async function refreshSchedules() {
-  const payload = await api("/api/schedules");
-  renderSchedules(payload);
+function renderSchedulesLoading() {
+  state.viewState = "loading";
+  document.getElementById("schedule-grid").innerHTML = '<div class="run-row">Loading schedules...</div>';
+}
+
+function renderSchedulesError(error) {
+  state.viewState = "error";
+  const message = String(error?.message || error || "Failed to load schedules.");
+  document.getElementById("schedule-grid").innerHTML = `<div class="run-row">Error: ${escapeHtml(message)}</div>`;
+}
+
+async function refreshSchedules({ showLoading = false } = {}) {
+  if (showLoading) {
+    renderSchedulesLoading();
+  }
+  try {
+    const payload = await api("/api/schedules");
+    renderSchedules(payload);
+  } catch (error) {
+    renderSchedulesError(error);
+    throw error;
+  }
 }
 
 function queueRefresh(delayMs = 250) {
@@ -382,7 +406,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
-  await refreshSchedules();
+  await refreshSchedules({ showLoading: true });
   setupEventStream();
 }
 

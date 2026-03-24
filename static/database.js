@@ -1,5 +1,6 @@
 const state = {
   payload: null,
+  viewState: "loading",
   refreshTimer: null,
   eventCursor: 0,
   eventStreamController: null,
@@ -11,10 +12,7 @@ async function api(path, options = {}) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return window.ManzaraCore.escapeHtml(value);
 }
 
 function formatDateTime(value) {
@@ -42,9 +40,7 @@ function formatBytes(value) {
 }
 
 function cssName(name, fallback = "unknown") {
-  const value = String(name || "").trim().toLowerCase();
-  if (!value) return fallback;
-  return value.replace(/[^a-z0-9_-]+/g, "-");
+  return window.ManzaraCore.cssName(name, fallback);
 }
 
 function initSoundNotifier() {
@@ -67,7 +63,10 @@ function teardownSoundNotifier() {
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
-  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
+    active,
+    activeWorkflows
+  );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
@@ -85,6 +84,7 @@ function renderBackupItem(title, item) {
 }
 
 function renderDatabaseState(payload) {
+  state.viewState = "ready";
   state.payload = payload;
   const db = payload.database_state || {};
   renderGlobalState(payload);
@@ -150,9 +150,41 @@ function renderDatabaseState(payload) {
   lucide.createIcons();
 }
 
-async function refreshDatabaseState() {
-  const payload = await api("/api/database/state");
-  renderDatabaseState(payload);
+function renderDatabaseLoading() {
+  state.viewState = "loading";
+  document.getElementById("db-warning-pill").className = "panel-pill";
+  document.getElementById("db-warning-pill").textContent = "Loading";
+  document.getElementById("db-status").textContent = "Loading database state...";
+  document.getElementById("db-stat-grid").innerHTML = '<div class="run-row">Loading database metrics...</div>';
+  document.getElementById("db-backup-grid").innerHTML = '<div class="run-row">Loading backup state...</div>';
+  document.getElementById("db-table-body").innerHTML = '<tr><td colspan="3">Loading table metrics...</td></tr>';
+  document.getElementById("db-table-footnote").textContent = "";
+}
+
+function renderDatabaseError(error) {
+  state.viewState = "error";
+  const message = String(error?.message || error || "Failed to load database state.");
+  const safe = escapeHtml(message);
+  document.getElementById("db-warning-pill").className = "panel-pill state-attention";
+  document.getElementById("db-warning-pill").textContent = "Unavailable";
+  document.getElementById("db-status").textContent = `Database state unavailable: ${message}`;
+  document.getElementById("db-stat-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("db-backup-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("db-table-body").innerHTML = `<tr><td colspan="3">Error: ${safe}</td></tr>`;
+  document.getElementById("db-table-footnote").textContent = "";
+}
+
+async function refreshDatabaseState({ showLoading = false } = {}) {
+  if (showLoading) {
+    renderDatabaseLoading();
+  }
+  try {
+    const payload = await api("/api/database/state");
+    renderDatabaseState(payload);
+  } catch (error) {
+    renderDatabaseError(error);
+    throw error;
+  }
 }
 
 function queueRefresh(delayMs = 250) {
@@ -212,7 +244,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
-  await refreshDatabaseState();
+  await refreshDatabaseState({ showLoading: true });
   setupEventStream();
 }
 

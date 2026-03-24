@@ -1,5 +1,6 @@
 const state = {
   dashboard: null,
+  viewState: "loading",
   refreshTimer: null,
   logRunId: null,
   logAfterId: 0,
@@ -22,10 +23,7 @@ function formatDateTime(value) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return window.ManzaraCore.escapeHtml(value);
 }
 
 function escapeAttr(value) {
@@ -70,9 +68,7 @@ function lucideName(name) {
 }
 
 function cssName(name, fallback = "unknown") {
-  const value = String(name || "").trim().toLowerCase();
-  if (!value) return fallback;
-  return value.replace(/[^a-z0-9_-]+/g, "-");
+  return window.ManzaraCore.cssName(name, fallback);
 }
 
 function taskControlModel(task) {
@@ -476,22 +472,55 @@ function renderRuns(runs) {
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
-  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
+    active,
+    activeWorkflows
+  );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
 
 function renderDashboard(payload) {
+  state.viewState = "ready";
   state.dashboard = payload;
-  document.getElementById("panel-grid").innerHTML = payload.panels.map(renderPanel).join("");
+  const panelGrid = document.getElementById("panel-grid");
+  const panels = Array.isArray(payload.panels) ? payload.panels : [];
+  if (!panels.length) {
+    state.viewState = "empty";
+    panelGrid.innerHTML = '<div class="run-row">No flows available yet.</div>';
+  } else {
+    panelGrid.innerHTML = panels.map(renderPanel).join("");
+  }
   document.getElementById("runs-list").innerHTML = renderRuns(payload.recent_runs || []);
   renderGlobalState(payload);
   lucide.createIcons();
 }
 
-async function refreshDashboard() {
-  const payload = await api("/api/dashboard");
-  renderDashboard(payload);
+function renderDashboardLoading() {
+  state.viewState = "loading";
+  document.getElementById("panel-grid").innerHTML = '<div class="run-row">Loading flows...</div>';
+  document.getElementById("runs-list").innerHTML = '<div class="run-row">Loading runs...</div>';
+}
+
+function renderDashboardError(error) {
+  state.viewState = "error";
+  const message = String(error?.message || error || "Failed to load dashboard.");
+  const safe = escapeHtml(message);
+  document.getElementById("panel-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("runs-list").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+}
+
+async function refreshDashboard({ showLoading = false } = {}) {
+  if (showLoading) {
+    renderDashboardLoading();
+  }
+  try {
+    const payload = await api("/api/dashboard");
+    renderDashboard(payload);
+  } catch (error) {
+    renderDashboardError(error);
+    throw error;
+  }
 }
 
 function queueRefresh(delayMs = 250) {
@@ -691,7 +720,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
-  await refreshDashboard();
+  await refreshDashboard({ showLoading: true });
   setupEventStream();
 }
 

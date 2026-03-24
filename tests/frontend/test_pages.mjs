@@ -5,6 +5,10 @@ import vm from "node:vm";
 
 const TASKS_SOURCE = readFileSync(new URL("../../static/tasks.js", import.meta.url), "utf-8");
 const TASK_SOURCE = readFileSync(new URL("../../static/task.js", import.meta.url), "utf-8");
+const DASHBOARD_SOURCE = readFileSync(new URL("../../static/app.js", import.meta.url), "utf-8");
+const SCHEDULES_SOURCE = readFileSync(new URL("../../static/schedules.js", import.meta.url), "utf-8");
+const LIBRARY_SOURCE = readFileSync(new URL("../../static/library.js", import.meta.url), "utf-8");
+const DATABASE_SOURCE = readFileSync(new URL("../../static/database.js", import.meta.url), "utf-8");
 
 class FakeClassList {
   constructor() {
@@ -459,4 +463,156 @@ test("task page renders loading then error when task detail fetch fails", async 
   await harness.flush();
   assert.equal(harness.elements.get("task-title").textContent, "Task unavailable");
   assert.match(harness.elements.get("task-run-list").innerHTML, /Error: detail unavailable/);
+});
+
+test("dashboard page renders empty state for panels and runs", async () => {
+  const payload = {
+    global: {
+      active_tasks: 0,
+      active_workflows: 0,
+      stop_all_state: "disabled",
+    },
+    panels: [],
+    recent_runs: [],
+  };
+  const harness = createHarness({
+    source: DASHBOARD_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "panel-grid",
+      "runs-list",
+      "last-event",
+      "close-logs",
+      "log-dialog",
+      "copy-logs",
+      "log-title",
+      "log-content",
+    ],
+    apiResolver(path) {
+      if (path === "/api/dashboard") return JSON.parse(JSON.stringify(payload));
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(harness.elements.get("panel-grid").innerHTML, /No flows available yet/);
+  assert.match(harness.elements.get("runs-list").innerHTML, /No runs yet/);
+  assert.equal(harness.elements.get("global-status").textContent, "Tasks: 0 • Flows: 0");
+});
+
+test("dashboard page renders error state when API fails", async () => {
+  const harness = createHarness({
+    source: DASHBOARD_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "panel-grid",
+      "runs-list",
+      "last-event",
+      "close-logs",
+      "log-dialog",
+      "copy-logs",
+      "log-title",
+      "log-content",
+    ],
+    apiResolver(path) {
+      if (path === "/api/dashboard") {
+        throw new Error("dashboard unavailable");
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(harness.elements.get("panel-grid").innerHTML, /Error: dashboard unavailable/);
+  assert.match(harness.elements.get("runs-list").innerHTML, /Error: dashboard unavailable/);
+});
+
+test("schedules page renders empty state when no workflows exist", async () => {
+  const payload = {
+    global: {
+      active_tasks: 0,
+      active_workflows: 0,
+      stop_all_state: "disabled",
+    },
+    workflows: [],
+  };
+  const harness = createHarness({
+    source: SCHEDULES_SOURCE,
+    ids: ["global-status", "stop-all-btn", "schedule-grid", "last-event"],
+    apiResolver(path) {
+      if (path === "/api/schedules") return JSON.parse(JSON.stringify(payload));
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(harness.elements.get("schedule-grid").innerHTML, /No schedules available yet/);
+  assert.equal(harness.elements.get("global-status").textContent, "Tasks: 0 • Flows: 0");
+});
+
+test("schedules page renders error state when API fails", async () => {
+  const harness = createHarness({
+    source: SCHEDULES_SOURCE,
+    ids: ["global-status", "stop-all-btn", "schedule-grid", "last-event"],
+    apiResolver(path) {
+      if (path === "/api/schedules") {
+        throw new Error("schedules unavailable");
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(harness.elements.get("schedule-grid").innerHTML, /Error: schedules unavailable/);
+});
+
+test("library page renders loading then API error state", async () => {
+  const harness = createHarness({
+    source: LIBRARY_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "last-event",
+      "library-status",
+      "library-stat-grid",
+      "library-top-list",
+      "library-last-run",
+    ],
+    apiResolver(path) {
+      if (path === "/api/library") {
+        throw new Error("library unavailable");
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(harness.elements.get("library-status").textContent, /Library unavailable/);
+  assert.match(harness.elements.get("library-stat-grid").innerHTML, /Error: library unavailable/);
+  assert.match(harness.elements.get("library-top-list").innerHTML, /Error: library unavailable/);
+});
+
+test("database page renders loading then API error state", async () => {
+  const harness = createHarness({
+    source: DATABASE_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "last-event",
+      "db-warning-pill",
+      "db-status",
+      "db-stat-grid",
+      "db-backup-grid",
+      "db-table-body",
+      "db-table-footnote",
+    ],
+    apiResolver(path) {
+      if (path === "/api/database/state") {
+        throw new Error("database unavailable");
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.equal(harness.elements.get("db-warning-pill").textContent, "Unavailable");
+  assert.match(harness.elements.get("db-status").textContent, /Database state unavailable/);
+  assert.match(harness.elements.get("db-stat-grid").innerHTML, /Error: database unavailable/);
+  assert.match(harness.elements.get("db-table-body").innerHTML, /Error: database unavailable/);
 });
