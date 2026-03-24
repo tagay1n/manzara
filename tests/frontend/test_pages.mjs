@@ -315,6 +315,45 @@ function createHarness({
       applyStopAllButton(button, stopAllState) {
         button.dataset.stopState = String(stopAllState || "");
       },
+      createTabController(options = {}) {
+        const tabs = Array.isArray(options.tabs)
+          ? options.tabs.map((tab) => String(tab || "")).filter(Boolean)
+          : [];
+        const validTabs = new Set(tabs);
+        const getActiveTab = typeof options.getActiveTab === "function"
+          ? options.getActiveTab
+          : () => "";
+        const setActiveTab = typeof options.setActiveTab === "function"
+          ? options.setActiveTab
+          : () => {};
+        return {
+          tabs: [...tabs],
+          isValid(tab) {
+            return validTabs.has(String(tab || ""));
+          },
+          apply() {
+            for (const tab of tabs) {
+              const isActive = String(getActiveTab() || "") === tab;
+              const btn = documentObj.getElementById(`tab-btn-${tab}`);
+              const panel = documentObj.getElementById(`tab-panel-${tab}`);
+              if (btn) {
+                btn.classList.toggle("active", isActive);
+                btn.setAttribute("aria-selected", isActive ? "true" : "false");
+              }
+              if (panel) {
+                panel.classList.toggle("active", isActive);
+              }
+            }
+          },
+          select(tab) {
+            const value = String(tab || "");
+            if (!validTabs.has(value)) return false;
+            setActiveTab(value);
+            this.apply();
+            return true;
+          },
+        };
+      },
       createSseController(options = {}) {
         sse.config = options;
         return {

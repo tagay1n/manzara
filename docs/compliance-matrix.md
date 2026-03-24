@@ -10,7 +10,7 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 - `N/A`: policy/process requirement, not directly verifiable in code.
 
 ## Automated Baseline (current)
-- `pytest`: `40 passed` (`.venv/bin/python -m pytest -q`)
+- `pytest`: `41 passed` (`.venv/bin/python -m pytest -q`)
 - `frontend tests`: `node --test tests/frontend/*.mjs` passed (`core helpers` + `dashboard/schedules/tasks/task/library/database/classification-list/classification-detail/personality/publisher/normalization page behavior`)
 - `requirements files`: only `requirements.txt` found (`rg --files -g 'requirements*.txt'`)
 
@@ -37,15 +37,15 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 | FE-06 | European datetime format (24h, day-first) | PASS | Shared formatter in `static/core.js:14-23`; page scripts use `window.ManzaraCore.formatDateTime(...)` | Enforced via `Intl.DateTimeFormat("en-GB", ...)`. |
 | FE-07 | Keep timezone explicit when operational timestamps can be ambiguous | PASS | Shared datetime/time formatters include timezone by default (`static/core.js:13`, `static/core.js:30`) | Operational timestamps now render with timezone marker (for example `GMT+3`). |
 | FE-08 | Use UI reference baseline (Mission Control) | PASS | `AGENTS.md:55-56`, `README.md:24-29` | Documented baseline for frontend direction. |
-| FE-09 | Keep rendering safe; no unsanitized HTML injection | PARTIAL | Frequent `escapeHtml()` usage (`static/app.js:36-45`, etc.) | No centralized sanitizer contract/lint guard; needs automated checks. |
+| FE-09 | Keep rendering safe; no unsanitized HTML injection | PASS | Escaping helpers across page scripts + malicious-payload regression checks in `tests/frontend/test_pages.mjs` (`library classifications page escapes dangerous strings in rendered html`, `library classification detail escapes dangerous strings in stats`) | Render paths now have automated regression coverage for unsafe payloads. |
 | LC-BE-01 | Prefer declarative registries/maps over branching for flow/task definitions | PASS | `app/modules/shayan/tasks.py`, `app/modules/maintenance/tasks.py`, workflow bundles in `app/modules/*/workflow.py` | Task/workflow seeds are declarative dict/list structures. |
 | LC-BE-02 | Move overlap/catchup schedule behavior into policy data | PASS | schedule fields in workflow bundles (`overlap_policy`, `catchup_policy`) | Policy values stored in schedule config. |
 | LC-BE-03 | Shared run/workflow state machine definitions | PARTIAL | `app/db.py` constants (`ACTIVE_STATUSES`, `ACTIVE_WORKFLOW_STATUSES`) | Transitions still spread across runtime/service methods. |
-| LC-FE-01 | Centralize data/event handling utilities to reduce page-level branching | PARTIAL | Shared utilities in `static/core.js` (`api`, datetime/event banner, `applyStopAllButton`, `createSseController`, `escapeHtml`, `cssName`, status helpers) and page adoption across all page scripts | Core transport/time/SSE/sanitization/status logic is centralized; render/state orchestration is still duplicated across page modules. |
+| LC-FE-01 | Centralize data/event handling utilities to reduce page-level branching | PARTIAL | Shared utilities in `static/core.js` (`api`, datetime/event banner, `applyStopAllButton`, `createSseController`, `createTabController`, `escapeHtml`, `cssName`, status helpers) and page adoption across all page scripts | Core transport/time/SSE/sanitization/status logic is centralized and tab orchestration moved to shared helper; render/state orchestration is still duplicated across page modules. |
 
 ## Priority Remediation Batches
 1. Frontend foundation extraction (phase 3):
-   - Extract shared page primitives for tabbed data workbenches (status bars, table shells, error/empty blocks, pagination controls) used by normalization/personality/publisher/classification pages.
+   - Continue extraction beyond tabs: shared status bars, table shells, error/empty blocks, and pagination controls used by normalization/personality/publisher/classification pages.
 2. Frontend test baseline:
    - Expand interaction-level tests further (queue+canonical creation/edit sequences, richer filter transitions, and larger multi-action chains).
 3. Logging hardening:

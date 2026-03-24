@@ -22,6 +22,16 @@ const state = {
   queueRows: [],
 };
 
+const TAB_IDS = ["queue", "canonicals", "suggestions", "merge", "quality", "history"];
+
+const tabController = window.ManzaraCore.createTabController({
+  tabs: TAB_IDS,
+  getActiveTab: () => state.activeTab,
+  setActiveTab: (tab) => {
+    state.activeTab = tab;
+  },
+});
+
 const ENTITY_LABELS = {
   personality: "Personalities",
   publisher: "Publishers",
@@ -638,26 +648,12 @@ function queueRefresh(delayMs = 250) {
 }
 
 function applyActiveTab() {
-  const tabs = ["queue", "canonicals", "suggestions", "merge", "quality", "history"];
-  for (const tab of tabs) {
-    const isActive = state.activeTab === tab;
-    const btn = document.getElementById(`tab-btn-${tab}`);
-    const panel = document.getElementById(`tab-panel-${tab}`);
-    if (btn) {
-      btn.classList.toggle("active", isActive);
-      btn.setAttribute("aria-selected", isActive ? "true" : "false");
-    }
-    if (panel) {
-      panel.classList.toggle("active", isActive);
-    }
-  }
+  tabController.apply();
 }
 
 async function switchTab(tab) {
-  if (!["queue", "canonicals", "suggestions", "merge", "quality", "history"].includes(tab)) return;
-  state.activeTab = tab;
-  applyActiveTab();
-  await refreshTab(tab);
+  if (!tabController.select(tab)) return;
+  await refreshTab(state.activeTab);
   lucide.createIcons();
 }
 

@@ -126,6 +126,51 @@
     return response.json();
   }
 
+  function createTabController(options = {}) {
+    const tabs = Array.isArray(options.tabs)
+      ? options.tabs.map((tab) => String(tab || "")).filter(Boolean)
+      : [];
+    const validTabs = new Set(tabs);
+    const getActiveTab = typeof options.getActiveTab === "function"
+      ? options.getActiveTab
+      : () => "";
+    const setActiveTab = typeof options.setActiveTab === "function"
+      ? options.setActiveTab
+      : () => {};
+
+    function apply() {
+      for (const tab of tabs) {
+        const isActive = String(getActiveTab() || "") === tab;
+        const btn = document.getElementById(`tab-btn-${tab}`);
+        const panel = document.getElementById(`tab-panel-${tab}`);
+        if (btn) {
+          btn.classList.toggle("active", isActive);
+          btn.setAttribute("aria-selected", isActive ? "true" : "false");
+        }
+        if (panel) {
+          panel.classList.toggle("active", isActive);
+        }
+      }
+    }
+
+    function select(tab) {
+      const value = String(tab || "");
+      if (!validTabs.has(value)) return false;
+      setActiveTab(value);
+      apply();
+      return true;
+    }
+
+    return {
+      apply,
+      select,
+      isValid(tab) {
+        return validTabs.has(String(tab || ""));
+      },
+      tabs: [...tabs],
+    };
+  }
+
   function createSseController(options = {}) {
     const eventTypes = Array.isArray(options.eventTypes) && options.eventTypes.length
       ? [...options.eventTypes]
@@ -244,6 +289,7 @@
     applyStopAllButton,
     api,
     cssName,
+    createTabController,
     createSseController,
     DEFAULT_EVENT_TYPES: [...DEFAULT_EVENT_TYPES],
     escapeHtml,

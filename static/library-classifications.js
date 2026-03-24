@@ -14,6 +14,24 @@ const state = {
   activeTab: "table",
 };
 
+const TAB_IDS = [
+  "table",
+  "tree",
+  "distribution",
+  "normalization",
+  "merge",
+  "duplicates",
+  "unclassified",
+];
+
+const tabController = window.ManzaraCore.createTabController({
+  tabs: TAB_IDS,
+  getActiveTab: () => state.activeTab,
+  setActiveTab: (tab) => {
+    state.activeTab = tab;
+  },
+});
+
 async function api(path, options = {}) {
   return window.ManzaraCore.api(path, options);
 }
@@ -156,45 +174,11 @@ function renderTable(payload) {
 }
 
 function applyActiveTab() {
-  const tabs = [
-    "table",
-    "tree",
-    "distribution",
-    "normalization",
-    "merge",
-    "duplicates",
-    "unclassified",
-  ];
-  for (const tab of tabs) {
-    const isActive = state.activeTab === tab;
-    const btn = document.getElementById(`tab-btn-${tab}`);
-    const panel = document.getElementById(`tab-panel-${tab}`);
-    if (btn) {
-      btn.classList.toggle("active", isActive);
-      btn.setAttribute("aria-selected", isActive ? "true" : "false");
-    }
-    if (panel) {
-      panel.classList.toggle("active", isActive);
-    }
-  }
+  tabController.apply();
 }
 
 function switchTab(tab) {
-  if (
-    ![
-      "table",
-      "tree",
-      "distribution",
-      "normalization",
-      "merge",
-      "duplicates",
-      "unclassified",
-    ].includes(tab)
-  ) {
-    return;
-  }
-  state.activeTab = tab;
-  applyActiveTab();
+  tabController.select(tab);
 }
 
 function renderTreeNodes(nodes, depth = 0) {

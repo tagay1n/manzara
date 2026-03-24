@@ -5,7 +5,7 @@ import vm from "node:vm";
 
 const CORE_SOURCE = readFileSync(new URL("../../static/core.js", import.meta.url), "utf-8");
 
-function loadCore({ fetchImpl, EventSourceImpl, timerApi } = {}) {
+function loadCore({ fetchImpl, EventSourceImpl, timerApi, documentImpl } = {}) {
   const sandbox = {
     window: {},
     Intl,
@@ -34,6 +34,13 @@ function loadCore({ fetchImpl, EventSourceImpl, timerApi } = {}) {
         return 1;
       }),
     clearTimeout: timerApi?.clearTimeout || (() => {}),
+    document:
+      documentImpl ||
+      {
+        getElementById() {
+          return null;
+        },
+      },
   };
   vm.createContext(sandbox);
   vm.runInContext(CORE_SOURCE, sandbox);
@@ -184,4 +191,66 @@ test("createSseController updates cursor, dispatches events, and reconnects", ()
   controller.stop();
   assert.equal(created[0].closed, true);
   assert.equal(created[1].closed, true);
+});
+
+test("createTabController toggles active tab and rejects unknown tabs", () => {
+  function makeNode() {
+    const classes = new Set();
+    const attrs = new Map();
+    return {
+      classes,
+      attrs,
+      classList: {
+        toggle(name, active) {
+          if (active) {
+            classes.add(name);
+          } else {
+            classes.delete(name);
+          }
+        },
+      },
+      setAttribute(name, value) {
+        attrs.set(name, String(value));
+      },
+    };
+  }
+
+  const nodes = new Map([
+    ["tab-btn-table", makeNode()],
+    ["tab-panel-table", makeNode()],
+    ["tab-btn-queue", makeNode()],
+    ["tab-panel-queue", makeNode()],
+  ]);
+  const core = loadCore({
+    documentImpl: {
+      getElementById(id) {
+        return nodes.get(String(id)) || null;
+      },
+    },
+  });
+
+  let activeTab = "table";
+  const controller = core.createTabController({
+    tabs: ["table", "queue"],
+    getActiveTab: () => activeTab,
+    setActiveTab: (next) => {
+      activeTab = String(next);
+    },
+  });
+
+  controller.apply();
+  assert.equal(nodes.get("tab-btn-table").classes.has("active"), true);
+  assert.equal(nodes.get("tab-panel-table").classes.has("active"), true);
+  assert.equal(nodes.get("tab-btn-table").attrs.get("aria-selected"), "true");
+  assert.equal(nodes.get("tab-btn-queue").classes.has("active"), false);
+  assert.equal(nodes.get("tab-btn-queue").attrs.get("aria-selected"), "false");
+
+  assert.equal(controller.select("queue"), true);
+  assert.equal(activeTab, "queue");
+  assert.equal(nodes.get("tab-btn-table").classes.has("active"), false);
+  assert.equal(nodes.get("tab-btn-queue").classes.has("active"), true);
+  assert.equal(nodes.get("tab-btn-queue").attrs.get("aria-selected"), "true");
+
+  assert.equal(controller.select("unknown"), false);
+  assert.equal(activeTab, "queue");
 });
