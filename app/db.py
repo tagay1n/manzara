@@ -1067,6 +1067,70 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_database_storage_snapshot(
+        self,
+        *,
+        schema_name: Optional[str] = None,
+        table_limit: int = 200,
+    ) -> Dict[str, Any]:
+        """Return PostgreSQL storage snapshot for dashboard diagnostics."""
+        target_schema = str(schema_name or self.schema or "public").strip() or "public"
+        limit = max(1, min(int(table_limit), 500))
+        with self._connect() as conn:
+            database_name = conn.execute("SELECT current_database() AS name").scalar()
+            database_size_bytes = conn.execute(
+                "SELECT pg_database_size(current_database()) AS bytes"
+            ).scalar()
+            rows = conn.execute(
+                """
+                SELECT
+                    c.relname AS table_name,
+                    COALESCE(
+                        NULLIF(s.n_live_tup, -1),
+                        GREATEST(c.reltuples::bigint, 0)
+                    )::bigint AS estimated_rows,
+                    pg_total_relation_size(c.oid)::bigint AS total_bytes
+                FROM pg_class c
+                JOIN pg_namespace n
+                    ON n.oid = c.relnamespace
+                LEFT JOIN pg_stat_user_tables s
+                    ON s.relid = c.oid
+                WHERE c.relkind = 'r'
+                  AND n.nspname = ?
+                ORDER BY total_bytes DESC, c.relname ASC
+                LIMIT ?
+                """,
+                (target_schema, limit),
+            ).fetchall()
+
+        data_directory = None
+        try:
+            # Run in a separate transaction because permission failures here
+            # would abort the transaction for all subsequent queries.
+            with self._connect() as conn:
+                data_directory = conn.execute("SHOW data_directory").scalar()
+        except Exception:
+            # Some managed roles cannot read this setting (requires pg_read_all_settings).
+            # Keep the diagnostics endpoint usable without elevated grants.
+            data_directory = None
+
+        tables = [
+            {
+                "table_name": str(row.get("table_name") or ""),
+                "estimated_rows": int(row.get("estimated_rows") or 0),
+                "total_bytes": int(row.get("total_bytes") or 0),
+            }
+            for row in rows
+        ]
+
+        return {
+            "database_name": str(database_name or ""),
+            "database_size_bytes": int(database_size_bytes or 0),
+            "data_directory": str(data_directory or ""),
+            "schema": target_schema,
+            "tables": tables,
+        }
+
     def run_count_by_status(self, panel_id: str) -> Dict[str, int]:
         """Return run status counters for one panel."""
         with self._connect() as conn:

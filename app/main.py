@@ -52,7 +52,11 @@ from app.modules.library.normalization import (
     undo_event,
 )
 from app.modules.library.stats import get_library_dataset_stats
-from app.modules.maintenance.panel import build_library_panel, build_maintenance_panel
+from app.modules.maintenance.panel import (
+    build_database_state_snapshot,
+    build_library_panel,
+    build_maintenance_panel,
+)
 from app.modules.maintenance.tasks import (
     MONOCORPUS_META_EVALUATE_TASK_ID,
     maintenance_task_definitions,
@@ -186,6 +190,12 @@ def tasks_page() -> FileResponse:
 def library_page() -> FileResponse:
     """Serve library insights page."""
     return FileResponse(STATIC_DIR / "library.html")
+
+
+@app.get("/database")
+def database_page() -> FileResponse:
+    """Serve database diagnostics page."""
+    return FileResponse(STATIC_DIR / "database.html")
 
 
 @app.get("/library/classifications")
@@ -630,6 +640,34 @@ def build_library_payload() -> Dict[str, Any]:
     }
 
 
+def build_database_state_payload() -> Dict[str, Any]:
+    """Compose database diagnostics payload with global state."""
+    active_runs = state.db.list_active_runs()
+    stop_all_state = "disabled"
+    if active_runs:
+        stop_all_state = (
+            "normal"
+            if any(run.get("stop_mode") is None for run in active_runs)
+            else "armed"
+        )
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "global": {
+            "active_tasks": len(active_runs),
+            "active_workflows": len(
+                [
+                    row
+                    for row in state.db.list_workflows_with_latest_run()
+                    if row.get("run_status") in {"starting", "running"}
+                ]
+            ),
+            "stop_all_state": stop_all_state,
+        },
+        "database_state": build_database_state_snapshot(state.db),
+    }
+
+
 def build_classification_detail_payload(
     classification_id: int,
     *,
@@ -800,6 +838,12 @@ def get_task_detail(
 def get_library() -> JSONResponse:
     """Return library applicability dataset statistics."""
     return JSONResponse(build_library_payload())
+
+
+@app.get("/api/database/state")
+def get_database_state() -> JSONResponse:
+    """Return database diagnostics snapshot."""
+    return JSONResponse(build_database_state_payload())
 
 
 @app.get("/api/library/personalities")
