@@ -30,6 +30,71 @@ const LIBRARY_NORMALIZATION_SOURCE = readFileSync(
   "utf-8",
 );
 
+const NORMALIZATION_PAGE_IDS = [
+  "global-status",
+  "stop-all-btn",
+  "last-event",
+  "normalization-title",
+  "entity-source-link",
+  "normalization-status",
+  "normalization-stat-grid",
+  "canonical-status",
+  "canonical-table-body",
+  "tab-badge-canonicals",
+  "queue-bulk-canonical",
+  "queue-filter-search",
+  "queue-filter-status",
+  "queue-filter-script",
+  "queue-filter-min-docs",
+  "queue-status",
+  "queue-table-body",
+  "queue-page-label",
+  "queue-page-prev",
+  "queue-page-next",
+  "suggestions-status",
+  "tab-badge-suggestions",
+  "suggestions-table-body",
+  "merge-min-score",
+  "merge-status",
+  "merge-root",
+  "quality-status",
+  "quality-stat-grid",
+  "quality-unresolved",
+  "history-status",
+  "history-root",
+  "queue-filter-apply",
+  "queue-select-all",
+  "queue-bulk-link",
+  "queue-bulk-reject",
+  "queue-clear-selection",
+  "canonical-create-btn",
+  "canonical-create-name",
+  "canonical-create-notes",
+  "canonical-search-apply",
+  "canonical-search",
+  "suggestions-refresh-btn",
+  "suggestions-limit",
+  "suggestions-use-gemini",
+  "merge-load-btn",
+  "evidence-dialog",
+  "evidence-title",
+  "evidence-content",
+  "evidence-close-btn",
+  "evidence-close-footer-btn",
+  "tab-btn-queue",
+  "tab-btn-canonicals",
+  "tab-btn-suggestions",
+  "tab-btn-merge",
+  "tab-btn-quality",
+  "tab-btn-history",
+  "tab-panel-queue",
+  "tab-panel-canonicals",
+  "tab-panel-suggestions",
+  "tab-panel-merge",
+  "tab-panel-quality",
+  "tab-panel-history",
+];
+
 class FakeClassList {
   constructor() {
     this._set = new Set();
@@ -867,70 +932,7 @@ test("library classification detail page renders API error state", async () => {
 test("library normalization page renders API error state", async () => {
   const harness = createHarness({
     source: LIBRARY_NORMALIZATION_SOURCE,
-    ids: [
-      "global-status",
-      "stop-all-btn",
-      "last-event",
-      "normalization-title",
-      "entity-source-link",
-      "normalization-status",
-      "normalization-stat-grid",
-      "canonical-status",
-      "canonical-table-body",
-      "tab-badge-canonicals",
-      "queue-bulk-canonical",
-      "queue-filter-search",
-      "queue-filter-status",
-      "queue-filter-script",
-      "queue-filter-min-docs",
-      "queue-status",
-      "queue-table-body",
-      "queue-page-label",
-      "queue-page-prev",
-      "queue-page-next",
-      "suggestions-status",
-      "tab-badge-suggestions",
-      "suggestions-table-body",
-      "merge-min-score",
-      "merge-status",
-      "merge-root",
-      "quality-status",
-      "quality-stat-grid",
-      "quality-unresolved",
-      "history-status",
-      "history-root",
-      "queue-filter-apply",
-      "queue-select-all",
-      "queue-bulk-link",
-      "queue-bulk-reject",
-      "queue-clear-selection",
-      "canonical-create-btn",
-      "canonical-create-name",
-      "canonical-create-notes",
-      "canonical-search-apply",
-      "canonical-search",
-      "suggestions-refresh-btn",
-      "suggestions-limit",
-      "suggestions-use-gemini",
-      "merge-load-btn",
-      "evidence-dialog",
-      "evidence-title",
-      "evidence-content",
-      "evidence-close-btn",
-      "evidence-close-footer-btn",
-      "tab-btn-queue",
-      "tab-btn-canonicals",
-      "tab-btn-suggestions",
-      "tab-btn-merge",
-      "tab-btn-quality",
-      "tab-btn-history",
-      "tab-panel-queue",
-      "tab-panel-canonicals",
-      "tab-panel-suggestions",
-      "tab-panel-merge",
-      "tab-panel-quality",
-      "tab-panel-history",
-    ],
+    ids: NORMALIZATION_PAGE_IDS,
     selectors: [".classification-tab", ".queue-row-select"],
     locationPathname: "/library/normalization/personality",
     apiResolver(path) {
@@ -950,4 +952,135 @@ test("library normalization page renders API error state", async () => {
     harness.elements.get("queue-status").textContent,
     /Queue unavailable|normalization unavailable/,
   );
+});
+
+function createNormalizationResolver({ stopAllState = "normal" } = {}) {
+  return (path) => {
+    if (path === "/api/library/normalization/personality") {
+      return {
+        global: { active_tasks: 1, active_workflows: 0, stop_all_state: stopAllState },
+        dashboard: {
+          available: true,
+          config_source: "test",
+          stats: {
+            total_aliases: 10,
+            docs_with_entities: 7,
+            canonicals: 2,
+            linked: 6,
+            unreviewed: 4,
+            suggested: 3,
+            coverage_pct: 60,
+          },
+          suggestions: { open_total: 3 },
+        },
+      };
+    }
+    if (path.startsWith("/api/library/normalization/personality/canonicals?")) {
+      return { available: true, items: [{ canonical_id: 1, display_name: "Author One", normalized_name: "author one", linked_aliases: 2, status: "active", notes: "" }] };
+    }
+    if (path.startsWith("/api/library/normalization/personality/queue?")) {
+      const page = Number(new URL(`http://local${path}`).searchParams.get("page") || "1");
+      return {
+        available: true,
+        page,
+        total_pages: 2,
+        total: 2,
+        items: [
+          {
+            raw_name: page === 1 ? "Alias One" : "Alias Two",
+            normalized_name: page === 1 ? "alias one" : "alias two",
+            script_label: "latin",
+            docs_count: 1,
+            mentions_count: 1,
+            queue_status: "pending",
+            canonical_id: null,
+            canonical_name: null,
+            suggestion: null,
+          },
+        ],
+      };
+    }
+    if (path.startsWith("/api/library/normalization/personality/suggestions?")) {
+      return { available: true, items: [] };
+    }
+    if (path.startsWith("/api/library/normalization/personality/merge-candidates?")) {
+      return { available: true, summary: { candidate_count: 0 }, items: [] };
+    }
+    if (path === "/api/library/normalization/personality/quality") {
+      return { available: true, stats: { total_aliases: 10, linked_aliases: 6, rejected_aliases: 0, unresolved_aliases: 4, unresolved_docs_estimate: 4, duplicate_normalized_keys: 0, coverage_pct: 60 } };
+    }
+    if (path === "/api/library/normalization/personality/history?limit=200") {
+      return { available: true, items: [] };
+    }
+    if (path === "/api/system/stop-all") {
+      return { action: "stop_all_force" };
+    }
+    if (path === "/api/library/normalization/personality/suggestions/refresh") {
+      return { accepted: true };
+    }
+    throw new Error(`unexpected path: ${path}`);
+  };
+}
+
+test("library normalization queue pagination requests next page", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver(),
+  });
+  await harness.flush();
+
+  harness.elements.get("queue-page-next").dispatch("click");
+  await harness.flush();
+
+  const queueCalls = harness.apiCalls
+    .map((call) => call.path)
+    .filter((path) => path.startsWith("/api/library/normalization/personality/queue?"));
+  const hasPage2 = queueCalls.some((path) => new URL(`http://local${path}`).searchParams.get("page") === "2");
+  assert.equal(hasPage2, true);
+});
+
+test("library normalization stop-all respects force confirmation", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    confirmResult: false,
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver({ stopAllState: "armed" }),
+  });
+  await harness.flush();
+
+  harness.elements.get("stop-all-btn").dispatch("click");
+  await harness.flush();
+
+  const stopCalls = harness.apiCalls.filter((call) => call.path === "/api/system/stop-all");
+  assert.equal(stopCalls.length, 0);
+});
+
+test("library normalization suggestions refresh posts configured payload", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver(),
+  });
+  await harness.flush();
+  harness.elements.get("suggestions-limit").value = "42";
+  harness.elements.get("suggestions-use-gemini").checked = true;
+
+  harness.elements.get("suggestions-refresh-btn").dispatch("click");
+  await harness.flush();
+
+  const refreshCall = harness.apiCalls.find(
+    (call) => call.path === "/api/library/normalization/personality/suggestions/refresh",
+  );
+  assert.equal(Boolean(refreshCall), true);
+  assert.equal(refreshCall.options.method, "POST");
+  const body = JSON.parse(refreshCall.options.body || "{}");
+  assert.equal(body.limit, 42);
+  assert.equal(body.use_gemini, true);
 });
