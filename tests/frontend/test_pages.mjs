@@ -215,6 +215,7 @@ function createHarness({
   }
   for (const selector of selectors) {
     elements.set(`selector:${selector}`, new FakeElement(`selector:${selector}`));
+    elements.set(`selectorAll:${selector}`, new FakeElement(`selectorAll:${selector}`));
   }
 
   const timer = createTimerHarness();
@@ -954,7 +955,12 @@ test("library normalization page renders API error state", async () => {
   );
 });
 
-function createNormalizationResolver({ stopAllState = "normal" } = {}) {
+function createNormalizationResolver({
+  stopAllState = "normal",
+  suggestionsItems = [],
+  mergeItems = [],
+  historyItems = [],
+} = {}) {
   return (path) => {
     if (path === "/api/library/normalization/personality") {
       return {
@@ -1001,21 +1007,43 @@ function createNormalizationResolver({ stopAllState = "normal" } = {}) {
       };
     }
     if (path.startsWith("/api/library/normalization/personality/suggestions?")) {
-      return { available: true, items: [] };
+      return { available: true, items: suggestionsItems };
     }
     if (path.startsWith("/api/library/normalization/personality/merge-candidates?")) {
-      return { available: true, summary: { candidate_count: 0 }, items: [] };
+      return {
+        available: true,
+        summary: { candidate_count: mergeItems.length },
+        items: mergeItems,
+      };
     }
     if (path === "/api/library/normalization/personality/quality") {
       return { available: true, stats: { total_aliases: 10, linked_aliases: 6, rejected_aliases: 0, unresolved_aliases: 4, unresolved_docs_estimate: 4, duplicate_normalized_keys: 0, coverage_pct: 60 } };
     }
     if (path === "/api/library/normalization/personality/history?limit=200") {
-      return { available: true, items: [] };
+      return { available: true, items: historyItems };
     }
     if (path === "/api/system/stop-all") {
       return { action: "stop_all_force" };
     }
     if (path === "/api/library/normalization/personality/suggestions/refresh") {
+      return { accepted: true };
+    }
+    if (path === "/api/library/normalization/personality/bulk/link") {
+      return { accepted: true };
+    }
+    if (path === "/api/library/normalization/personality/bulk/reject") {
+      return { accepted: true };
+    }
+    if (path === "/api/library/normalization/personality/decisions/link") {
+      return { accepted: true };
+    }
+    if (path === "/api/library/normalization/personality/decisions/reject") {
+      return { accepted: true };
+    }
+    if (path === "/api/library/normalization/personality/merge") {
+      return { accepted: true };
+    }
+    if (/^\/api\/library\/normalization\/personality\/history\/\d+\/undo$/.test(path)) {
       return { accepted: true };
     }
     throw new Error(`unexpected path: ${path}`);
@@ -1083,4 +1111,228 @@ test("library normalization suggestions refresh posts configured payload", async
   const body = JSON.parse(refreshCall.options.body || "{}");
   assert.equal(body.limit, 42);
   assert.equal(body.use_gemini, true);
+});
+
+test("library normalization bulk link posts selected aliases and canonical id", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select", ".queue-row-select:checked"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver(),
+  });
+  await harness.flush();
+
+  harness.elements.get("queue-bulk-canonical").value = "1";
+  harness.elements.get("selectorAll:.queue-row-select:checked").dataset.raw = encodeURIComponent(
+    "Alias One",
+  );
+  harness.elements.get("queue-bulk-link").dispatch("click");
+  await harness.flush();
+
+  const call = harness.apiCalls.find(
+    (entry) => entry.path === "/api/library/normalization/personality/bulk/link",
+  );
+  assert.equal(Boolean(call), true);
+  assert.equal(call.options.method, "POST");
+  const body = JSON.parse(call.options.body || "{}");
+  assert.equal(body.canonical_id, 1);
+  assert.deepEqual(body.raw_names, ["Alias One"]);
+});
+
+test("library normalization bulk reject posts selected aliases", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select", ".queue-row-select:checked"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver(),
+  });
+  await harness.flush();
+
+  harness.elements.get("selectorAll:.queue-row-select:checked").dataset.raw = encodeURIComponent(
+    "Alias One",
+  );
+  harness.elements.get("queue-bulk-reject").dispatch("click");
+  await harness.flush();
+
+  const call = harness.apiCalls.find(
+    (entry) => entry.path === "/api/library/normalization/personality/bulk/reject",
+  );
+  assert.equal(Boolean(call), true);
+  assert.equal(call.options.method, "POST");
+  const body = JSON.parse(call.options.body || "{}");
+  assert.deepEqual(body.raw_names, ["Alias One"]);
+});
+
+test("library normalization suggestion accept posts link decision", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver({
+      suggestionsItems: [
+        {
+          raw_name: "Alias One",
+          suggestion_id: 11,
+          suggestion_kind: "link",
+          target_canonical_id: 1,
+          target_canonical_name: "Author One",
+          confidence: 0.95,
+          confidence_band: "high",
+          rationale: "exact",
+        },
+      ],
+    }),
+  });
+  await harness.flush();
+
+  harness.elements.get("suggestions-table-body").dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== ".suggestion-action-btn") return null;
+        return {
+          dataset: {
+            action: "accept",
+            raw: encodeURIComponent("Alias One"),
+            suggestionId: "11",
+          },
+        };
+      },
+    },
+  });
+  await harness.flush();
+
+  const call = harness.apiCalls.find(
+    (entry) => entry.path === "/api/library/normalization/personality/decisions/link",
+  );
+  assert.equal(Boolean(call), true);
+  const body = JSON.parse(call.options.body || "{}");
+  assert.equal(body.raw_name, "Alias One");
+  assert.equal(body.canonical_id, 1);
+  assert.deepEqual(body.suggestion_ids, [11]);
+});
+
+test("library normalization suggestion reject posts reject decision", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver({
+      suggestionsItems: [
+        {
+          raw_name: "Alias One",
+          suggestion_id: 12,
+          suggestion_kind: "link",
+          target_canonical_id: 1,
+          confidence: 0.91,
+          confidence_band: "high",
+          rationale: "similar",
+        },
+      ],
+    }),
+  });
+  await harness.flush();
+
+  harness.elements.get("suggestions-table-body").dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== ".suggestion-action-btn") return null;
+        return {
+          dataset: {
+            action: "reject",
+            raw: encodeURIComponent("Alias One"),
+            suggestionId: "12",
+          },
+        };
+      },
+    },
+  });
+  await harness.flush();
+
+  const call = harness.apiCalls.find(
+    (entry) => entry.path === "/api/library/normalization/personality/decisions/reject",
+  );
+  assert.equal(Boolean(call), true);
+  const body = JSON.parse(call.options.body || "{}");
+  assert.equal(body.raw_name, "Alias One");
+  assert.deepEqual(body.suggestion_ids, [12]);
+});
+
+test("library normalization merge action posts merge request", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver({
+      mergeItems: [
+        {
+          left: { canonical_id: 1, display_name: "Author One" },
+          right: { canonical_id: 2, display_name: "Author Two" },
+          recommended_primary_canonical_id: 1,
+          score: 0.93,
+          impact: 10,
+        },
+      ],
+    }),
+  });
+  await harness.flush();
+
+  harness.elements.get("merge-root").dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== ".merge-apply-btn") return null;
+        return { dataset: { sourceId: "2", targetId: "1" } };
+      },
+    },
+  });
+  await harness.flush();
+
+  const call = harness.apiCalls.find(
+    (entry) => entry.path === "/api/library/normalization/personality/merge",
+  );
+  assert.equal(Boolean(call), true);
+  const body = JSON.parse(call.options.body || "{}");
+  assert.equal(body.source_canonical_id, 2);
+  assert.equal(body.target_canonical_id, 1);
+});
+
+test("library normalization history undo posts undo request", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver({
+      historyItems: [
+        {
+          event_id: 77,
+          action: "link_alias",
+          payload: { raw_name: "Alias One", canonical_id: 1 },
+          created_at: "2026-03-24T10:00:00Z",
+          reverted: false,
+        },
+      ],
+    }),
+  });
+  await harness.flush();
+
+  harness.elements.get("history-root").dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== ".history-undo-btn") return null;
+        return { dataset: { eventId: "77" } };
+      },
+    },
+  });
+  await harness.flush();
+
+  const call = harness.apiCalls.find(
+    (entry) => entry.path === "/api/library/normalization/personality/history/77/undo",
+  );
+  assert.equal(Boolean(call), true);
+  assert.equal(call.options.method, "POST");
 });
