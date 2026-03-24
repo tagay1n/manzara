@@ -37,6 +37,12 @@ class TaskRunner:
     _LOG_REDACTION_PATTERNS = (
         (
             re.compile(
+                r"(?i)(\bauthorization\b\s*:\s*(?:bearer|basic)\s+)([^\s,;]+)"
+            ),
+            r"\1<redacted>",
+        ),
+        (
+            re.compile(
                 r"(?i)(--repo1-s3-key-secret=)([^\s]+)"
             ),
             r"\1<redacted>",
@@ -64,6 +70,18 @@ class TaskRunner:
                 r'(?i)("?(?:password|passwd|token|access_token|refresh_token|secret|api[_-]?key|aws_secret_access_key|aws_access_key_id)"?\s*:\s*")([^"]+)(")'
             ),
             r"\1<redacted>\3",
+        ),
+        (
+            re.compile(
+                r'(?i)("authorization"\s*:\s*"(?:bearer|basic)\s+)([^"]+)(")'
+            ),
+            r"\1<redacted>\3",
+        ),
+        (
+            re.compile(
+                r"(?i)([?&](?:access_token|refresh_token|token|api[_-]?key|password|passwd|secret)=)([^&#\s]+)"
+            ),
+            r"\1<redacted>",
         ),
         (
             re.compile(
@@ -720,8 +738,29 @@ class TaskRunner:
                     source="stdout",
                     message=safe_line,
                 )
-        except Exception:
-            # Do not break task lifecycle on log-stream errors.
+        except Exception as exc:
+            # Do not break task lifecycle on log-stream errors, but emit
+            # actionable context for UI/DB/artifact diagnostics.
+            error_line = self._sanitize_log_line(f"log_stream_error={exc}")
+            try:
+                self.db.append_log(run_id, stream="stderr", line=error_line)
+                self.db.insert_event(
+                    "task.log",
+                    task_id=task_id,
+                    run_id=run_id,
+                    panel_id=panel_id,
+                    payload={"line": error_line},
+                )
+            except Exception:
+                pass
+            self._write_run_log(
+                run_id=run_id,
+                task_id=task_id,
+                panel_id=panel_id,
+                level="WARNING",
+                source="runtime",
+                message=error_line,
+            )
             return
 
     def _open_run_log(self, task: Dict[str, Any], run_id: int) -> tuple[Optional[TextIO], Optional[str]]:

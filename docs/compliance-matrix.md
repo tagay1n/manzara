@@ -27,8 +27,8 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 | BE-02 | Uniform artifact log line format | PASS | `app/tasks.py:740-756`, `tests/test_api.py:855-862`, `README.md:183-187` | Format is stable and documented. |
 | BE-03 | Persist stdout to DB logs and mirror to artifact logs | PASS | `app/tasks.py:665-681`, `app/tasks.py:530-545` | DB + SSE + artifact mirror present. |
 | BE-04 | Include explicit start/final status runtime lines | PASS | `app/tasks.py:279-286`, `app/tasks.py:364-374`, `tests/test_api.py:852-853` | Start and final outcome logged. |
-| BE-05 | Keep secrets out of runtime logs | PASS | Redaction layer in `app/tasks.py` (`_sanitize_log_line`) applied to DB logs, SSE payload lines, and artifact logs; regression in `tests/test_api.py` (`test_task_logs_are_redacted_in_db_and_artifact_files`) | Masks common secret/token/password/key patterns and credential-style URLs. |
-| BE-06 | Surface actionable errors in run state/logs/events | PARTIAL | `app/tasks.py:389-413`, `app/tasks.py:521-537` | Good coverage in task runner; still has broad exception swallowing in stream path (`app/tasks.py:682-684`). |
+| BE-05 | Keep secrets out of runtime logs | PASS | Redaction layer in `app/tasks.py` (`_sanitize_log_line`) applied to DB logs, SSE payload lines, and artifact logs; regression in `tests/test_api.py` (`test_task_logs_are_redacted_in_db_and_artifact_files`) | Masks common secret/token/password/key patterns, authorization headers, secret query params, and credential-style URLs. |
+| BE-06 | Surface actionable errors in run state/logs/events | PASS | `app/tasks.py` stream error path now emits `log_stream_error=...` into DB logs + SSE + artifact log; regression in `tests/test_api.py` (`test_stream_stdout_failures_emit_actionable_log_line`) | Stream/log reader failures are no longer silently swallowed. |
 | FE-01 | Bootstrap via API, then apply important updates from SSE | PASS | `static/app.js:17-27`, `static/app.js:633-685` and same pattern in page scripts | Implemented across pages. |
 | FE-02 | Backend API/SSE is source of truth; avoid frontend domain duplication | PARTIAL | API/SSE-driven flow in page scripts | Most state is server-driven; frontend still duplicates control helpers and transforms per page. |
 | FE-03 | Route HTTP calls through shared client layer | PASS | Shared client in `static/core.js:40-50`; page scripts call it (`static/app.js:17-18`, `static/tasks.js:10-11`, etc.) | Transport/error handling now centralized in one module. |
@@ -49,4 +49,4 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 2. Frontend test baseline:
    - Expand interaction-level tests further (queue+canonical creation/edit sequences, richer filter transitions, and larger multi-action chains).
 3. Logging hardening:
-   - Expand redaction allowlist/denylist as new integrations are added and add fixture-based regression tests for new secret formats.
+   - Continue expanding redaction allowlist/denylist as new integrations are added and keep fixture-based regression tests for newly observed secret formats.

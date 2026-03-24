@@ -918,6 +918,8 @@ def test_task_logs_are_redacted_in_db_and_artifact_files(
                         "aws_secret_access_key=SECRETVALUE "
                         "--repo1-s3-key-secret=SECRETKEY "
                         "--repo1-s3-key=ACCESSKEY "
+                        "Authorization: Bearer VERYSECRETTOKEN "
+                        "https://example.com/path?token=QUERYTOKEN&x=1 "
                         "https://user:plainpass@example.com/path')\""
                     ),
                 },
@@ -938,6 +940,8 @@ def test_task_logs_are_redacted_in_db_and_artifact_files(
     assert "SECRETVALUE" not in combined
     assert "SECRETKEY" not in combined
     assert "ACCESSKEY" not in combined
+    assert "VERYSECRETTOKEN" not in combined
+    assert "QUERYTOKEN" not in combined
     assert "plainpass" not in combined
 
     run_log_path = artifacts_root / "maintenance.secret_log_redaction" / f"run-{run_id}.log"
@@ -948,7 +952,39 @@ def test_task_logs_are_redacted_in_db_and_artifact_files(
     assert "SECRETVALUE" not in artifact_text
     assert "SECRETKEY" not in artifact_text
     assert "ACCESSKEY" not in artifact_text
+    assert "VERYSECRETTOKEN" not in artifact_text
+    assert "QUERYTOKEN" not in artifact_text
     assert "plainpass" not in artifact_text
+
+
+def test_stream_stdout_failures_emit_actionable_log_line(test_client) -> None:
+    _client, main_app = test_client
+    runner = main_app.state.runner
+    task = main_app.state.db.get_task("shayan.quick")
+    assert task is not None
+    run_id = main_app.state.db.create_run(task)
+
+    class _BoomStream:
+        def __init__(self) -> None:
+            self._step = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self) -> str:
+            if self._step == 0:
+                self._step = 1
+                return "line-before-error\n"
+            raise RuntimeError("stream exploded")
+
+    class _Proc:
+        stdout = _BoomStream()
+
+    runner._stream_stdout_lines(_Proc(), run_id, task["task_id"], task["panel_id"])
+    logs = main_app.state.db.get_logs(run_id, after_log_id=0, limit=50)
+    combined = "\n".join(str(item.get("line") or "") for item in logs)
+    assert "line-before-error" in combined
+    assert "log_stream_error=stream exploded" in combined
 
 
 def test_task_completion_not_blocked_by_open_stdout_fd(test_client, wait_for_terminal_run) -> None:

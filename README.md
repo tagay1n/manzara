@@ -189,6 +189,7 @@ Artifact log line standard:
 Observability notes:
 - DB run logs (`/api/runs/{run_id}/logs`) remain the UI/SSE source.
 - Artifact run logs are durable per-run files for offline auditing and long-task troubleshooting.
+- Stream reader failures now emit explicit `log_stream_error=...` lines (DB + SSE + artifact log) instead of failing silently.
 
 Manual normalization suggestion refresh:
 
@@ -219,6 +220,7 @@ node --test tests/frontend/*.mjs
 
 Coverage notes:
 - API/scheduler/task-control behavior is covered by `pytest`.
+- Backend runtime logging tests include secret redaction regression checks (including `Authorization: Bearer ...` and secret query params) and stream error visibility checks.
 - Shared frontend helpers and page behavior are covered by `node:test` (`tests/frontend/*.mjs`, currently `dashboard`, `schedules`, `tasks`, `task`, `library`, `database`, `library/classifications`, `library/classifications/{id}`, `library/personalities`, `library/publishers`, and normalization pages).
 - Normalization interaction coverage includes queue pagination, stop-all force-confirmation guard, suggestions refresh payload checks, bulk queue actions, suggestion accept/reject, merge, history undo calls, cross-tab queue-open transitions, and evidence dialog fetch/render checks.
 - Runtime-heavy external flows still require manual smoke checks, especially:
