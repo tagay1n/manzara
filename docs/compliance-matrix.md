@@ -11,7 +11,7 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 
 ## Automated Baseline (current)
 - `pytest`: `40 passed` (`.venv/bin/python -m pytest -q`)
-- `frontend core tests`: `node --test tests/frontend/test_core.mjs` passed (`api`, datetime/event banner, stop-all UI state, SSE controller)
+- `frontend tests`: `node --test tests/frontend/*.mjs` passed (`core helpers` + `tasks/task page behavior`)
 - `requirements files`: only `requirements.txt` found (`rg --files -g 'requirements*.txt'`)
 
 ## Matrix
@@ -33,7 +33,7 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 | FE-02 | Backend API/SSE is source of truth; avoid frontend domain duplication | PARTIAL | API/SSE-driven flow in page scripts | Most state is server-driven; frontend still duplicates control helpers and transforms per page. |
 | FE-03 | Route HTTP calls through shared client layer | PASS | Shared client in `static/core.js:40-50`; page scripts call it (`static/app.js:17-18`, `static/tasks.js:10-11`, etc.) | Transport/error handling now centralized in one module. |
 | FE-04 | Explicit view-state model (`loading`, `ready`, `empty`, `error`) | PARTIAL | Per-page rendering handles some empty/error states ad hoc | No shared, explicit state-machine pattern used consistently. |
-| FE-05 | Add frontend behavior-focused tests where applicable | PARTIAL | `tests/frontend/test_core.mjs` (API client, datetime/event banner, stop-all UI state model, SSE controller behavior) | Shared behavior is covered; page-specific render/action tests still need expansion. |
+| FE-05 | Add frontend behavior-focused tests where applicable | PARTIAL | `tests/frontend/test_core.mjs`, `tests/frontend/test_pages.mjs` (tasks page bootstrap/stop-all/SSE refresh; task page control toggle behavior) | Core + first page-level coverage are present; remaining pages still need behavior tests. |
 | FE-06 | European datetime format (24h, day-first) | PASS | Shared formatter in `static/core.js:14-23`; page scripts use `window.ManzaraCore.formatDateTime(...)` | Enforced via `Intl.DateTimeFormat("en-GB", ...)`. |
 | FE-07 | Keep timezone explicit when operational timestamps can be ambiguous | PASS | Shared datetime/time formatters include timezone by default (`static/core.js:13`, `static/core.js:30`) | Operational timestamps now render with timezone marker (for example `GMT+3`). |
 | FE-08 | Use UI reference baseline (Mission Control) | PASS | `AGENTS.md:55-56`, `README.md:24-29` | Documented baseline for frontend direction. |
@@ -47,6 +47,6 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 1. Frontend foundation extraction (phase 3):
    - Continue extracting shared page primitives (status badges, task-card/run-row render helpers).
 2. Frontend test baseline:
-   - Extend from `tests/frontend/test_core.mjs` to page-level behavior tests for task/control rendering and SSE-driven refresh triggers.
+   - Expand page-level behavior tests from `tasks/task` to `dashboard`, `schedules`, `library*`, and `database` pages.
 3. Logging hardening:
    - Expand redaction allowlist/denylist as new integrations are added and add fixture-based regression tests for new secret formats.
