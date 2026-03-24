@@ -79,6 +79,47 @@
       .replaceAll(">", "&gt;");
   }
 
+  function setStatusMessage(node, text, options = {}) {
+    if (!node) return;
+    const isError = Boolean(options.error);
+    node.textContent = String(text ?? "");
+    if (node.classList) {
+      node.classList.toggle("library-status-error", isError);
+    }
+  }
+
+  function renderRunRowMessage(text, options = {}) {
+    const isError = Boolean(options.error);
+    const prefix = isError ? "Error: " : "";
+    return `<div class="run-row">${prefix}${escapeHtml(String(text ?? ""))}</div>`;
+  }
+
+  function renderWorkflowFootnoteMessage(text, options = {}) {
+    const isError = Boolean(options.error);
+    const classes = isError ? "workflow-footnote library-status-error" : "workflow-footnote";
+    return `<div class="${classes}">${escapeHtml(String(text ?? ""))}</div>`;
+  }
+
+  function renderLoadingTableRow(colSpan, text) {
+    const safeColSpan = Math.max(1, Math.trunc(Number(colSpan) || 1));
+    return `<tr><td colspan="${safeColSpan}">${escapeHtml(String(text ?? ""))}</td></tr>`;
+  }
+
+  function applyPaginationControls(options = {}) {
+    const page = Math.max(1, Math.trunc(Number(options.page) || 1));
+    const totalPages = Math.max(1, Math.trunc(Number(options.totalPages) || 1));
+    const labelPrefix = String(options.labelPrefix || "Page");
+    if (options.labelNode) {
+      options.labelNode.textContent = `${labelPrefix} ${page} / ${totalPages}`;
+    }
+    if (options.prevNode) {
+      options.prevNode.disabled = page <= 1;
+    }
+    if (options.nextNode) {
+      options.nextNode.disabled = page >= totalPages;
+    }
+  }
+
   function cssName(name, fallback = "unknown") {
     const value = String(name || "").trim().toLowerCase();
     if (!value) return fallback;
@@ -288,6 +329,7 @@
   window.ManzaraCore = {
     applyStopAllButton,
     api,
+    applyPaginationControls,
     cssName,
     createTabController,
     createSseController,
@@ -298,5 +340,9 @@
     formatGlobalStatus,
     formatTime,
     isActiveStatus,
+    renderLoadingTableRow,
+    renderRunRowMessage,
+    renderWorkflowFootnoteMessage,
+    setStatusMessage,
   };
 })();

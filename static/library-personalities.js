@@ -31,6 +31,22 @@ function escapeHtml(value) {
   return window.ManzaraCore.escapeHtml(value);
 }
 
+function setStatusMessage(node, text, options = {}) {
+  window.ManzaraCore.setStatusMessage(node, text, options);
+}
+
+function renderRunRowMessage(text, options = {}) {
+  return window.ManzaraCore.renderRunRowMessage(text, options);
+}
+
+function renderWorkflowFootnoteMessage(text, options = {}) {
+  return window.ManzaraCore.renderWorkflowFootnoteMessage(text, options);
+}
+
+function renderLoadingTableRow(colSpan, text) {
+  return window.ManzaraCore.renderLoadingTableRow(colSpan, text);
+}
+
 function initSoundNotifier() {
   const createNotifier = window.ManzaraSound?.createNotifier;
   if (typeof createNotifier !== "function") return;
@@ -87,11 +103,13 @@ function renderOverview(overview) {
   const stats = overview.stats || {};
   if (overview.available) {
     const source = overview.config_source ? ` • source: ${overview.config_source}` : "";
-    statusNode.textContent = `Personality stats loaded${source}`;
-    statusNode.classList.remove("library-status-error");
+    setStatusMessage(statusNode, `Personality stats loaded${source}`, { error: false });
   } else {
-    statusNode.textContent = `Personality dataset unavailable: ${overview.error || "unknown error"}`;
-    statusNode.classList.add("library-status-error");
+    setStatusMessage(
+      statusNode,
+      `Personality dataset unavailable: ${overview.error || "unknown error"}`,
+      { error: true }
+    );
   }
 
   document.getElementById("personality-stat-grid").innerHTML = `
@@ -125,13 +143,15 @@ function renderTable(payload) {
   state.tablePayload = payload;
   const statusNode = document.getElementById("personality-table-status");
   if (!payload.available) {
-    statusNode.textContent = `Table unavailable: ${payload.error || "unknown error"}`;
-    statusNode.classList.add("library-status-error");
+    setStatusMessage(statusNode, `Table unavailable: ${payload.error || "unknown error"}`, {
+      error: true,
+    });
     document.getElementById("personality-table-body").innerHTML = "";
     return;
   }
-  statusNode.classList.remove("library-status-error");
-  statusNode.textContent = `Loaded ${payload.items.length} rows from ${payload.total} total`;
+  setStatusMessage(statusNode, `Loaded ${payload.items.length} rows from ${payload.total} total`, {
+    error: false,
+  });
 
   document.getElementById("personality-table-body").innerHTML = (payload.items || [])
     .map(
@@ -148,9 +168,13 @@ function renderTable(payload) {
     )
     .join("");
 
-  document.getElementById("page-label").textContent = `Page ${payload.page} / ${payload.total_pages}`;
-  document.getElementById("page-prev").disabled = payload.page <= 1;
-  document.getElementById("page-next").disabled = payload.page >= payload.total_pages;
+  window.ManzaraCore.applyPaginationControls({
+    labelNode: document.getElementById("page-label"),
+    prevNode: document.getElementById("page-prev"),
+    nextNode: document.getElementById("page-next"),
+    page: payload.page,
+    totalPages: payload.total_pages,
+  });
 }
 
 function renderDistribution(items) {
@@ -233,7 +257,9 @@ function renderInsights(payload) {
   const queueNode = document.getElementById("queue-root");
 
   if (!payload.available) {
-    const errorHtml = `<div class="workflow-footnote library-status-error">${escapeHtml(payload.error || "unknown error")}</div>`;
+    const errorHtml = renderWorkflowFootnoteMessage(payload.error || "unknown error", {
+      error: true,
+    });
     scriptsNode.innerHTML = errorHtml;
     clustersNode.innerHTML = errorHtml;
     queueNode.innerHTML = errorHtml;
@@ -289,35 +315,44 @@ async function refreshAll() {
 
 function renderPageLoading() {
   state.viewState = "loading";
-  document.getElementById("personality-status").textContent = "Loading personalities...";
-  document.getElementById("personality-status").classList.remove("library-status-error");
-  document.getElementById("personality-stat-grid").innerHTML = '<div class="run-row">Loading overview...</div>';
-  document.getElementById("personality-top-list").innerHTML = '<div class="run-row">Loading top personalities...</div>';
-  document.getElementById("personality-table-status").textContent = "Loading personality table...";
-  document.getElementById("personality-table-status").classList.remove("library-status-error");
+  setStatusMessage(document.getElementById("personality-status"), "Loading personalities...", {
+    error: false,
+  });
+  document.getElementById("personality-stat-grid").innerHTML = renderRunRowMessage("Loading overview...");
+  document.getElementById("personality-top-list").innerHTML = renderRunRowMessage(
+    "Loading top personalities..."
+  );
+  setStatusMessage(document.getElementById("personality-table-status"), "Loading personality table...", {
+    error: false,
+  });
   document.getElementById("personality-table-body").innerHTML =
-    '<tr><td colspan="6">Loading personality rows...</td></tr>';
-  document.getElementById("scripts-root").innerHTML = '<div class="workflow-footnote">Loading script distribution...</div>';
-  document.getElementById("clusters-root").innerHTML = '<div class="workflow-footnote">Loading variant clusters...</div>';
-  document.getElementById("queue-root").innerHTML = '<div class="workflow-footnote">Loading ambiguous queue...</div>';
+    renderLoadingTableRow(6, "Loading personality rows...");
+  document.getElementById("scripts-root").innerHTML = renderWorkflowFootnoteMessage(
+    "Loading script distribution..."
+  );
+  document.getElementById("clusters-root").innerHTML = renderWorkflowFootnoteMessage(
+    "Loading variant clusters..."
+  );
+  document.getElementById("queue-root").innerHTML = renderWorkflowFootnoteMessage(
+    "Loading ambiguous queue..."
+  );
 }
 
 function renderPageError(error) {
   state.viewState = "error";
   const message = String(error?.message || error || "Failed to load personalities.");
-  const safe = escapeHtml(message);
-  document.getElementById("personality-status").textContent =
-    `Personalities unavailable: ${message}`;
-  document.getElementById("personality-status").classList.add("library-status-error");
+  setStatusMessage(document.getElementById("personality-status"), `Personalities unavailable: ${message}`, {
+    error: true,
+  });
   document.getElementById("personality-stat-grid").innerHTML =
-    `<div class="run-row">Error: ${safe}</div>`;
+    renderRunRowMessage(message, { error: true });
   document.getElementById("personality-top-list").innerHTML =
-    `<div class="run-row">Error: ${safe}</div>`;
-  document.getElementById("personality-table-status").textContent =
-    `Table unavailable: ${message}`;
-  document.getElementById("personality-table-status").classList.add("library-status-error");
+    renderRunRowMessage(message, { error: true });
+  setStatusMessage(document.getElementById("personality-table-status"), `Table unavailable: ${message}`, {
+    error: true,
+  });
   document.getElementById("personality-table-body").innerHTML = "";
-  const errorHtml = `<div class="workflow-footnote library-status-error">${safe}</div>`;
+  const errorHtml = renderWorkflowFootnoteMessage(message, { error: true });
   document.getElementById("scripts-root").innerHTML = errorHtml;
   document.getElementById("clusters-root").innerHTML = errorHtml;
   document.getElementById("queue-root").innerHTML = errorHtml;

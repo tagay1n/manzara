@@ -304,6 +304,39 @@ function createHarness({
           .replaceAll("<", "&lt;")
           .replaceAll(">", "&gt;");
       },
+      setStatusMessage(node, text, options = {}) {
+        if (!node) return;
+        const isError = Boolean(options.error);
+        node.textContent = String(text ?? "");
+        node.classList.toggle("library-status-error", isError);
+      },
+      renderRunRowMessage(text, options = {}) {
+        const isError = Boolean(options.error);
+        const prefix = isError ? "Error: " : "";
+        return `<div class="run-row">${prefix}${this.escapeHtml(String(text ?? ""))}</div>`;
+      },
+      renderWorkflowFootnoteMessage(text, options = {}) {
+        const isError = Boolean(options.error);
+        const classes = isError ? "workflow-footnote library-status-error" : "workflow-footnote";
+        return `<div class="${classes}">${this.escapeHtml(String(text ?? ""))}</div>`;
+      },
+      renderLoadingTableRow(colSpan, text) {
+        const safeColSpan = Math.max(1, Math.trunc(Number(colSpan) || 1));
+        return `<tr><td colspan="${safeColSpan}">${this.escapeHtml(String(text ?? ""))}</td></tr>`;
+      },
+      applyPaginationControls(options = {}) {
+        const page = Math.max(1, Math.trunc(Number(options.page) || 1));
+        const totalPages = Math.max(1, Math.trunc(Number(options.totalPages) || 1));
+        if (options.labelNode) {
+          options.labelNode.textContent = `Page ${page} / ${totalPages}`;
+        }
+        if (options.prevNode) {
+          options.prevNode.disabled = page <= 1;
+        }
+        if (options.nextNode) {
+          options.nextNode.disabled = page >= totalPages;
+        }
+      },
       cssName(name, fallback = "unknown") {
         const value = String(name || "").trim().toLowerCase();
         if (!value) return fallback;

@@ -254,3 +254,64 @@ test("createTabController toggles active tab and rejects unknown tabs", () => {
   assert.equal(controller.select("unknown"), false);
   assert.equal(activeTab, "queue");
 });
+
+test("setStatusMessage toggles error class and writes text", () => {
+  const toggles = [];
+  const node = {
+    textContent: "",
+    classList: {
+      toggle(name, value) {
+        toggles.push({ name, value: Boolean(value) });
+      },
+    },
+  };
+  const core = loadCore();
+  core.setStatusMessage(node, "Loaded", { error: false });
+  core.setStatusMessage(node, "Failed", { error: true });
+  assert.equal(node.textContent, "Failed");
+  assert.deepEqual(toggles, [
+    { name: "library-status-error", value: false },
+    { name: "library-status-error", value: true },
+  ]);
+});
+
+test("render message helpers escape unsafe values", () => {
+  const core = loadCore();
+  const runRow = core.renderRunRowMessage("<script>alert(1)</script>", { error: true });
+  const footnote = core.renderWorkflowFootnoteMessage("<img src=x>", { error: true });
+  const loadingRow = core.renderLoadingTableRow(6, "<b>Loading</b>");
+  assert.match(runRow, /Error:\s*&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(footnote, /library-status-error/);
+  assert.match(footnote, /&lt;img src=x&gt;/);
+  assert.match(loadingRow, /colspan="6"/);
+  assert.match(loadingRow, /&lt;b&gt;Loading&lt;\/b&gt;/);
+});
+
+test("applyPaginationControls updates label and button disabled state", () => {
+  const core = loadCore();
+  const labelNode = { textContent: "" };
+  const prevNode = { disabled: false };
+  const nextNode = { disabled: false };
+
+  core.applyPaginationControls({
+    labelNode,
+    prevNode,
+    nextNode,
+    page: 1,
+    totalPages: 3,
+  });
+  assert.equal(labelNode.textContent, "Page 1 / 3");
+  assert.equal(prevNode.disabled, true);
+  assert.equal(nextNode.disabled, false);
+
+  core.applyPaginationControls({
+    labelNode,
+    prevNode,
+    nextNode,
+    page: 3,
+    totalPages: 3,
+  });
+  assert.equal(labelNode.textContent, "Page 3 / 3");
+  assert.equal(prevNode.disabled, false);
+  assert.equal(nextNode.disabled, true);
+});
