@@ -9,6 +9,18 @@ const DASHBOARD_SOURCE = readFileSync(new URL("../../static/app.js", import.meta
 const SCHEDULES_SOURCE = readFileSync(new URL("../../static/schedules.js", import.meta.url), "utf-8");
 const LIBRARY_SOURCE = readFileSync(new URL("../../static/library.js", import.meta.url), "utf-8");
 const DATABASE_SOURCE = readFileSync(new URL("../../static/database.js", import.meta.url), "utf-8");
+const LIBRARY_CLASSIFICATIONS_SOURCE = readFileSync(
+  new URL("../../static/library-classifications.js", import.meta.url),
+  "utf-8",
+);
+const LIBRARY_PERSONALITIES_SOURCE = readFileSync(
+  new URL("../../static/library-personalities.js", import.meta.url),
+  "utf-8",
+);
+const LIBRARY_PUBLISHERS_SOURCE = readFileSync(
+  new URL("../../static/library-publishers.js", import.meta.url),
+  "utf-8",
+);
 
 class FakeClassList {
   constructor() {
@@ -23,6 +35,23 @@ class FakeClassList {
   contains(name) {
     return this._set.has(String(name));
   }
+  toggle(name, force) {
+    const key = String(name);
+    if (force === true) {
+      this._set.add(key);
+      return true;
+    }
+    if (force === false) {
+      this._set.delete(key);
+      return false;
+    }
+    if (this._set.has(key)) {
+      this._set.delete(key);
+      return false;
+    }
+    this._set.add(key);
+    return true;
+  }
 }
 
 class FakeElement {
@@ -36,6 +65,7 @@ class FakeElement {
     this.dataset = {};
     this.attributes = new Map();
     this.listeners = new Map();
+    this.value = "";
     this.open = false;
     this.scrollTop = 0;
     this.scrollHeight = 0;
@@ -101,6 +131,7 @@ function createTimerHarness() {
 function createHarness({
   source,
   ids,
+  selectors = [],
   apiResolver,
   confirmResult = true,
   locationPathname = "/tasks",
@@ -108,6 +139,9 @@ function createHarness({
   const elements = new Map();
   for (const id of ids) {
     elements.set(id, new FakeElement(id));
+  }
+  for (const selector of selectors) {
+    elements.set(`selector:${selector}`, new FakeElement(`selector:${selector}`));
   }
 
   const timer = createTimerHarness();
@@ -191,6 +225,13 @@ function createHarness({
       }
       return elements.get(key);
     },
+    querySelector(selector) {
+      const key = `selector:${String(selector)}`;
+      if (!elements.has(key)) {
+        elements.set(key, new FakeElement(key));
+      }
+      return elements.get(key);
+    },
   };
 
   const sandbox = {
@@ -214,6 +255,8 @@ function createHarness({
     Date,
     Number,
     Promise,
+    URLSearchParams,
+    HTMLInputElement: FakeElement,
   };
 
   vm.createContext(sandbox);
@@ -227,10 +270,9 @@ function createHarness({
     apiCalls,
     sse,
     async flush() {
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      for (let i = 0; i < 16; i += 1) {
+        await Promise.resolve();
+      }
     },
   };
 }
@@ -615,4 +657,160 @@ test("database page renders loading then API error state", async () => {
   assert.match(harness.elements.get("db-status").textContent, /Database state unavailable/);
   assert.match(harness.elements.get("db-stat-grid").innerHTML, /Error: database unavailable/);
   assert.match(harness.elements.get("db-table-body").innerHTML, /Error: database unavailable/);
+});
+
+test("library classifications page renders API error state", async () => {
+  const harness = createHarness({
+    source: LIBRARY_CLASSIFICATIONS_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "last-event",
+      "classification-table-body",
+      "classification-table-status",
+      "distribution-root",
+      "duplicates-root",
+      "filter-apply",
+      "filter-ddc-prefix",
+      "filter-min-usage",
+      "filter-search",
+      "filter-sort",
+      "filter-status",
+      "merge-limit",
+      "merge-min-score",
+      "merge-refresh",
+      "merge-root",
+      "merge-status",
+      "merge-summary",
+      "normalization-affected",
+      "normalization-drop-segments",
+      "normalization-groups",
+      "normalization-limit",
+      "normalization-refresh",
+      "normalization-status",
+      "normalization-summary",
+      "page-label",
+      "page-next",
+      "page-prev",
+      "tab-badge-duplicates",
+      "tab-badge-merge",
+      "tab-badge-normalization",
+      "tab-badge-unclassified",
+      "tree-root",
+      "unclassified-root",
+    ],
+    selectors: [".classification-tabs"],
+    apiResolver(path) {
+      if (path.startsWith("/api/library/")) {
+        throw new Error("classifications unavailable");
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(
+    harness.elements.get("classification-table-status").textContent,
+    /Classifications unavailable/,
+  );
+  assert.match(harness.elements.get("tree-root").innerHTML, /classifications unavailable/);
+  assert.match(
+    harness.elements.get("normalization-status").textContent,
+    /classifications unavailable/,
+  );
+});
+
+test("library personalities page renders API error state", async () => {
+  const harness = createHarness({
+    source: LIBRARY_PERSONALITIES_SOURCE,
+    ids: [
+      "clusters-root",
+      "filter-apply",
+      "filter-min-docs",
+      "filter-script",
+      "filter-search",
+      "filter-sort",
+      "global-status",
+      "last-event",
+      "page-label",
+      "page-next",
+      "page-prev",
+      "personality-stat-grid",
+      "personality-status",
+      "personality-table-body",
+      "personality-table-status",
+      "personality-top-list",
+      "queue-root",
+      "scripts-root",
+      "stop-all-btn",
+      "tab-badge-clusters",
+      "tab-badge-queue",
+      "tab-badge-scripts",
+    ],
+    selectors: [".classification-tabs"],
+    apiResolver(path) {
+      if (path.startsWith("/api/library/personalities")) {
+        throw new Error("personalities unavailable");
+      }
+      if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(
+    harness.elements.get("personality-status").textContent,
+    /Personalities unavailable/,
+  );
+  assert.match(
+    harness.elements.get("personality-table-status").textContent,
+    /personalities unavailable/,
+  );
+  assert.match(harness.elements.get("scripts-root").innerHTML, /personalities unavailable/);
+});
+
+test("library publishers page renders API error state", async () => {
+  const harness = createHarness({
+    source: LIBRARY_PUBLISHERS_SOURCE,
+    ids: [
+      "clusters-root",
+      "filter-apply",
+      "filter-min-docs",
+      "filter-script",
+      "filter-search",
+      "filter-sort",
+      "global-status",
+      "last-event",
+      "page-label",
+      "page-next",
+      "page-prev",
+      "publisher-stat-grid",
+      "publisher-status",
+      "publisher-table-body",
+      "publisher-table-status",
+      "publisher-top-list",
+      "queue-root",
+      "scripts-root",
+      "stop-all-btn",
+      "tab-badge-clusters",
+      "tab-badge-queue",
+      "tab-badge-scripts",
+    ],
+    selectors: [".classification-tabs"],
+    apiResolver(path) {
+      if (path.startsWith("/api/library/publishers")) {
+        throw new Error("publishers unavailable");
+      }
+      if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(
+    harness.elements.get("publisher-status").textContent,
+    /Publishers unavailable/,
+  );
+  assert.match(
+    harness.elements.get("publisher-table-status").textContent,
+    /publishers unavailable/,
+  );
+  assert.match(harness.elements.get("scripts-root").innerHTML, /publishers unavailable/);
 });

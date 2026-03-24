@@ -3,6 +3,7 @@ const state = {
   tablePayload: null,
   insightsPayload: null,
   globalPayload: null,
+  viewState: "loading",
   refreshTimer: null,
   eventCursor: 0,
   eventStreamController: null,
@@ -17,10 +18,7 @@ async function api(path, options = {}) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return window.ManzaraCore.escapeHtml(value);
 }
 
 function initSoundNotifier() {
@@ -43,7 +41,10 @@ function teardownSoundNotifier() {
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
-  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
+    active,
+    activeWorkflows
+  );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
@@ -287,9 +288,61 @@ async function refreshInsights() {
 }
 
 async function refreshAll() {
-  await Promise.all([refreshOverview(), refreshTable(), refreshInsights()]);
-  applyActiveTab();
-  lucide.createIcons();
+  await refreshAllWithState({});
+}
+
+function renderPageLoading() {
+  state.viewState = "loading";
+  document.getElementById("personality-status").textContent = "Loading personalities...";
+  document.getElementById("personality-status").classList.remove("library-status-error");
+  document.getElementById("personality-stat-grid").innerHTML = '<div class="run-row">Loading overview...</div>';
+  document.getElementById("personality-top-list").innerHTML = '<div class="run-row">Loading top personalities...</div>';
+  document.getElementById("personality-table-status").textContent = "Loading personality table...";
+  document.getElementById("personality-table-status").classList.remove("library-status-error");
+  document.getElementById("personality-table-body").innerHTML =
+    '<tr><td colspan="6">Loading personality rows...</td></tr>';
+  document.getElementById("scripts-root").innerHTML = '<div class="workflow-footnote">Loading script distribution...</div>';
+  document.getElementById("clusters-root").innerHTML = '<div class="workflow-footnote">Loading variant clusters...</div>';
+  document.getElementById("queue-root").innerHTML = '<div class="workflow-footnote">Loading ambiguous queue...</div>';
+}
+
+function renderPageError(error) {
+  state.viewState = "error";
+  const message = String(error?.message || error || "Failed to load personalities.");
+  const safe = escapeHtml(message);
+  document.getElementById("personality-status").textContent =
+    `Personalities unavailable: ${message}`;
+  document.getElementById("personality-status").classList.add("library-status-error");
+  document.getElementById("personality-stat-grid").innerHTML =
+    `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("personality-top-list").innerHTML =
+    `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("personality-table-status").textContent =
+    `Table unavailable: ${message}`;
+  document.getElementById("personality-table-status").classList.add("library-status-error");
+  document.getElementById("personality-table-body").innerHTML = "";
+  const errorHtml = `<div class="workflow-footnote library-status-error">${safe}</div>`;
+  document.getElementById("scripts-root").innerHTML = errorHtml;
+  document.getElementById("clusters-root").innerHTML = errorHtml;
+  document.getElementById("queue-root").innerHTML = errorHtml;
+  document.getElementById("tab-badge-scripts").textContent = "0";
+  document.getElementById("tab-badge-clusters").textContent = "0";
+  document.getElementById("tab-badge-queue").textContent = "0";
+}
+
+async function refreshAllWithState({ showLoading = false } = {}) {
+  if (showLoading) {
+    renderPageLoading();
+  }
+  try {
+    await Promise.all([refreshOverview(), refreshTable(), refreshInsights()]);
+    state.viewState = "ready";
+    applyActiveTab();
+    lucide.createIcons();
+  } catch (error) {
+    renderPageError(error);
+    throw error;
+  }
 }
 
 function queueRefresh(delayMs = 250) {
@@ -384,7 +437,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
-  await refreshAll();
+  await refreshAllWithState({ showLoading: true });
   setupEventStream();
 }
 

@@ -11,7 +11,7 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 
 ## Automated Baseline (current)
 - `pytest`: `40 passed` (`.venv/bin/python -m pytest -q`)
-- `frontend tests`: `node --test tests/frontend/*.mjs` passed (`core helpers` + `dashboard/schedules/tasks/task/library/database page behavior`)
+- `frontend tests`: `node --test tests/frontend/*.mjs` passed (`core helpers` + `dashboard/schedules/tasks/task/library/database/classification-list/personality/publisher page behavior`)
 - `requirements files`: only `requirements.txt` found (`rg --files -g 'requirements*.txt'`)
 
 ## Matrix
@@ -32,8 +32,8 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 | FE-01 | Bootstrap via API, then apply important updates from SSE | PASS | `static/app.js:17-27`, `static/app.js:633-685` and same pattern in page scripts | Implemented across pages. |
 | FE-02 | Backend API/SSE is source of truth; avoid frontend domain duplication | PARTIAL | API/SSE-driven flow in page scripts | Most state is server-driven; frontend still duplicates control helpers and transforms per page. |
 | FE-03 | Route HTTP calls through shared client layer | PASS | Shared client in `static/core.js:40-50`; page scripts call it (`static/app.js:17-18`, `static/tasks.js:10-11`, etc.) | Transport/error handling now centralized in one module. |
-| FE-04 | Explicit view-state model (`loading`, `ready`, `empty`, `error`) | PARTIAL | `static/tasks.js`, `static/task.js`, `static/app.js`, `static/schedules.js`, `static/library.js`, `static/database.js` | Explicit states now cover top-level operational pages; detail library pages still need alignment. |
-| FE-05 | Add frontend behavior-focused tests where applicable | PARTIAL | `tests/frontend/test_core.mjs`, `tests/frontend/test_pages.mjs` (dashboard/schedules/tasks/task/library/database behaviors) | Core + top-level page coverage are present; remaining detail pages (`library-classification*`, `library-personalities`, `library-publishers`, normalization pages) still need behavior tests. |
+| FE-04 | Explicit view-state model (`loading`, `ready`, `empty`, `error`) | PARTIAL | `static/tasks.js`, `static/task.js`, `static/app.js`, `static/schedules.js`, `static/library.js`, `static/database.js`, `static/library-classifications.js`, `static/library-personalities.js`, `static/library-publishers.js` | Explicit states now cover top-level pages and list-level library pages; classification detail + normalization pages still need alignment. |
+| FE-05 | Add frontend behavior-focused tests where applicable | PARTIAL | `tests/frontend/test_core.mjs`, `tests/frontend/test_pages.mjs` (dashboard/schedules/tasks/task/library/database/classification-list/personality/publisher behaviors) | Coverage now includes key list pages; remaining detail pages (`library-classification`, normalization pages) still need behavior tests. |
 | FE-06 | European datetime format (24h, day-first) | PASS | Shared formatter in `static/core.js:14-23`; page scripts use `window.ManzaraCore.formatDateTime(...)` | Enforced via `Intl.DateTimeFormat("en-GB", ...)`. |
 | FE-07 | Keep timezone explicit when operational timestamps can be ambiguous | PASS | Shared datetime/time formatters include timezone by default (`static/core.js:13`, `static/core.js:30`) | Operational timestamps now render with timezone marker (for example `GMT+3`). |
 | FE-08 | Use UI reference baseline (Mission Control) | PASS | `AGENTS.md:55-56`, `README.md:24-29` | Documented baseline for frontend direction. |
@@ -41,12 +41,12 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 | LC-BE-01 | Prefer declarative registries/maps over branching for flow/task definitions | PASS | `app/modules/shayan/tasks.py`, `app/modules/maintenance/tasks.py`, workflow bundles in `app/modules/*/workflow.py` | Task/workflow seeds are declarative dict/list structures. |
 | LC-BE-02 | Move overlap/catchup schedule behavior into policy data | PASS | schedule fields in workflow bundles (`overlap_policy`, `catchup_policy`) | Policy values stored in schedule config. |
 | LC-BE-03 | Shared run/workflow state machine definitions | PARTIAL | `app/db.py` constants (`ACTIVE_STATUSES`, `ACTIVE_WORKFLOW_STATUSES`) | Transitions still spread across runtime/service methods. |
-| LC-FE-01 | Centralize data/event handling utilities to reduce page-level branching | PARTIAL | Shared utilities in `static/core.js` (`api`, datetime/event banner, `applyStopAllButton`, `createSseController`, `escapeHtml`, `cssName`, status helpers) and page adoption (`static/app.js`, `static/schedules.js`, `static/tasks.js`, `static/task.js`, `static/library.js`, `static/database.js`) | Core transport/time/SSE/sanitization/status logic is centralized; detail library pages still contain duplicated render/state patterns. |
+| LC-FE-01 | Centralize data/event handling utilities to reduce page-level branching | PARTIAL | Shared utilities in `static/core.js` (`api`, datetime/event banner, `applyStopAllButton`, `createSseController`, `escapeHtml`, `cssName`, status helpers) and page adoption (`static/app.js`, `static/schedules.js`, `static/tasks.js`, `static/task.js`, `static/library.js`, `static/database.js`, `static/library-classifications.js`, `static/library-personalities.js`, `static/library-publishers.js`) | Core transport/time/SSE/sanitization/status logic is centralized; classification detail + normalization pages still contain duplicated render/state patterns. |
 
 ## Priority Remediation Batches
 1. Frontend foundation extraction (phase 3):
-   - Continue extracting shared page primitives (status badges, table/insight cards, section empty/error blocks) for detail `library*` pages.
+   - Continue extracting shared page primitives (status badges, table/insight cards, section empty/error blocks) for classification detail + normalization pages.
 2. Frontend test baseline:
-   - Expand page-level behavior tests from top-level pages to detail pages: `library-classification*`, `library-personalities`, `library-publishers`, normalization pages.
+   - Expand page-level behavior tests from list pages to remaining detail pages: `library-classification`, normalization pages.
 3. Logging hardening:
    - Expand redaction allowlist/denylist as new integrations are added and add fixture-based regression tests for new secret formats.

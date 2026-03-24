@@ -4,6 +4,7 @@ const state = {
   normalizationPayload: null,
   mergePayload: null,
   globalPayload: null,
+  viewState: "loading",
   refreshTimer: null,
   eventCursor: 0,
   eventStreamController: null,
@@ -18,10 +19,7 @@ async function api(path, options = {}) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return window.ManzaraCore.escapeHtml(value);
 }
 
 function formatDateTime(value) {
@@ -48,7 +46,10 @@ function teardownSoundNotifier() {
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
   const activeWorkflows = payload.global.active_workflows || 0;
-  document.getElementById("global-status").textContent = `Tasks: ${active} • Flows: ${activeWorkflows}`;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
+    active,
+    activeWorkflows
+  );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
@@ -462,15 +463,88 @@ async function refreshGlobal() {
 }
 
 async function refreshAll() {
-  await Promise.all([
-    refreshTable(),
-    refreshInsights(),
-    refreshNormalization(),
-    refreshMergeCandidates(),
-    refreshGlobal(),
-  ]);
-  applyActiveTab();
-  lucide.createIcons();
+  await refreshAllWithState({});
+}
+
+function renderPageLoading() {
+  state.viewState = "loading";
+  document.getElementById("classification-table-status").textContent = "Loading classifications...";
+  document.getElementById("classification-table-status").classList.remove("library-status-error");
+  document.getElementById("classification-table-body").innerHTML =
+    '<tr><td colspan="7">Loading classifications...</td></tr>';
+  document.getElementById("tree-root").innerHTML = '<div class="workflow-footnote">Loading hierarchy tree...</div>';
+  document.getElementById("distribution-root").innerHTML =
+    '<div class="workflow-footnote">Loading DDC distribution...</div>';
+  document.getElementById("duplicates-root").innerHTML =
+    '<div class="workflow-footnote">Loading duplicates and drift...</div>';
+  document.getElementById("unclassified-root").innerHTML =
+    '<div class="workflow-footnote">Loading unclassified queue...</div>';
+  document.getElementById("normalization-status").textContent = "Loading normalization preview...";
+  document.getElementById("normalization-status").classList.remove("library-status-error");
+  document.getElementById("normalization-summary").innerHTML = "";
+  document.getElementById("normalization-groups").innerHTML = "";
+  document.getElementById("normalization-affected").innerHTML = "";
+  document.getElementById("merge-status").textContent = "Loading merge candidates...";
+  document.getElementById("merge-status").classList.remove("library-status-error");
+  document.getElementById("merge-summary").innerHTML = "";
+  document.getElementById("merge-root").innerHTML = "";
+}
+
+function renderPageError(error) {
+  state.viewState = "error";
+  const message = String(error?.message || error || "Failed to load classifications.");
+  const safe = escapeHtml(message);
+  document.getElementById("classification-table-status").textContent =
+    `Classifications unavailable: ${message}`;
+  document.getElementById("classification-table-status").classList.add("library-status-error");
+  document.getElementById("classification-table-body").innerHTML = "";
+  document.getElementById("tree-root").innerHTML =
+    `<div class="workflow-footnote library-status-error">${safe}</div>`;
+  document.getElementById("distribution-root").innerHTML =
+    `<div class="workflow-footnote library-status-error">${safe}</div>`;
+  document.getElementById("duplicates-root").innerHTML =
+    `<div class="workflow-footnote library-status-error">${safe}</div>`;
+  document.getElementById("unclassified-root").innerHTML =
+    `<div class="workflow-footnote library-status-error">${safe}</div>`;
+  document.getElementById("normalization-status").textContent =
+    `Normalization unavailable: ${message}`;
+  document.getElementById("normalization-status").classList.add("library-status-error");
+  document.getElementById("normalization-summary").innerHTML = "";
+  document.getElementById("normalization-groups").innerHTML = "";
+  document.getElementById("normalization-affected").innerHTML = "";
+  document.getElementById("merge-status").textContent = `Merge candidates unavailable: ${message}`;
+  document.getElementById("merge-status").classList.add("library-status-error");
+  document.getElementById("merge-summary").innerHTML = "";
+  document.getElementById("merge-root").innerHTML = "";
+  const duplicatesBadge = document.getElementById("tab-badge-duplicates");
+  if (duplicatesBadge) duplicatesBadge.textContent = "0";
+  const mergeBadge = document.getElementById("tab-badge-merge");
+  if (mergeBadge) mergeBadge.textContent = "0";
+  const normalizationBadge = document.getElementById("tab-badge-normalization");
+  if (normalizationBadge) normalizationBadge.textContent = "0";
+  const unclassifiedBadge = document.getElementById("tab-badge-unclassified");
+  if (unclassifiedBadge) unclassifiedBadge.textContent = "0";
+}
+
+async function refreshAllWithState({ showLoading = false } = {}) {
+  if (showLoading) {
+    renderPageLoading();
+  }
+  try {
+    await Promise.all([
+      refreshTable(),
+      refreshInsights(),
+      refreshNormalization(),
+      refreshMergeCandidates(),
+      refreshGlobal(),
+    ]);
+    state.viewState = "ready";
+    applyActiveTab();
+    lucide.createIcons();
+  } catch (error) {
+    renderPageError(error);
+    throw error;
+  }
 }
 
 function queueRefresh(delayMs = 250) {
@@ -575,7 +649,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
-  await refreshAll();
+  await refreshAllWithState({ showLoading: true });
   setupEventStream();
 }
 
