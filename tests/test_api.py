@@ -245,6 +245,84 @@ def test_library_classification_insights_endpoint(test_client, monkeypatch) -> N
     assert payload["unclassified_queue"]["total"] == 1
 
 
+def test_library_classification_normalization_preview_endpoint(
+    test_client,
+    monkeypatch,
+) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_normalization_preview",
+        lambda **_kwargs: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "rules": {"drop_segments": ["turkic literature"]},
+            "summary": {
+                "total_rows_scanned": 100,
+                "affected_classifications": 7,
+                "estimated_reassigned_documents": 42,
+                "merge_group_candidates": 3,
+            },
+            "affected_preview": [{"classification_id": 1}],
+            "merge_groups": [{"normalized_path": "language / tatar"}],
+        },
+    )
+
+    response = client.get(
+        "/api/library/classifications/normalization-preview"
+        "?drop_segments=Turkic%20literature,Tatar&limit=120&row_limit=5000"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["summary"]["affected_classifications"] == 7
+    assert payload["rules"]["drop_segments"][0] == "turkic literature"
+
+
+def test_library_classification_merge_candidates_endpoint(
+    test_client,
+    monkeypatch,
+) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_merge_candidates",
+        lambda **_kwargs: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "summary": {
+                "rows_scanned": 120,
+                "candidate_count": 2,
+                "min_score": 0.78,
+            },
+            "candidates": [
+                {
+                    "issue": "near_duplicate",
+                    "score": 0.91,
+                    "impact": 11,
+                    "recommended_primary_classification_id": 3,
+                    "primary": {"classification_id": 3, "ddc": "891.7", "path": "A", "usage_count": 7},
+                    "secondary": {"classification_id": 4, "ddc": "891.7", "path": "B", "usage_count": 4},
+                }
+            ],
+        },
+    )
+
+    response = client.get(
+        "/api/library/classifications/merge-candidates"
+        "?limit=80&min_score=0.8&row_limit=1000"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["summary"]["candidate_count"] == 2
+    assert payload["candidates"][0]["recommended_primary_classification_id"] == 3
+
+
 def test_library_classification_detail_endpoint(test_client, monkeypatch) -> None:
     client, main_app = test_client
 

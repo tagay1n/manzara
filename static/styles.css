@@ -756,6 +756,10 @@ button {
   gap: 8px;
 }
 
+.classification-filters.compact {
+  grid-template-columns: minmax(240px, 1.2fr) minmax(120px, 0.8fr);
+}
+
 .classification-tabs {
   margin-top: 10px;
   display: flex;
@@ -867,6 +871,13 @@ button {
 .duplicates-root,
 .unclassified-root {
   display: grid;
+  gap: 8px;
+}
+
+.normalization-summary {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 8px;
 }
 
@@ -1272,6 +1283,10 @@ button {
 
   .classification-filters {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .classification-filters.compact {
+    grid-template-columns: 1fr;
   }
 }
 

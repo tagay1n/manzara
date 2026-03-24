@@ -1,6 +1,8 @@
 const state = {
   tablePayload: null,
   insightsPayload: null,
+  normalizationPayload: null,
+  mergePayload: null,
   globalPayload: null,
   refreshTimer: null,
   eventStream: null,
@@ -100,6 +102,33 @@ function tableUrl() {
   return `/api/library/classifications?${params.toString()}`;
 }
 
+function normalizationUrl() {
+  const dropSegments = document
+    .getElementById("normalization-drop-segments")
+    .value.trim();
+  const limitRaw = Number(
+    document.getElementById("normalization-limit").value || "120"
+  );
+  const limit = Math.max(10, Math.min(500, Number.isFinite(limitRaw) ? limitRaw : 120));
+  const params = new URLSearchParams({
+    drop_segments: dropSegments || "Turkic literature",
+    limit: String(limit),
+  });
+  return `/api/library/classifications/normalization-preview?${params.toString()}`;
+}
+
+function mergeCandidatesUrl() {
+  const minScoreRaw = Number(document.getElementById("merge-min-score").value || "0.78");
+  const limitRaw = Number(document.getElementById("merge-limit").value || "80");
+  const minScore = Math.max(0, Math.min(1, Number.isFinite(minScoreRaw) ? minScoreRaw : 0.78));
+  const limit = Math.max(10, Math.min(300, Number.isFinite(limitRaw) ? limitRaw : 80));
+  const params = new URLSearchParams({
+    min_score: String(minScore),
+    limit: String(limit),
+  });
+  return `/api/library/classifications/merge-candidates?${params.toString()}`;
+}
+
 function renderTable(payload) {
   state.tablePayload = payload;
   const statusNode = document.getElementById("classification-table-status");
@@ -134,7 +163,15 @@ function renderTable(payload) {
 }
 
 function applyActiveTab() {
-  const tabs = ["table", "tree", "distribution", "duplicates", "unclassified"];
+  const tabs = [
+    "table",
+    "tree",
+    "distribution",
+    "normalization",
+    "merge",
+    "duplicates",
+    "unclassified",
+  ];
   for (const tab of tabs) {
     const isActive = state.activeTab === tab;
     const btn = document.getElementById(`tab-btn-${tab}`);
@@ -150,7 +187,19 @@ function applyActiveTab() {
 }
 
 function switchTab(tab) {
-  if (!["table", "tree", "distribution", "duplicates", "unclassified"].includes(tab)) return;
+  if (
+    ![
+      "table",
+      "tree",
+      "distribution",
+      "normalization",
+      "merge",
+      "duplicates",
+      "unclassified",
+    ].includes(tab)
+  ) {
+    return;
+  }
   state.activeTab = tab;
   applyActiveTab();
 }
@@ -250,6 +299,138 @@ function renderUnclassified(queue) {
   `;
 }
 
+function renderNormalization(payload) {
+  state.normalizationPayload = payload;
+  const statusNode = document.getElementById("normalization-status");
+  const summaryNode = document.getElementById("normalization-summary");
+  const groupsNode = document.getElementById("normalization-groups");
+  const affectedNode = document.getElementById("normalization-affected");
+
+  if (!payload.available) {
+    statusNode.textContent = `Normalization unavailable: ${payload.error || "unknown error"}`;
+    statusNode.classList.add("library-status-error");
+    summaryNode.innerHTML = "";
+    groupsNode.innerHTML = "";
+    affectedNode.innerHTML = "";
+    const normalizationBadge = document.getElementById("tab-badge-normalization");
+    if (normalizationBadge) normalizationBadge.textContent = "0";
+    return;
+  }
+
+  statusNode.classList.remove("library-status-error");
+  statusNode.textContent = `Rules: ${payload.rules.drop_segments.join(", ")}`;
+  summaryNode.innerHTML = `
+    <div class="library-stat-card"><span class="library-stat-label">Rows Scanned</span><span class="library-stat-value">${payload.summary.total_rows_scanned || 0}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Affected</span><span class="library-stat-value">${payload.summary.affected_classifications || 0}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Estimated Reassignments</span><span class="library-stat-value">${payload.summary.estimated_reassigned_documents || 0}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Merge Groups</span><span class="library-stat-value">${payload.summary.merge_group_candidates || 0}</span></div>
+  `;
+
+  groupsNode.innerHTML = `
+    <h3 class="mini-head">Merge Groups After Normalization</h3>
+    ${
+      (payload.merge_groups || []).length
+        ? (payload.merge_groups || [])
+            .slice(0, 25)
+            .map(
+              (group) => `
+            <div class="duplicate-card">
+              <div class="duplicate-head">
+                <span class="duplicate-path">${escapeHtml(group.normalized_path || "-")}</span>
+                <span class="panel-pill">group ${group.group_size}</span>
+              </div>
+              <div class="workflow-footnote">Usage ${group.total_usage} • primary ${group.recommended_primary_classification_id}</div>
+            </div>
+          `
+            )
+            .join("")
+        : '<div class="workflow-footnote">No merge groups detected.</div>'
+    }
+  `;
+
+  affectedNode.innerHTML = `
+    <h3 class="mini-head">Affected Classifications Preview</h3>
+    ${
+      (payload.affected_preview || []).length
+        ? (payload.affected_preview || [])
+            .slice(0, 30)
+            .map(
+              (item) => `
+            <div class="duplicate-card">
+              <div class="duplicate-head">
+                <span class="duplicate-path">${escapeHtml(item.original_path || "-")}</span>
+                <span class="panel-pill">#${item.classification_id}</span>
+              </div>
+              <div class="workflow-footnote">→ ${escapeHtml(item.normalized_path || "-")} • usage ${item.usage_count}</div>
+            </div>
+          `
+            )
+            .join("")
+        : '<div class="workflow-footnote">No affected classifications.</div>'
+    }
+  `;
+
+  const normalizationBadge = document.getElementById("tab-badge-normalization");
+  if (normalizationBadge) {
+    normalizationBadge.textContent = String(payload.summary.affected_classifications || 0);
+  }
+}
+
+function renderMergeCandidates(payload) {
+  state.mergePayload = payload;
+  const statusNode = document.getElementById("merge-status");
+  const summaryNode = document.getElementById("merge-summary");
+  const rootNode = document.getElementById("merge-root");
+
+  if (!payload.available) {
+    statusNode.textContent = `Merge candidates unavailable: ${payload.error || "unknown error"}`;
+    statusNode.classList.add("library-status-error");
+    summaryNode.innerHTML = "";
+    rootNode.innerHTML = "";
+    const mergeBadge = document.getElementById("tab-badge-merge");
+    if (mergeBadge) mergeBadge.textContent = "0";
+    return;
+  }
+
+  statusNode.classList.remove("library-status-error");
+  statusNode.textContent = `Rows scanned ${payload.summary.rows_scanned} • min score ${payload.summary.min_score}`;
+  summaryNode.innerHTML = `
+    <div class="library-stat-card"><span class="library-stat-label">Candidates</span><span class="library-stat-value">${payload.summary.candidate_count || 0}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Rows Scanned</span><span class="library-stat-value">${payload.summary.rows_scanned || 0}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">Min Score</span><span class="library-stat-value">${Number(payload.summary.min_score || 0).toFixed(2)}</span></div>
+  `;
+  rootNode.innerHTML = (payload.candidates || []).length
+    ? (payload.candidates || [])
+        .map(
+          (candidate) => `
+        <div class="duplicate-card">
+          <div class="duplicate-head">
+            <span class="duplicate-path">${escapeHtml(candidate.primary.path || "-")} ↔ ${escapeHtml(candidate.secondary.path || "-")}</span>
+            <span class="panel-pill">${escapeHtml(candidate.issue || "-")}</span>
+          </div>
+          <div class="workflow-footnote">Score ${candidate.score} • Impact ${candidate.impact} • Primary ${candidate.recommended_primary_classification_id}</div>
+          <div class="duplicate-items">
+            <a class="duplicate-item" href="/library/classifications/${candidate.primary.classification_id}">
+              <span>#${candidate.primary.classification_id} ${escapeHtml(candidate.primary.ddc || "-")}</span>
+              <span>${candidate.primary.usage_count}</span>
+            </a>
+            <a class="duplicate-item" href="/library/classifications/${candidate.secondary.classification_id}">
+              <span>#${candidate.secondary.classification_id} ${escapeHtml(candidate.secondary.ddc || "-")}</span>
+              <span>${candidate.secondary.usage_count}</span>
+            </a>
+          </div>
+        </div>
+      `
+        )
+        .join("")
+    : '<div class="workflow-footnote">No merge candidates at this threshold.</div>';
+
+  const mergeBadge = document.getElementById("tab-badge-merge");
+  if (mergeBadge) {
+    mergeBadge.textContent = String(payload.summary.candidate_count || 0);
+  }
+}
+
 function renderInsights(payload) {
   state.insightsPayload = payload;
   if (!payload.available) {
@@ -289,6 +470,16 @@ async function refreshInsights() {
   renderInsights(payload);
 }
 
+async function refreshNormalization() {
+  const payload = await api(normalizationUrl());
+  renderNormalization(payload);
+}
+
+async function refreshMergeCandidates() {
+  const payload = await api(mergeCandidatesUrl());
+  renderMergeCandidates(payload);
+}
+
 async function refreshGlobal() {
   const payload = await api("/api/library");
   state.globalPayload = payload;
@@ -296,7 +487,13 @@ async function refreshGlobal() {
 }
 
 async function refreshAll() {
-  await Promise.all([refreshTable(), refreshInsights(), refreshGlobal()]);
+  await Promise.all([
+    refreshTable(),
+    refreshInsights(),
+    refreshNormalization(),
+    refreshMergeCandidates(),
+    refreshGlobal(),
+  ]);
   applyActiveTab();
   lucide.createIcons();
 }
@@ -449,6 +646,16 @@ function attachUiHandlers() {
     const button = event.target.closest(".classification-tab");
     if (!button) return;
     switchTab(String(button.dataset.tab || "table"));
+  });
+
+  document.getElementById("normalization-refresh").addEventListener("click", () => {
+    switchTab("normalization");
+    refreshNormalization().catch((error) => console.error(error));
+  });
+
+  document.getElementById("merge-refresh").addEventListener("click", () => {
+    switchTab("merge");
+    refreshMergeCandidates().catch((error) => console.error(error));
   });
 }
 

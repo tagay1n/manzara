@@ -17,6 +17,8 @@ from app.db import Database
 from app.modules.library.insights import (
     get_classification_detail,
     get_classification_insights,
+    get_merge_candidates,
+    get_normalization_preview,
     list_classifications,
 )
 from app.modules.library.stats import get_library_dataset_stats
@@ -665,6 +667,37 @@ def get_library_classification_insights(
         row_limit=row_limit,
         duplicate_limit=duplicate_limit,
         unclassified_limit=unclassified_limit,
+    )
+    return JSONResponse(payload)
+
+
+@app.get("/api/library/classifications/normalization-preview")
+def get_library_classification_normalization_preview(
+    drop_segments: str = Query("Turkic literature", max_length=300),
+    limit: int = Query(120, ge=1, le=500),
+    row_limit: int = Query(5000, ge=1, le=20000),
+) -> JSONResponse:
+    """Preview simplification rules before applying any merge."""
+    segments = [item.strip() for item in drop_segments.split(",") if item.strip()]
+    payload = get_normalization_preview(
+        drop_segments=segments,
+        limit=limit,
+        row_limit=row_limit,
+    )
+    return JSONResponse(payload)
+
+
+@app.get("/api/library/classifications/merge-candidates")
+def get_library_classification_merge_candidates(
+    limit: int = Query(80, ge=1, le=300),
+    min_score: float = Query(0.78, ge=0.0, le=1.0),
+    row_limit: int = Query(1200, ge=10, le=10000),
+) -> JSONResponse:
+    """Return ranked near-duplicate classification merge suggestions."""
+    payload = get_merge_candidates(
+        limit=limit,
+        min_score=min_score,
+        row_limit=row_limit,
     )
     return JSONResponse(payload)
 

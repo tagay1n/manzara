@@ -77,6 +77,14 @@
               <button id="tab-btn-distribution" class="classification-tab" data-tab="distribution" role="tab" aria-selected="false">
                 DDC Distribution
               </button>
+              <button id="tab-btn-normalization" class="classification-tab" data-tab="normalization" role="tab" aria-selected="false">
+                Normalization Rules
+                <span id="tab-badge-normalization" class="classification-tab-badge">0</span>
+              </button>
+              <button id="tab-btn-merge" class="classification-tab" data-tab="merge" role="tab" aria-selected="false">
+                Merge Candidates
+                <span id="tab-badge-merge" class="classification-tab-badge">0</span>
+              </button>
               <button id="tab-btn-duplicates" class="classification-tab" data-tab="duplicates" role="tab" aria-selected="false">
                 Duplicates / Drift
                 <span id="tab-badge-duplicates" class="classification-tab-badge">0</span>
@@ -140,6 +148,66 @@
             <div id="tab-panel-distribution" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-distribution">
               <h2>DDC Distribution</h2>
               <div id="distribution-root" class="distribution-root"></div>
+            </div>
+
+            <div id="tab-panel-normalization" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-normalization">
+              <div class="library-overview-head">
+                <h2>Normalization Rules Preview</h2>
+                <button id="normalization-refresh" class="small-btn">Refresh Preview</button>
+              </div>
+              <div class="classification-filters compact">
+                <input
+                  id="normalization-drop-segments"
+                  class="filter-input"
+                  type="text"
+                  value="Turkic literature"
+                  placeholder="Segments to drop (comma-separated)"
+                />
+                <input
+                  id="normalization-limit"
+                  class="filter-input"
+                  type="number"
+                  min="10"
+                  max="500"
+                  value="120"
+                  placeholder="Preview limit"
+                />
+              </div>
+              <div id="normalization-status" class="workflow-footnote">Loading normalization preview...</div>
+              <div id="normalization-summary" class="normalization-summary"></div>
+              <div id="normalization-groups" class="duplicates-root"></div>
+              <div id="normalization-affected" class="duplicates-root"></div>
+            </div>
+
+            <div id="tab-panel-merge" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-merge">
+              <div class="library-overview-head">
+                <h2>Merge Candidates</h2>
+                <button id="merge-refresh" class="small-btn">Refresh Candidates</button>
+              </div>
+              <div class="classification-filters compact">
+                <input
+                  id="merge-min-score"
+                  class="filter-input"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value="0.78"
+                  placeholder="Min score"
+                />
+                <input
+                  id="merge-limit"
+                  class="filter-input"
+                  type="number"
+                  min="10"
+                  max="300"
+                  value="80"
+                  placeholder="Limit"
+                />
+              </div>
+              <div id="merge-status" class="workflow-footnote">Loading merge candidates...</div>
+              <div id="merge-summary" class="normalization-summary"></div>
+              <div id="merge-root" class="duplicates-root"></div>
             </div>
 
             <div id="tab-panel-duplicates" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-duplicates">

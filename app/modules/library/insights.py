@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Tuple
+from difflib import SequenceMatcher
+from typing import Any, Dict, Iterable, List
 
 from sqlalchemy import text
 
@@ -14,6 +16,11 @@ from app.modules.library.stats import create_runtime_engine
 _DEFAULT_PAGE_SIZE = 25
 _MAX_PAGE_SIZE = 100
 _DEFAULT_ALL_ROWS_LIMIT = 5000
+_DEFAULT_DROP_SEGMENTS = [
+    "turkic literature",
+    "torkic literature",
+    "turkic",
+]
 
 
 def _parse_json_path(path_value: Any) -> list[str]:
@@ -391,6 +398,254 @@ def get_classification_insights(
         }
 
 
+def _normalize_text(value: str) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _drop_segment_set(drop_segments: Iterable[str] | None) -> set[str]:
+    source = list(drop_segments or []) or list(_DEFAULT_DROP_SEGMENTS)
+    return {_normalize_text(item) for item in source if _normalize_text(item)}
+
+
+def _normalize_path_parts(parts: list[str], drop_set: set[str]) -> tuple[list[str], list[str]]:
+    normalized_parts: list[str] = []
+    removed_parts: list[str] = []
+    for part in parts:
+        key = _normalize_text(part)
+        if key in drop_set:
+            removed_parts.append(part)
+            continue
+        normalized_parts.append(part)
+    return normalized_parts, removed_parts
+
+
+def get_normalization_preview(
+    *,
+    drop_segments: list[str] | None = None,
+    limit: int = 120,
+    row_limit: int = _DEFAULT_ALL_ROWS_LIMIT,
+) -> Dict[str, Any]:
+    """Preview classification simplification using drop-segment normalization rules."""
+    try:
+        rows, config_source = _all_classification_usage_rows(limit=row_limit)
+        drop_set = _drop_segment_set(drop_segments)
+
+        affected: list[Dict[str, Any]] = []
+        groups: Dict[str, list[Dict[str, Any]]] = defaultdict(list)
+
+        for row in rows:
+            original_parts = _parse_json_path(row.get("path_en"))
+            normalized_parts, removed_parts = _normalize_path_parts(original_parts, drop_set)
+            original_path = " / ".join(original_parts) if original_parts else "-"
+            normalized_path = " / ".join(normalized_parts) if normalized_parts else "-"
+            usage_count = int(row.get("usage_count") or 0)
+            if original_parts != normalized_parts:
+                item = {
+                    "classification_id": int(row.get("id") or 0),
+                    "ddc": str(row.get("ddc") or ""),
+                    "original_path": original_path,
+                    "normalized_path": normalized_path,
+                    "usage_count": usage_count,
+                    "removed_segments": removed_parts,
+                }
+                affected.append(item)
+            groups[_normalize_text(normalized_path)].append(
+                {
+                    "classification_id": int(row.get("id") or 0),
+                    "ddc": str(row.get("ddc") or ""),
+                    "path": original_path,
+                    "normalized_path": normalized_path,
+                    "usage_count": usage_count,
+                }
+            )
+
+        affected.sort(key=lambda item: (-int(item["usage_count"]), item["ddc"], item["classification_id"]))
+
+        merge_groups: list[Dict[str, Any]] = []
+        for _key, items in groups.items():
+            if len(items) <= 1:
+                continue
+            sorted_items = sorted(items, key=lambda item: (-int(item["usage_count"]), item["classification_id"]))
+            canonical = sorted_items[0]
+            total_usage = sum(int(item["usage_count"]) for item in sorted_items)
+            merge_groups.append(
+                {
+                    "normalized_path": sorted_items[0]["normalized_path"],
+                    "group_size": len(sorted_items),
+                    "total_usage": total_usage,
+                    "recommended_primary_classification_id": int(canonical["classification_id"]),
+                    "items": sorted_items,
+                }
+            )
+
+        merge_groups.sort(key=lambda item: (-int(item["total_usage"]), -int(item["group_size"])))
+
+        return {
+            "available": True,
+            "error": None,
+            "config_source": config_source,
+            "rules": {
+                "drop_segments": sorted(drop_set),
+            },
+            "summary": {
+                "total_rows_scanned": len(rows),
+                "affected_classifications": len(affected),
+                "estimated_reassigned_documents": sum(int(item["usage_count"]) for item in affected),
+                "merge_group_candidates": len(merge_groups),
+            },
+            "affected_preview": affected[: max(1, int(limit))],
+            "merge_groups": merge_groups[: max(1, min(int(limit), 80))],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "available": False,
+            "error": str(exc),
+            "config_source": None,
+            "rules": {"drop_segments": []},
+            "summary": {
+                "total_rows_scanned": 0,
+                "affected_classifications": 0,
+                "estimated_reassigned_documents": 0,
+                "merge_group_candidates": 0,
+            },
+            "affected_preview": [],
+            "merge_groups": [],
+        }
+
+
+def _path_tokens(path: str) -> set[str]:
+    tokens = re.split(r"[^a-z0-9]+", _normalize_text(path))
+    return {token for token in tokens if len(token) > 1}
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a and not b:
+        return 1.0
+    union = a | b
+    if not union:
+        return 0.0
+    return len(a & b) / len(union)
+
+
+def get_merge_candidates(
+    *,
+    limit: int = 80,
+    min_score: float = 0.78,
+    row_limit: int = 1200,
+) -> Dict[str, Any]:
+    """Return ranked near-duplicate classification merge candidates."""
+    try:
+        rows, config_source = _all_classification_usage_rows(limit=row_limit)
+        items = []
+        for row in rows:
+            path = _format_path(row.get("path_en"))
+            path_key = _normalize_text(path)
+            ddc = str(row.get("ddc") or "")
+            ddc_digits = _digits_prefix(ddc)
+            usage_count = int(row.get("usage_count") or 0)
+            parts = _parse_json_path(row.get("path_en"))
+            root = _normalize_text(parts[0]) if parts else ""
+            tokens = _path_tokens(path)
+            items.append(
+                {
+                    "classification_id": int(row.get("id") or 0),
+                    "ddc": ddc,
+                    "usage_count": usage_count,
+                    "path": path,
+                    "path_key": path_key,
+                    "tokens": tokens,
+                    "root": root,
+                    "ddc1": ddc_digits[:1],
+                    "ddc2": ddc_digits[:2],
+                }
+            )
+
+        items.sort(key=lambda item: (-int(item["usage_count"]), item["classification_id"]))
+        max_items = min(len(items), 900)
+        items = items[:max_items]
+
+        candidates: list[Dict[str, Any]] = []
+        min_score = max(0.0, min(1.0, float(min_score)))
+
+        for i in range(len(items)):
+            left = items[i]
+            for j in range(i + 1, len(items)):
+                right = items[j]
+
+                # Fast block to avoid O(n^2) across unrelated branches.
+                same_root = left["root"] and left["root"] == right["root"]
+                same_ddc1 = left["ddc1"] and left["ddc1"] == right["ddc1"]
+                if not same_root and not same_ddc1:
+                    continue
+
+                seq = SequenceMatcher(None, left["path_key"], right["path_key"]).ratio()
+                jac = _jaccard(left["tokens"], right["tokens"])
+                ddc_bonus = 0.0
+                if left["ddc"] and right["ddc"] and left["ddc"] == right["ddc"]:
+                    ddc_bonus += 0.08
+                elif left["ddc2"] and right["ddc2"] and left["ddc2"] == right["ddc2"]:
+                    ddc_bonus += 0.03
+
+                score = 0.55 * seq + 0.35 * jac + ddc_bonus
+                issue = "near_duplicate"
+                if left["path_key"] == right["path_key"] and left["ddc"] != right["ddc"]:
+                    issue = "ddc_conflict"
+                    score = max(score, 0.86)
+                if score < min_score:
+                    continue
+
+                primary = left if int(left["usage_count"]) >= int(right["usage_count"]) else right
+                secondary = right if primary is left else left
+                impact = int(left["usage_count"]) + int(right["usage_count"])
+                candidates.append(
+                    {
+                        "issue": issue,
+                        "score": round(score, 3),
+                        "impact": impact,
+                        "recommended_primary_classification_id": int(primary["classification_id"]),
+                        "primary": {
+                            "classification_id": int(primary["classification_id"]),
+                            "ddc": str(primary["ddc"]),
+                            "path": str(primary["path"]),
+                            "usage_count": int(primary["usage_count"]),
+                        },
+                        "secondary": {
+                            "classification_id": int(secondary["classification_id"]),
+                            "ddc": str(secondary["ddc"]),
+                            "path": str(secondary["path"]),
+                            "usage_count": int(secondary["usage_count"]),
+                        },
+                    }
+                )
+
+        candidates.sort(key=lambda item: (-float(item["score"]), -int(item["impact"])))
+        return {
+            "available": True,
+            "error": None,
+            "config_source": config_source,
+            "summary": {
+                "rows_scanned": len(items),
+                "candidate_count": len(candidates),
+                "min_score": min_score,
+            },
+            "candidates": candidates[: max(1, int(limit))],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "available": False,
+            "error": str(exc),
+            "config_source": None,
+            "summary": {
+                "rows_scanned": 0,
+                "candidate_count": 0,
+                "min_score": min_score,
+            },
+            "candidates": [],
+        }
+
+
 def get_classification_detail(
     classification_id: int,
     *,
@@ -557,5 +812,7 @@ def get_classification_detail(
 __all__ = [
     "list_classifications",
     "get_classification_insights",
+    "get_normalization_preview",
+    "get_merge_candidates",
     "get_classification_detail",
 ]
