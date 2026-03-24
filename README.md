@@ -211,8 +211,15 @@ Run test suite:
 .venv/bin/python -m pytest -q
 ```
 
+Run frontend core behavior tests:
+
+```bash
+node --test tests/frontend/test_core.mjs
+```
+
 Coverage notes:
 - API/scheduler/task-control behavior is covered by `pytest`.
+- Shared frontend core helpers (API transport, datetime formatting, SSE controller) are covered by `node:test`.
 - Runtime-heavy external flows still require manual smoke checks, especially:
   - `maintenance.monocorpus_meta_evaluate`
   - normalization refresh with real config + Gemini keys

@@ -1,22 +1,13 @@
 const state = {
   payload: null,
   refreshTimer: null,
-  eventStream: null,
-  eventStreamReconnectTimer: null,
   eventCursor: 0,
+  eventStreamController: null,
   soundNotifier: null,
 };
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `HTTP ${response.status}`);
-  }
-  return response.json();
+  return window.ManzaraCore.api(path, options);
 }
 
 function escapeHtml(value) {
@@ -27,10 +18,7 @@ function escapeHtml(value) {
 }
 
 function formatDateTime(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString();
+  return window.ManzaraCore.formatDateTime(value);
 }
 
 function initSoundNotifier() {
@@ -178,95 +166,26 @@ async function stopAll() {
   queueRefresh(0);
 }
 
-function scheduleEventStreamReconnect() {
-  if (state.eventStreamReconnectTimer) return;
-  state.eventStreamReconnectTimer = setTimeout(() => {
-    state.eventStreamReconnectTimer = null;
-    setupEventStream();
-  }, 1500);
-}
-
-function streamUrl() {
-  const cursor = Number(state.eventCursor || 0);
-  if (Number.isFinite(cursor) && cursor > 0) {
-    return `/api/events/stream?after_event_id=${encodeURIComponent(String(cursor))}`;
-  }
-  return "/api/events/stream";
-}
-
-function updateEventCursor(event, payload) {
-  const fromSse = Number(String(event?.lastEventId || ""));
-  const fromPayload = Number(payload?.event_id || 0);
-  const candidate = Number.isFinite(fromSse) && fromSse > 0 ? fromSse : fromPayload;
-  if (Number.isFinite(candidate) && candidate > Number(state.eventCursor || 0)) {
-    state.eventCursor = candidate;
-  }
-}
-
 function setupEventStream() {
-  if (state.eventStream) {
-    state.eventStream.close();
-    state.eventStream = null;
-  }
-  const stream = new EventSource(streamUrl());
-  state.eventStream = stream;
-  const eventTypes = [
-    "task.started",
-    "task.progress",
-    "task.log",
-    "task.stop_requested",
-    "task.force_stop_requested",
-    "task.stopped",
-    "task.completed",
-    "task.failed",
-    "workflow.started",
-    "workflow.step_started",
-    "workflow.step_completed",
-    "workflow.step_skipped",
-    "workflow.stopped",
-    "workflow.completed",
-    "workflow.failed",
-    "task.renamed",
-    "flow.renamed",
-    "schedule.triggered",
-    "schedule.updated",
-    "schedule.skipped",
-    "schedule.skipped_overlap",
-    "system.stop_all_requested",
-    "system.workflow_recovery",
-  ];
-
-  eventTypes.forEach((name) => {
-    stream.addEventListener(name, (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        updateEventCursor(event, payload);
-        document.getElementById("last-event").textContent = `Last event: ${payload.type} @ ${new Date(payload.ts).toLocaleTimeString()}`;
-        maybePlayTaskNotification(payload, event.lastEventId || "");
-      } catch (_error) {
-        // ignore malformed events
-      }
+  state.eventStreamController?.stop();
+  state.eventStreamController = window.ManzaraCore.createSseController({
+    eventTypes: window.ManzaraCore.DEFAULT_EVENT_TYPES,
+    getCursor: () => Number(state.eventCursor || 0),
+    setCursor: (nextCursor) => {
+      state.eventCursor = Number(nextCursor || 0);
+    },
+    onEvent: (payload, event) => {
+      document.getElementById("last-event").textContent =
+        "Last event: " + payload.type + " @ " + window.ManzaraCore.formatTime(payload.ts, { includeZone: true });
+      maybePlayTaskNotification(payload, event.lastEventId || "");
       queueRefresh(100);
-    });
+    },
   });
-
-  stream.onopen = () => {
-    if (state.eventStreamReconnectTimer) {
-      clearTimeout(state.eventStreamReconnectTimer);
-      state.eventStreamReconnectTimer = null;
-    }
-  };
-
-  stream.onerror = () => {
-    if (state.eventStream === stream) {
-      stream.close();
-      state.eventStream = null;
-      scheduleEventStreamReconnect();
-    }
-  };
+  state.eventStreamController.start();
 }
 
 function attachUiHandlers() {
+
   document.getElementById("stop-all-btn").addEventListener("click", () => {
     stopAll().catch((error) => console.error(error));
   });
@@ -276,14 +195,11 @@ async function bootstrap() {
   initSoundNotifier();
   window.addEventListener("beforeunload", () => {
     teardownSoundNotifier();
-    if (state.eventStreamReconnectTimer) {
-      clearTimeout(state.eventStreamReconnectTimer);
-      state.eventStreamReconnectTimer = null;
+    if (state.eventStreamController) {
+      state.eventStreamController.stop();
+      state.eventStreamController = null;
     }
-    if (state.eventStream) {
-      state.eventStream.close();
-      state.eventStream = null;
-    }
+
   });
   attachUiHandlers();
   await refreshLibrary();
