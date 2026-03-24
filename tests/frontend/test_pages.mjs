@@ -245,6 +245,7 @@ function createHarness({
   selectors = [],
   apiResolver,
   confirmResult = true,
+  promptResult = null,
   locationPathname = "/tasks",
 }) {
   const elements = new Map();
@@ -258,6 +259,8 @@ function createHarness({
 
   const timer = createTimerHarness();
   const apiCalls = [];
+  const alerts = [];
+  const prompts = [];
   const sse = {
     config: null,
     started: 0,
@@ -275,7 +278,19 @@ function createHarness({
     confirm() {
       return confirmResult;
     },
-    alert() {},
+    alert(message) {
+      alerts.push(String(message || ""));
+    },
+    prompt(message, defaultValue = "") {
+      prompts.push({
+        message: String(message || ""),
+        defaultValue: String(defaultValue || ""),
+      });
+      if (typeof promptResult === "function") {
+        return promptResult({ message, defaultValue });
+      }
+      return promptResult;
+    },
     ManzaraSound: null,
     ManzaraCore: {
       DEFAULT_EVENT_TYPES: ["task.started", "task.completed", "task.failed"],
@@ -398,7 +413,7 @@ function createHarness({
     console,
     alert: (...args) => windowObj.alert(...args),
     confirm: (...args) => windowObj.confirm(...args),
-    prompt: () => null,
+    prompt: (...args) => windowObj.prompt(...args),
     lucide: { createIcons() {} },
     navigator: {
       clipboard: {
@@ -427,6 +442,8 @@ function createHarness({
     elements,
     timer,
     apiCalls,
+    alerts,
+    prompts,
     sse,
     async flush() {
       for (let i = 0; i < 16; i += 1) {
@@ -1200,6 +1217,9 @@ function createNormalizationResolver({
     if (path.startsWith("/api/library/normalization/personality/canonicals?")) {
       return { available: true, items: [{ canonical_id: 1, display_name: "Author One", normalized_name: "author one", linked_aliases: 2, status: "active", notes: "" }] };
     }
+    if (path === "/api/library/normalization/personality/canonicals") {
+      return { accepted: true };
+    }
     if (path.startsWith("/api/library/normalization/personality/queue?")) {
       const page = Number(new URL(`http://local${path}`).searchParams.get("page") || "1");
       return {
@@ -1268,6 +1288,9 @@ function createNormalizationResolver({
       return { accepted: true };
     }
     if (path === "/api/library/normalization/personality/decisions/reject") {
+      return { accepted: true };
+    }
+    if (path === "/api/library/normalization/personality/decisions/create-link") {
       return { accepted: true };
     }
     if (path === "/api/library/normalization/personality/merge") {
@@ -1393,6 +1416,94 @@ test("library normalization bulk reject posts selected aliases", async () => {
   assert.equal(call.options.method, "POST");
   const body = JSON.parse(call.options.body || "{}");
   assert.deepEqual(body.raw_names, ["Alias One"]);
+});
+
+test("library normalization canonical create posts payload and clears input", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver(),
+  });
+  await harness.flush();
+
+  harness.elements.get("canonical-create-name").value = "Author New";
+  harness.elements.get("canonical-create-notes").value = "manual seed";
+  harness.elements.get("canonical-create-btn").dispatch("click");
+  await harness.flush();
+
+  const createCall = harness.apiCalls.find(
+    (entry) => entry.path === "/api/library/normalization/personality/canonicals",
+  );
+  assert.equal(Boolean(createCall), true);
+  assert.equal(createCall.options.method, "POST");
+  const body = JSON.parse(createCall.options.body || "{}");
+  assert.equal(body.display_name, "Author New");
+  assert.equal(body.notes, "manual seed");
+  assert.equal(harness.elements.get("canonical-create-name").value, "");
+});
+
+test("library normalization canonical search apply sends search query", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver(),
+  });
+  await harness.flush();
+
+  harness.elements.get("canonical-search").value = "Author";
+  harness.elements.get("canonical-search-apply").dispatch("click");
+  await harness.flush();
+
+  const canonicalCalls = harness.apiCalls
+    .map((entry) => entry.path)
+    .filter((path) => path.startsWith("/api/library/normalization/personality/canonicals?"));
+  const hasSearch = canonicalCalls.some(
+    (path) => new URL(`http://local${path}`).searchParams.get("search") === "Author",
+  );
+  assert.equal(hasSearch, true);
+});
+
+test("library normalization queue create action posts create-link decision", async () => {
+  const harness = createHarness({
+    source: LIBRARY_NORMALIZATION_SOURCE,
+    ids: NORMALIZATION_PAGE_IDS,
+    selectors: [".classification-tab", ".queue-row-select"],
+    promptResult: "Author Via Prompt",
+    locationPathname: "/library/normalization/personality",
+    apiResolver: createNormalizationResolver(),
+  });
+  await harness.flush();
+
+  harness.elements.get("queue-table-body").dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== ".queue-action-btn") return null;
+        return {
+          dataset: {
+            action: "create",
+            raw: encodeURIComponent("Alias One"),
+          },
+        };
+      },
+    },
+  });
+  await harness.flush();
+
+  assert.equal(harness.prompts.length > 0, true);
+  assert.equal(harness.prompts[0].defaultValue, "Alias One");
+  const call = harness.apiCalls.find(
+    (entry) => entry.path === "/api/library/normalization/personality/decisions/create-link",
+  );
+  assert.equal(Boolean(call), true);
+  assert.equal(call.options.method, "POST");
+  const body = JSON.parse(call.options.body || "{}");
+  assert.equal(body.raw_name, "Alias One");
+  assert.equal(body.display_name, "Author Via Prompt");
+  assert.deepEqual(body.suggestion_ids, []);
 });
 
 test("library normalization suggestion accept posts link decision", async () => {
