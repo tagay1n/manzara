@@ -52,6 +52,8 @@ Notes:
 - Frontend-local state is acceptable only for UI concerns (for example view toggles, transient input, optimistic UX markers), not as an alternate domain truth.
 
 ## Frontend Standards
+- UI reference baseline: https://github.com/builderz-labs/mission-control
+  - Treat it as visual/UX direction (console layout, density, hierarchy, panel style), while keeping Manzara-specific information architecture and behavior.
 - Treat backend API/event contracts as authoritative; align frontend types and adapters to backend schemas.
 - Bootstrap page state with API on initial load, then apply important runtime state transitions from SSE events.
 - Route all HTTP calls through a shared client layer (timeouts, retries, auth headers, error normalization).
@@ -65,6 +67,10 @@ Notes:
 - Keep rendering safe by default; do not inject unsanitized HTML.
 - Reuse design tokens/components for consistency across pages; avoid one-off styling drift.
 - Add lightweight client observability for failures with route/task/run context where possible.
+- Use European date/time presentation in UI by default:
+  - 24-hour clock (`HH:mm`, no AM/PM).
+  - Day-first date order (`DD.MM.YYYY` where a concrete date string is shown).
+  - Keep timezone explicit on operational timestamps when ambiguity is possible.
 
 ## Backend Standards
 - Backend changes are TDD-first by default:
@@ -80,6 +86,29 @@ Notes:
   - Persist user-visible stdout/stderr lines to DB logs and mirror them into artifact run logs with context metadata.
   - Include explicit start/final status lines in runtime logs so long-running task outcomes are auditable offline.
   - Keep secrets out of logs (mask/redact credentials and tokens).
+
+## Low-Context Scalability Rules
+These rules apply to both backend and frontend to keep implementation understandable as flows/tasks/pages grow.
+
+Backend:
+- Prefer declarative registries/maps over `if/elif` routing for flow/task dispatch.
+- Keep task execution on a shared contract (`prepare`, `run`, `validate`, `summarize`) where practical.
+- Move skip/retry/overlap/schedule behavior into policy config tables instead of inline condition chains.
+- Use a single shared state-machine definition for run/workflow statuses and valid transitions.
+- Keep business logic in small pure functions with typed inputs/outputs; keep side effects at module edges.
+- Enforce strict module boundaries by flow (`app/modules/<flow>/...`); avoid cross-flow imports except shared core.
+- Prefer additive extension points (register new handler) over editing central branching logic.
+- Keep per-function complexity bounded (small functions, shallow nesting, early returns).
+
+Frontend:
+- Use route/page registries and config-driven rendering for repeated page patterns; avoid per-page custom branching where possible.
+- Treat backend API/SSE payloads as single source of truth; do not duplicate domain decision logic client-side.
+- Centralize data fetching, event handling, and error normalization in shared utilities.
+- Use explicit view-state models (`loading`, `ready`, `empty`, `error`) instead of scattered boolean flags.
+- Reuse shared components/tokens for cards, tables, tabs, forms, and task controls; avoid one-off UI logic.
+- Keep local state UI-only (selection, expanded/collapsed, transient inputs); derive domain state from backend responses/events.
+- Prefer declarative action mapping (`action_id -> handler`) over long click-handler condition chains.
+- Add tests for shared behavior contracts (state transitions, API mapping, SSE reducers) so new pages reuse proven primitives.
 
 ## Agent Startup Checklist
 When starting a new session in this repo:
