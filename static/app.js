@@ -12,7 +12,6 @@ const state = {
   editValue: "",
   pendingRefresh: false,
   soundNotifier: null,
-  sudoPrompt: null,
 };
 
 async function api(path, options = {}) {
@@ -62,34 +61,14 @@ function teardownSoundNotifier() {
   state.soundNotifier = null;
 }
 
-function initSudoPrompt() {
-  const createPrompt = window.ManzaraSudoPrompt?.createPrompt;
-  if (typeof createPrompt !== "function") return;
-  state.sudoPrompt = createPrompt();
-}
-
-function teardownSudoPrompt() {
-  if (state.sudoPrompt && typeof state.sudoPrompt.teardown === "function") {
-    state.sudoPrompt.teardown();
-  }
-  state.sudoPrompt = null;
-}
-
-async function runWithSudoPrompt(requestExecutor, contextLabel) {
-  const runWithPrompt = window.ManzaraSudoPrompt?.runWithSudoPrompt;
-  if (typeof runWithPrompt !== "function") {
-    return requestExecutor(null);
-  }
-  return runWithPrompt({
-    execute: requestExecutor,
-    prompt: state.sudoPrompt,
-    contextLabel,
-  });
-}
-
-function maybeShowSudoError(result) {
+function maybeShowTaskActionError(result) {
+  if (!result || typeof result !== "object") return;
+  const action = String(result.action || "");
   const reason = String(result?.reason || "");
-  if (reason === "sudo_prompt_cancelled") return;
+  if (action === "noop" && result?.message) {
+    window.alert(String(result.message));
+    return;
+  }
   if (reason.startsWith("sudo_") && result?.message) {
     window.alert(String(result.message));
   }
@@ -557,15 +536,11 @@ function queueRefresh(delayMs = 250) {
 }
 
 async function toggleTask(taskId) {
-  const result = await runWithSudoPrompt(
-    (sudoPassword) =>
-      api(`/api/tasks/${encodeURIComponent(taskId)}/toggle`, {
-        method: "POST",
-        body: JSON.stringify(sudoPassword ? { sudo_password: sudoPassword } : {}),
-      }),
-    "Task requires sudo access"
-  );
-  maybeShowSudoError(result);
+  const result = await api(`/api/tasks/${encodeURIComponent(taskId)}/toggle`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  maybeShowTaskActionError(result);
   queueRefresh(0);
 }
 
@@ -802,10 +777,8 @@ function attachUiHandlers() {
 
 async function bootstrap() {
   initSoundNotifier();
-  initSudoPrompt();
   window.addEventListener("beforeunload", () => {
     teardownSoundNotifier();
-    teardownSudoPrompt();
     if (state.eventStreamReconnectTimer) {
       clearTimeout(state.eventStreamReconnectTimer);
       state.eventStreamReconnectTimer = null;

@@ -28,6 +28,7 @@ Manzara is an independent implementation tailored to this repository's workflow 
 
 Pages:
 - `/dashboard`
+- `/database`
 - `/schedules`
 - `/tasks`
 - `/tasks/{task-slug-or-id}`
@@ -130,8 +131,44 @@ Secrets policy:
 
 Backup task note:
 - Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.
-- Manual task/workflow runs can prompt for sudo password in UI when required.
-- Scheduled runs are non-interactive; configure passwordless sudo for backup commands if they must run on schedule.
+- Manual and scheduled runs are non-interactive. If sudo access is not configured, backup tasks fail.
+- Configure passwordless sudo for backup commands:
+
+```bash
+PG=$(command -v pgbackrest)
+printf 'tans1q ALL=(postgres) NOPASSWD: %s --stanza=monocorpus --type=full backup\n' "$PG" | sudo tee /etc/sudoers.d/manzara-pgbackrest >/dev/null
+printf 'tans1q ALL=(postgres) NOPASSWD: %s --stanza=monocorpus --type=incr backup\n' "$PG" | sudo tee -a /etc/sudoers.d/manzara-pgbackrest >/dev/null
+printf 'tans1q ALL=(postgres) NOPASSWD: %s --stanza=monocorpus info --output=json\n' "$PG" | sudo tee -a /etc/sudoers.d/manzara-pgbackrest >/dev/null
+sudo chmod 440 /etc/sudoers.d/manzara-pgbackrest
+sudo visudo -cf /etc/sudoers.d/manzara-pgbackrest
+```
+
+- Quick verification:
+
+```bash
+sudo -n -u postgres pgbackrest --stanza=monocorpus --type=full backup
+sudo -n -u postgres pgbackrest --stanza=monocorpus --type=incr backup
+sudo -n -u postgres pgbackrest --stanza=monocorpus info --output=json
+```
+
+- Database state page permissions:
+  - Core table/size/backup data works without elevated PostgreSQL roles.
+  - Disk path/free-space metrics require reading `SHOW data_directory`, which needs `pg_read_all_settings`.
+  - Grant:
+
+```bash
+sudo -u postgres psql -d postgres -c "GRANT pg_read_all_settings TO tans1q;"
+```
+
+  - Revoke (optional):
+
+```bash
+sudo -u postgres psql -d postgres -c "REVOKE pg_read_all_settings FROM tans1q;"
+```
+
+- To verify backup files were uploaded to S3 for a run label, use:
+  - `.venv/bin/python app/modules/maintenance/runtime/check_backup_s3.py --task-id maintenance.pgbackrest_backup_incr`
+  - `.venv/bin/python app/modules/maintenance/runtime/check_backup_s3.py --task-id maintenance.pgbackrest_backup_full`
 
 ## Useful Runtime Commands
 
@@ -170,6 +207,7 @@ Core:
 - `GET /api/schedules`
 - `GET /api/tasks`
 - `GET /api/tasks/{task_id_or_slug}`
+- `GET /api/database/state`
 - `POST /api/tasks/{task_id}/toggle`
 - `PATCH /api/tasks/{task_id}/title`
 - `PATCH /api/flows/{panel_id}/title`
