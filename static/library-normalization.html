@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Manzara</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+  </head>
+  <body class="console-body">
+    <div class="app-shell">
+      <aside class="side-rail" aria-label="Primary">
+        <a class="rail-brand" href="/dashboard" title="Manzara">
+          <i data-lucide="sparkles"></i>
+        </a>
+        <nav class="rail-nav">
+          <a href="/dashboard" class="rail-link" title="Dashboard">
+            <i data-lucide="layout-grid"></i>
+          </a>
+          <a href="/schedules" class="rail-link" title="Schedules">
+            <i data-lucide="calendar-range"></i>
+          </a>
+          <a href="/tasks" class="rail-link" title="Tasks">
+            <i data-lucide="list-checks"></i>
+          </a>
+          <a href="/library" class="rail-link active" aria-current="page" title="Library">
+            <i data-lucide="book-open"></i>
+          </a>
+        </nav>
+      </aside>
+
+      <div class="shell-main">
+        <header class="topbar">
+          <div class="topbar-left">
+            <div class="brand-wrap">
+              <div class="brand">Manzara</div>
+              <div class="subtitle">Bird-eye view of Tatar content pipelines</div>
+            </div>
+            <label class="jump-box" aria-label="Jump">
+              <i data-lucide="search"></i>
+              <input type="text" placeholder="Jump to page, task, flow..." />
+            </label>
+          </div>
+          <div class="top-controls">
+            <div id="global-status" class="status-pill">Tasks: 0 • Flows: 0</div>
+            <button
+              id="stop-all-btn"
+              class="icon-btn amber"
+              title="Graceful stop all running tasks; press again to force stop"
+              aria-label="Stop all tasks"
+              disabled
+            >
+              <i data-lucide="square"></i>
+            </button>
+          </div>
+        </header>
+
+        <div class="alert-strip">
+          <i data-lucide="wand-sparkles"></i>
+          <span>Normalization workbench: canonical registry, queue decisions, suggestions, merge control, and audit undo.</span>
+        </div>
+
+        <main class="dashboard">
+          <section class="runs-card">
+            <div class="library-overview-head">
+              <h2 id="normalization-title">Normalization</h2>
+              <div class="library-head-actions">
+                <a href="/library" class="small-btn">Back to Library</a>
+                <a id="entity-source-link" href="/library/personalities" class="small-btn">Entity Page</a>
+              </div>
+            </div>
+            <div id="normalization-status" class="workflow-footnote">Loading normalization payload...</div>
+            <div id="normalization-stat-grid" class="library-stat-grid"></div>
+
+            <div class="classification-tabs" role="tablist" aria-label="Normalization views">
+              <button id="tab-btn-queue" class="classification-tab active" data-tab="queue" role="tab" aria-selected="true">
+                Review Queue
+              </button>
+              <button id="tab-btn-canonicals" class="classification-tab" data-tab="canonicals" role="tab" aria-selected="false">
+                Canonicals
+                <span id="tab-badge-canonicals" class="classification-tab-badge">0</span>
+              </button>
+              <button id="tab-btn-suggestions" class="classification-tab" data-tab="suggestions" role="tab" aria-selected="false">
+                Suggestions
+                <span id="tab-badge-suggestions" class="classification-tab-badge">0</span>
+              </button>
+              <button id="tab-btn-merge" class="classification-tab" data-tab="merge" role="tab" aria-selected="false">
+                Merge Candidates
+              </button>
+              <button id="tab-btn-quality" class="classification-tab" data-tab="quality" role="tab" aria-selected="false">
+                Quality
+              </button>
+              <button id="tab-btn-history" class="classification-tab" data-tab="history" role="tab" aria-selected="false">
+                History
+              </button>
+            </div>
+
+            <div id="tab-panel-queue" class="classification-tab-panel active" role="tabpanel" aria-labelledby="tab-btn-queue">
+              <div class="classification-filters normalization-filters">
+                <input id="queue-filter-search" class="filter-input" type="text" placeholder="Search raw/normalized" />
+                <select id="queue-filter-status" class="filter-select">
+                  <option value="all">All statuses</option>
+                  <option value="unreviewed">unreviewed</option>
+                  <option value="suggested">suggested</option>
+                  <option value="linked">linked</option>
+                  <option value="pending">pending</option>
+                  <option value="rejected">rejected</option>
+                </select>
+                <select id="queue-filter-script" class="filter-select">
+                  <option value="">Any script</option>
+                  <option value="cyrillic">cyrillic</option>
+                  <option value="latin">latin</option>
+                  <option value="mixed">mixed</option>
+                  <option value="other">other</option>
+                </select>
+                <input id="queue-filter-min-docs" class="filter-input" type="number" min="0" value="0" placeholder="Min docs" />
+                <button id="queue-filter-apply" class="small-btn">Apply</button>
+              </div>
+              <div class="normalization-action-row">
+                <select id="queue-bulk-canonical" class="filter-select"></select>
+                <button id="queue-bulk-link" class="small-btn">Bulk Link</button>
+                <button id="queue-bulk-reject" class="small-btn">Bulk Reject</button>
+                <button id="queue-clear-selection" class="small-btn">Clear</button>
+              </div>
+              <div id="queue-status" class="workflow-footnote">Loading queue...</div>
+              <div class="classification-table-wrap">
+                <table class="classification-table normalization-queue-table">
+                  <thead>
+                    <tr>
+                      <th><input id="queue-select-all" type="checkbox" /></th>
+                      <th>Raw Name</th>
+                      <th>Script</th>
+                      <th>Docs</th>
+                      <th>Mentions</th>
+                      <th>Status</th>
+                      <th>Canonical</th>
+                      <th>Suggestion</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="queue-table-body"></tbody>
+                </table>
+              </div>
+              <div class="classification-pagination">
+                <button id="queue-page-prev" class="small-btn">Prev</button>
+                <span id="queue-page-label" class="workflow-footnote">Page 1 / 1</span>
+                <button id="queue-page-next" class="small-btn">Next</button>
+              </div>
+            </div>
+
+            <div id="tab-panel-canonicals" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-canonicals">
+              <div class="normalization-action-row">
+                <input id="canonical-create-name" class="filter-input" type="text" placeholder="New canonical display name" />
+                <input id="canonical-create-notes" class="filter-input" type="text" placeholder="Notes (optional)" />
+                <button id="canonical-create-btn" class="small-btn">Create Canonical</button>
+              </div>
+              <div class="classification-filters compact">
+                <input id="canonical-search" class="filter-input" type="text" placeholder="Search canonicals" />
+                <button id="canonical-search-apply" class="small-btn">Apply</button>
+              </div>
+              <div id="canonical-status" class="workflow-footnote">Loading canonical registry...</div>
+              <div class="classification-table-wrap">
+                <table class="classification-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Display Name</th>
+                      <th>Normalized</th>
+                      <th>Linked Aliases</th>
+                      <th>Status</th>
+                      <th>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody id="canonical-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div id="tab-panel-suggestions" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-suggestions">
+              <div class="normalization-action-row">
+                <input id="suggestions-limit" class="filter-input" type="number" min="1" max="1000" value="120" />
+                <label class="normalization-inline-check">
+                  <input id="suggestions-use-gemini" type="checkbox" checked />
+                  <span>Use Gemini</span>
+                </label>
+                <button id="suggestions-refresh-btn" class="small-btn">Refresh Suggestions</button>
+              </div>
+              <div id="suggestions-status" class="workflow-footnote">Loading suggestions...</div>
+              <div class="classification-table-wrap">
+                <table class="classification-table">
+                  <thead>
+                    <tr>
+                      <th>Raw Name</th>
+                      <th>Kind</th>
+                      <th>Target Canonical</th>
+                      <th>Confidence</th>
+                      <th>Rationale</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="suggestions-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div id="tab-panel-merge" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-merge">
+              <div class="normalization-action-row">
+                <input id="merge-min-score" class="filter-input" type="number" min="0" max="1" step="0.01" value="0.84" />
+                <button id="merge-load-btn" class="small-btn">Load Candidates</button>
+              </div>
+              <div id="merge-status" class="workflow-footnote">Loading merge candidates...</div>
+              <div id="merge-root" class="duplicates-root"></div>
+            </div>
+
+            <div id="tab-panel-quality" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-quality">
+              <div id="quality-status" class="workflow-footnote">Loading quality metrics...</div>
+              <div id="quality-stat-grid" class="library-stat-grid"></div>
+              <h2>Top Unresolved</h2>
+              <div id="quality-unresolved" class="library-top-list"></div>
+            </div>
+
+            <div id="tab-panel-history" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-history">
+              <div id="history-status" class="workflow-footnote">Loading history...</div>
+              <div id="history-root" class="runs-list"></div>
+            </div>
+          </section>
+        </main>
+
+        <footer class="footer">
+          <span>manzara v0.1.0</span>
+          <span id="last-event">Last event: n/a</span>
+        </footer>
+      </div>
+    </div>
+
+    <dialog id="evidence-dialog" class="log-dialog">
+      <header class="log-head">
+        <h3 id="evidence-title">Alias Evidence</h3>
+        <button id="evidence-close-btn" class="icon-btn" title="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </header>
+      <pre id="evidence-content" class="log-content">Loading...</pre>
+      <div class="log-controls">
+        <button id="evidence-close-footer-btn" class="small-btn">Close</button>
+      </div>
+    </dialog>
+
+    <script src="/static/sound-notifier.js"></script>
+    <script src="/static/library-normalization.js"></script>
+  </body>
+</html>
+
