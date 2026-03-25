@@ -37,6 +37,10 @@ class GeminiServerPauseError(GeminiRuntimeError):
     """Raised when Gemini returns 5xx and global pause has been activated."""
 
 
+class GeminiRequestRejectedError(GeminiRuntimeError):
+    """Raised when Gemini rejects one request payload (e.g. HTTP 400)."""
+
+
 @dataclass(frozen=True)
 class GeminiLease:
     """Reserved key context for one Gemini request attempt."""
@@ -361,6 +365,23 @@ class GeminiRuntimeManager:
                 f"Gemini quota exhausted for key {lease.masked_key} model={lease.model_name}"
             ) from error
 
+        if status_code == 400:
+            self._emit(
+                "gemini.request.rejected",
+                {
+                    "account_id": lease.account_id,
+                    "key_id": lease.key_id,
+                    "masked_key": lease.masked_key,
+                    "model_name": lease.model_name,
+                    "status_code": status_code,
+                    "error": error_text,
+                },
+                run_id=run_id,
+            )
+            raise GeminiRequestRejectedError(
+                f"Gemini request rejected (400) for model={lease.model_name}: {error_text}"
+            ) from error
+
         if status_code is not None and 500 <= status_code <= 599:
             pause_until = now_utc + timedelta(seconds=_GLOBAL_SERVER_PAUSE_SECONDS)
             self.db.mark_gemini_error(
@@ -424,6 +445,8 @@ class GeminiRuntimeManager:
             except Exception as error:  # noqa: BLE001
                 try:
                     self._handle_error(lease=lease, error=error, run_id=run_id)
+                except GeminiRequestRejectedError:
+                    raise
                 except GeminiServerPauseError as pause_error:
                     last_error = pause_error
                     if attempt < attempts:
@@ -577,4 +600,3 @@ class GeminiRuntimeManager:
             },
             "accounts": accounts,
         }
-

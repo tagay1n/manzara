@@ -29,6 +29,7 @@ from app.db import Database
 from app.gemini_runtime import (
     GeminiAllKeysExhaustedError,
     GeminiQuotaExceededError,
+    GeminiRequestRejectedError,
     GeminiRuntimeManager,
     GeminiRuntimeError,
     GeminiServerPauseError,
@@ -374,6 +375,10 @@ class LibraryApplicabilityWorker:
             except GeminiServerPauseError as exc:
                 self.log(f"Gemini server pause active: {exc}")
                 self.tasks_queue.put(doc)
+                continue
+            except GeminiRequestRejectedError as exc:
+                self.log(f"Gemini request rejected for {doc.md5}: {exc}")
+                self.channel.add_unprocessable_doc(doc.md5)
                 continue
             except (ServerError, ClientError) as exc:
                 self.log(f"Gemini client/server error for {doc.md5}: {exc}")

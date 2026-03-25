@@ -8,7 +8,9 @@ import re
 import time
 
 import app.tasks as task_runtime
+import pytest
 from app.gemini_config import GeminiKey
+from app.gemini_runtime import GeminiRequestRejectedError, GeminiRuntimeManager
 from app.modules.maintenance.workflow import (
     LIBRARY_WORKFLOW_ID,
     MAINTENANCE_BACKUP_FULL_WORKFLOW_ID,
@@ -311,6 +313,52 @@ def test_gemini_reset_key_and_reset_all_clear_exhaustion(test_client, monkeypatc
 
     rows_after_all = db.list_gemini_model_states(model_name="gemini-2.5-flash")
     assert all(bool(item.get("exhausted")) is False for item in rows_after_all if item.get("model_name"))
+
+
+def test_gemini_400_rejection_does_not_exhaust_or_pause_key(test_client, monkeypatch) -> None:
+    _client, main_app = test_client
+    monkeypatch.setattr(
+        "app.gemini_runtime.load_gemini_keys",
+        lambda: [
+            GeminiKey(
+                account_id="acc-a",
+                key_id="acc-a:key-1",
+                key_value="KEY_A_1",
+                masked_key="KEYA...A001",
+            ),
+        ],
+    )
+
+    manager = GeminiRuntimeManager(
+        main_app.state.db,
+        task_id="library.personality_suggestions_refresh",
+        panel_id="library",
+    )
+
+    class _BadRequestError(Exception):
+        status_code = 400
+
+        def __str__(self) -> str:
+            return "bad prompt payload"
+
+    def _raise_400(_api_key: str, _lease) -> None:
+        raise _BadRequestError()
+
+    with pytest.raises(GeminiRequestRejectedError):
+        manager.run_with_key(
+            model_name="gemini-2.5-flash",
+            call=_raise_400,
+            max_attempts=2,
+        )
+
+    rows = main_app.state.db.list_gemini_model_states(model_name="gemini-2.5-flash")
+    assert len(rows) == 1
+    row = rows[0]
+    assert bool(row.get("exhausted")) is False
+    assert row.get("last_error_text") in (None, "")
+
+    control = main_app.state.db.ensure_gemini_runtime_control("2026-03-25")
+    assert control.get("pause_until") is None
 
 
 def test_library_classifications_table_endpoint(test_client, monkeypatch) -> None:

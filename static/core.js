@@ -25,6 +25,7 @@
     "gemini.key.success",
     "gemini.key.error",
     "gemini.key.exhausted",
+    "gemini.request.rejected",
     "gemini.key.reset",
     "gemini.all_reset",
     "gemini.pause.started",

@@ -105,6 +105,7 @@ Notes:
   - Selection policy: random account first, then random key in that account; if selected key is cooling down, try another key before waiting.
   - Daily limits are inferred from Gemini responses (no local fixed RPD enforcement).
   - On Gemini `429`: log full payload/context and fail current task run; parsing subtypes can be improved incrementally from observed payloads.
+  - On Gemini `400`: treat as request-level rejection (prompt/input issue); do not exhaust or pause keys, skip/fail only the current item and continue workflow processing.
   - On Gemini `5xx`: start a global Gemini pause for 60 seconds and block new Gemini calls during pause.
   - Enforce Gemini reset blackout window around Pacific reset:
     - No new Gemini calls from 1 hour before to 1 hour after reset.

@@ -1,11 +1,14 @@
-daily backups
-proper migrations
-get rid of sqlite
-skills
-TDD
 periodics resolving
 rename schema in database
-database safety
 move gec-annotations-filter
 move oscar
 unified gemini keys usage
+add upstream metadata to database
+clean s3 storageda
+notification panel
+
+multiple task simultaneously
+explain error types
+working time with cooldo
+
+tasks hierarchy/concurrency

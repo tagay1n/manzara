@@ -270,30 +270,6 @@ def decrypt(ciphertext, config):
     return aesgcm.decrypt(nonce, ct, None).decode()
 
 
-def load_expired_keys(dir='_artifacts/expired_keys'):
-    """Load expired Gemini keys from a single persistent file."""
-    candidates = [dir]
-    if dir.startswith("_artifacts/"):
-        candidates.append(dir.removeprefix("_artifacts/"))
-
-    ekf_name = "expired_keys.json"
-    for candidate in candidates:
-        ekf = os.path.join(candidate, ekf_name)
-        if os.path.exists(ekf):
-            with open(ekf, "r") as f:
-                return set(json.load(f))
-
-    os.makedirs(dir, exist_ok=True)
-    return set()
-    
-
-def dump_expired_keys(keys, dir='_artifacts/expired_keys'):
-    """Persist expired Gemini keys to a single persistent file."""
-    os.makedirs(dir, exist_ok=True)
-    ekf = os.path.join(dir, "expired_keys.json")
-    with open(ekf, "w") as f:
-        json.dump(list(keys), f, ensure_ascii=False, indent=4)
-
 import requests
 import zipfile
 
