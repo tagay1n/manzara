@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import re
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
@@ -84,6 +85,7 @@ from app.modules.shayan.workflow import (
 from app.modules.oscar.panel import build_oscar_panel
 from app.modules.oscar.tasks import oscar_task_definitions
 from app.modules.oscar.workflow import oscar_pipeline_workflow_bundle
+from app.page_routes import register_page_routes
 from app.settings import Settings, load_settings
 from app.run_summary import build_default_run_summary
 from app.tasks import TaskRunner
@@ -122,12 +124,7 @@ class AppState:
 
 settings = load_settings()
 state = AppState(settings)
-app = FastAPI(title="Manzara", version="0.1.0")
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-
-@app.on_event("startup")
-def on_startup() -> None:
+def _startup() -> None:
     """Initialize schema and seed known task/workflow definitions."""
     state.shutting_down = False
     state.db.init_schema()
@@ -170,106 +167,29 @@ def on_startup() -> None:
         state.workflow_service.start()
 
 
-@app.on_event("shutdown")
-def on_shutdown() -> None:
+def _shutdown() -> None:
     """Stop background scheduler worker on app shutdown."""
     state.shutting_down = True
     state.workflow_service.stop()
 
 
-@app.get("/")
-def index() -> RedirectResponse:
-    """Redirect root to dashboard page."""
-    return RedirectResponse(url="/dashboard", status_code=307)
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """FastAPI lifespan hook for startup/shutdown orchestration."""
+    _startup()
+    try:
+        yield
+    finally:
+        _shutdown()
 
 
-@app.get("/dashboard")
-def dashboard_page() -> FileResponse:
-    """Serve dashboard page."""
-    return FileResponse(STATIC_DIR / "dashboard.html")
-
-
-@app.get("/schedules")
-def schedules_page() -> FileResponse:
-    """Serve schedules page."""
-    return FileResponse(STATIC_DIR / "schedules.html")
-
-
-@app.get("/tasks")
-def tasks_page() -> FileResponse:
-    """Serve task index page."""
-    return FileResponse(STATIC_DIR / "tasks.html")
-
-
-@app.get("/flows/{flow_id_or_slug:path}")
-def flow_detail_page(flow_id_or_slug: str) -> FileResponse:
-    """Serve flow detail page shell."""
-    _ = flow_id_or_slug
-    return FileResponse(STATIC_DIR / "flow.html")
-
-
-@app.get("/library")
-def library_page() -> FileResponse:
-    """Serve library insights page."""
-    return FileResponse(STATIC_DIR / "library.html")
-
-
-@app.get("/database")
-def database_page() -> FileResponse:
-    """Serve database diagnostics page."""
-    return FileResponse(STATIC_DIR / "database.html")
-
-
-@app.get("/gemini")
-def gemini_page() -> FileResponse:
-    """Serve Gemini key/runtime diagnostics page."""
-    return FileResponse(STATIC_DIR / "gemini.html")
-
-
-@app.get("/library/classifications")
-def library_classifications_page() -> FileResponse:
-    """Serve classifications control page."""
-    return FileResponse(STATIC_DIR / "library-classifications.html")
-
-
-@app.get("/library/classifications/{classification_id}")
-def library_classification_detail_page(classification_id: int) -> FileResponse:
-    """Serve one classification detail page shell."""
-    _ = classification_id
-    return FileResponse(STATIC_DIR / "library-classification.html")
-
-
-@app.get("/library/personalities")
-def library_personalities_page() -> FileResponse:
-    """Serve personality control page."""
-    return FileResponse(STATIC_DIR / "library-personalities.html")
-
-
-@app.get("/library/publishers")
-def library_publishers_page() -> FileResponse:
-    """Serve publisher control page."""
-    return FileResponse(STATIC_DIR / "library-publishers.html")
-
-
-@app.get("/library/collections")
-def library_collections_page() -> FileResponse:
-    """Serve collections control page."""
-    return FileResponse(STATIC_DIR / "library-collections.html")
-
-
-@app.get("/library/normalization/{entity_type}")
-def library_normalization_page(entity_type: str) -> FileResponse:
-    """Serve normalization workbench page for personality/publisher."""
-    if entity_type not in NORMALIZATION_ENTITY_TYPES:
-        raise HTTPException(status_code=404, detail="Normalization entity type not found")
-    return FileResponse(STATIC_DIR / "library-normalization.html")
-
-
-@app.get("/tasks/{task_id:path}")
-def task_detail_page(task_id: str) -> FileResponse:
-    """Serve task detail page shell."""
-    _ = task_id
-    return FileResponse(STATIC_DIR / "task.html")
+app = FastAPI(title="Manzara", version="0.1.0", lifespan=_lifespan)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+register_page_routes(
+    app,
+    static_dir=STATIC_DIR,
+    normalization_entity_types=NORMALIZATION_ENTITY_TYPES,
+)
 
 
 @app.get("/api/health")

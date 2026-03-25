@@ -1,0 +1,74 @@
+"""Static/UI page route registration."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Iterable
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse
+
+
+def register_page_routes(
+    app: FastAPI,
+    *,
+    static_dir: Path,
+    normalization_entity_types: Iterable[str],
+) -> None:
+    """Register all non-API page routes."""
+    allowed_normalization = {str(item) for item in normalization_entity_types}
+
+    async def _index(_request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/dashboard", status_code=307)
+
+    app.add_api_route("/", _index, methods=["GET"])
+
+    routes = [
+        ("/dashboard", "dashboard.html"),
+        ("/schedules", "schedules.html"),
+        ("/tasks", "tasks.html"),
+        ("/library", "library.html"),
+        ("/database", "database.html"),
+        ("/gemini", "gemini.html"),
+        ("/library/classifications", "library-classifications.html"),
+        ("/library/personalities", "library-personalities.html"),
+        ("/library/publishers", "library-publishers.html"),
+        ("/library/collections", "library-collections.html"),
+    ]
+
+    for path, file_name in routes:
+        target = static_dir / file_name
+
+        async def _serve(_request: Request, _target: Path = target) -> FileResponse:
+            return FileResponse(_target)
+
+        app.add_api_route(path, _serve, methods=["GET"])
+
+    async def _flow_detail(_request: Request, flow_id_or_slug: str) -> FileResponse:
+        _ = flow_id_or_slug
+        return FileResponse(static_dir / "flow.html")
+
+    app.add_api_route("/flows/{flow_id_or_slug:path}", _flow_detail, methods=["GET"])
+
+    async def _classification_detail(_request: Request, classification_id: int) -> FileResponse:
+        _ = classification_id
+        return FileResponse(static_dir / "library-classification.html")
+
+    app.add_api_route(
+        "/library/classifications/{classification_id}",
+        _classification_detail,
+        methods=["GET"],
+    )
+
+    async def _normalization_page(_request: Request, entity_type: str) -> FileResponse:
+        if entity_type not in allowed_normalization:
+            raise HTTPException(status_code=404, detail="Normalization entity type not found")
+        return FileResponse(static_dir / "library-normalization.html")
+
+    app.add_api_route("/library/normalization/{entity_type}", _normalization_page, methods=["GET"])
+
+    async def _task_detail(_request: Request, task_id: str) -> FileResponse:
+        _ = task_id
+        return FileResponse(static_dir / "task.html")
+
+    app.add_api_route("/tasks/{task_id:path}", _task_detail, methods=["GET"])
