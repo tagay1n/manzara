@@ -8,13 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
 from app.control_routes import register_control_routes
 from app.library_classification_routes import register_library_classification_routes
+from app.library_entities_routes import register_library_entities_routes
 from app.library_normalization_routes import register_library_normalization_routes
 from app.modules.library.insights import (
     get_classification_detail,
@@ -878,6 +879,23 @@ register_library_classification_routes(
     },
     build_classification_detail_payload=build_classification_detail_payload,
 )
+register_library_entities_routes(
+    app,
+    state_provider=lambda: state,
+    operations_provider=lambda: {
+        "list_personalities": list_personalities,
+        "get_personality_insights": get_personality_insights,
+        "list_publishers": list_publishers,
+        "get_publisher_insights": get_publisher_insights,
+        "list_library_collections": list_library_collections,
+        "get_collection_insights": get_collection_insights,
+        "list_collection_items": list_collection_items,
+        "update_collection": update_collection,
+    },
+    build_personality_payload=build_personality_payload,
+    build_publisher_payload=build_publisher_payload,
+    build_collections_payload=build_collections_payload,
+)
 
 
 @app.get("/api/dashboard")
@@ -926,147 +944,3 @@ def get_library() -> JSONResponse:
 def get_database_state() -> JSONResponse:
     """Return database diagnostics snapshot."""
     return JSONResponse(build_database_state_payload())
-
-
-@app.get("/api/library/personalities")
-def get_library_personalities() -> JSONResponse:
-    """Return personality overview payload."""
-    return JSONResponse(build_personality_payload())
-
-
-@app.get("/api/library/personalities/table")
-def get_library_personalities_table(
-    search: str = Query("", max_length=120),
-    script_label: str = Query("", max_length=40),
-    min_docs: int = Query(0, ge=0),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=100),
-    sort: str = Query("docs_desc", max_length=40),
-) -> JSONResponse:
-    """Return paginated personalities table."""
-    payload = list_personalities(
-        search=search,
-        script_label=script_label,
-        min_docs=min_docs,
-        page=page,
-        page_size=page_size,
-        sort=sort,
-    )
-    return JSONResponse(payload)
-
-
-@app.get("/api/library/personalities/insights")
-def get_library_personalities_insights(
-    cluster_limit: int = Query(24, ge=1, le=100),
-    queue_limit: int = Query(40, ge=1, le=200),
-) -> JSONResponse:
-    """Return personalities insight tabs payload."""
-    payload = get_personality_insights(
-        cluster_limit=cluster_limit,
-        queue_limit=queue_limit,
-    )
-    return JSONResponse(payload)
-
-
-@app.get("/api/library/publishers")
-def get_library_publishers() -> JSONResponse:
-    """Return publisher overview payload."""
-    return JSONResponse(build_publisher_payload())
-
-
-@app.get("/api/library/collections")
-def get_library_collections() -> JSONResponse:
-    """Return collection overview payload."""
-    return JSONResponse(build_collections_payload())
-
-
-@app.get("/api/library/collections/table")
-def get_library_collections_table(
-    search: str = Query("", max_length=120),
-    status: str = Query("", max_length=40),
-    include: str = Query("all", max_length=10),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=100),
-    sort: str = Query("updated_desc", max_length=40),
-) -> JSONResponse:
-    """Return paginated collections table."""
-    payload = list_library_collections(
-        search=search,
-        status=status,
-        include=include,
-        page=page,
-        page_size=page_size,
-        sort=sort,
-    )
-    return JSONResponse(payload)
-
-
-@app.get("/api/library/collections/insights")
-def get_library_collections_insights(
-    cluster_limit: int = Query(24, ge=1, le=200),
-    queue_limit: int = Query(40, ge=1, le=200),
-) -> JSONResponse:
-    """Return collection insight tabs payload."""
-    payload = get_collection_insights(
-        cluster_limit=cluster_limit,
-        queue_limit=queue_limit,
-    )
-    return JSONResponse(payload)
-
-
-@app.get("/api/library/collections/{collection_id}/items")
-def get_library_collection_items(
-    collection_id: int,
-    limit: int = Query(400, ge=1, le=2000),
-) -> JSONResponse:
-    """Return one collection with linked items."""
-    payload = list_collection_items(collection_id, limit=limit)
-    return JSONResponse(payload)
-
-
-@app.patch("/api/library/collections/{collection_id}")
-def patch_library_collection(
-    collection_id: int,
-    payload: Dict[str, Any] = Body(...),
-) -> JSONResponse:
-    """Patch collection review status/title/notes/include settings."""
-    try:
-        result = update_collection(state.db, collection_id, updates=payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(result)
-
-
-@app.get("/api/library/publishers/table")
-def get_library_publishers_table(
-    search: str = Query("", max_length=120),
-    script_label: str = Query("", max_length=40),
-    min_docs: int = Query(0, ge=0),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=100),
-    sort: str = Query("docs_desc", max_length=40),
-) -> JSONResponse:
-    """Return paginated publishers table."""
-    payload = list_publishers(
-        search=search,
-        script_label=script_label,
-        min_docs=min_docs,
-        page=page,
-        page_size=page_size,
-        sort=sort,
-    )
-    return JSONResponse(payload)
-
-
-@app.get("/api/library/publishers/insights")
-def get_library_publishers_insights(
-    cluster_limit: int = Query(24, ge=1, le=100),
-    queue_limit: int = Query(40, ge=1, le=200),
-) -> JSONResponse:
-    """Return publishers insight tabs payload."""
-    payload = get_publisher_insights(
-        cluster_limit=cluster_limit,
-        queue_limit=queue_limit,
-    )
-    return JSONResponse(payload)
-
