@@ -306,6 +306,42 @@ def _run_with_summary(run: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _count_active_workflows(workflows: Optional[list[Dict[str, Any]]] = None) -> int:
+    rows = workflows if workflows is not None else state.db.list_workflows_with_latest_run()
+    return len([row for row in rows if row.get("run_status") in {"starting", "running"}])
+
+
+def _resolve_stop_all_state(active_runs: list[Dict[str, Any]]) -> str:
+    if not active_runs:
+        return "disabled"
+    if any(run.get("stop_mode") is None for run in active_runs):
+        return "normal"
+    return "armed"
+
+
+def _build_global_payload(
+    *,
+    active_runs: Optional[list[Dict[str, Any]]] = None,
+    active_workflows: Optional[int] = None,
+    include_failed_runs: bool = False,
+) -> Dict[str, Any]:
+    runs = active_runs if active_runs is not None else state.db.list_active_runs()
+    payload: Dict[str, Any] = {
+        "active_tasks": len(runs),
+        "active_workflows": (
+            active_workflows
+            if active_workflows is not None
+            else _count_active_workflows()
+        ),
+        "stop_all_state": _resolve_stop_all_state(runs),
+    }
+    if include_failed_runs:
+        payload["failed_runs"] = len(
+            [run for run in state.db.list_recent_runs(50) if run["status"] == "failed"]
+        )
+    return payload
+
+
 def _build_panel_payloads(
     *,
     tasks_by_panel: Dict[str, list[Dict[str, Any]]],
@@ -399,21 +435,7 @@ def build_dashboard_payload() -> Dict[str, Any]:
         panel["slug"] = flow_slug_map.get(panel_id, panel_id)
 
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
-
-    active_workflow_runs = len(
-        [
-            row
-            for row in workflows
-            if row.get("run_status") in {"starting", "running"}
-        ]
-    )
+    active_workflow_runs = _count_active_workflows(workflows)
 
     recent_runs = state.db.list_recent_runs(20)
     for run in recent_runs:
@@ -423,12 +445,11 @@ def build_dashboard_payload() -> Dict[str, Any]:
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": active_workflow_runs,
-            "failed_runs": len([r for r in state.db.list_recent_runs(50) if r["status"] == "failed"]),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(
+            active_runs=active_runs,
+            active_workflows=active_workflow_runs,
+            include_failed_runs=True,
+        ),
         "panels": ordered_panels,
         "recent_runs": recent_runs,
         "scheduler": {
@@ -478,23 +499,16 @@ def build_schedules_payload() -> Dict[str, Any]:
         )
 
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
+    active_workflows = len(
+        [workflow for workflow in workflow_items if workflow["run"]["status"] in {"starting", "running"}]
+    )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [w for w in workflow_items if w["run"]["status"] in {"starting", "running"}]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(
+            active_runs=active_runs,
+            active_workflows=active_workflows,
+        ),
         "scheduler": {
             "enabled": state.settings.scheduler_enabled,
         },
@@ -547,27 +561,10 @@ def build_tasks_payload() -> Dict[str, Any]:
         )
 
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [
-                    row
-                    for row in state.db.list_workflows_with_latest_run()
-                    if row.get("run_status") in {"starting", "running"}
-                ]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(active_runs=active_runs),
         "flows": sorted(task_groups.values(), key=lambda item: str(item.get("title", "")).lower()),
     }
 
@@ -591,27 +588,10 @@ def build_task_detail_payload(task_key: str, limit: int = 20) -> Dict[str, Any]:
         status_counts[key] = int(status_counts.get(key, 0)) + 1
 
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [
-                    row
-                    for row in state.db.list_workflows_with_latest_run()
-                    if row.get("run_status") in {"starting", "running"}
-                ]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(active_runs=active_runs),
         "task": {
             "task_id": task["task_id"],
             "slug": task_slug_map.get(task_id, task_id),
@@ -723,13 +703,6 @@ def build_flow_detail_payload(flow_key: str, limit_per_task: int = 20) -> Dict[s
         )
 
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
 
     workflow_items = [
         {
@@ -749,17 +722,7 @@ def build_flow_detail_payload(flow_key: str, limit_per_task: int = 20) -> Dict[s
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [
-                    row
-                    for row in state.db.list_workflows_with_latest_run()
-                    if row.get("run_status") in {"starting", "running"}
-                ]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(active_runs=active_runs),
         "flow": flow_payload,
         "tasks": sorted(task_items, key=lambda item: str(item.get("title", "")).lower()),
         "workflows": workflow_items,
@@ -769,28 +732,11 @@ def build_flow_detail_payload(flow_key: str, limit_per_task: int = 20) -> Dict[s
 def build_library_payload() -> Dict[str, Any]:
     """Compose library page payload with external dataset stats."""
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
 
     last_eval_run = state.db.get_latest_run_for_task(MONOCORPUS_META_EVALUATE_TASK_ID)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [
-                    row
-                    for row in state.db.list_workflows_with_latest_run()
-                    if row.get("run_status") in {"starting", "running"}
-                ]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(active_runs=active_runs),
         "dataset": get_library_dataset_stats(),
         "last_eval_run": last_eval_run,
     }
@@ -799,27 +745,10 @@ def build_library_payload() -> Dict[str, Any]:
 def build_database_state_payload() -> Dict[str, Any]:
     """Compose database diagnostics payload with global state."""
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [
-                    row
-                    for row in state.db.list_workflows_with_latest_run()
-                    if row.get("run_status") in {"starting", "running"}
-                ]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(active_runs=active_runs),
         "database_state": build_database_state_snapshot(state.db),
     }
 
@@ -838,13 +767,6 @@ def build_classification_detail_payload(
     )
 
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
 
     task_slug_map, _ = _task_slug_maps()
     recent_eval_runs = state.db.list_recent_runs_for_task(MONOCORPUS_META_EVALUATE_TASK_ID, limit=10)
@@ -854,17 +776,7 @@ def build_classification_detail_payload(
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [
-                    row
-                    for row in state.db.list_workflows_with_latest_run()
-                    if row.get("run_status") in {"starting", "running"}
-                ]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(active_runs=active_runs),
         "detail": detail,
         "recent_meta_evaluate_runs": recent_eval_runs,
     }
@@ -873,27 +785,10 @@ def build_classification_detail_payload(
 def build_personality_payload() -> Dict[str, Any]:
     """Compose personality page payload with global state and overview metrics."""
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [
-                    row
-                    for row in state.db.list_workflows_with_latest_run()
-                    if row.get("run_status") in {"starting", "running"}
-                ]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(active_runs=active_runs),
         "overview": get_personality_overview(),
     }
 
@@ -901,27 +796,10 @@ def build_personality_payload() -> Dict[str, Any]:
 def build_publisher_payload() -> Dict[str, Any]:
     """Compose publisher page payload with global state and overview metrics."""
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [
-                    row
-                    for row in state.db.list_workflows_with_latest_run()
-                    if row.get("run_status") in {"starting", "running"}
-                ]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(active_runs=active_runs),
         "overview": get_publisher_overview(),
     }
 
@@ -932,30 +810,13 @@ def build_normalization_payload(entity_type: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Normalization entity type not found")
 
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
 
     label = "Personalities" if entity_type == "personality" else "Publishers"
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "entity_type": entity_type,
         "entity_label": label,
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [
-                    row
-                    for row in state.db.list_workflows_with_latest_run()
-                    if row.get("run_status") in {"starting", "running"}
-                ]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(active_runs=active_runs),
         "dashboard": get_normalization_dashboard(state.db, entity_type),
         "quality": get_normalization_quality(state.db, entity_type),
         "suggestions": list_suggestions(state.db, entity_type, limit=80),
@@ -966,27 +827,10 @@ def build_normalization_payload(entity_type: str) -> Dict[str, Any]:
 def build_collections_payload() -> Dict[str, Any]:
     """Compose collections page payload with overview metrics."""
     active_runs = state.db.list_active_runs()
-    stop_all_state = "disabled"
-    if active_runs:
-        stop_all_state = (
-            "normal"
-            if any(run.get("stop_mode") is None for run in active_runs)
-            else "armed"
-        )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "global": {
-            "active_tasks": len(active_runs),
-            "active_workflows": len(
-                [
-                    row
-                    for row in state.db.list_workflows_with_latest_run()
-                    if row.get("run_status") in {"starting", "running"}
-                ]
-            ),
-            "stop_all_state": stop_all_state,
-        },
+        "global": _build_global_payload(active_runs=active_runs),
         "overview": get_collection_overview(),
     }
 
