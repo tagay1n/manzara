@@ -14,7 +14,7 @@ import yaml
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
-from app.db import ACTIVE_STATUSES, ACTIVE_WORKFLOW_STATUSES
+from app.db import ACTIVE_STATUSES, ACTIVE_WORKFLOW_STATUSES, Database
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.oscar.config import OscarSettings
 from app.modules.oscar.tasks import (
@@ -251,13 +251,52 @@ def _drop_schema(database_url: str, schema_name: str) -> None:
         engine.dispose()
 
 
+def _truncate_schema(database_url: str, schema_name: str) -> None:
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            table_list = conn.execute(
+                text(
+                    """
+                    SELECT string_agg(format('%I.%I', schemaname, tablename), ', ') AS names
+                    FROM pg_tables
+                    WHERE schemaname = :schema
+                      AND tablename <> 'alembic_version'
+                    """
+                ),
+                {"schema": schema_name},
+            ).scalar()
+            if table_list:
+                conn.execute(text(f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE"))
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def prepared_test_schema() -> tuple[str, str]:
+    """Create one migrated schema for the full test session."""
+    database_url = _resolve_test_database_url()
+    schema_name = f"manzara_test_{uuid.uuid4().hex[:10]}"
+    _drop_schema(database_url, schema_name)
+    db = Database(database_url, schema=schema_name)
+    db.init_schema()
+    try:
+        yield database_url, schema_name
+    finally:
+        _drop_schema(database_url, schema_name)
+
+
 @pytest.fixture()
-def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tuple[TestClient, object]]:
+def test_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    prepared_test_schema: tuple[str, str],
+) -> Iterator[Tuple[TestClient, object]]:
     """Return isolated TestClient and app.main module with temporary state."""
     from app import main as main_app
 
-    database_url = _resolve_test_database_url()
-    schema_name = f"manzara_test_{uuid.uuid4().hex[:10]}"
+    database_url, schema_name = prepared_test_schema
+    _truncate_schema(database_url, schema_name)
 
     shayan_repo = tmp_path / "shayan"
     shayan_repo.mkdir(parents=True, exist_ok=True)
@@ -299,6 +338,7 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
     monkeypatch.setattr(main_app, "shayan_task_definitions", _test_task_defs)
     monkeypatch.setattr(main_app, "oscar_task_definitions", _test_oscar_task_defs)
     main_app.state = main_app.AppState(settings)
+    monkeypatch.setattr(main_app.state.db, "init_schema", lambda: None)
 
     with TestClient(main_app.app) as client:
         yield client, main_app
@@ -310,8 +350,7 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
             break
         main_app.state.runner.stop_all_toggle()
         time.sleep(0.15)
-
-    _drop_schema(database_url, schema_name)
+    _truncate_schema(database_url, schema_name)
 
 
 @pytest.fixture()
