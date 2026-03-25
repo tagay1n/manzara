@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
 from app.control_routes import register_control_routes
+from app.library_normalization_routes import register_library_normalization_routes
 from app.modules.library.insights import (
     get_classification_detail,
     get_classification_insights,
@@ -842,6 +843,32 @@ def build_collections_payload() -> Dict[str, Any]:
     }
 
 
+register_library_normalization_routes(
+    app,
+    state_provider=lambda: state,
+    normalization_entity_types=NORMALIZATION_ENTITY_TYPES,
+    build_normalization_payload=build_normalization_payload,
+    operations_provider=lambda: {
+        "get_review_queue": get_review_queue,
+        "list_canonicals": list_canonicals,
+        "create_canonical": create_canonical,
+        "link_alias": link_alias,
+        "create_and_link_alias": create_and_link_alias,
+        "reject_alias": reject_alias,
+        "bulk_link_aliases": bulk_link_aliases,
+        "bulk_reject_aliases": bulk_reject_aliases,
+        "list_suggestions": list_suggestions,
+        "refresh_suggestions": refresh_suggestions,
+        "get_normalization_merge_candidates": get_normalization_merge_candidates,
+        "merge_canonicals": merge_canonicals,
+        "list_normalization_history": list_normalization_history,
+        "undo_event": undo_event,
+        "get_normalization_quality": get_normalization_quality,
+        "get_normalization_evidence": get_normalization_evidence,
+    },
+)
+
+
 @app.get("/api/dashboard")
 def get_dashboard() -> JSONResponse:
     """Return current dashboard state."""
@@ -1030,350 +1057,6 @@ def get_library_publishers_insights(
         cluster_limit=cluster_limit,
         queue_limit=queue_limit,
     )
-    return JSONResponse(payload)
-
-
-def _require_normalization_entity(entity_type: str) -> str:
-    normalized = str(entity_type or "").strip().lower()
-    if normalized not in NORMALIZATION_ENTITY_TYPES:
-        raise HTTPException(status_code=404, detail="Normalization entity type not found")
-    return normalized
-
-
-@app.get("/api/library/normalization/{entity_type}")
-def get_library_normalization(entity_type: str) -> JSONResponse:
-    """Return normalization workbench summary payload."""
-    normalized = _require_normalization_entity(entity_type)
-    return JSONResponse(build_normalization_payload(normalized))
-
-
-@app.get("/api/library/normalization/{entity_type}/queue")
-def get_library_normalization_queue(
-    entity_type: str,
-    status: str = Query("all", max_length=40),
-    search: str = Query("", max_length=120),
-    script_label: str = Query("", max_length=40),
-    min_docs: int = Query(0, ge=0),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(40, ge=1, le=200),
-) -> JSONResponse:
-    """Return normalization review queue."""
-    normalized = _require_normalization_entity(entity_type)
-    payload = get_review_queue(
-        state.db,
-        normalized,
-        status=status,
-        search=search,
-        script_label=script_label,
-        min_docs=min_docs,
-        page=page,
-        page_size=page_size,
-    )
-    return JSONResponse(payload)
-
-
-@app.get("/api/library/normalization/{entity_type}/canonicals")
-def get_library_normalization_canonicals(
-    entity_type: str,
-    search: str = Query("", max_length=160),
-) -> JSONResponse:
-    """Return canonical registry entries for normalization entity."""
-    normalized = _require_normalization_entity(entity_type)
-    return JSONResponse(list_canonicals(state.db, normalized, search=search))
-
-
-@app.post("/api/library/normalization/{entity_type}/canonicals")
-def create_library_normalization_canonical(
-    entity_type: str,
-    payload: Dict[str, Any] = Body(...),
-) -> JSONResponse:
-    """Create one canonical entry."""
-    normalized = _require_normalization_entity(entity_type)
-    display_name = str(payload.get("display_name") or "").strip()
-    notes = str(payload.get("notes") or "").strip()
-    if not display_name:
-        raise HTTPException(status_code=400, detail="display_name is required")
-    try:
-        result = create_canonical(
-            state.db,
-            normalized,
-            display_name=display_name,
-            notes=notes,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(result)
-
-
-@app.post("/api/library/normalization/{entity_type}/decisions/link")
-def link_library_normalization_alias(
-    entity_type: str,
-    payload: Dict[str, Any] = Body(...),
-) -> JSONResponse:
-    """Link alias to canonical."""
-    normalized = _require_normalization_entity(entity_type)
-    raw_name = str(payload.get("raw_name") or "").strip()
-    if not raw_name:
-        raise HTTPException(status_code=400, detail="raw_name is required")
-    canonical_id = payload.get("canonical_id")
-    try:
-        canonical_int = int(canonical_id)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="canonical_id must be an integer")
-
-    confidence_raw = payload.get("confidence")
-    confidence = None
-    if confidence_raw is not None and str(confidence_raw).strip() != "":
-        try:
-            confidence = float(confidence_raw)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="confidence must be a number")
-
-    suggestion_ids_raw = payload.get("suggestion_ids") or []
-    suggestion_ids = [int(item) for item in suggestion_ids_raw if str(item).strip()]
-
-    try:
-        result = link_alias(
-            state.db,
-            normalized,
-            raw_name=raw_name,
-            canonical_id=canonical_int,
-            source=str(payload.get("source") or "manual"),
-            confidence=confidence if confidence is not None else 1.0,
-            reason=str(payload.get("reason") or ""),
-            suggestion_ids=suggestion_ids,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(result)
-
-
-@app.post("/api/library/normalization/{entity_type}/decisions/create-link")
-def create_and_link_library_normalization_alias(
-    entity_type: str,
-    payload: Dict[str, Any] = Body(...),
-) -> JSONResponse:
-    """Create canonical and link alias in one action."""
-    normalized = _require_normalization_entity(entity_type)
-    raw_name = str(payload.get("raw_name") or "").strip()
-    display_name = str(payload.get("display_name") or "").strip()
-    suggestion_ids_raw = payload.get("suggestion_ids") or []
-    suggestion_ids = [int(item) for item in suggestion_ids_raw if str(item).strip()]
-    if not raw_name:
-        raise HTTPException(status_code=400, detail="raw_name is required")
-    if not display_name:
-        raise HTTPException(status_code=400, detail="display_name is required")
-
-    try:
-        result = create_and_link_alias(
-            state.db,
-            normalized,
-            raw_name=raw_name,
-            display_name=display_name,
-            reason=str(payload.get("reason") or ""),
-            suggestion_ids=suggestion_ids,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(result)
-
-
-@app.post("/api/library/normalization/{entity_type}/decisions/reject")
-def reject_library_normalization_alias(
-    entity_type: str,
-    payload: Dict[str, Any] = Body(...),
-) -> JSONResponse:
-    """Reject alias from normalization queue."""
-    normalized = _require_normalization_entity(entity_type)
-    raw_name = str(payload.get("raw_name") or "").strip()
-    if not raw_name:
-        raise HTTPException(status_code=400, detail="raw_name is required")
-    suggestion_ids_raw = payload.get("suggestion_ids") or []
-    suggestion_ids = [int(item) for item in suggestion_ids_raw if str(item).strip()]
-
-    try:
-        result = reject_alias(
-            state.db,
-            normalized,
-            raw_name=raw_name,
-            reason=str(payload.get("reason") or ""),
-            suggestion_ids=suggestion_ids,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(result)
-
-
-@app.post("/api/library/normalization/{entity_type}/bulk/link")
-def bulk_link_library_normalization_aliases(
-    entity_type: str,
-    payload: Dict[str, Any] = Body(...),
-) -> JSONResponse:
-    """Bulk-link aliases to a canonical."""
-    normalized = _require_normalization_entity(entity_type)
-    raw_names = payload.get("raw_names") or []
-    canonical_id = payload.get("canonical_id")
-    try:
-        canonical_int = int(canonical_id)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="canonical_id must be an integer")
-
-    try:
-        result = bulk_link_aliases(
-            state.db,
-            normalized,
-            raw_names=[str(item) for item in raw_names],
-            canonical_id=canonical_int,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(result)
-
-
-@app.post("/api/library/normalization/{entity_type}/bulk/reject")
-def bulk_reject_library_normalization_aliases(
-    entity_type: str,
-    payload: Dict[str, Any] = Body(...),
-) -> JSONResponse:
-    """Bulk-reject aliases from queue."""
-    normalized = _require_normalization_entity(entity_type)
-    raw_names = payload.get("raw_names") or []
-    try:
-        result = bulk_reject_aliases(
-            state.db,
-            normalized,
-            raw_names=[str(item) for item in raw_names],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(result)
-
-
-@app.get("/api/library/normalization/{entity_type}/suggestions")
-def get_library_normalization_suggestions(
-    entity_type: str,
-    limit: int = Query(200, ge=1, le=1000),
-) -> JSONResponse:
-    """Return open suggestions for normalization queue."""
-    normalized = _require_normalization_entity(entity_type)
-    return JSONResponse(list_suggestions(state.db, normalized, limit=limit))
-
-
-@app.post("/api/library/normalization/{entity_type}/suggestions/refresh")
-def refresh_library_normalization_suggestions(
-    entity_type: str,
-    payload: Dict[str, Any] = Body(default={}),
-) -> JSONResponse:
-    """Regenerate normalization suggestions."""
-    normalized = _require_normalization_entity(entity_type)
-    limit = payload.get("limit", 120)
-    use_gemini = payload.get("use_gemini", True)
-    try:
-        result = refresh_suggestions(
-            state.db,
-            normalized,
-            limit=int(limit),
-            use_gemini=bool(use_gemini),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(result)
-
-
-@app.get("/api/library/normalization/{entity_type}/merge-candidates")
-def get_library_normalization_merge_candidates(
-    entity_type: str,
-    min_score: float = Query(0.84, ge=0.0, le=1.0),
-    limit: int = Query(80, ge=1, le=300),
-) -> JSONResponse:
-    """Return possible canonical merge candidates."""
-    normalized = _require_normalization_entity(entity_type)
-    return JSONResponse(
-        get_normalization_merge_candidates(
-            state.db,
-            normalized,
-            min_score=min_score,
-            limit=limit,
-        )
-    )
-
-
-@app.post("/api/library/normalization/{entity_type}/merge")
-def merge_library_normalization_canonicals(
-    entity_type: str,
-    payload: Dict[str, Any] = Body(...),
-) -> JSONResponse:
-    """Merge source canonical into target canonical."""
-    normalized = _require_normalization_entity(entity_type)
-    try:
-        source_canonical_id = int(payload.get("source_canonical_id"))
-        target_canonical_id = int(payload.get("target_canonical_id"))
-    except (TypeError, ValueError):
-        raise HTTPException(
-            status_code=400,
-            detail="source_canonical_id and target_canonical_id must be integers",
-        )
-
-    try:
-        result = merge_canonicals(
-            state.db,
-            normalized,
-            source_canonical_id=source_canonical_id,
-            target_canonical_id=target_canonical_id,
-            reason=str(payload.get("reason") or ""),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(result)
-
-
-@app.get("/api/library/normalization/{entity_type}/history")
-def get_library_normalization_history(
-    entity_type: str,
-    limit: int = Query(200, ge=1, le=1000),
-) -> JSONResponse:
-    """Return normalization action history."""
-    normalized = _require_normalization_entity(entity_type)
-    return JSONResponse(list_normalization_history(state.db, normalized, limit=limit))
-
-
-@app.post("/api/library/normalization/{entity_type}/history/{event_id}/undo")
-def undo_library_normalization_history_event(
-    entity_type: str,
-    event_id: int,
-) -> JSONResponse:
-    """Undo one normalization event by id."""
-    normalized = _require_normalization_entity(entity_type)
-    try:
-        result = undo_event(state.db, normalized, event_id=event_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse(result)
-
-
-@app.get("/api/library/normalization/{entity_type}/quality")
-def get_library_normalization_quality(entity_type: str) -> JSONResponse:
-    """Return quality metrics for normalization workbench."""
-    normalized = _require_normalization_entity(entity_type)
-    return JSONResponse(get_normalization_quality(state.db, normalized))
-
-
-@app.get("/api/library/normalization/{entity_type}/evidence")
-def get_library_normalization_alias_evidence(
-    entity_type: str,
-    raw_name: str = Query(..., min_length=1, max_length=240),
-    limit: int = Query(20, ge=1, le=200),
-) -> JSONResponse:
-    """Return sample docs where alias appears."""
-    normalized = _require_normalization_entity(entity_type)
-    try:
-        payload = get_normalization_evidence(
-            normalized,
-            raw_name=raw_name,
-            limit=limit,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(payload)
 
 
