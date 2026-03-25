@@ -90,6 +90,10 @@ Notes:
   - If full automation is impractical (external/runtime-heavy dependencies), add focused unit/integration coverage for core logic and document the exact manual smoke checks in `README`.
 - Keep backend as the only source of domain truth; do not move business decisions to frontend.
 - Prefer explicit contracts for API/SSE payloads and backward-compatible schema changes.
+- Validate external API payloads strictly and fail fast with actionable `400` errors:
+  - Avoid silent coercion of ambiguous values.
+  - For boolean-like control fields, accept only explicit allowlisted forms.
+  - For integer control fields, require integral values (no implicit truncation from floats).
 - Keep flow modules isolated (`app/modules/<flow>/...`) with clear ownership boundaries.
 - No silent failures: surface actionable error context in run state, logs, and SSE events.
 - Logging/observability is mandatory for task execution paths:

@@ -78,6 +78,15 @@ Scheduler policy:
 - Catch-up policy on downtime: `once`
 - Timezone field is stored per schedule (default `UTC`)
 
+Schedule update contract (`PATCH /api/schedules/{schedule_id}`):
+- `enabled` accepts:
+  - booleans (`true` / `false`)
+  - numeric `0` or `1`
+  - strings: `1,true,yes,on` and `0,false,no,off`
+- `day_of_week` must be an integer `1..7`
+- `interval_minutes` must be an integer `>= 1` (or `null`/empty when not used)
+- `timezone` must be a valid IANA timezone name (for example `UTC`, `Europe/Moscow`, `America/Los_Angeles`)
+
 Runtime control behavior:
 - Task toggle: `start -> graceful stop -> force stop`
 - Header stop-all button: first press graceful, second press force
