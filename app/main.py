@@ -8,12 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
 from app.control_routes import register_control_routes
+from app.core_read_routes import register_core_read_routes
 from app.library_classification_routes import register_library_classification_routes
 from app.library_entities_routes import register_library_entities_routes
 from app.library_normalization_routes import register_library_normalization_routes
@@ -896,51 +896,15 @@ register_library_entities_routes(
     build_publisher_payload=build_publisher_payload,
     build_collections_payload=build_collections_payload,
 )
-
-
-@app.get("/api/dashboard")
-def get_dashboard() -> JSONResponse:
-    """Return current dashboard state."""
-    return JSONResponse(build_dashboard_payload())
-
-
-@app.get("/api/schedules")
-def get_schedules() -> JSONResponse:
-    """Return workflows and schedule configuration state."""
-    return JSONResponse(build_schedules_payload())
-
-
-@app.get("/api/tasks")
-def get_tasks() -> JSONResponse:
-    """Return all tasks grouped by flow."""
-    return JSONResponse(build_tasks_payload())
-
-
-@app.get("/api/tasks/{task_id}")
-def get_task_detail(
-    task_id: str,
-    limit: int = Query(20, ge=1, le=400),
-) -> JSONResponse:
-    """Return one task with run history (task id or slug)."""
-    return JSONResponse(build_task_detail_payload(task_id, limit=limit))
-
-
-@app.get("/api/flows/{flow_id_or_slug}")
-def get_flow_detail(
-    flow_id_or_slug: str,
-    limit_per_task: int = Query(20, ge=1, le=200),
-) -> JSONResponse:
-    """Return one flow with panel stats and per-task run history."""
-    return JSONResponse(build_flow_detail_payload(flow_id_or_slug, limit_per_task=limit_per_task))
-
-
-@app.get("/api/library")
-def get_library() -> JSONResponse:
-    """Return library applicability dataset statistics."""
-    return JSONResponse(build_library_payload())
-
-
-@app.get("/api/database/state")
-def get_database_state() -> JSONResponse:
-    """Return database diagnostics snapshot."""
-    return JSONResponse(build_database_state_payload())
+register_core_read_routes(
+    app,
+    payload_provider=lambda: {
+        "build_dashboard_payload": build_dashboard_payload,
+        "build_schedules_payload": build_schedules_payload,
+        "build_tasks_payload": build_tasks_payload,
+        "build_task_detail_payload": build_task_detail_payload,
+        "build_flow_detail_payload": build_flow_detail_payload,
+        "build_library_payload": build_library_payload,
+        "build_database_state_payload": build_database_state_payload,
+    },
+)
