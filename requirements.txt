@@ -1,24 +1,26 @@
-fastapi==0.118.0
-uvicorn==0.37.0
-alembic==1.16.5
+fastapi==0.135.2
+# ASGI server used to run Manzara locally/in production.
+uvicorn==0.42.0
+alembic==1.18.4
 
 # Embedded runtime dependencies for copied monocorpus flows.
-boto3==1.42.44
-cryptography==46.0.4
-google-genai==1.62.0
-huggingface_hub==1.7.1
+boto3==1.42.75
+cryptography==46.0.5
+google-genai==1.68.0
+huggingface_hub==1.7.2
 isbnlib==3.10.14
 pydantic==2.12.5
 psycopg2-binary==2.9.11
-pymupdf==1.26.7
+pymupdf==1.27.2.2
 pyyaml==6.0.3
 requests==2.32.5
-rich==14.3.2
-sqlalchemy==2.0.46
-typer==0.21.1
+rich==14.3.3
+sqlalchemy==2.0.48
+typer==0.24.1
 yadisk==3.4.0
 yadisk_client @ git+https://github.com/tagay1n/yadisk-client@dd7e957bf56837cb82aa1042ca0deb52596bdd79
 
 # Testing tools (single-file dependency policy).
-pytest==8.4.2
+pytest==9.0.2
+# Required by FastAPI/Starlette TestClient during backend tests.
 httpx==0.28.1
