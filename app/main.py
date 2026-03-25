@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
-import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
@@ -86,6 +84,7 @@ from app.modules.oscar.panel import build_oscar_panel
 from app.modules.oscar.tasks import oscar_task_definitions
 from app.modules.oscar.workflow import oscar_pipeline_workflow_bundle
 from app.page_routes import register_page_routes
+from app.stream_routes import register_stream_routes
 from app.settings import Settings, load_settings
 from app.run_summary import build_default_run_summary
 from app.tasks import TaskRunner
@@ -194,6 +193,14 @@ register_control_routes(
     state_provider=lambda: state,
     title_max_length=_TITLE_MAX_LENGTH,
 )
+_stream_route_handlers = register_stream_routes(
+    app,
+    state_provider=lambda: state,
+    sse_poll_interval_seconds=_SSE_POLL_INTERVAL_SECONDS,
+    sse_heartbeat_every_empty_polls=_SSE_HEARTBEAT_EVERY_EMPTY_POLLS,
+)
+run_logs = _stream_route_handlers["run_logs"]
+events_stream = _stream_route_handlers["events_stream"]
 
 
 @app.get("/api/health")
@@ -1452,114 +1459,4 @@ def get_library_classification_detail(
             docs_page=docs_page,
             docs_page_size=docs_page_size,
         )
-    )
-
-
-@app.get("/api/runs/{run_id}/logs")
-def run_logs(
-    run_id: int,
-    after_log_id: int = Query(0, ge=0),
-    before_log_id: Optional[int] = Query(None, gt=0),
-    tail: bool = Query(False),
-    limit: int = Query(400, ge=1, le=2000),
-) -> JSONResponse:
-    """Return logs for one run with cursor pagination (after/before/tail)."""
-    run = state.db.get_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-
-    if tail and (after_log_id > 0 or before_log_id is not None):
-        raise HTTPException(
-            status_code=400,
-            detail="tail mode cannot be combined with after_log_id or before_log_id",
-        )
-    if before_log_id is not None and after_log_id > 0:
-        raise HTTPException(
-            status_code=400,
-            detail="before_log_id cannot be combined with after_log_id",
-        )
-
-    lines = state.db.get_logs(
-        run_id=run_id,
-        after_log_id=after_log_id,
-        before_log_id=before_log_id,
-        tail=tail,
-        limit=limit,
-    )
-    next_after_log_id = int(lines[-1]["log_id"]) if lines else int(after_log_id or 0)
-    if lines:
-        next_before_log_id = int(lines[0]["log_id"])
-    elif before_log_id is not None:
-        next_before_log_id = int(before_log_id)
-    else:
-        next_before_log_id = 0
-
-    has_more_before = (
-        state.db.has_logs_before(run_id, next_before_log_id)
-        if next_before_log_id > 0
-        else False
-    )
-
-    return JSONResponse(
-        {
-            "run": run,
-            "lines": lines,
-            "next_after_log_id": next_after_log_id,
-            "next_before_log_id": next_before_log_id,
-            "has_more_before": has_more_before,
-        }
-    )
-
-
-@app.get("/api/events/stream")
-async def events_stream(
-    request: Request,
-    after_event_id: int = Query(0, ge=0),
-) -> StreamingResponse:
-    """Server-Sent Events stream for near-real-time dashboard updates."""
-
-    header_last_event: Optional[str] = request.headers.get("last-event-id")
-    cursor = after_event_id
-    if header_last_event is not None:
-        try:
-            cursor = max(cursor, int(header_last_event))
-        except ValueError:
-            pass
-
-    async def event_generator():
-        nonlocal cursor
-        heartbeat_counter = 0
-        try:
-            while True:
-                if state.shutting_down:
-                    break
-
-                if await request.is_disconnected():
-                    break
-
-                events = state.db.get_events_after(cursor, limit=200)
-                if events:
-                    for event in events:
-                        cursor = int(event["event_id"])
-                        data = json.dumps(event, ensure_ascii=False)
-                        yield f"id: {cursor}\nevent: {event['type']}\ndata: {data}\n\n"
-                    heartbeat_counter = 0
-                    # Keep loop cooperative for cancellation/shutdown.
-                    await asyncio.sleep(0)
-                else:
-                    heartbeat_counter += 1
-                    if heartbeat_counter >= _SSE_HEARTBEAT_EVERY_EMPTY_POLLS:
-                        yield ": heartbeat\n\n"
-                        heartbeat_counter = 0
-                    await asyncio.sleep(_SSE_POLL_INTERVAL_SECONDS)
-        except asyncio.CancelledError:
-            return
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
     )
