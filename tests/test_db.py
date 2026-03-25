@@ -133,3 +133,85 @@ def test_recover_active_workflow_runs_marks_running_as_failed(tmp_path: Path) ->
         assert run["status"] == "failed"
         assert run["finished_at"] is not None
         assert "Recovered after Manzara restart" in (run["error_text"] or "")
+
+
+def test_oscar_snapshot_queue_claims_oldest_pending_first() -> None:
+    with _isolated_database() as db:
+        db.upsert_oscar_snapshot(
+            "snap-b",
+            source_path="/snapshots/b",
+            discovered_at="2026-03-02T00:00:00+00:00",
+        )
+        db.upsert_oscar_snapshot(
+            "snap-a",
+            source_path="/snapshots/a",
+            discovered_at="2026-03-01T00:00:00+00:00",
+        )
+
+        first = db.claim_next_oscar_snapshot()
+        assert first is not None
+        assert first["snapshot_id"] == "snap-a"
+        assert first["status"] == "processing"
+
+        second = db.claim_next_oscar_snapshot()
+        assert second is not None
+        assert second["snapshot_id"] == "snap-b"
+        assert second["status"] == "processing"
+
+        assert db.claim_next_oscar_snapshot() is None
+
+        db.set_oscar_snapshot_status("snap-a", "completed")
+        completed = db.list_oscar_snapshots(statuses=["completed"])
+        assert any(row["snapshot_id"] == "snap-a" for row in completed)
+
+
+def test_oscar_snapshot_stage_progress_upserts_by_snapshot_and_stage() -> None:
+    with _isolated_database() as db:
+        db.seed_tasks(
+            [
+                {
+                    "task_id": "oscar.test_stage_task",
+                    "panel_id": "oscar",
+                    "title": "Oscar stage task",
+                    "task_type": "extract",
+                    "icon_idle": "Play",
+                    "icon_running": "Square",
+                    "command": {"mode": "shell", "value": "echo hi"},
+                    "cwd": ".",
+                }
+            ]
+        )
+        task = db.get_task("oscar.test_stage_task")
+        assert task is not None
+        run_id_1 = db.create_run(task)
+        run_id_2 = db.create_run(task)
+
+        db.upsert_oscar_snapshot("snap-1", source_path="/snapshots/1")
+
+        db.upsert_oscar_snapshot_stage(
+            "snap-1",
+            "resolve_offsets_local",
+            "running",
+            run_id=run_id_1,
+        )
+        db.upsert_oscar_snapshot_stage(
+            "snap-1",
+            "resolve_offsets_local",
+            "completed",
+            run_id=run_id_1,
+        )
+        db.upsert_oscar_snapshot_stage(
+            "snap-1",
+            "download_ranges",
+            "failed",
+            run_id=run_id_2,
+            error_text="network timeout",
+        )
+
+        rows = db.list_oscar_snapshot_stages("snap-1")
+        by_stage = {row["stage_name"]: row for row in rows}
+        assert by_stage["resolve_offsets_local"]["status"] == "completed"
+        assert by_stage["resolve_offsets_local"]["run_id"] == run_id_1
+        assert by_stage["download_ranges"]["status"] == "failed"
+        assert by_stage["download_ranges"]["run_id"] == run_id_2
+        assert "timeout" in str(by_stage["download_ranges"]["error_text"] or "")

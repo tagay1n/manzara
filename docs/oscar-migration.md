@@ -20,7 +20,7 @@ Status: draft checklist for controlled migration in small steps.
 
 - [x] Step 1: Requirements freeze and migration checklist (this doc)
 - [x] Step 2: Flow skeleton in Manzara (panel + tasks + lightweight runners)
-- [ ] Step 3: PostgreSQL state model for snapshot queue/progress
+- [x] Step 3: PostgreSQL state model for snapshot queue/progress
 - [ ] Step 4: Implement `resolve_offsets_local`
 - [ ] Step 5: Implement `download_ranges`
 - [ ] Step 6: Implement `export_parquet` (`1024 MB` parts)
@@ -50,4 +50,3 @@ Status: draft checklist for controlled migration in small steps.
   - No SQLite runtime paths.
   - Snapshot progression is resumable and auditable from DB.
   - Logs and SSE state transitions remain consistent with existing task model.
-

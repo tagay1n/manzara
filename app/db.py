@@ -1514,6 +1514,288 @@ class Database:
             "tables": tables,
         }
 
+    def upsert_oscar_snapshot(
+        self,
+        snapshot_id: str,
+        *,
+        source_path: Optional[str] = None,
+        source_label: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: str = "pending",
+        discovered_at: Optional[str] = None,
+    ) -> None:
+        """Insert or update one Oscar snapshot queue row."""
+        now = utc_now()
+        payload_json = json.dumps(metadata, ensure_ascii=False) if metadata is not None else None
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO oscar_snapshots (
+                        snapshot_id,
+                        source_path,
+                        source_label,
+                        metadata_json,
+                        status,
+                        discovered_at,
+                        claimed_at,
+                        completed_at,
+                        error_text,
+                        created_at,
+                        updated_at
+                    ) VALUES (
+                        ?, ?, ?, COALESCE(?, '{}'), ?, ?, NULL, NULL, NULL, ?, ?
+                    )
+                    ON CONFLICT(snapshot_id) DO UPDATE SET
+                        source_path=COALESCE(excluded.source_path, oscar_snapshots.source_path),
+                        source_label=COALESCE(excluded.source_label, oscar_snapshots.source_label),
+                        metadata_json=COALESCE(excluded.metadata_json, oscar_snapshots.metadata_json),
+                        status=excluded.status,
+                        discovered_at=COALESCE(excluded.discovered_at, oscar_snapshots.discovered_at),
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        str(snapshot_id or "").strip(),
+                        source_path,
+                        source_label,
+                        payload_json,
+                        str(status or "pending").strip() or "pending",
+                        discovered_at,
+                        now,
+                        now,
+                    ),
+                )
+
+    def get_oscar_snapshot(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
+        """Return one Oscar snapshot row by id."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    snapshot_id,
+                    source_path,
+                    source_label,
+                    metadata_json,
+                    status,
+                    discovered_at,
+                    claimed_at,
+                    completed_at,
+                    error_text,
+                    created_at,
+                    updated_at
+                FROM oscar_snapshots
+                WHERE snapshot_id = ?
+                """,
+                (snapshot_id,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = dict(row)
+        payload["metadata"] = json.loads(payload.pop("metadata_json") or "{}")
+        return payload
+
+    def list_oscar_snapshots(
+        self,
+        *,
+        statuses: Optional[List[str]] = None,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """List Oscar snapshots ordered by discovery time and id."""
+        row_limit = max(1, min(int(limit), 5000))
+        params: List[Any] = []
+        where = ""
+        normalized = [str(item).strip() for item in (statuses or []) if str(item).strip()]
+        if normalized:
+            placeholders = ", ".join("?" for _ in normalized)
+            where = f"WHERE status IN ({placeholders})"
+            params.extend(normalized)
+        params.append(row_limit)
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    snapshot_id,
+                    source_path,
+                    source_label,
+                    metadata_json,
+                    status,
+                    discovered_at,
+                    claimed_at,
+                    completed_at,
+                    error_text,
+                    created_at,
+                    updated_at
+                FROM oscar_snapshots
+                {where}
+                ORDER BY COALESCE(discovered_at, created_at) ASC, snapshot_id ASC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        payload = [dict(row) for row in rows]
+        for item in payload:
+            item["metadata"] = json.loads(str(item.pop("metadata_json") or "{}"))
+        return payload
+
+    def claim_next_oscar_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Claim next pending Oscar snapshot and mark it as processing."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT snapshot_id
+                    FROM oscar_snapshots
+                    WHERE status = 'pending'
+                    ORDER BY COALESCE(discovered_at, created_at) ASC, snapshot_id ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if row is None:
+                    return None
+                snapshot_id = str(row.get("snapshot_id") or "")
+                conn.execute(
+                    """
+                    UPDATE oscar_snapshots
+                    SET status = 'processing',
+                        claimed_at = ?,
+                        updated_at = ?,
+                        error_text = NULL
+                    WHERE snapshot_id = ?
+                    """,
+                    (now, now, snapshot_id),
+                )
+                claimed = conn.execute(
+                    """
+                    SELECT
+                        snapshot_id,
+                        source_path,
+                        source_label,
+                        metadata_json,
+                        status,
+                        discovered_at,
+                        claimed_at,
+                        completed_at,
+                        error_text,
+                        created_at,
+                        updated_at
+                    FROM oscar_snapshots
+                    WHERE snapshot_id = ?
+                    """,
+                    (snapshot_id,),
+                ).fetchone()
+
+        if claimed is None:
+            return None
+        payload = dict(claimed)
+        payload["metadata"] = json.loads(str(payload.pop("metadata_json") or "{}"))
+        return payload
+
+    def set_oscar_snapshot_status(
+        self,
+        snapshot_id: str,
+        status: str,
+        *,
+        error_text: Optional[str] = None,
+    ) -> None:
+        """Update one Oscar snapshot lifecycle status."""
+        now = utc_now()
+        normalized = str(status or "").strip() or "pending"
+        terminal = normalized in {"completed", "failed", "skipped"}
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE oscar_snapshots
+                    SET status = ?,
+                        completed_at = CASE WHEN ? THEN ? ELSE NULL END,
+                        error_text = ?,
+                        updated_at = ?
+                    WHERE snapshot_id = ?
+                    """,
+                    (normalized, terminal, now, error_text, now, snapshot_id),
+                )
+
+    def upsert_oscar_snapshot_stage(
+        self,
+        snapshot_id: str,
+        stage_name: str,
+        status: str,
+        *,
+        run_id: Optional[int] = None,
+        error_text: Optional[str] = None,
+    ) -> None:
+        """Insert or update one Oscar stage row for a snapshot."""
+        now = utc_now()
+        normalized = str(status or "").strip() or "pending"
+        started_at = now if normalized == "running" else None
+        finished_at = now if normalized in {"completed", "failed", "skipped"} else None
+
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO oscar_snapshot_stages (
+                        snapshot_id,
+                        stage_name,
+                        status,
+                        run_id,
+                        started_at,
+                        finished_at,
+                        error_text,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(snapshot_id, stage_name) DO UPDATE SET
+                        status=excluded.status,
+                        run_id=COALESCE(excluded.run_id, oscar_snapshot_stages.run_id),
+                        started_at=COALESCE(oscar_snapshot_stages.started_at, excluded.started_at),
+                        finished_at=COALESCE(excluded.finished_at, oscar_snapshot_stages.finished_at),
+                        error_text=excluded.error_text,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        snapshot_id,
+                        stage_name,
+                        normalized,
+                        run_id,
+                        started_at,
+                        finished_at,
+                        error_text,
+                        now,
+                    ),
+                )
+
+    def list_oscar_snapshot_stages(self, snapshot_id: str) -> List[Dict[str, Any]]:
+        """List stage-level progress rows for one Oscar snapshot."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    snapshot_id,
+                    stage_name,
+                    status,
+                    run_id,
+                    started_at,
+                    finished_at,
+                    error_text,
+                    updated_at
+                FROM oscar_snapshot_stages
+                WHERE snapshot_id = ?
+                ORDER BY
+                    CASE stage_name
+                        WHEN 'resolve_offsets_local' THEN 1
+                        WHEN 'download_ranges' THEN 2
+                        WHEN 'export_parquet' THEN 3
+                        ELSE 99
+                    END ASC,
+                    stage_name ASC
+                """,
+                (snapshot_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def run_count_by_status(self, panel_id: str) -> Dict[str, int]:
         """Return run status counters for one panel."""
         with self._connect() as conn:
