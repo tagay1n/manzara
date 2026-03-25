@@ -57,6 +57,8 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     library = panels["library"]
     library_task_ids = {task["task_id"] for task in library["tasks"]}
     assert "maintenance.monocorpus_meta_evaluate" in library_task_ids
+    assert "library.collection_detect" in library_task_ids
+    assert "library.collection_apply" in library_task_ids
 
 
 def test_rename_flow_and_task_title(test_client) -> None:
@@ -674,6 +676,145 @@ def test_library_publishers_insights_endpoint(test_client, monkeypatch) -> None:
     assert payload["available"] is True
     assert payload["script_distribution"][0]["script_label"] == "cyrillic"
     assert payload["ambiguous_queue"]["total"] == 1
+
+
+def test_library_collections_overview_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_collection_overview",
+        lambda: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "stats": {
+                "total_collections": 12,
+                "approved_collections": 5,
+                "included_collections": 4,
+                "suggested_collections": 6,
+                "items_linked": 190,
+            },
+            "top_collections": [
+                {
+                    "collection_id": 101,
+                    "title": "Шура журналы",
+                    "item_count": 40,
+                    "status": "approved",
+                    "include_in_library": True,
+                }
+            ],
+        },
+    )
+
+    response = client.get("/api/library/collections")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["overview"]["available"] is True
+    assert payload["overview"]["stats"]["total_collections"] == 12
+    assert payload["overview"]["top_collections"][0]["collection_id"] == 101
+
+
+def test_library_collections_table_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "list_library_collections",
+        lambda **_kwargs: {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "page": 2,
+            "page_size": 20,
+            "total": 31,
+            "total_pages": 2,
+            "items": [
+                {
+                    "collection_id": 7,
+                    "title": "Казан утлары",
+                    "normalized_title": "казан утлары",
+                    "status": "suggested",
+                    "include_in_library": True,
+                    "confidence": 0.88,
+                    "item_count": 24,
+                    "last_detected_at": "2026-03-25T10:00:00+00:00",
+                }
+            ],
+        },
+    )
+
+    response = client.get("/api/library/collections/table?page=2&page_size=20")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["page"] == 2
+    assert payload["items"][0]["collection_id"] == 7
+
+
+def test_library_collection_items_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "list_collection_items",
+        lambda collection_id, **_kwargs: {
+            "available": True,
+            "error": None,
+            "collection_id": collection_id,
+            "items": [
+                {
+                    "md5": "abc123",
+                    "item_title": "Казан утлары №1 (1999)",
+                    "ya_path": "/library/kazan-utlary/1999-01.pdf",
+                    "lib": False,
+                }
+            ],
+        },
+    )
+
+    response = client.get("/api/library/collections/9/items")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["collection_id"] == 9
+    assert payload["items"][0]["md5"] == "abc123"
+
+
+def test_library_collection_update_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "update_collection",
+        lambda _db, collection_id, updates: {
+            "ok": True,
+            "collection": {
+                "collection_id": collection_id,
+                "status": updates.get("status", "suggested"),
+                "include_in_library": bool(updates.get("include_in_library", False)),
+                "title": str(updates.get("title") or "Collection"),
+                "notes": str(updates.get("notes") or ""),
+            },
+            "updated_fields": sorted(list(updates.keys())),
+        },
+    )
+
+    response = client.patch(
+        "/api/library/collections/12",
+        json={
+            "status": "approved",
+            "include_in_library": True,
+            "title": "Шура журналы",
+            "notes": "Manual review approved",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["collection"]["collection_id"] == 12
+    assert payload["collection"]["status"] == "approved"
+    assert payload["collection"]["include_in_library"] is True
 
 
 def test_library_normalization_overview_endpoint(test_client, monkeypatch) -> None:

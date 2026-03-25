@@ -977,6 +977,10 @@ button {
   background: rgba(61, 141, 255, 0.08);
 }
 
+.classification-table tbody tr.table-row-selected {
+  background: rgba(61, 141, 255, 0.18);
+}
+
 .classification-pagination {
   margin-top: 10px;
   display: flex;

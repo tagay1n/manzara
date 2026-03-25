@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Manzara</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+  </head>
+  <body class="console-body">
+    <div class="app-shell">
+      <aside class="side-rail" aria-label="Primary">
+        <a class="rail-brand" href="/dashboard" title="Manzara">
+          <i data-lucide="sparkles"></i>
+        </a>
+        <nav class="rail-nav">
+          <a href="/dashboard" class="rail-link" title="Dashboard">
+            <i data-lucide="layout-grid"></i>
+          </a>
+          <a href="/schedules" class="rail-link" title="Schedules">
+            <i data-lucide="calendar-range"></i>
+          </a>
+          <a href="/tasks" class="rail-link" title="Tasks">
+            <i data-lucide="list-checks"></i>
+          </a>
+          <a href="/database" class="rail-link" title="Database">
+            <i data-lucide="database"></i>
+          </a>
+          <a href="/library" class="rail-link active" aria-current="page" title="Library">
+            <i data-lucide="book-open"></i>
+          </a>
+          <a href="/gemini" class="rail-link" title="Gemini">
+            <i data-lucide="key-round"></i>
+          </a>
+        </nav>
+      </aside>
+
+      <div class="shell-main">
+        <header class="topbar">
+          <div class="topbar-left">
+            <div class="brand-wrap">
+              <div class="brand">Manzara</div>
+              <div class="subtitle">Bird-eye view of Tatar content pipelines</div>
+            </div>
+            <label class="jump-box" aria-label="Jump">
+              <i data-lucide="search"></i>
+              <input type="text" placeholder="Jump to page, task, flow..." />
+            </label>
+          </div>
+          <div class="top-controls">
+            <div id="global-status" class="status-pill">Tasks: 0 • Flows: 0</div>
+            <button
+              id="stop-all-btn"
+              class="icon-btn amber"
+              title="Graceful stop all running tasks; press again to force stop"
+              aria-label="Stop all tasks"
+              disabled
+            >
+              <i data-lucide="square"></i>
+            </button>
+          </div>
+        </header>
+
+        <div class="alert-strip">
+          <i data-lucide="folders"></i>
+          <span>Review detected document series and approve collection-level metadata overrides.</span>
+        </div>
+
+        <main class="dashboard">
+          <section class="runs-card">
+            <div class="library-overview-head">
+              <h2>Collections</h2>
+              <div class="library-head-actions">
+                <a href="/library" class="small-btn">Back to Library</a>
+              </div>
+            </div>
+            <div id="collections-status" class="workflow-footnote">Loading collections overview...</div>
+            <div id="collections-stat-grid" class="library-stat-grid"></div>
+            <div id="collections-top-list" class="library-top-list"></div>
+
+            <div class="classification-tabs" role="tablist" aria-label="Collection views">
+              <button id="tab-btn-table" class="classification-tab active" data-tab="table" role="tab" aria-selected="true">
+                Collection Table
+              </button>
+              <button id="tab-btn-clusters" class="classification-tab" data-tab="clusters" role="tab" aria-selected="false">
+                Clusters
+                <span id="tab-badge-clusters" class="classification-tab-badge">0</span>
+              </button>
+              <button id="tab-btn-queue" class="classification-tab" data-tab="queue" role="tab" aria-selected="false">
+                Review Queue
+                <span id="tab-badge-queue" class="classification-tab-badge">0</span>
+              </button>
+            </div>
+
+            <div id="tab-panel-table" class="classification-tab-panel active" role="tabpanel" aria-labelledby="tab-btn-table">
+              <div class="classification-filters publisher-filters">
+                <input id="filter-search" class="filter-input" type="text" placeholder="Search title/path key" />
+                <select id="filter-status" class="filter-select">
+                  <option value="">Any status</option>
+                  <option value="suggested">suggested</option>
+                  <option value="approved">approved</option>
+                  <option value="rejected">rejected</option>
+                </select>
+                <select id="filter-include" class="filter-select">
+                  <option value="all">Include: all</option>
+                  <option value="yes">include only</option>
+                  <option value="no">exclude only</option>
+                </select>
+                <select id="filter-sort" class="filter-select">
+                  <option value="updated_desc">Updated desc</option>
+                  <option value="items_desc">Items desc</option>
+                  <option value="confidence_desc">Confidence desc</option>
+                  <option value="title_asc">Title asc</option>
+                </select>
+                <button id="filter-apply" class="small-btn">Apply</button>
+              </div>
+              <div id="collections-table-status" class="workflow-footnote">Loading table...</div>
+              <div class="classification-table-wrap">
+                <table class="classification-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Title</th>
+                      <th>Status</th>
+                      <th>Include</th>
+                      <th>Confidence</th>
+                      <th>Items</th>
+                      <th>Detected</th>
+                    </tr>
+                  </thead>
+                  <tbody id="collections-table-body"></tbody>
+                </table>
+              </div>
+              <div class="classification-pagination">
+                <button id="page-prev" class="small-btn">Prev</button>
+                <span id="page-label" class="workflow-footnote">Page 1 / 1</span>
+                <button id="page-next" class="small-btn">Next</button>
+              </div>
+
+              <div class="normalization-action-row">
+                <input id="collection-title-input" class="filter-input" type="text" placeholder="Collection title" />
+                <input id="collection-notes-input" class="filter-input" type="text" placeholder="Notes" />
+                <button id="collection-approve-btn" class="small-btn">Approve</button>
+                <button id="collection-reject-btn" class="small-btn">Reject</button>
+                <button id="collection-include-btn" class="small-btn">Toggle Include</button>
+              </div>
+              <div id="collection-items-status" class="workflow-footnote">Select a collection to inspect items.</div>
+              <div class="classification-table-wrap">
+                <table class="classification-table">
+                  <thead>
+                    <tr>
+                      <th>MD5</th>
+                      <th>Item Title</th>
+                      <th>Path</th>
+                      <th>lib</th>
+                    </tr>
+                  </thead>
+                  <tbody id="collection-items-body"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div id="tab-panel-clusters" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-clusters">
+              <h2>Clusters</h2>
+              <div id="clusters-root" class="duplicates-root"></div>
+            </div>
+
+            <div id="tab-panel-queue" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-queue">
+              <h2>Review Queue</h2>
+              <div id="queue-root" class="unclassified-root"></div>
+            </div>
+          </section>
+        </main>
+
+        <footer class="footer">
+          <span>manzara v0.1.0</span>
+          <span id="last-event">Last event: n/a</span>
+        </footer>
+      </div>
+    </div>
+
+    <script src="/static/sound-notifier.js"></script>
+    <script src="/static/core.js"></script>
+    <script src="/static/library-collections.js"></script>
+  </body>
+</html>
+

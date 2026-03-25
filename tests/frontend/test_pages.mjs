@@ -21,6 +21,10 @@ const LIBRARY_PUBLISHERS_SOURCE = readFileSync(
   new URL("../../static/library-publishers.js", import.meta.url),
   "utf-8",
 );
+const LIBRARY_COLLECTIONS_SOURCE = readFileSync(
+  new URL("../../static/library-collections.js", import.meta.url),
+  "utf-8",
+);
 const LIBRARY_CLASSIFICATION_SOURCE = readFileSync(
   new URL("../../static/library-classification.js", import.meta.url),
   "utf-8",
@@ -181,6 +185,36 @@ const PUBLISHERS_PAGE_IDS = [
   "tab-badge-clusters",
   "tab-badge-queue",
   "tab-badge-scripts",
+];
+
+const COLLECTIONS_PAGE_IDS = [
+  "global-status",
+  "stop-all-btn",
+  "last-event",
+  "collections-status",
+  "collections-stat-grid",
+  "collections-top-list",
+  "collections-table-status",
+  "collections-table-body",
+  "clusters-root",
+  "queue-root",
+  "tab-badge-clusters",
+  "tab-badge-queue",
+  "page-label",
+  "page-prev",
+  "page-next",
+  "filter-search",
+  "filter-status",
+  "filter-include",
+  "filter-sort",
+  "filter-apply",
+  "collection-items-status",
+  "collection-items-body",
+  "collection-title-input",
+  "collection-notes-input",
+  "collection-approve-btn",
+  "collection-reject-btn",
+  "collection-include-btn",
 ];
 
 class FakeClassList {
@@ -1242,6 +1276,96 @@ function createPublishersResolver({
   };
 }
 
+function createCollectionsResolver({
+  summary = null,
+} = {}) {
+  return (path) => {
+    if (path === "/api/library/collections") {
+      return {
+        global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+        overview: {
+          available: true,
+          config_source: "test",
+          stats: {
+            total_collections: 3,
+            approved_collections: 1,
+            included_collections: 1,
+            suggested_collections: 2,
+            items_linked: 14,
+          },
+          top_collections: [],
+        },
+      };
+    }
+    if (path.startsWith("/api/library/collections/table?")) {
+      return {
+        available: true,
+        page: 1,
+        total_pages: 1,
+        total: 2,
+        items: [
+          {
+            collection_id: 11,
+            title: "Collection One",
+            normalized_title: "collection one",
+            status: "suggested",
+            include_in_library: true,
+            confidence: 0.81,
+            item_count: 3,
+            last_detected_at: "2026-03-25T12:00:00Z",
+          },
+        ],
+      };
+    }
+    if (path === "/api/library/collections/insights") {
+      return {
+        available: true,
+        summary: summary || {
+          cluster_count: 7,
+          queue_total: 5,
+        },
+        clusters: [
+          {
+            title: "Collection One",
+            status: "suggested",
+            item_count: 3,
+            confidence: 0.81,
+          },
+        ],
+        queue: {
+          total: 1,
+          items: [
+            {
+              collection_id: 11,
+              title: "Collection One",
+              status: "suggested",
+              include_in_library: true,
+              confidence: 0.81,
+              item_count: 3,
+            },
+          ],
+        },
+      };
+    }
+    if (path.startsWith("/api/library/collections/11/items")) {
+      return {
+        available: true,
+        collection_id: 11,
+        items: [
+          {
+            md5: "abc123",
+            item_title: "Issue #1",
+            ya_path: "/path/issue-1.pdf",
+            lib: false,
+          },
+        ],
+      };
+    }
+    if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
+    throw new Error(`unexpected path: ${path}`);
+  };
+}
+
 test("library classifications page escapes dangerous strings in rendered html", async () => {
   const harness = createHarness({
     source: LIBRARY_CLASSIFICATIONS_SOURCE,
@@ -1350,6 +1474,48 @@ test("library publishers page prefers backend summary counters for badges", asyn
   assert.equal(harness.elements.get("tab-badge-scripts").textContent, "51");
   assert.equal(harness.elements.get("tab-badge-clusters").textContent, "41");
   assert.equal(harness.elements.get("tab-badge-queue").textContent, "31");
+});
+
+test("library collections page renders API error state", async () => {
+  const harness = createHarness({
+    source: LIBRARY_COLLECTIONS_SOURCE,
+    ids: COLLECTIONS_PAGE_IDS,
+    selectors: [".classification-tabs"],
+    apiResolver(path) {
+      if (path.startsWith("/api/library/collections")) {
+        throw new Error("collections unavailable");
+      }
+      if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  assert.match(
+    harness.elements.get("collections-status").textContent,
+    /Collections unavailable/,
+  );
+  assert.match(
+    harness.elements.get("collections-table-status").textContent,
+    /collections unavailable/,
+  );
+  assert.match(harness.elements.get("clusters-root").innerHTML, /collections unavailable/);
+});
+
+test("library collections page prefers backend summary counters for badges", async () => {
+  const harness = createHarness({
+    source: LIBRARY_COLLECTIONS_SOURCE,
+    ids: COLLECTIONS_PAGE_IDS,
+    selectors: [".classification-tabs"],
+    apiResolver: createCollectionsResolver({
+      summary: {
+        cluster_count: 37,
+        queue_total: 27,
+      },
+    }),
+  });
+  await harness.flush();
+  assert.equal(harness.elements.get("tab-badge-clusters").textContent, "37");
+  assert.equal(harness.elements.get("tab-badge-queue").textContent, "27");
 });
 
 test("library classification detail page renders API error state", async () => {

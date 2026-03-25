@@ -22,6 +22,13 @@ from app.modules.library.insights import (
     get_normalization_preview,
     list_classifications,
 )
+from app.modules.library.collections import (
+    get_collection_insights,
+    get_collection_overview,
+    list_collection_items,
+    list_collections as list_library_collections,
+    update_collection,
+)
 from app.modules.library.personalities import (
     get_personality_insights,
     get_personality_overview,
@@ -228,6 +235,12 @@ def library_personalities_page() -> FileResponse:
 def library_publishers_page() -> FileResponse:
     """Serve publisher control page."""
     return FileResponse(STATIC_DIR / "library-publishers.html")
+
+
+@app.get("/library/collections")
+def library_collections_page() -> FileResponse:
+    """Serve collections control page."""
+    return FileResponse(STATIC_DIR / "library-collections.html")
 
 
 @app.get("/library/normalization/{entity_type}")
@@ -814,6 +827,34 @@ def build_normalization_payload(entity_type: str) -> Dict[str, Any]:
     }
 
 
+def build_collections_payload() -> Dict[str, Any]:
+    """Compose collections page payload with overview metrics."""
+    active_runs = state.db.list_active_runs()
+    stop_all_state = "disabled"
+    if active_runs:
+        stop_all_state = (
+            "normal"
+            if any(run.get("stop_mode") is None for run in active_runs)
+            else "armed"
+        )
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "global": {
+            "active_tasks": len(active_runs),
+            "active_workflows": len(
+                [
+                    row
+                    for row in state.db.list_workflows_with_latest_run()
+                    if row.get("run_status") in {"starting", "running"}
+                ]
+            ),
+            "stop_all_state": stop_all_state,
+        },
+        "overview": get_collection_overview(),
+    }
+
+
 @app.get("/api/dashboard")
 def get_dashboard() -> JSONResponse:
     """Return current dashboard state."""
@@ -897,6 +938,69 @@ def get_library_personalities_insights(
 def get_library_publishers() -> JSONResponse:
     """Return publisher overview payload."""
     return JSONResponse(build_publisher_payload())
+
+
+@app.get("/api/library/collections")
+def get_library_collections() -> JSONResponse:
+    """Return collection overview payload."""
+    return JSONResponse(build_collections_payload())
+
+
+@app.get("/api/library/collections/table")
+def get_library_collections_table(
+    search: str = Query("", max_length=120),
+    status: str = Query("", max_length=40),
+    include: str = Query("all", max_length=10),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    sort: str = Query("updated_desc", max_length=40),
+) -> JSONResponse:
+    """Return paginated collections table."""
+    payload = list_library_collections(
+        search=search,
+        status=status,
+        include=include,
+        page=page,
+        page_size=page_size,
+        sort=sort,
+    )
+    return JSONResponse(payload)
+
+
+@app.get("/api/library/collections/insights")
+def get_library_collections_insights(
+    cluster_limit: int = Query(24, ge=1, le=200),
+    queue_limit: int = Query(40, ge=1, le=200),
+) -> JSONResponse:
+    """Return collection insight tabs payload."""
+    payload = get_collection_insights(
+        cluster_limit=cluster_limit,
+        queue_limit=queue_limit,
+    )
+    return JSONResponse(payload)
+
+
+@app.get("/api/library/collections/{collection_id}/items")
+def get_library_collection_items(
+    collection_id: int,
+    limit: int = Query(400, ge=1, le=2000),
+) -> JSONResponse:
+    """Return one collection with linked items."""
+    payload = list_collection_items(collection_id, limit=limit)
+    return JSONResponse(payload)
+
+
+@app.patch("/api/library/collections/{collection_id}")
+def patch_library_collection(
+    collection_id: int,
+    payload: Dict[str, Any] = Body(...),
+) -> JSONResponse:
+    """Patch collection review status/title/notes/include settings."""
+    try:
+        result = update_collection(state.db, collection_id, updates=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(result)
 
 
 @app.get("/api/library/publishers/table")
