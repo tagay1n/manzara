@@ -10,6 +10,8 @@ import yaml
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+from app.modules.library.response_envelope import available_payload, unavailable_payload
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _REDACTED_SENTINEL = "<REDACTED>"
 
@@ -128,11 +130,9 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
         engine.dispose()
 
         evaluated_docs = applicable_docs + non_applicable_docs
-        return {
-            "available": True,
-            "error": None,
-            "config_source": str(config_source),
-            "stats": {
+        return available_payload(
+            config_source=config_source,
+            stats={
                 "total_documents": total_documents,
                 "metadata_rows": metadata_rows,
                 "applicable_docs": applicable_docs,
@@ -143,7 +143,7 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
                 "acceptance_rate": _safe_ratio(applicable_docs, evaluated_docs),
                 "classification_coverage": _safe_ratio(classified_docs, applicable_docs),
             },
-            "top_classifications": [
+            top_classifications=[
                 {
                     "classification_id": int(row.get("classification_id") or 0),
                     "ddc": str(row.get("ddc") or ""),
@@ -152,13 +152,11 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
                 }
                 for row in top_rows
             ],
-        }
+        )
     except Exception as exc:  # noqa: BLE001
-        return {
-            "available": False,
-            "error": str(exc),
-            "config_source": None,
-            "stats": {
+        return unavailable_payload(
+            exc,
+            stats={
                 "total_documents": 0,
                 "metadata_rows": 0,
                 "applicable_docs": 0,
@@ -169,8 +167,8 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
                 "acceptance_rate": 0.0,
                 "classification_coverage": 0.0,
             },
-            "top_classifications": [],
-        }
+            top_classifications=[],
+        )
 
 
 __all__ = ["get_library_dataset_stats"]

@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from sqlalchemy import text
 
+from app.modules.library.response_envelope import available_payload, unavailable_payload
 from app.modules.library.stats import create_runtime_engine
 
 _DEFAULT_PAGE_SIZE = 25
@@ -148,12 +149,10 @@ def get_publisher_overview(top_limit: int = 12) -> Dict[str, Any]:
             ).mappings().all()
         engine.dispose()
 
-        return {
-            "available": True,
-            "error": None,
-            "config_source": config_source,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-            "stats": {
+        return available_payload(
+            config_source=config_source,
+            generated_at=datetime.utcnow().isoformat() + "Z",
+            stats={
                 "total_mentions": int(stats_row.get("total_mentions") or 0),
                 "docs_with_publishers": int(stats_row.get("docs_with_publishers") or 0),
                 "unique_raw_names": int(stats_row.get("unique_raw_names") or 0),
@@ -161,15 +160,13 @@ def get_publisher_overview(top_limit: int = 12) -> Dict[str, Any]:
                 "mixed_script_mentions": int(stats_row.get("mixed_script_mentions") or 0),
                 "org_marker_mentions": int(stats_row.get("org_marker_mentions") or 0),
             },
-            "top_publishers": [_row_to_publisher_item(row) for row in top_rows],
-        }
+            top_publishers=[_row_to_publisher_item(row) for row in top_rows],
+        )
     except Exception as exc:  # noqa: BLE001
-        return {
-            "available": False,
-            "error": str(exc),
-            "config_source": None,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-            "stats": {
+        return unavailable_payload(
+            exc,
+            generated_at=datetime.utcnow().isoformat() + "Z",
+            stats={
                 "total_mentions": 0,
                 "docs_with_publishers": 0,
                 "unique_raw_names": 0,
@@ -177,8 +174,8 @@ def get_publisher_overview(top_limit: int = 12) -> Dict[str, Any]:
                 "mixed_script_mentions": 0,
                 "org_marker_mentions": 0,
             },
-            "top_publishers": [],
-        }
+            top_publishers=[],
+        )
 
 
 def list_publishers(
@@ -273,27 +270,23 @@ def list_publishers(
         engine.dispose()
 
         total_pages = max(1, (total + page_size - 1) // page_size)
-        return {
-            "available": True,
-            "error": None,
-            "config_source": config_source,
-            "page": page,
-            "page_size": page_size,
-            "total": total,
-            "total_pages": total_pages,
-            "items": [_row_to_publisher_item(row) for row in rows],
-        }
+        return available_payload(
+            config_source=config_source,
+            page=page,
+            page_size=page_size,
+            total=total,
+            total_pages=total_pages,
+            items=[_row_to_publisher_item(row) for row in rows],
+        )
     except Exception as exc:  # noqa: BLE001
-        return {
-            "available": False,
-            "error": str(exc),
-            "config_source": None,
-            "page": page,
-            "page_size": page_size,
-            "total": 0,
-            "total_pages": 1,
-            "items": [],
-        }
+        return unavailable_payload(
+            exc,
+            page=page,
+            page_size=page_size,
+            total=0,
+            total_pages=1,
+            items=[],
+        )
 
 
 def _script_distribution(rows: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
@@ -447,38 +440,34 @@ def get_publisher_insights(
             item["reasons"] = _ambiguous_reasons(row)
             queue_items.append(item)
 
-        return {
-            "available": True,
-            "error": None,
-            "config_source": config_source,
-            "script_distribution": _script_distribution(list(script_rows)),
-            "variant_clusters": variant_clusters,
-            "summary": {
+        return available_payload(
+            config_source=config_source,
+            script_distribution=_script_distribution(list(script_rows)),
+            variant_clusters=variant_clusters,
+            summary={
                 "script_total_mentions": sum(
                     int(row.get("mentions_count") or 0) for row in script_rows
                 ),
                 "variant_cluster_count": len(variant_clusters),
                 "ambiguous_queue_total": len(queue_items),
             },
-            "ambiguous_queue": {
+            ambiguous_queue={
                 "total": len(queue_items),
                 "items": queue_items,
             },
-        }
+        )
     except Exception as exc:  # noqa: BLE001
-        return {
-            "available": False,
-            "error": str(exc),
-            "config_source": None,
-            "script_distribution": [],
-            "variant_clusters": [],
-            "summary": {
+        return unavailable_payload(
+            exc,
+            script_distribution=[],
+            variant_clusters=[],
+            summary={
                 "script_total_mentions": 0,
                 "variant_cluster_count": 0,
                 "ambiguous_queue_total": 0,
             },
-            "ambiguous_queue": {"total": 0, "items": []},
-        }
+            ambiguous_queue={"total": 0, "items": []},
+        )
 
 
 __all__ = [

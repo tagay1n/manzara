@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List
 
 from sqlalchemy import text
 
+from app.modules.library.response_envelope import available_payload, unavailable_payload
 from app.modules.library.stats import create_runtime_engine
 
 _DEFAULT_PAGE_SIZE = 25
@@ -161,27 +162,23 @@ def list_classifications(
         engine.dispose()
 
         items = [_row_to_classification_item(dict(row)) for row in rows]
-        return {
-            "available": True,
-            "error": None,
-            "config_source": config_source,
-            "page": page,
-            "page_size": page_size,
-            "total": total,
-            "total_pages": max(1, (total + page_size - 1) // page_size),
-            "items": items,
-        }
+        return available_payload(
+            config_source=config_source,
+            page=page,
+            page_size=page_size,
+            total=total,
+            total_pages=max(1, (total + page_size - 1) // page_size),
+            items=items,
+        )
     except Exception as exc:  # noqa: BLE001
-        return {
-            "available": False,
-            "error": str(exc),
-            "config_source": None,
-            "page": 1,
-            "page_size": page_size,
-            "total": 0,
-            "total_pages": 1,
-            "items": [],
-        }
+        return unavailable_payload(
+            exc,
+            page=1,
+            page_size=page_size,
+            total=0,
+            total_pages=1,
+            items=[],
+        )
 
 
 def _all_classification_usage_rows(limit: int = _DEFAULT_ALL_ROWS_LIMIT) -> tuple[list[dict[str, Any]], str]:
@@ -377,25 +374,21 @@ def get_classification_insights(
     """Return hierarchy, DDC distribution, duplicate path clusters and queue."""
     try:
         rows, config_source = _all_classification_usage_rows(limit=row_limit)
-        return {
-            "available": True,
-            "error": None,
-            "config_source": config_source,
-            "tree": _build_tree(rows),
-            "distribution": _build_distribution(rows),
-            "duplicates": _build_duplicates(rows, limit=duplicate_limit),
-            "unclassified_queue": _fetch_unclassified_applicable(unclassified_limit),
-        }
+        return available_payload(
+            config_source=config_source,
+            tree=_build_tree(rows),
+            distribution=_build_distribution(rows),
+            duplicates=_build_duplicates(rows, limit=duplicate_limit),
+            unclassified_queue=_fetch_unclassified_applicable(unclassified_limit),
+        )
     except Exception as exc:  # noqa: BLE001
-        return {
-            "available": False,
-            "error": str(exc),
-            "config_source": None,
-            "tree": [],
-            "distribution": [],
-            "duplicates": [],
-            "unclassified_queue": {"total": 0, "items": []},
-        }
+        return unavailable_payload(
+            exc,
+            tree=[],
+            distribution=[],
+            duplicates=[],
+            unclassified_queue={"total": 0, "items": []},
+        )
 
 
 def _normalize_text(value: str) -> str:
@@ -482,37 +475,33 @@ def get_normalization_preview(
 
         merge_groups.sort(key=lambda item: (-int(item["total_usage"]), -int(item["group_size"])))
 
-        return {
-            "available": True,
-            "error": None,
-            "config_source": config_source,
-            "rules": {
+        return available_payload(
+            config_source=config_source,
+            rules={
                 "drop_segments": sorted(drop_set),
             },
-            "summary": {
+            summary={
                 "total_rows_scanned": len(rows),
                 "affected_classifications": len(affected),
                 "estimated_reassigned_documents": sum(int(item["usage_count"]) for item in affected),
                 "merge_group_candidates": len(merge_groups),
             },
-            "affected_preview": affected[: max(1, int(limit))],
-            "merge_groups": merge_groups[: max(1, min(int(limit), 80))],
-        }
+            affected_preview=affected[: max(1, int(limit))],
+            merge_groups=merge_groups[: max(1, min(int(limit), 80))],
+        )
     except Exception as exc:  # noqa: BLE001
-        return {
-            "available": False,
-            "error": str(exc),
-            "config_source": None,
-            "rules": {"drop_segments": []},
-            "summary": {
+        return unavailable_payload(
+            exc,
+            rules={"drop_segments": []},
+            summary={
                 "total_rows_scanned": 0,
                 "affected_classifications": 0,
                 "estimated_reassigned_documents": 0,
                 "merge_group_candidates": 0,
             },
-            "affected_preview": [],
-            "merge_groups": [],
-        }
+            affected_preview=[],
+            merge_groups=[],
+        )
 
 
 def _path_tokens(path: str) -> set[str]:
@@ -621,29 +610,25 @@ def get_merge_candidates(
                 )
 
         candidates.sort(key=lambda item: (-float(item["score"]), -int(item["impact"])))
-        return {
-            "available": True,
-            "error": None,
-            "config_source": config_source,
-            "summary": {
+        return available_payload(
+            config_source=config_source,
+            summary={
                 "rows_scanned": len(items),
                 "candidate_count": len(candidates),
                 "min_score": min_score,
             },
-            "candidates": candidates[: max(1, int(limit))],
-        }
+            candidates=candidates[: max(1, int(limit))],
+        )
     except Exception as exc:  # noqa: BLE001
-        return {
-            "available": False,
-            "error": str(exc),
-            "config_source": None,
-            "summary": {
+        return unavailable_payload(
+            exc,
+            summary={
                 "rows_scanned": 0,
                 "candidate_count": 0,
                 "min_score": min_score,
             },
-            "candidates": [],
-        }
+            candidates=[],
+        )
 
 
 def get_classification_detail(
@@ -748,11 +733,9 @@ def get_classification_detail(
         engine.dispose()
 
         total_pages = max(1, (docs_total + docs_page_size - 1) // docs_page_size)
-        return {
-            "available": True,
-            "error": None,
-            "config_source": config_source,
-            "classification": {
+        return available_payload(
+            config_source=config_source,
+            classification={
                 "classification_id": int(row.get("id") or 0),
                 "ddc": str(row.get("ddc") or ""),
                 "path": _format_path(row.get("path_en")),
@@ -762,7 +745,7 @@ def get_classification_detail(
                 "created_at": _serialize_value(row.get("created_at")),
                 "usage_count": int(row.get("usage_count") or 0),
             },
-            "linked_docs": {
+            linked_docs={
                 "page": docs_page,
                 "page_size": docs_page_size,
                 "total": docs_total,
@@ -784,29 +767,27 @@ def get_classification_detail(
                     for doc in docs_rows
                 ],
             },
-            "language_distribution": [
+            language_distribution=[
                 {
                     "language": str(row.get("language") or ""),
                     "count": int(row.get("count") or 0),
                 }
                 for row in language_rows
             ],
-        }
+        )
     except Exception as exc:  # noqa: BLE001
-        return {
-            "available": False,
-            "error": str(exc),
-            "config_source": None,
-            "classification": None,
-            "linked_docs": {
+        return unavailable_payload(
+            exc,
+            classification=None,
+            linked_docs={
                 "page": 1,
                 "page_size": docs_page_size,
                 "total": 0,
                 "total_pages": 1,
                 "items": [],
             },
-            "language_distribution": [],
-        }
+            language_distribution=[],
+        )
 
 
 __all__ = [
