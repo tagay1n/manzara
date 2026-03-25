@@ -69,6 +69,51 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     assert "library.collection_apply" in library_task_ids
 
 
+def test_dashboard_oscar_panel_includes_snapshot_queue_stats(test_client) -> None:
+    client, main_app = test_client
+    db = main_app.state.db
+
+    db.upsert_oscar_snapshot(
+        "CC-MAIN-2024-10",
+        source_path="/snapshots/10",
+        status="pending",
+        discovered_at="2026-03-01T00:00:00+00:00",
+    )
+    db.upsert_oscar_snapshot(
+        "CC-MAIN-2024-11",
+        source_path="/snapshots/11",
+        status="processing",
+        discovered_at="2026-03-02T00:00:00+00:00",
+    )
+    db.upsert_oscar_snapshot(
+        "CC-MAIN-2024-12",
+        source_path="/snapshots/12",
+        status="pending",
+        discovered_at="2026-03-03T00:00:00+00:00",
+    )
+    db.set_oscar_snapshot_status("CC-MAIN-2024-12", "completed")
+    db.upsert_oscar_snapshot(
+        "CC-MAIN-2024-13",
+        source_path="/snapshots/13",
+        status="pending",
+        discovered_at="2026-03-04T00:00:00+00:00",
+    )
+    db.set_oscar_snapshot_status("CC-MAIN-2024-13", "failed", error_text="test")
+
+    payload = client.get("/api/dashboard").json()
+    panels = {panel["panel_id"]: panel for panel in payload["panels"]}
+    oscar = panels["oscar"]
+    cards = {str(item["label"]): str(item["value"]) for item in oscar["stats_cards"]}
+
+    assert cards["Snapshots Total"] == "4"
+    assert cards["Pending"] == "1"
+    assert cards["Processing"] == "1"
+    assert cards["Completed"] == "1"
+    assert cards["Failed"] == "1"
+    assert cards["Current Snapshot"] == "CC-MAIN-2024-11"
+    assert cards["Last Completed Snapshot"] == "CC-MAIN-2024-12"
+
+
 def test_rename_flow_and_task_title(test_client) -> None:
     client, main_app = test_client
 
