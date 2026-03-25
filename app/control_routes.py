@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Callable, Dict, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -228,6 +229,13 @@ def register_control_routes(
 
         if "timezone" in payload:
             timezone_name = str(payload["timezone"]).strip() or "UTC"
+            try:
+                ZoneInfo(timezone_name)
+            except ZoneInfoNotFoundError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="timezone must be a valid IANA timezone name",
+                ) from exc
             updates["timezone"] = timezone_name
 
         if schedule_type == "interval":

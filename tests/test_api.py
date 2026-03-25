@@ -257,6 +257,28 @@ def test_update_schedule_rejects_numeric_enabled_outside_zero_one(test_client) -
     assert response.json()["detail"] == "enabled must be a boolean-like value"
 
 
+def test_update_schedule_accepts_valid_iana_timezone(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.patch(
+        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
+        json={"timezone": "Europe/Moscow"},
+    )
+    assert response.status_code == 200
+    assert response.json()["schedule"]["timezone"] == "Europe/Moscow"
+
+
+def test_update_schedule_rejects_invalid_timezone(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.patch(
+        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
+        json={"timezone": "Invalid/Timezone"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "timezone must be a valid IANA timezone name"
+
+
 def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
     client, _main_app = test_client
 
