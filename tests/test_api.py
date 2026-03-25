@@ -228,6 +228,35 @@ def test_update_schedule_rejects_non_integral_interval_minutes(test_client) -> N
     assert response.json()["detail"] == "interval_minutes must be an integer >= 1"
 
 
+def test_update_schedule_accepts_numeric_enabled_zero_and_one(test_client) -> None:
+    client, _main_app = test_client
+
+    disable_resp = client.patch(
+        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
+        json={"enabled": 0},
+    )
+    assert disable_resp.status_code == 200
+    assert disable_resp.json()["schedule"]["enabled"] is False
+
+    enable_resp = client.patch(
+        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
+        json={"enabled": 1},
+    )
+    assert enable_resp.status_code == 200
+    assert enable_resp.json()["schedule"]["enabled"] is True
+
+
+def test_update_schedule_rejects_numeric_enabled_outside_zero_one(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.patch(
+        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
+        json={"enabled": 2},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "enabled must be a boolean-like value"
+
+
 def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
     client, _main_app = test_client
 
