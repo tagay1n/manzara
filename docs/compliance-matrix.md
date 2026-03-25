@@ -1,6 +1,6 @@
 # Compliance Matrix
 
-Last audit: 2026-03-24  
+Last audit: 2026-03-25  
 Scope: enforceable requirements from `AGENTS.md` (engineering constraints, frontend/backend standards, low-context scalability rules).
 
 ## Legend
@@ -10,7 +10,7 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 - `N/A`: policy/process requirement, not directly verifiable in code.
 
 ## Automated Baseline (current)
-- `pytest`: `46 passed` (`.venv/bin/python -m pytest -q`)
+- `pytest`: `95 passed` (`.venv/bin/python -m pytest -q`)
 - `frontend tests`: `node --test tests/frontend/*.mjs` passed (`core helpers` + `dashboard/schedules/tasks/task/library/database/classification-list/classification-detail/personality/publisher/normalization page behavior`)
 - `requirements files`: only `requirements.txt` found (`rg --files -g 'requirements*.txt'`)
 
@@ -23,7 +23,7 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 | EC-04 | Keep secrets out of git (`config.yaml` local-only, masked `config.example.yaml`) | PASS | `.gitignore:9-11`, `README.md:123-131`, `config.example.yaml` redactions | `config.yaml` is not tracked by git. |
 | EC-05 | Single dependency file policy | PASS | `requirements.txt` only, `README.md:99-101` | No split requirement files present. |
 | EC-06 | Runtime-heavy flow coverage + manual smoke expectations documented | PASS | `README.md:214-218` | Manual checks documented for `meta_evaluate` and normalization refresh. |
-| BE-01 | Every task run has artifact log under `_artifacts/task_runs/<task_id>/run-<run_id>.log` | PASS | `app/tasks.py:686-704`, `tests/test_api.py:831-849` | Covered by automated test. |
+| BE-01 | Every task run has artifact log under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...`) | PASS | `app/tasks.py:107-108`, `app/tasks.py:797`, `tests/test_api.py:831-849`, `README.md:85` | Covered by automated test and documented runtime path. |
 | BE-02 | Uniform artifact log line format | PASS | `app/tasks.py:740-756`, `tests/test_api.py:855-862`, `README.md:183-187` | Format is stable and documented. |
 | BE-03 | Persist stdout to DB logs and mirror to artifact logs | PASS | `app/tasks.py:665-681`, `app/tasks.py:530-545` | DB + SSE + artifact mirror present. |
 | BE-04 | Include explicit start/final status runtime lines | PASS | `app/tasks.py:279-286`, `app/tasks.py:364-374`, `tests/test_api.py:852-853` | Start and final outcome logged. |
