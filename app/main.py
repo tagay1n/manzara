@@ -11,6 +11,7 @@ from typing import Any, Dict
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.bootstrap import shutdown_app, startup_app
 from app.db import Database
 from app.control_routes import register_control_routes
 from app.core_read_routes import register_core_read_routes
@@ -155,51 +156,29 @@ payload_builder = PayloadBuilder(
 
 def _startup() -> None:
     """Initialize schema and seed known task/workflow definitions."""
-    state.shutting_down = False
-    state.db.init_schema()
-    state.db.seed_panels(_PANEL_DEFS)
-    task_defs = [
-        *shayan_task_definitions(state.settings.shayan),
-        *maintenance_task_definitions(state.settings.maintenance),
-        *oscar_task_definitions(state.settings.oscar),
-    ]
-    state.db.seed_tasks(task_defs)
-    state.db.seed_workflow_bundle(shayan_workflow_bundle(state.settings.shayan))
-    state.db.seed_workflow_bundle(maintenance_backup_full_workflow_bundle())
-    state.db.seed_workflow_bundle(maintenance_backup_incr_workflow_bundle())
-    state.db.seed_workflow_bundle(library_workflow_bundle())
-    state.db.seed_workflow_bundle(library_personality_normalization_workflow_bundle())
-    state.db.seed_workflow_bundle(library_publisher_normalization_workflow_bundle())
-    state.db.seed_workflow_bundle(oscar_pipeline_workflow_bundle())
-
-    recovered_runs = state.db.recover_active_runs()
-    if recovered_runs > 0:
-        state.db.insert_event(
-            "system.recovery",
-            task_id=None,
-            run_id=None,
-            panel_id=None,
-            payload={"recovered_runs": recovered_runs},
-        )
-
-    recovered_workflows = state.db.recover_active_workflow_runs()
-    if recovered_workflows > 0:
-        state.db.insert_event(
-            "system.workflow_recovery",
-            task_id=None,
-            run_id=None,
-            panel_id=None,
-            payload={"recovered_workflow_runs": recovered_workflows},
-        )
-
-    if state.settings.scheduler_enabled:
-        state.workflow_service.start()
+    startup_app(
+        state=state,
+        panel_defs=_PANEL_DEFS,
+        task_defs=[
+            *shayan_task_definitions(state.settings.shayan),
+            *maintenance_task_definitions(state.settings.maintenance),
+            *oscar_task_definitions(state.settings.oscar),
+        ],
+        workflow_bundles=[
+            shayan_workflow_bundle(state.settings.shayan),
+            maintenance_backup_full_workflow_bundle(),
+            maintenance_backup_incr_workflow_bundle(),
+            library_workflow_bundle(),
+            library_personality_normalization_workflow_bundle(),
+            library_publisher_normalization_workflow_bundle(),
+            oscar_pipeline_workflow_bundle(),
+        ],
+    )
 
 
 def _shutdown() -> None:
     """Stop background scheduler worker on app shutdown."""
-    state.shutting_down = True
-    state.workflow_service.stop()
+    shutdown_app(state=state)
 
 
 @asynccontextmanager
