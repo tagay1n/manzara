@@ -404,6 +404,7 @@ function renderPanel(panel) {
         .join("");
 
   const isFlowEditing = state.editMode === "flow" && state.editId === panel.panel_id;
+  const flowPathKey = encodeURIComponent(panel.slug || panel.panel_id);
   const panelTitleHtml = isFlowEditing
     ? `
       <div class="inline-edit panel-inline-edit">
@@ -418,7 +419,7 @@ function renderPanel(panel) {
     `
     : `
       <div class="panel-title-row">
-        <h2>${escapeHtml(panel.title)}</h2>
+        <h2><a class="task-title task-detail-link" href="/flows/${flowPathKey}">${escapeHtml(panel.title)}</a></h2>
         <button
           class="icon-btn rename-inline-btn flow-rename-start"
           data-panel-id="${escapeAttr(panel.panel_id)}"

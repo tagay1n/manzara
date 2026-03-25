@@ -82,6 +82,22 @@ function selectedRun() {
   return state.payload.runs[0];
 }
 
+function runSummary(run) {
+  const summary = run?.summary;
+  return summary && typeof summary === "object" ? summary : {};
+}
+
+function runSummaryMessage(run) {
+  const summary = runSummary(run);
+  const message = String(summary.message || "").trim();
+  if (message) return message;
+  const status = String(run?.status || "idle");
+  if (status === "completed") return "Run completed.";
+  if (status === "failed") return String(run?.error_text || "Run failed.");
+  if (status === "stopped") return "Run stopped.";
+  return `Run ${status}.`;
+}
+
 function toggleButtonModel(task, run) {
   const status = run?.status || "idle";
   if (status === "stopping_graceful") {
@@ -108,6 +124,7 @@ function renderRunList(runs) {
           <span class="task-run-id">#${run.run_id}</span>
           <span class="task-run-status task-status-${cssName(run.status, "idle")}">${escapeHtml(run.status)}</span>
           <span class="task-run-time">${escapeHtml(formatDateTime(run.started_at))}</span>
+          <span class="task-run-summary">${escapeHtml(runSummaryMessage(run))}</span>
         </button>
       `;
     })
@@ -117,6 +134,18 @@ function renderRunList(runs) {
 function renderRunResult(run) {
   if (!run) return '<div class="run-row">No run selected.</div>';
   const errorText = (run.error_text || "").trim();
+  const summary = runSummary(run);
+  const highlights = Array.isArray(summary.highlights) ? summary.highlights : [];
+  const summaryRows = highlights
+    .filter((item) => item && typeof item === "object")
+    .map((item) => {
+      const label = String(item.label || "").trim();
+      const value = String(item.value || "").trim();
+      if (!label || !value) return "";
+      return `<div><span class="meta-k">${escapeHtml(label)}</span><span class="meta-v">${escapeHtml(value)}</span></div>`;
+    })
+    .filter(Boolean)
+    .join("");
   return `
     <div class="run-result-grid">
       <div><span class="meta-k">Run</span><span class="meta-v">#${run.run_id}</span></div>
@@ -126,6 +155,8 @@ function renderRunResult(run) {
       <div><span class="meta-k">Duration</span><span class="meta-v">${escapeHtml(runDuration(run))}</span></div>
       <div><span class="meta-k">Exit Code</span><span class="meta-v">${escapeHtml(String(run.exit_code ?? "-"))}</span></div>
     </div>
+    <div class="workflow-footnote">${escapeHtml(runSummaryMessage(run))}</div>
+    ${summaryRows ? `<div class="run-result-grid">${summaryRows}</div>` : ""}
     ${
       errorText
         ? `<div class="run-error-box">${escapeHtml(errorText)}</div>`
@@ -162,6 +193,11 @@ function renderTaskDetail(payload) {
 
   document.getElementById("task-title").textContent = task.title;
   document.getElementById("task-subtitle").textContent = `${payload.panel.title} • ${task.task_id} • ${task.task_type}`;
+  const backLink = document.getElementById("task-back-link");
+  if (backLink && payload.panel?.slug) {
+    backLink.href = `/flows/${encodeURIComponent(payload.panel.slug)}`;
+    backLink.textContent = "Back to flow";
+  }
   document.getElementById("task-stat-grid").innerHTML = `
     <div class="stat"><div class="stat-label">Total Runs</div><div class="stat-value">${payload.stats.total_runs}</div></div>
     <div class="stat"><div class="stat-label">Completed</div><div class="stat-value">${payload.stats.status_counts.completed || 0}</div></div>
@@ -221,7 +257,7 @@ async function refreshTaskDetail({ showLoading = false } = {}) {
     renderTaskLoading();
   }
   try {
-    const payload = await api(`/api/tasks/${encodeURIComponent(state.taskId)}?limit=120`);
+    const payload = await api(`/api/tasks/${encodeURIComponent(state.taskId)}?limit=20`);
     renderTaskDetail(payload);
   } catch (error) {
     renderTaskError(error);

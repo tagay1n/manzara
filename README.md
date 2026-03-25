@@ -33,6 +33,7 @@ Pages:
 - `/schedules`
 - `/tasks`
 - `/tasks/{task-slug-or-id}`
+- `/flows/{flow-slug-or-id}`
 - `/library`
 - `/library/classifications`
 - `/library/classifications/{classification_id}`
@@ -272,6 +273,7 @@ Core:
 - `GET /api/schedules`
 - `GET /api/tasks`
 - `GET /api/tasks/{task_id_or_slug}`
+- `GET /api/flows/{flow_id_or_slug}`
 - `GET /api/database/state`
 - `GET /api/gemini/state`
 - `POST /api/tasks/{task_id}/toggle`

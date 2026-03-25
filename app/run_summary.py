@@ -1,0 +1,148 @@
+"""Structured run summary builders."""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime
+from typing import Any, Dict, List
+
+
+_SNAPSHOT_RE = re.compile(r"snapshot=([A-Za-z0-9._:-]+)")
+_BACKUP_LABEL_RE = re.compile(r"new backup label\s*=\s*([^\s]+)", re.IGNORECASE)
+_BACKUP_SIZE_RE = re.compile(r"\b(?:full|incr)\s+backup size\s*=\s*([^,]+)", re.IGNORECASE)
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def build_default_run_summary(run: Dict[str, Any]) -> Dict[str, Any]:
+    """Build fallback summary from run metadata only."""
+    status = str(run.get("status") or "unknown")
+    error_text = str(run.get("error_text") or "").strip() or None
+    message = "Run completed."
+    if status == "failed":
+        message = error_text or "Run failed."
+    elif status == "stopped":
+        message = "Run stopped."
+    elif status == "running":
+        message = "Run is in progress."
+    elif status == "starting":
+        message = "Run is starting."
+    elif status in {"stopping_graceful", "stopping_force"}:
+        message = "Run is stopping."
+
+    started_at = run.get("started_at")
+    finished_at = run.get("finished_at")
+    duration_seconds = None
+    started_dt = _parse_iso(started_at)
+    finished_dt = _parse_iso(finished_at)
+    if started_dt and finished_dt:
+        duration_seconds = max(0, int((finished_dt - started_dt).total_seconds()))
+
+    return {
+        "kind": "default",
+        "status": status,
+        "message": message,
+        "exit_code": run.get("exit_code"),
+        "duration_seconds": duration_seconds,
+        "highlights": [],
+    }
+
+
+def build_structured_run_summary(
+    *,
+    task_id: str,
+    panel_id: str,
+    status: str,
+    exit_code: Any,
+    error_text: Any,
+    stop_mode: Any,
+    started_at: Any,
+    finished_at: Any,
+    log_lines: List[str],
+) -> Dict[str, Any]:
+    """Build task-aware structured summary object."""
+    summary = build_default_run_summary(
+        {
+            "status": status,
+            "exit_code": exit_code,
+            "error_text": error_text,
+            "started_at": started_at,
+            "finished_at": finished_at,
+        }
+    )
+    summary["task_id"] = task_id
+    summary["panel_id"] = panel_id
+    summary["stop_mode"] = stop_mode
+    summary["kind"] = task_id
+
+    if task_id.startswith("maintenance.pgbackrest_backup_"):
+        summary["kind"] = "maintenance.pgbackrest_backup"
+        backup_label = None
+        backup_size = None
+        s3_verified = False
+        for line in log_lines:
+            if backup_label is None:
+                match = _BACKUP_LABEL_RE.search(line)
+                if match:
+                    backup_label = match.group(1).strip()
+            if backup_size is None:
+                match = _BACKUP_SIZE_RE.search(line)
+                if match:
+                    backup_size = match.group(1).strip()
+            if "S3 backup verification passed" in line:
+                s3_verified = True
+        if backup_label:
+            summary["highlights"].append({"label": "Backup Label", "value": backup_label})
+        if backup_size:
+            summary["highlights"].append({"label": "Backup Size", "value": backup_size})
+        if s3_verified:
+            summary["highlights"].append({"label": "S3 Verify", "value": "passed"})
+        if status == "completed" and backup_label:
+            summary["message"] = f"Backup completed: {backup_label}"
+        elif status == "completed":
+            summary["message"] = "Backup completed."
+        return summary
+
+    if panel_id == "oscar":
+        snapshot = None
+        for line in log_lines:
+            match = _SNAPSHOT_RE.search(line)
+            if match:
+                snapshot = match.group(1).strip()
+        if snapshot:
+            summary["highlights"].append({"label": "Snapshot", "value": snapshot})
+        stage_name = task_id.split(".", 1)[-1] if "." in task_id else task_id
+        stage_label = stage_name.replace("_", " ")
+        if status == "completed":
+            summary["message"] = f"{stage_label} completed."
+        elif status == "failed":
+            summary["message"] = summary.get("message") or f"{stage_label} failed."
+        else:
+            summary["message"] = f"{stage_label} {status.replace('_', ' ')}."
+        return summary
+
+    if panel_id == "shayan" and status == "completed":
+        if task_id.endswith(".scan_changes"):
+            summary["message"] = "Scan completed."
+        elif task_id.endswith(".download_new"):
+            summary["message"] = "Download completed."
+        else:
+            summary["message"] = "Task completed."
+        return summary
+
+    if panel_id == "library" and status == "completed":
+        summary["message"] = "Library task completed."
+        return summary
+
+    return summary
+

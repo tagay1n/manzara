@@ -5,6 +5,7 @@ import vm from "node:vm";
 
 const TASKS_SOURCE = readFileSync(new URL("../../static/tasks.js", import.meta.url), "utf-8");
 const TASK_SOURCE = readFileSync(new URL("../../static/task.js", import.meta.url), "utf-8");
+const FLOW_SOURCE = readFileSync(new URL("../../static/flow.js", import.meta.url), "utf-8");
 const DASHBOARD_SOURCE = readFileSync(new URL("../../static/app.js", import.meta.url), "utf-8");
 const SCHEDULES_SOURCE = readFileSync(new URL("../../static/schedules.js", import.meta.url), "utf-8");
 const LIBRARY_SOURCE = readFileSync(new URL("../../static/library.js", import.meta.url), "utf-8");
@@ -804,7 +805,7 @@ test("task page renders running control state and toggles task endpoint", async 
     ],
     locationPathname: "/tasks/quick",
     apiResolver(path) {
-      if (path === "/api/tasks/quick?limit=120") {
+      if (path === "/api/tasks/quick?limit=20") {
         return JSON.parse(JSON.stringify(detailPayload));
       }
       if (path === "/api/tasks/quick/toggle") {
@@ -826,7 +827,7 @@ test("task page renders running control state and toggles task endpoint", async 
 
   const toggleCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/quick/toggle");
   assert.equal(toggleCalls.length, 1);
-  const detailCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/quick?limit=120");
+  const detailCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/quick?limit=20");
   assert.ok(detailCalls.length >= 2);
 });
 
@@ -851,7 +852,7 @@ test("task page renders loading then error when task detail fetch fails", async 
     ],
     locationPathname: "/tasks/quick",
     apiResolver(path) {
-      if (path === "/api/tasks/quick?limit=120") {
+      if (path === "/api/tasks/quick?limit=20") {
         throw new Error("detail unavailable");
       }
       throw new Error(`unexpected path: ${path}`);
@@ -860,6 +861,96 @@ test("task page renders loading then error when task detail fetch fails", async 
   await harness.flush();
   assert.equal(harness.elements.get("task-title").textContent, "Task unavailable");
   assert.match(harness.elements.get("task-run-list").innerHTML, /Error: detail unavailable/);
+});
+
+test("flow page bootstraps, renders tasks and summaries, and refreshes on SSE", async () => {
+  const payload = {
+    global: {
+      active_tasks: 1,
+      active_workflows: 0,
+      stop_all_state: "normal",
+    },
+    flow: {
+      panel_id: "shayan",
+      slug: "shayan",
+      title: "Shayan",
+      description: "Flow summary",
+      stats_cards: [{ label: "Total Runs", value: "5" }],
+    },
+    tasks: [
+      {
+        task_id: "shayan.quick",
+        slug: "quick",
+        title: "Quick",
+        task_type: "scan",
+        icon_idle: "Play",
+        icon_running: "Square",
+        run: {
+          run_id: 41,
+          status: "completed",
+          started_at: "2026-03-24T10:00:00Z",
+          finished_at: "2026-03-24T10:00:01Z",
+          exit_code: 0,
+          error_text: null,
+          summary: { status: "completed", message: "Quick run completed." },
+        },
+        runs: [
+          {
+            run_id: 41,
+            status: "completed",
+            started_at: "2026-03-24T10:00:00Z",
+            finished_at: "2026-03-24T10:00:01Z",
+            exit_code: 0,
+            error_text: null,
+            summary: { status: "completed", message: "Quick run completed." },
+          },
+        ],
+      },
+    ],
+  };
+
+  const harness = createHarness({
+    source: FLOW_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "flow-title",
+      "flow-subtitle",
+      "flow-stat-grid",
+      "flow-task-grid",
+      "last-event",
+      "close-logs",
+      "log-dialog",
+      "copy-logs",
+      "log-title",
+      "log-content",
+    ],
+    locationPathname: "/flows/shayan",
+    apiResolver(path) {
+      if (path === "/api/flows/shayan?limit_per_task=20") {
+        return JSON.parse(JSON.stringify(payload));
+      }
+      if (path === "/api/tasks/shayan.quick/toggle") {
+        return { action: "start" };
+      }
+      if (path === "/api/system/stop-all") {
+        return { action: "stop_all_graceful" };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  await harness.flush();
+  assert.equal(harness.elements.get("flow-title").textContent, "Shayan");
+  assert.match(harness.elements.get("flow-task-grid").innerHTML, /Quick run completed/);
+  assert.match(harness.elements.get("flow-task-grid").innerHTML, /\/tasks\/quick/);
+
+  const before = harness.apiCalls.filter((call) => call.path === "/api/flows/shayan?limit_per_task=20").length;
+  harness.sse.config.onEvent({ type: "task.completed" }, { lastEventId: "9" });
+  await harness.timer.runAllTimeouts();
+  await harness.flush();
+  const after = harness.apiCalls.filter((call) => call.path === "/api/flows/shayan?limit_per_task=20").length;
+  assert.ok(after > before);
 });
 
 test("dashboard page renders empty state for panels and runs", async () => {

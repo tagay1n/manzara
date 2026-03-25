@@ -85,6 +85,7 @@ from app.modules.oscar.panel import build_oscar_panel
 from app.modules.oscar.tasks import oscar_task_definitions
 from app.modules.oscar.workflow import oscar_pipeline_workflow_bundle
 from app.settings import Settings, load_settings
+from app.run_summary import build_default_run_summary
 from app.tasks import TaskRunner
 from app.workflows import WorkflowService
 
@@ -198,6 +199,13 @@ def schedules_page() -> FileResponse:
 def tasks_page() -> FileResponse:
     """Serve task index page."""
     return FileResponse(STATIC_DIR / "tasks.html")
+
+
+@app.get("/flows/{flow_id_or_slug:path}")
+def flow_detail_page(flow_id_or_slug: str) -> FileResponse:
+    """Serve flow detail page shell."""
+    _ = flow_id_or_slug
+    return FileResponse(STATIC_DIR / "flow.html")
 
 
 @app.get("/library")
@@ -356,37 +364,61 @@ def _resolve_task_identifier(task_key: str) -> Dict[str, Any]:
     return resolved
 
 
-def build_dashboard_payload() -> Dict[str, Any]:
-    """Compose dashboard payload from DB and Shayan artifacts."""
-    panel_titles = state.db.get_panel_title_map()
-    task_slug_map, _ = _task_slug_maps()
+def _flow_slug_maps() -> tuple[Dict[str, str], Dict[str, str]]:
+    """Return deterministic panel_id<->slug maps."""
+    title_map = state.db.get_panel_title_map()
+    panel_ids = {str(item["panel_id"]) for item in _PANEL_DEFS}
+    panel_ids.update(title_map.keys())
 
-    tasks = state.db.list_tasks_with_latest_run()
-    tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
-    for task in tasks:
-        panel_id = task["panel_id"]
-        tasks_by_panel.setdefault(panel_id, []).append(
-            {
-                "task_id": task["task_id"],
-                "slug": task_slug_map.get(str(task["task_id"]), str(task["task_id"])),
-                "title": task["title"],
-                "task_type": task["task_type"],
-                "icon_idle": task["icon_idle"],
-                "icon_running": task["icon_running"],
-                "run": {
-                    "run_id": task.get("run_id"),
-                    "status": task.get("run_status") or "idle",
-                    "stop_mode": task.get("stop_mode"),
-                    "started_at": task.get("started_at"),
-                    "finished_at": task.get("finished_at"),
-                    "heartbeat_at": task.get("heartbeat_at"),
-                    "exit_code": task.get("exit_code"),
-                    "error_text": task.get("error_text"),
-                },
-            }
-        )
+    used: set[str] = set()
+    panel_to_slug: Dict[str, str] = {}
+    slug_to_panel: Dict[str, str] = {}
+    for panel_id in sorted(panel_ids):
+        display_title = str(title_map.get(panel_id, panel_id))
+        base = _slugify(display_title) or _slugify(panel_id) or "flow"
+        candidate = base
+        attempt = 1
+        while candidate in used:
+            if attempt == 1:
+                candidate = f"{base}-{_slugify(panel_id) or panel_id}"
+            else:
+                candidate = f"{base}-{attempt}"
+            attempt += 1
+        used.add(candidate)
+        panel_to_slug[panel_id] = candidate
+        slug_to_panel[candidate] = panel_id
+    return panel_to_slug, slug_to_panel
 
-    workflows = state.db.list_workflows_with_latest_run()
+
+def _resolve_flow_identifier(flow_key: str) -> Dict[str, Any]:
+    """Resolve flow by panel id or human slug."""
+    panel = state.db.get_panel(flow_key)
+    if panel:
+        return panel
+    _, slug_to_panel = _flow_slug_maps()
+    panel_id = slug_to_panel.get(flow_key)
+    if not panel_id:
+        raise HTTPException(status_code=404, detail="Flow not found")
+    resolved = state.db.get_panel(panel_id)
+    if not resolved:
+        raise HTTPException(status_code=404, detail="Flow not found")
+    return resolved
+
+
+def _run_with_summary(run: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(run)
+    summary = payload.get("summary")
+    if not isinstance(summary, dict) or not summary:
+        payload["summary"] = build_default_run_summary(payload)
+    return payload
+
+
+def _build_panel_payloads(
+    *,
+    tasks_by_panel: Dict[str, list[Dict[str, Any]]],
+    panel_titles: Dict[str, str],
+    workflows: list[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
     shayan_workflows = [item for item in workflows if item.get("panel_id") == "shayan"]
     shayan_panel = build_shayan_panel(
         db=state.db,
@@ -413,6 +445,65 @@ def build_dashboard_payload() -> Dict[str, Any]:
         tasks=tasks_by_panel.get("oscar", []),
         title=panel_titles.get("oscar", "Oscar"),
     )
+    return {
+        "shayan": shayan_panel,
+        "maintenance": maintenance_panel,
+        "oscar": oscar_panel,
+        "library": library_panel,
+    }
+
+
+def build_dashboard_payload() -> Dict[str, Any]:
+    """Compose dashboard payload from DB and Shayan artifacts."""
+    panel_titles = state.db.get_panel_title_map()
+    task_slug_map, _ = _task_slug_maps()
+    flow_slug_map, _ = _flow_slug_maps()
+
+    tasks = state.db.list_tasks_with_latest_run()
+    tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
+    for task in tasks:
+        panel_id = task["panel_id"]
+        tasks_by_panel.setdefault(panel_id, []).append(
+            {
+                "task_id": task["task_id"],
+                "slug": task_slug_map.get(str(task["task_id"]), str(task["task_id"])),
+                "title": task["title"],
+                "task_type": task["task_type"],
+                "icon_idle": task["icon_idle"],
+                "icon_running": task["icon_running"],
+                "run": {
+                    "run_id": task.get("run_id"),
+                    "status": task.get("run_status") or "idle",
+                    "stop_mode": task.get("stop_mode"),
+                    "started_at": task.get("started_at"),
+                    "finished_at": task.get("finished_at"),
+                    "heartbeat_at": task.get("heartbeat_at"),
+                    "exit_code": task.get("exit_code"),
+                    "error_text": task.get("error_text"),
+                    "summary": (
+                        task.get("run_summary")
+                        if isinstance(task.get("run_summary"), dict) and task.get("run_summary")
+                        else None
+                    ),
+                },
+            }
+        )
+
+    workflows = state.db.list_workflows_with_latest_run()
+    panel_payloads = _build_panel_payloads(
+        tasks_by_panel=tasks_by_panel,
+        panel_titles=panel_titles,
+        workflows=workflows,
+    )
+    ordered_panels = [
+        panel_payloads["shayan"],
+        panel_payloads["maintenance"],
+        panel_payloads["oscar"],
+        panel_payloads["library"],
+    ]
+    for panel in ordered_panels:
+        panel_id = str(panel.get("panel_id") or "")
+        panel["slug"] = flow_slug_map.get(panel_id, panel_id)
 
     active_runs = state.db.list_active_runs()
     stop_all_state = "disabled"
@@ -435,6 +526,7 @@ def build_dashboard_payload() -> Dict[str, Any]:
     for run in recent_runs:
         task_id = str(run.get("task_id") or "")
         run["task_slug"] = task_slug_map.get(task_id, task_id)
+        run["summary"] = _run_with_summary(run).get("summary", {})
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -444,7 +536,7 @@ def build_dashboard_payload() -> Dict[str, Any]:
             "failed_runs": len([r for r in state.db.list_recent_runs(50) if r["status"] == "failed"]),
             "stop_all_state": stop_all_state,
         },
-        "panels": [shayan_panel, maintenance_panel, oscar_panel, library_panel],
+        "panels": ordered_panels,
         "recent_runs": recent_runs,
         "scheduler": {
             "enabled": state.settings.scheduler_enabled,
@@ -521,6 +613,7 @@ def build_tasks_payload() -> Dict[str, Any]:
     """Compose tasks page payload grouped by flow."""
     panel_titles = state.db.get_panel_title_map()
     task_slug_map, _ = _task_slug_maps()
+    flow_slug_map, _ = _flow_slug_maps()
     tasks = state.db.list_tasks_with_latest_run()
     task_groups: Dict[str, Dict[str, Any]] = {}
     for task in tasks:
@@ -530,6 +623,7 @@ def build_tasks_payload() -> Dict[str, Any]:
             {
                 "panel_id": panel_id,
                 "title": panel_titles.get(panel_id, panel_id),
+                "slug": flow_slug_map.get(panel_id, panel_id),
                 "tasks": [],
             },
         )
@@ -550,6 +644,11 @@ def build_tasks_payload() -> Dict[str, Any]:
                     "heartbeat_at": task.get("heartbeat_at"),
                     "exit_code": task.get("exit_code"),
                     "error_text": task.get("error_text"),
+                    "summary": (
+                        task.get("run_summary")
+                        if isinstance(task.get("run_summary"), dict) and task.get("run_summary")
+                        else None
+                    ),
                 },
             }
         )
@@ -580,7 +679,7 @@ def build_tasks_payload() -> Dict[str, Any]:
     }
 
 
-def build_task_detail_payload(task_key: str, limit: int = 100) -> Dict[str, Any]:
+def build_task_detail_payload(task_key: str, limit: int = 20) -> Dict[str, Any]:
     """Compose one task detail payload with run history."""
     task = _resolve_task_identifier(task_key)
     task_slug_map, _ = _task_slug_maps()
@@ -590,7 +689,9 @@ def build_task_detail_payload(task_key: str, limit: int = 100) -> Dict[str, Any]
         "panel_id": task["panel_id"],
         "title": str(task["panel_id"]),
     }
-    runs = state.db.list_recent_runs_for_task(task_id, limit=limit)
+    flow_slug_map, _ = _flow_slug_maps()
+    panel["slug"] = flow_slug_map.get(str(panel.get("panel_id") or ""), str(panel.get("panel_id") or ""))
+    runs = [_run_with_summary(run) for run in state.db.list_recent_runs_for_task(task_id, limit=limit)]
     status_counts: Dict[str, int] = {}
     for run in runs:
         key = str(run.get("status") or "unknown")
@@ -639,6 +740,136 @@ def build_task_detail_payload(task_key: str, limit: int = 100) -> Dict[str, Any]
             ),
         },
         "runs": runs,
+    }
+
+
+def build_flow_detail_payload(flow_key: str, limit_per_task: int = 20) -> Dict[str, Any]:
+    """Compose one flow payload with panel stats and per-task run history."""
+    panel = _resolve_flow_identifier(flow_key)
+    panel_id = str(panel["panel_id"])
+    panel_titles = state.db.get_panel_title_map()
+    task_slug_map, _ = _task_slug_maps()
+    flow_slug_map, _ = _flow_slug_maps()
+
+    tasks_with_latest = state.db.list_tasks_with_latest_run()
+    tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
+    for task in tasks_with_latest:
+        current_panel_id = str(task["panel_id"])
+        tasks_by_panel.setdefault(current_panel_id, []).append(
+            {
+                "task_id": task["task_id"],
+                "slug": task_slug_map.get(str(task["task_id"]), str(task["task_id"])),
+                "title": task["title"],
+                "task_type": task["task_type"],
+                "icon_idle": task["icon_idle"],
+                "icon_running": task["icon_running"],
+                "run": {
+                    "run_id": task.get("run_id"),
+                    "status": task.get("run_status") or "idle",
+                    "stop_mode": task.get("stop_mode"),
+                    "started_at": task.get("started_at"),
+                    "finished_at": task.get("finished_at"),
+                    "heartbeat_at": task.get("heartbeat_at"),
+                    "exit_code": task.get("exit_code"),
+                    "error_text": task.get("error_text"),
+                    "summary": (
+                        task.get("run_summary")
+                        if isinstance(task.get("run_summary"), dict) and task.get("run_summary")
+                        else None
+                    ),
+                },
+            }
+        )
+
+    workflows = state.db.list_workflows_with_latest_run(panel_id=panel_id)
+    panel_payloads = _build_panel_payloads(
+        tasks_by_panel=tasks_by_panel,
+        panel_titles=panel_titles,
+        workflows=state.db.list_workflows_with_latest_run(),
+    )
+    flow_payload = dict(
+        panel_payloads.get(panel_id)
+        or {
+            "panel_id": panel_id,
+            "title": panel_titles.get(panel_id, panel_id),
+            "description": "",
+            "status_counts": {},
+            "stats_cards": [],
+            "tasks": [],
+        }
+    )
+    flow_payload["slug"] = flow_slug_map.get(panel_id, panel_id)
+
+    task_items: list[Dict[str, Any]] = []
+    for task in tasks_by_panel.get(panel_id, []):
+        task_id = str(task["task_id"])
+        runs = [_run_with_summary(run) for run in state.db.list_recent_runs_for_task(task_id, limit=limit_per_task)]
+        latest_run = runs[0] if runs else {
+            "run_id": None,
+            "status": "idle",
+            "stop_mode": None,
+            "started_at": None,
+            "finished_at": None,
+            "heartbeat_at": None,
+            "pid": None,
+            "exit_code": None,
+            "error_text": None,
+            "summary": build_default_run_summary({"status": "idle"}),
+        }
+        task_items.append(
+            {
+                "task_id": task_id,
+                "slug": task["slug"],
+                "title": task["title"],
+                "task_type": task["task_type"],
+                "icon_idle": task["icon_idle"],
+                "icon_running": task["icon_running"],
+                "run": latest_run,
+                "runs": runs,
+            }
+        )
+
+    active_runs = state.db.list_active_runs()
+    stop_all_state = "disabled"
+    if active_runs:
+        stop_all_state = (
+            "normal"
+            if any(run.get("stop_mode") is None for run in active_runs)
+            else "armed"
+        )
+
+    workflow_items = [
+        {
+            "workflow_id": row["workflow_id"],
+            "title": row["title"],
+            "description": row.get("description") or "",
+            "run": {
+                "workflow_run_id": row.get("workflow_run_id"),
+                "status": row.get("run_status") or "idle",
+                "started_at": row.get("started_at"),
+                "finished_at": row.get("finished_at"),
+                "error_text": row.get("error_text"),
+            },
+        }
+        for row in workflows
+    ]
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "global": {
+            "active_tasks": len(active_runs),
+            "active_workflows": len(
+                [
+                    row
+                    for row in state.db.list_workflows_with_latest_run()
+                    if row.get("run_status") in {"starting", "running"}
+                ]
+            ),
+            "stop_all_state": stop_all_state,
+        },
+        "flow": flow_payload,
+        "tasks": sorted(task_items, key=lambda item: str(item.get("title", "")).lower()),
+        "workflows": workflow_items,
     }
 
 
@@ -888,10 +1119,19 @@ def get_tasks() -> JSONResponse:
 @app.get("/api/tasks/{task_id}")
 def get_task_detail(
     task_id: str,
-    limit: int = Query(100, ge=1, le=400),
+    limit: int = Query(20, ge=1, le=400),
 ) -> JSONResponse:
     """Return one task with run history (task id or slug)."""
     return JSONResponse(build_task_detail_payload(task_id, limit=limit))
+
+
+@app.get("/api/flows/{flow_id_or_slug}")
+def get_flow_detail(
+    flow_id_or_slug: str,
+    limit_per_task: int = Query(20, ge=1, le=200),
+) -> JSONResponse:
+    """Return one flow with panel stats and per-task run history."""
+    return JSONResponse(build_flow_detail_payload(flow_id_or_slug, limit_per_task=limit_per_task))
 
 
 @app.get("/api/library")

@@ -229,12 +229,75 @@ def test_task_detail_endpoint_returns_run_history(test_client, wait_for_terminal
     assert payload["runs"][0]["task_id"] == "shayan.quick"
 
 
+def test_task_detail_default_limit_is_twenty(test_client) -> None:
+    client, main_app = test_client
+    db = main_app.state.db
+    task = db.get_task("shayan.quick")
+    assert task is not None
+
+    for idx in range(25):
+        run_id = db.create_run(task)
+        db.mark_run_started(run_id, pid=20000 + idx)
+        db.finish_run(
+            run_id=run_id,
+            status="completed",
+            exit_code=0,
+            error_text=None,
+        )
+
+    payload = client.get("/api/tasks/shayan.quick").json()
+    assert payload["task"]["task_id"] == "shayan.quick"
+    assert len(payload["runs"]) == 20
+
+
 def test_task_detail_endpoint_accepts_human_slug(test_client) -> None:
     client, _main_app = test_client
 
     payload = client.get("/api/tasks/quick").json()
     assert payload["task"]["task_id"] == "shayan.quick"
     assert payload["task"]["slug"] == "quick"
+
+
+def test_flow_detail_endpoint_returns_tasks_with_recent_runs_and_summary(
+    test_client,
+) -> None:
+    client, main_app = test_client
+    db = main_app.state.db
+    task = db.get_task("shayan.quick")
+    assert task is not None
+    run_id = db.create_run(task)
+    db.mark_run_started(run_id, pid=21001)
+    db.finish_run(
+        run_id=run_id,
+        status="completed",
+        exit_code=0,
+        error_text=None,
+    )
+
+    flow_payload = client.get("/api/flows/shayan?limit_per_task=20")
+    assert flow_payload.status_code == 200
+    payload = flow_payload.json()
+    assert payload["flow"]["panel_id"] == "shayan"
+    assert payload["flow"]["slug"] == "shayan"
+    assert "stats_cards" in payload["flow"] or "stats" in payload["flow"]
+    assert len(payload["tasks"]) >= 1
+
+    quick = next(item for item in payload["tasks"] if item["task_id"] == "shayan.quick")
+    assert len(quick["runs"]) >= 1
+    assert quick["runs"][0]["run_id"] == run_id
+    assert isinstance(quick["runs"][0].get("summary"), dict)
+    assert quick["runs"][0]["summary"]["status"] == "completed"
+
+
+def test_flow_detail_endpoint_accepts_flow_slug(test_client) -> None:
+    client, _main_app = test_client
+
+    rename = client.patch("/api/flows/shayan/title", json={"title": "Shayan Console"})
+    assert rename.status_code == 200
+
+    payload = client.get("/api/flows/shayan-console").json()
+    assert payload["flow"]["panel_id"] == "shayan"
+    assert payload["flow"]["slug"] == "shayan-console"
 
 
 def test_library_endpoint_returns_dataset_stats(test_client, monkeypatch) -> None:

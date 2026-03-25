@@ -25,6 +25,7 @@ from app.runtime_states import (
     task_terminal_event_type,
 )
 from app.modules.maintenance.backup_s3_verify import verify_backup_objects_in_s3
+from app.run_summary import build_structured_run_summary
 
 
 @dataclass
@@ -437,6 +438,20 @@ class TaskRunner:
                 exit_code=exit_code,
                 error_text=error_text,
             )
+            run_row = self.db.get_run(run_id) or {}
+            log_rows = self.db.get_logs(run_id, after_log_id=0, limit=5000)
+            summary = build_structured_run_summary(
+                task_id=str(task["task_id"]),
+                panel_id=str(task["panel_id"]),
+                status=str(status),
+                exit_code=exit_code,
+                error_text=error_text,
+                stop_mode=run_row.get("stop_mode"),
+                started_at=run_row.get("started_at"),
+                finished_at=run_row.get("finished_at"),
+                log_lines=[str(item.get("line") or "") for item in log_rows],
+            )
+            self.db.update_run_summary(run_id, summary)
             self.db.insert_event(
                 event_type,
                 task_id=task["task_id"],
@@ -462,6 +477,19 @@ class TaskRunner:
                 exit_code=None,
                 error_text=str(exc),
             )
+            failed_row = self.db.get_run(run_id) or {}
+            failed_summary = build_structured_run_summary(
+                task_id=str(task.get("task_id") or "unknown"),
+                panel_id=str(task.get("panel_id") or "unknown"),
+                status=TASK_RUN_STATUS_FAILED,
+                exit_code=None,
+                error_text=str(exc),
+                stop_mode=failed_row.get("stop_mode"),
+                started_at=failed_row.get("started_at"),
+                finished_at=failed_row.get("finished_at"),
+                log_lines=[],
+            )
+            self.db.update_run_summary(run_id, failed_summary)
             self.db.insert_event(
                 task_terminal_event_type(TASK_RUN_STATUS_FAILED),
                 task_id=task["task_id"],

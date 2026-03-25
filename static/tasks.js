@@ -51,10 +51,11 @@ function renderTaskItem(task) {
 }
 
 function renderTaskFlow(flow) {
+  const flowPathKey = encodeURIComponent(flow.slug || flow.panel_id);
   return `
     <section class="task-flow-card">
       <div class="task-flow-head">
-        <h3>${window.ManzaraCore.escapeHtml(flow.title)}</h3>
+        <h3><a class="task-title task-detail-link" href="/flows/${flowPathKey}">${window.ManzaraCore.escapeHtml(flow.title)}</a></h3>
         <span class="panel-pill">Tasks ${flow.tasks.length}</span>
       </div>
       <div class="task-list-grid">

@@ -168,6 +168,21 @@ class Database:
         payload["output"] = json.loads(payload.pop("output_json") or "{}")
         return payload
 
+    def _decode_summary(self, raw_summary: Any) -> Dict[str, Any]:
+        text = str(raw_summary or "").strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _row_to_run(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(row)
+        payload["summary"] = self._decode_summary(payload.pop("summary_json", "{}"))
+        return payload
+
     def seed_tasks(self, task_defs: List[Dict[str, Any]]) -> None:
         """Insert or update known task definitions."""
         now = utc_now()
@@ -788,8 +803,8 @@ class Database:
                     """
                     INSERT INTO runs (
                         task_id, panel_id, status, stop_mode,
-                        started_at, heartbeat_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        started_at, heartbeat_at, created_at, updated_at, summary_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task["task_id"],
@@ -800,6 +815,7 @@ class Database:
                         now,
                         now,
                         now,
+                        "{}",
                     ),
                 )
                 return int(cur.lastrowid)
@@ -865,6 +881,23 @@ class Database:
                     WHERE run_id = ?
                     """,
                     (status, exit_code, error_text, now, now, now, run_id),
+                )
+
+    def update_run_summary(self, run_id: int, summary: Dict[str, Any]) -> None:
+        """Persist structured summary payload for one run."""
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET summary_json = ?, updated_at = ?
+                    WHERE run_id = ?
+                    """,
+                    (
+                        json.dumps(summary or {}, ensure_ascii=False),
+                        utc_now(),
+                        run_id,
+                    ),
                 )
 
     def append_log(self, run_id: int, stream: str, line: str) -> int:
@@ -949,7 +982,7 @@ class Database:
         """Return one run by id."""
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
-        return dict(row) if row else None
+        return self._row_to_run(row) if row else None
 
     def get_logs(
         self,
@@ -1358,7 +1391,7 @@ class Database:
                 """,
                 ACTIVE_STATUSES,
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._row_to_run(row) for row in rows]
 
     def get_active_run_for_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Return active run for task, if any."""
@@ -1373,7 +1406,7 @@ class Database:
                 """,
                 (task_id, *ACTIVE_STATUSES),
             ).fetchone()
-        return dict(row) if row else None
+        return self._row_to_run(row) if row else None
 
     def list_tasks_with_latest_run(self) -> List[Dict[str, Any]]:
         """Return each task with latest run details if available."""
@@ -1396,7 +1429,8 @@ class Database:
                     r.finished_at,
                     r.heartbeat_at,
                     r.exit_code,
-                    r.error_text
+                    r.error_text,
+                    r.summary_json
                 FROM task_definitions t
                 LEFT JOIN runs r
                     ON r.run_id = (
@@ -1414,6 +1448,7 @@ class Database:
         for row in rows:
             payload = dict(row)
             payload["command"] = json.loads(payload.pop("command_json"))
+            payload["run_summary"] = self._decode_summary(payload.pop("summary_json", "{}"))
             items.append(payload)
         return items
 
@@ -1424,14 +1459,14 @@ class Database:
                 """
                 SELECT run_id, task_id, panel_id, status, stop_mode,
                        started_at, finished_at, heartbeat_at,
-                       pid, exit_code, error_text
+                       pid, exit_code, error_text, summary_json
                 FROM runs
                 ORDER BY run_id DESC
                 LIMIT ?
                 """,
                 (limit,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._row_to_run(row) for row in rows]
 
     def list_recent_runs_for_task(self, task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Return recent runs for one task."""
@@ -1440,7 +1475,7 @@ class Database:
                 """
                 SELECT run_id, task_id, panel_id, status, stop_mode,
                        started_at, finished_at, heartbeat_at,
-                       pid, exit_code, error_text
+                       pid, exit_code, error_text, summary_json
                 FROM runs
                 WHERE task_id = ?
                 ORDER BY run_id DESC
@@ -1448,7 +1483,7 @@ class Database:
                 """,
                 (task_id, limit),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._row_to_run(row) for row in rows]
 
     def get_database_storage_snapshot(
         self,

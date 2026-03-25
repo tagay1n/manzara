@@ -260,6 +260,11 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
     schema_name = f"manzara_test_{uuid.uuid4().hex[:10]}"
 
     shayan_repo = tmp_path / "shayan"
+    shayan_repo.mkdir(parents=True, exist_ok=True)
+    monocorpus_repo = tmp_path / "monocorpus"
+    monocorpus_repo.mkdir(parents=True, exist_ok=True)
+    oscar_repo = tmp_path / "oscar-corpus-extractor"
+    oscar_repo.mkdir(parents=True, exist_ok=True)
     artifacts = tmp_path / ".manzara" / "shayan"
     snapshots = artifacts / "snapshots"
     snapshots.mkdir(parents=True, exist_ok=True)
@@ -274,11 +279,11 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
         latest_snapshot_file=artifacts / "snapshots" / "latest.json",
     )
     maintenance = MaintenanceSettings(
-        monocorpus_repo_path=tmp_path / "monocorpus",
+        monocorpus_repo_path=monocorpus_repo,
         pgbackrest_stanza="monocorpus",
     )
     oscar = OscarSettings(
-        repo_path=tmp_path / "oscar-corpus-extractor",
+        repo_path=oscar_repo,
         artifacts_dir=tmp_path / ".manzara" / "oscar",
         parquet_part_size_mb=1024,
     )
