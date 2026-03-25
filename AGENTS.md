@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last updated: 2026-03-24  
+Last updated: 2026-03-25  
 Owner: tans1q
 
 ## Purpose
@@ -39,7 +39,9 @@ Notes:
 - Prefer explicit module boundaries over ad-hoc scripts.
 - Prioritize operational visibility (run state, logs, artifacts, failures).
 - Runtime state store is PostgreSQL only (`MANZARA_DATABASE_URL`) in schema `monocorpus` by default (`MANZARA_DB_SCHEMA`); do not reintroduce SQLite runtime paths.
+- Known temporary exception: Oscar stage runner still reads legacy `state.sqlite` for snapshot queue seeding; keep changes isolated and plan full PostgreSQL cutover cleanup later.
 - Keep secrets out of git: treat `config.yaml` as local-only and maintain masked `config.example.yaml` in sync with config structure changes.
+- Runtime loaders must not use `config.example.yaml` as an input source; it is reference-only.
 - Keep a single dependency file policy (`requirements.txt`) unless owner explicitly asks to split.
 - When copying/adjusting embedded runtime code, update dependencies in `requirements.txt` for any new external imports.
 - For runtime-heavy tasks (for example Library `meta evaluate`), keep automated coverage where practical and record manual smoke-test expectations in README when full E2E is not in tests.
@@ -73,6 +75,10 @@ Notes:
   - On upward scroll near the top, load previous `N` lines and prepend while preserving viewport position.
   - Use cursor-based pagination (for example `before_log_id` / `after_log_id`) instead of offset pagination for large logs.
   - Keep the log viewer implementation centralized and reused by all task pages/components.
+- Routing/UI shape for operations must stay consistent:
+  - Flow pages (`/flows/{slug}`) show flow-level stats + all flow tasks.
+  - Task pages (`/tasks/{slug}`) own per-task history (newest first, default page-size 20 unless explicitly overridden by product requirement).
+  - Run history cards should render backend-provided structured summaries when available.
 - Use European date/time presentation in UI by default:
   - 24-hour clock (`HH:mm`, no AM/PM).
   - Day-first date order (`DD.MM.YYYY` where a concrete date string is shown).
@@ -98,7 +104,7 @@ Notes:
     - Bounded batch size (`limit`) for both directions.
 - Gemini usage must be centralized behind a shared runtime manager (no per-task ad-hoc key picking):
   - Treat Gemini keys as grouped by `account -> keys[]` from config.
-  - Do not hardcode model names; quota/runtime state is per `(account, key, model)`.
+  - Do not hardcode model names in task logic; resolve model aliases from config (`gemini.models`), while quota/runtime state stays per `(account, key, model)`.
   - Persist Gemini runtime state in PostgreSQL (not artifact files) so restarts keep continuity.
   - Key exhaustion is model-scoped only; a key exhausted for one model can still be used for others.
   - Per-key minute throttle: at most one request per minute per `(account, key, model)`.

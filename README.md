@@ -17,6 +17,9 @@ Current architecture:
 - Modular flows in one monorepo (`shayan`, `maintenance`, `oscar`, `library`)
 - Live updates via SSE (`/api/events/stream`)
 
+Transitional note:
+- Oscar runtime currently keeps one legacy bridge that reads `state.sqlite` for snapshot queue seeding. Core runtime state remains PostgreSQL-backed.
+
 ## UI Reference
 
 Frontend visual direction is inspired by:
@@ -39,6 +42,7 @@ Pages:
 - `/library/classifications/{classification_id}`
 - `/library/personalities`
 - `/library/publishers`
+- `/library/collections`
 - `/library/normalization/personality`
 - `/library/normalization/publisher`
 
@@ -54,6 +58,8 @@ Flow tasks (seeded at startup):
 - `oscar.export_parquet`
 - `oscar.upload_dataset`
 - `maintenance.monocorpus_meta_evaluate`
+- `library.collection_detect`
+- `library.collection_apply`
 - `library.personality_suggestions_refresh`
 - `library.publisher_suggestions_refresh`
 
@@ -77,6 +83,7 @@ Runtime control behavior:
 - Header stop-all button: first press graceful, second press force
 - Run logs stream into DB and are visible in UI
 - Each run also writes a dedicated artifact log file under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...` when overridden)
+- Task and flow pages render run history with backend-provided structured summaries (`runs.summary_json`)
 
 Library data tooling currently includes:
 - Classification views and merge/normalization previews
@@ -169,6 +176,12 @@ gemini:
 ```
 
 Legacy `gemini_api_keys: []` is still supported as fallback (single default account).
+
+Model policy:
+- Task flows should resolve Gemini model names from `gemini.models` aliases (not hardcoded in task logic).
+- Current default aliases are:
+  - `library_meta_evaluate`
+  - `library_normalization`
 
 Backup task note:
 - Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.
@@ -303,6 +316,11 @@ Library:
 - `GET /api/library/publishers`
 - `GET /api/library/publishers/table`
 - `GET /api/library/publishers/insights`
+- `GET /api/library/collections`
+- `GET /api/library/collections/table`
+- `GET /api/library/collections/insights`
+- `GET /api/library/collections/{collection_id}/items`
+- `PATCH /api/library/collections/{collection_id}`
 
 Normalization API (`{entity_type}` = `personality|publisher`):
 - `GET /api/library/normalization/{entity_type}`
