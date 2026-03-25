@@ -57,6 +57,12 @@ def register_library_normalization_routes(
                 names.append(value)
         return names
 
+    def _resolve_context(entity_type: str) -> tuple[Any, NormalizationOperations, str]:
+        state = state_provider()
+        operations = operations_provider()
+        normalized = _require_normalization_entity(entity_type)
+        return state, operations, normalized
+
     @app.get("/api/library/normalization/{entity_type}")
     def get_library_normalization(entity_type: str) -> JSONResponse:
         """Return normalization workbench summary payload."""
@@ -74,9 +80,7 @@ def register_library_normalization_routes(
         page_size: int = q_page_size(default=40, max_value=200),
     ) -> JSONResponse:
         """Return normalization review queue."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         payload = operations.get_review_queue(
             state.db,
             normalized,
@@ -95,9 +99,7 @@ def register_library_normalization_routes(
         search: str = q_text(max_length=160),
     ) -> JSONResponse:
         """Return canonical registry entries for normalization entity."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         return JSONResponse(operations.list_canonicals(state.db, normalized, search=search))
 
     @app.post("/api/library/normalization/{entity_type}/canonicals")
@@ -106,9 +108,7 @@ def register_library_normalization_routes(
         payload: Dict[str, Any] = Body(...),
     ) -> JSONResponse:
         """Create one canonical entry."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         display_name = str(payload.get("display_name") or "").strip()
         notes = str(payload.get("notes") or "").strip()
         if not display_name:
@@ -130,9 +130,7 @@ def register_library_normalization_routes(
         payload: Dict[str, Any] = Body(...),
     ) -> JSONResponse:
         """Link alias to canonical."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         raw_name = str(payload.get("raw_name") or "").strip()
         if not raw_name:
             raise HTTPException(status_code=400, detail="raw_name is required")
@@ -173,9 +171,7 @@ def register_library_normalization_routes(
         payload: Dict[str, Any] = Body(...),
     ) -> JSONResponse:
         """Create canonical and link alias in one action."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         raw_name = str(payload.get("raw_name") or "").strip()
         display_name = str(payload.get("display_name") or "").strip()
         suggestion_ids = _parse_suggestion_ids(payload)
@@ -203,9 +199,7 @@ def register_library_normalization_routes(
         payload: Dict[str, Any] = Body(...),
     ) -> JSONResponse:
         """Reject alias from normalization queue."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         raw_name = str(payload.get("raw_name") or "").strip()
         if not raw_name:
             raise HTTPException(status_code=400, detail="raw_name is required")
@@ -229,9 +223,7 @@ def register_library_normalization_routes(
         payload: Dict[str, Any] = Body(...),
     ) -> JSONResponse:
         """Bulk-link aliases to a canonical."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         raw_names = _parse_raw_names(payload)
         canonical_id = payload.get("canonical_id")
         try:
@@ -256,9 +248,7 @@ def register_library_normalization_routes(
         payload: Dict[str, Any] = Body(...),
     ) -> JSONResponse:
         """Bulk-reject aliases from queue."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         raw_names = _parse_raw_names(payload)
         try:
             result = operations.bulk_reject_aliases(
@@ -276,9 +266,7 @@ def register_library_normalization_routes(
         limit: int = q_limit(default=200, minimum=1, maximum=1000),
     ) -> JSONResponse:
         """Return open suggestions for normalization queue."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         return JSONResponse(operations.list_suggestions(state.db, normalized, limit=limit))
 
     @app.post("/api/library/normalization/{entity_type}/suggestions/refresh")
@@ -287,9 +275,7 @@ def register_library_normalization_routes(
         payload: Dict[str, Any] = Body(default={}),
     ) -> JSONResponse:
         """Regenerate normalization suggestions."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         limit = payload.get("limit", 120)
         use_gemini = payload.get("use_gemini", True)
         try:
@@ -310,9 +296,7 @@ def register_library_normalization_routes(
         limit: int = q_limit(default=80, minimum=1, maximum=300),
     ) -> JSONResponse:
         """Return possible canonical merge candidates."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         return JSONResponse(
             operations.get_normalization_merge_candidates(
                 state.db,
@@ -328,9 +312,7 @@ def register_library_normalization_routes(
         payload: Dict[str, Any] = Body(...),
     ) -> JSONResponse:
         """Merge source canonical into target canonical."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         try:
             source_canonical_id = int(payload.get("source_canonical_id"))
             target_canonical_id = int(payload.get("target_canonical_id"))
@@ -358,9 +340,7 @@ def register_library_normalization_routes(
         limit: int = q_limit(default=200, minimum=1, maximum=1000),
     ) -> JSONResponse:
         """Return normalization action history."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         return JSONResponse(operations.list_normalization_history(state.db, normalized, limit=limit))
 
     @app.post("/api/library/normalization/{entity_type}/history/{event_id}/undo")
@@ -369,9 +349,7 @@ def register_library_normalization_routes(
         event_id: int,
     ) -> JSONResponse:
         """Undo one normalization event by id."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         try:
             result = operations.undo_event(state.db, normalized, event_id=event_id)
         except ValueError as exc:
@@ -381,9 +359,7 @@ def register_library_normalization_routes(
     @app.get("/api/library/normalization/{entity_type}/quality")
     def get_library_normalization_quality(entity_type: str) -> JSONResponse:
         """Return quality metrics for normalization workbench."""
-        state = state_provider()
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        state, operations, normalized = _resolve_context(entity_type)
         return JSONResponse(operations.get_normalization_quality(state.db, normalized))
 
     @app.get("/api/library/normalization/{entity_type}/evidence")
@@ -393,8 +369,7 @@ def register_library_normalization_routes(
         limit: int = q_limit(default=20, minimum=1, maximum=200),
     ) -> JSONResponse:
         """Return sample docs where alias appears."""
-        operations = operations_provider()
-        normalized = _require_normalization_entity(entity_type)
+        _state, operations, normalized = _resolve_context(entity_type)
         try:
             payload = operations.get_normalization_evidence(
                 normalized,
