@@ -42,7 +42,7 @@ from integrations.s3 import create_session
 from dirs import Dirs
 from .fields import extract_flat_fields
 from .schema import BookPatch
-from models import Classification, Document, Metadata
+from models import Classification, Metadata
 from core.paths import get_in_workdir
 from core.config import read_config
 from core.db import get_session

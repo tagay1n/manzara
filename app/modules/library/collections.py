@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List
 from urllib.parse import unquote, urlparse
 
 from sqlalchemy import text
@@ -1186,4 +1186,3 @@ __all__ = [
     "list_collections",
     "update_collection",
 ]
-
