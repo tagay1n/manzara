@@ -11,13 +11,9 @@ from typing import Any, Dict
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.app_setup import register_app_routes
 from app.bootstrap import shutdown_app, startup_app
 from app.db import Database
-from app.control_routes import register_control_routes
-from app.core_read_routes import register_core_read_routes
-from app.library_classification_routes import register_library_classification_routes
-from app.library_entities_routes import register_library_entities_routes
-from app.library_normalization_routes import register_library_normalization_routes
 from app.modules.library.insights import (
     get_classification_detail,
     get_classification_insights,
@@ -87,9 +83,7 @@ from app.modules.shayan.workflow import (
 from app.modules.oscar.panel import build_oscar_panel
 from app.modules.oscar.tasks import oscar_task_definitions
 from app.modules.oscar.workflow import oscar_pipeline_workflow_bundle
-from app.page_routes import register_page_routes
 from app.payload_builder import PayloadBuilder
-from app.stream_routes import register_stream_routes
 from app.settings import Settings, load_settings
 from app.run_summary import build_default_run_summary
 from app.tasks import TaskRunner
@@ -193,21 +187,62 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="Manzara", version="0.1.0", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-register_page_routes(
+_stream_route_handlers = register_app_routes(
     app,
+    state_provider=lambda: state,
     static_dir=STATIC_DIR,
     normalization_entity_types=NORMALIZATION_ENTITY_TYPES,
-)
-register_control_routes(
-    app,
-    state_provider=lambda: state,
     title_max_length=_TITLE_MAX_LENGTH,
-)
-_stream_route_handlers = register_stream_routes(
-    app,
-    state_provider=lambda: state,
     sse_poll_interval_seconds=_SSE_POLL_INTERVAL_SECONDS,
     sse_heartbeat_every_empty_polls=_SSE_HEARTBEAT_EVERY_EMPTY_POLLS,
+    payload_provider=lambda: {
+        "build_dashboard_payload": build_dashboard_payload,
+        "build_schedules_payload": build_schedules_payload,
+        "build_tasks_payload": build_tasks_payload,
+        "build_task_detail_payload": build_task_detail_payload,
+        "build_flow_detail_payload": build_flow_detail_payload,
+        "build_library_payload": build_library_payload,
+        "build_database_state_payload": build_database_state_payload,
+        "build_classification_detail_payload": build_classification_detail_payload,
+        "build_personality_payload": build_personality_payload,
+        "build_publisher_payload": build_publisher_payload,
+        "build_normalization_payload": build_normalization_payload,
+        "build_collections_payload": build_collections_payload,
+    },
+    normalization_operations_provider=lambda: {
+        "get_review_queue": get_review_queue,
+        "list_canonicals": list_canonicals,
+        "create_canonical": create_canonical,
+        "link_alias": link_alias,
+        "create_and_link_alias": create_and_link_alias,
+        "reject_alias": reject_alias,
+        "bulk_link_aliases": bulk_link_aliases,
+        "bulk_reject_aliases": bulk_reject_aliases,
+        "list_suggestions": list_suggestions,
+        "refresh_suggestions": refresh_suggestions,
+        "get_normalization_merge_candidates": get_normalization_merge_candidates,
+        "merge_canonicals": merge_canonicals,
+        "list_normalization_history": list_normalization_history,
+        "undo_event": undo_event,
+        "get_normalization_quality": get_normalization_quality,
+        "get_normalization_evidence": get_normalization_evidence,
+    },
+    classification_operations_provider=lambda: {
+        "list_classifications": list_classifications,
+        "get_classification_insights": get_classification_insights,
+        "get_normalization_preview": get_normalization_preview,
+        "get_merge_candidates": get_merge_candidates,
+    },
+    entities_operations_provider=lambda: {
+        "list_personalities": list_personalities,
+        "get_personality_insights": get_personality_insights,
+        "list_publishers": list_publishers,
+        "get_publisher_insights": get_publisher_insights,
+        "list_library_collections": list_library_collections,
+        "get_collection_insights": get_collection_insights,
+        "list_collection_items": list_collection_items,
+        "update_collection": update_collection,
+    },
 )
 run_logs = _stream_route_handlers["run_logs"]
 events_stream = _stream_route_handlers["events_stream"]
@@ -273,68 +308,3 @@ def build_normalization_payload(entity_type: str) -> Dict[str, Any]:
 
 def build_collections_payload() -> Dict[str, Any]:
     return payload_builder.build_collections_payload()
-
-
-register_library_normalization_routes(
-    app,
-    state_provider=lambda: state,
-    normalization_entity_types=NORMALIZATION_ENTITY_TYPES,
-    build_normalization_payload=build_normalization_payload,
-    operations_provider=lambda: {
-        "get_review_queue": get_review_queue,
-        "list_canonicals": list_canonicals,
-        "create_canonical": create_canonical,
-        "link_alias": link_alias,
-        "create_and_link_alias": create_and_link_alias,
-        "reject_alias": reject_alias,
-        "bulk_link_aliases": bulk_link_aliases,
-        "bulk_reject_aliases": bulk_reject_aliases,
-        "list_suggestions": list_suggestions,
-        "refresh_suggestions": refresh_suggestions,
-        "get_normalization_merge_candidates": get_normalization_merge_candidates,
-        "merge_canonicals": merge_canonicals,
-        "list_normalization_history": list_normalization_history,
-        "undo_event": undo_event,
-        "get_normalization_quality": get_normalization_quality,
-        "get_normalization_evidence": get_normalization_evidence,
-    },
-)
-register_library_classification_routes(
-    app,
-    operations_provider=lambda: {
-        "list_classifications": list_classifications,
-        "get_classification_insights": get_classification_insights,
-        "get_normalization_preview": get_normalization_preview,
-        "get_merge_candidates": get_merge_candidates,
-    },
-    build_classification_detail_payload=build_classification_detail_payload,
-)
-register_library_entities_routes(
-    app,
-    state_provider=lambda: state,
-    operations_provider=lambda: {
-        "list_personalities": list_personalities,
-        "get_personality_insights": get_personality_insights,
-        "list_publishers": list_publishers,
-        "get_publisher_insights": get_publisher_insights,
-        "list_library_collections": list_library_collections,
-        "get_collection_insights": get_collection_insights,
-        "list_collection_items": list_collection_items,
-        "update_collection": update_collection,
-    },
-    build_personality_payload=build_personality_payload,
-    build_publisher_payload=build_publisher_payload,
-    build_collections_payload=build_collections_payload,
-)
-register_core_read_routes(
-    app,
-    payload_provider=lambda: {
-        "build_dashboard_payload": build_dashboard_payload,
-        "build_schedules_payload": build_schedules_payload,
-        "build_tasks_payload": build_tasks_payload,
-        "build_task_detail_payload": build_task_detail_payload,
-        "build_flow_detail_payload": build_flow_detail_payload,
-        "build_library_payload": build_library_payload,
-        "build_database_state_payload": build_database_state_payload,
-    },
-)
