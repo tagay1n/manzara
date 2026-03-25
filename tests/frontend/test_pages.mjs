@@ -133,6 +133,56 @@ const CLASSIFICATIONS_PAGE_IDS = [
   "unclassified-root",
 ];
 
+const PERSONALITIES_PAGE_IDS = [
+  "clusters-root",
+  "filter-apply",
+  "filter-min-docs",
+  "filter-script",
+  "filter-search",
+  "filter-sort",
+  "global-status",
+  "last-event",
+  "page-label",
+  "page-next",
+  "page-prev",
+  "personality-stat-grid",
+  "personality-status",
+  "personality-table-body",
+  "personality-table-status",
+  "personality-top-list",
+  "queue-root",
+  "scripts-root",
+  "stop-all-btn",
+  "tab-badge-clusters",
+  "tab-badge-queue",
+  "tab-badge-scripts",
+];
+
+const PUBLISHERS_PAGE_IDS = [
+  "clusters-root",
+  "filter-apply",
+  "filter-min-docs",
+  "filter-script",
+  "filter-search",
+  "filter-sort",
+  "global-status",
+  "last-event",
+  "page-label",
+  "page-next",
+  "page-prev",
+  "publisher-stat-grid",
+  "publisher-status",
+  "publisher-table-body",
+  "publisher-table-status",
+  "publisher-top-list",
+  "queue-root",
+  "scripts-root",
+  "stop-all-btn",
+  "tab-badge-clusters",
+  "tab-badge-queue",
+  "tab-badge-scripts",
+];
+
 class FakeClassList {
   constructor() {
     this._set = new Set();
@@ -1014,6 +1064,144 @@ function createClassificationsResolver({ malicious = false } = {}) {
   };
 }
 
+function createPersonalitiesResolver({
+  summary = null,
+} = {}) {
+  return (path) => {
+    if (path === "/api/library/personalities") {
+      return {
+        global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+        overview: {
+          available: true,
+          config_source: "test",
+          stats: {
+            total_mentions: 3,
+            docs_with_authors: 2,
+            unique_raw_names: 2,
+            unique_normalized_names: 2,
+            mixed_script_mentions: 0,
+            patronymic_mentions: 0,
+          },
+          top_personalities: [],
+        },
+      };
+    }
+    if (path.startsWith("/api/library/personalities/table?")) {
+      return {
+        available: true,
+        page: 1,
+        total_pages: 1,
+        total: 1,
+        items: [
+          {
+            raw_name: "Alias One",
+            normalized_name: "alias one",
+            script_label: "latin",
+            docs_count: 1,
+            mentions_count: 1,
+            patronymic_mentions: 0,
+          },
+        ],
+      };
+    }
+    if (path.startsWith("/api/library/personalities/insights")) {
+      return {
+        available: true,
+        script_distribution: [{ script_label: "latin", mentions_count: 1, share_pct: 100 }],
+        variant_clusters: [
+          {
+            normalized_name: "alias one",
+            variants_count: 1,
+            docs_count: 1,
+            mentions_count: 1,
+            variants: [],
+          },
+        ],
+        ambiguous_queue: {
+          total: 1,
+          items: [{ raw_name: "Alias One", script_label: "latin", reasons: ["manual_review"], docs_count: 1 }],
+        },
+        summary: summary || {
+          script_total_mentions: 1,
+          variant_cluster_count: 1,
+          ambiguous_queue_total: 1,
+        },
+      };
+    }
+    if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
+    throw new Error(`unexpected path: ${path}`);
+  };
+}
+
+function createPublishersResolver({
+  summary = null,
+} = {}) {
+  return (path) => {
+    if (path === "/api/library/publishers") {
+      return {
+        global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+        overview: {
+          available: true,
+          config_source: "test",
+          stats: {
+            total_mentions: 3,
+            docs_with_publishers: 2,
+            unique_raw_names: 2,
+            unique_normalized_names: 2,
+            mixed_script_mentions: 0,
+            org_marker_mentions: 0,
+          },
+          top_publishers: [],
+        },
+      };
+    }
+    if (path.startsWith("/api/library/publishers/table?")) {
+      return {
+        available: true,
+        page: 1,
+        total_pages: 1,
+        total: 1,
+        items: [
+          {
+            raw_name: "Publisher One",
+            normalized_name: "publisher one",
+            script_label: "latin",
+            docs_count: 1,
+            mentions_count: 1,
+            org_marker_mentions: 0,
+          },
+        ],
+      };
+    }
+    if (path.startsWith("/api/library/publishers/insights")) {
+      return {
+        available: true,
+        script_distribution: [{ script_label: "latin", mentions_count: 1, share_pct: 100 }],
+        variant_clusters: [
+          {
+            normalized_name: "publisher one",
+            variants_count: 1,
+            docs_count: 1,
+            mentions_count: 1,
+            variants: [],
+          },
+        ],
+        ambiguous_queue: {
+          total: 1,
+          items: [{ raw_name: "Publisher One", script_label: "latin", reasons: ["manual_review"], docs_count: 1 }],
+        },
+        summary: summary || {
+          script_total_mentions: 1,
+          variant_cluster_count: 1,
+          ambiguous_queue_total: 1,
+        },
+      };
+    }
+    if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
+    throw new Error(`unexpected path: ${path}`);
+  };
+}
+
 test("library classifications page escapes dangerous strings in rendered html", async () => {
   const harness = createHarness({
     source: LIBRARY_CLASSIFICATIONS_SOURCE,
@@ -1039,30 +1227,7 @@ test("library classifications page escapes dangerous strings in rendered html", 
 test("library personalities page renders API error state", async () => {
   const harness = createHarness({
     source: LIBRARY_PERSONALITIES_SOURCE,
-    ids: [
-      "clusters-root",
-      "filter-apply",
-      "filter-min-docs",
-      "filter-script",
-      "filter-search",
-      "filter-sort",
-      "global-status",
-      "last-event",
-      "page-label",
-      "page-next",
-      "page-prev",
-      "personality-stat-grid",
-      "personality-status",
-      "personality-table-body",
-      "personality-table-status",
-      "personality-top-list",
-      "queue-root",
-      "scripts-root",
-      "stop-all-btn",
-      "tab-badge-clusters",
-      "tab-badge-queue",
-      "tab-badge-scripts",
-    ],
+    ids: PERSONALITIES_PAGE_IDS,
     selectors: [".classification-tabs"],
     apiResolver(path) {
       if (path.startsWith("/api/library/personalities")) {
@@ -1084,33 +1249,29 @@ test("library personalities page renders API error state", async () => {
   assert.match(harness.elements.get("scripts-root").innerHTML, /personalities unavailable/);
 });
 
+test("library personalities page prefers backend summary counters for badges", async () => {
+  const harness = createHarness({
+    source: LIBRARY_PERSONALITIES_SOURCE,
+    ids: PERSONALITIES_PAGE_IDS,
+    selectors: [".classification-tabs"],
+    apiResolver: createPersonalitiesResolver({
+      summary: {
+        script_total_mentions: 91,
+        variant_cluster_count: 81,
+        ambiguous_queue_total: 71,
+      },
+    }),
+  });
+  await harness.flush();
+  assert.equal(harness.elements.get("tab-badge-scripts").textContent, "91");
+  assert.equal(harness.elements.get("tab-badge-clusters").textContent, "81");
+  assert.equal(harness.elements.get("tab-badge-queue").textContent, "71");
+});
+
 test("library publishers page renders API error state", async () => {
   const harness = createHarness({
     source: LIBRARY_PUBLISHERS_SOURCE,
-    ids: [
-      "clusters-root",
-      "filter-apply",
-      "filter-min-docs",
-      "filter-script",
-      "filter-search",
-      "filter-sort",
-      "global-status",
-      "last-event",
-      "page-label",
-      "page-next",
-      "page-prev",
-      "publisher-stat-grid",
-      "publisher-status",
-      "publisher-table-body",
-      "publisher-table-status",
-      "publisher-top-list",
-      "queue-root",
-      "scripts-root",
-      "stop-all-btn",
-      "tab-badge-clusters",
-      "tab-badge-queue",
-      "tab-badge-scripts",
-    ],
+    ids: PUBLISHERS_PAGE_IDS,
     selectors: [".classification-tabs"],
     apiResolver(path) {
       if (path.startsWith("/api/library/publishers")) {
@@ -1130,6 +1291,25 @@ test("library publishers page renders API error state", async () => {
     /publishers unavailable/,
   );
   assert.match(harness.elements.get("scripts-root").innerHTML, /publishers unavailable/);
+});
+
+test("library publishers page prefers backend summary counters for badges", async () => {
+  const harness = createHarness({
+    source: LIBRARY_PUBLISHERS_SOURCE,
+    ids: PUBLISHERS_PAGE_IDS,
+    selectors: [".classification-tabs"],
+    apiResolver: createPublishersResolver({
+      summary: {
+        script_total_mentions: 51,
+        variant_cluster_count: 41,
+        ambiguous_queue_total: 31,
+      },
+    }),
+  });
+  await harness.flush();
+  assert.equal(harness.elements.get("tab-badge-scripts").textContent, "51");
+  assert.equal(harness.elements.get("tab-badge-clusters").textContent, "41");
+  assert.equal(harness.elements.get("tab-badge-queue").textContent, "31");
 });
 
 test("library classification detail page renders API error state", async () => {

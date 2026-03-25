@@ -271,19 +271,25 @@ function renderInsights(payload) {
     return;
   }
 
-  scriptsNode.innerHTML = renderDistribution(payload.script_distribution || []);
-  clustersNode.innerHTML = renderVariantClusters(payload.variant_clusters || []);
-  queueNode.innerHTML = renderQueue(payload.ambiguous_queue || {});
-  document.getElementById("tab-badge-scripts").textContent = String(
-    (payload.script_distribution || []).reduce(
+  const summary = payload.summary || {};
+  const scriptMentionsTotal = Number(
+    summary.script_total_mentions
+    ?? (payload.script_distribution || []).reduce(
       (sum, row) => sum + Number(row.mentions_count || 0),
       0
     )
   );
-  document.getElementById("tab-badge-clusters").textContent = String((payload.variant_clusters || []).length);
-  document.getElementById("tab-badge-queue").textContent = String(
-    Number(payload.ambiguous_queue?.total || 0)
+  const variantClusterCount = Number(summary.variant_cluster_count ?? (payload.variant_clusters || []).length);
+  const ambiguousQueueTotal = Number(
+    summary.ambiguous_queue_total ?? (payload.ambiguous_queue?.total || 0)
   );
+
+  scriptsNode.innerHTML = renderDistribution(payload.script_distribution || []);
+  clustersNode.innerHTML = renderVariantClusters(payload.variant_clusters || []);
+  queueNode.innerHTML = renderQueue(payload.ambiguous_queue || {});
+  document.getElementById("tab-badge-scripts").textContent = String(scriptMentionsTotal);
+  document.getElementById("tab-badge-clusters").textContent = String(variantClusterCount);
+  document.getElementById("tab-badge-queue").textContent = String(ambiguousQueueTotal);
 }
 
 function applyActiveTab() {

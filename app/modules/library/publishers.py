@@ -453,6 +453,13 @@ def get_publisher_insights(
             "config_source": config_source,
             "script_distribution": _script_distribution(list(script_rows)),
             "variant_clusters": variant_clusters,
+            "summary": {
+                "script_total_mentions": sum(
+                    int(row.get("mentions_count") or 0) for row in script_rows
+                ),
+                "variant_cluster_count": len(variant_clusters),
+                "ambiguous_queue_total": len(queue_items),
+            },
             "ambiguous_queue": {
                 "total": len(queue_items),
                 "items": queue_items,
@@ -465,6 +472,11 @@ def get_publisher_insights(
             "config_source": None,
             "script_distribution": [],
             "variant_clusters": [],
+            "summary": {
+                "script_total_mentions": 0,
+                "variant_cluster_count": 0,
+                "ambiguous_queue_total": 0,
+            },
             "ambiguous_queue": {"total": 0, "items": []},
         }
 
