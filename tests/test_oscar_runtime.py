@@ -14,15 +14,22 @@ class _FakeDb:
         self._stage_snapshot = stage_snapshot
         self.stage_updates: list[tuple[str, str, str, int | None, str | None]] = []
         self.snapshot_updates: list[tuple[str, str, str | None]] = []
-        self.stage_claim_args: list[tuple[str, str | None]] = []
+        self.stage_claim_args: list[tuple[str, str | None, tuple[str, ...] | None]] = []
 
     def claim_next_oscar_snapshot(self):
         if not self._snapshot:
             return None
         return {"snapshot_id": self._snapshot, "status": "processing"}
 
-    def claim_next_oscar_snapshot_for_stage(self, stage_name: str, *, required_stage: str | None = None):
-        self.stage_claim_args.append((stage_name, required_stage))
+    def claim_next_oscar_snapshot_for_stage(
+        self,
+        stage_name: str,
+        *,
+        required_stage: str | None = None,
+        allowed_snapshot_statuses: list[str] | None = None,
+    ):
+        statuses = tuple(allowed_snapshot_statuses or [])
+        self.stage_claim_args.append((stage_name, required_stage, statuses or None))
         if not self._stage_snapshot:
             return None
         return {"snapshot_id": self._stage_snapshot, "status": "processing"}
@@ -253,7 +260,7 @@ def test_download_ranges_stage_success_uses_stage_claim_and_updates_state(
         ]
     )
     assert code == 0
-    assert fake_db.stage_claim_args == [("download_ranges", "resolve_offsets_local")]
+    assert fake_db.stage_claim_args == [("download_ranges", "resolve_offsets_local", None)]
     assert len(calls) == 1
     cmd = list(calls[0]["cmd"])
     assert "download-ranges" in cmd
@@ -339,7 +346,7 @@ def test_download_ranges_stage_exits_cleanly_when_no_ready_snapshot(
         ]
     )
     assert code == 0
-    assert fake_db.stage_claim_args == [("download_ranges", "resolve_offsets_local")]
+    assert fake_db.stage_claim_args == [("download_ranges", "resolve_offsets_local", None)]
     assert calls == []
     assert fake_db.stage_updates == []
     assert fake_db.snapshot_updates == []
@@ -385,7 +392,7 @@ def test_export_parquet_stage_success_marks_snapshot_completed(
         ]
     )
     assert code == 0
-    assert fake_db.stage_claim_args == [("export_parquet", "download_ranges")]
+    assert fake_db.stage_claim_args == [("export_parquet", "download_ranges", None)]
     assert len(calls) == 1
     cmd = list(calls[0]["cmd"])
     assert "export-parquet" in cmd
@@ -477,7 +484,231 @@ def test_export_parquet_stage_exits_cleanly_when_no_ready_snapshot(
         ]
     )
     assert code == 0
-    assert fake_db.stage_claim_args == [("export_parquet", "download_ranges")]
-    assert calls == []
+    assert fake_db.stage_claim_args == [("export_parquet", "download_ranges", None)]
+
+
+def test_discover_snapshots_stage_runs_ingest_command(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot=None)
+    calls: list[dict[str, object]] = []
+    seeded: list[Path] = []
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+
+    def _fake_seed(*, db, oscar_app_dir):  # noqa: ANN001
+        _ = db
+        seeded.append(Path(oscar_app_dir))
+
+    def _fake_run(cmd, *, cwd, env, text, check):  # noqa: ANN001
+        calls.append({"cmd": cmd, "cwd": cwd, "env": env, "text": text, "check": check})
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(run_stage, "_seed_snapshot_queue_from_sqlite", _fake_seed)
+    monkeypatch.setattr(run_stage.subprocess, "run", _fake_run)
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "discover_snapshots",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+    assert code == 0
+    assert len(calls) == 1
+    cmd = list(calls[0]["cmd"])
+    assert cmd[:3] == ["python3", "-m", "app.cli"]
+    assert cmd[-1] == "ingest"
+    assert calls[0]["cwd"] == str(repo)
+    env = dict(calls[0]["env"])
+    assert env["OSCAR_APP_DIR"] == str(artifacts)
+    assert seeded == [artifacts, artifacts]
+
+
+def test_discover_snapshots_stage_failure_returns_nonzero(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot=None)
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+    monkeypatch.setattr(run_stage, "_seed_snapshot_queue_from_sqlite", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        run_stage.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=4, stdout="", stderr="ingest failed"),
+    )
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "discover_snapshots",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+    assert code == 1
     assert fake_db.stage_updates == []
     assert fake_db.snapshot_updates == []
+
+
+def test_upload_dataset_stage_success_claims_completed_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot="CC-MAIN-2024-60")
+    uploads: list[tuple[str, Path]] = []
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+    monkeypatch.setattr(run_stage, "_seed_snapshot_queue_from_sqlite", lambda **_kwargs: None)
+
+    def _fake_upload(*, snapshot_id: str, oscar_app_dir: Path, source_repo: Path) -> dict[str, object]:
+        _ = source_repo
+        uploads.append((snapshot_id, oscar_app_dir))
+        return {"uploaded_files": 1, "repo_id": "owner/repo"}
+
+    monkeypatch.setattr(run_stage, "_upload_snapshot_dataset", _fake_upload)
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "upload_dataset",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+    assert code == 0
+    assert fake_db.stage_claim_args == [("upload_dataset", "export_parquet", ("completed",))]
+    assert fake_db.stage_updates[0][:3] == ("CC-MAIN-2024-60", "upload_dataset", "running")
+    assert fake_db.stage_updates[1][:3] == ("CC-MAIN-2024-60", "upload_dataset", "completed")
+    assert fake_db.snapshot_updates[-1] == ("CC-MAIN-2024-60", "completed", None)
+    assert uploads == [("CC-MAIN-2024-60", artifacts)]
+
+
+def test_upload_dataset_stage_exits_cleanly_when_no_ready_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot=None)
+    uploads: list[object] = []
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+    monkeypatch.setattr(run_stage, "_seed_snapshot_queue_from_sqlite", lambda **_kwargs: None)
+    monkeypatch.setattr(run_stage, "_upload_snapshot_dataset", lambda **kwargs: uploads.append(kwargs))
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "upload_dataset",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+    assert code == 0
+    assert fake_db.stage_claim_args == [("upload_dataset", "export_parquet", ("completed",))]
+    assert uploads == []
+    assert fake_db.stage_updates == []
+    assert fake_db.snapshot_updates == []
+
+
+def test_upload_dataset_stage_failure_marks_snapshot_failed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot="CC-MAIN-2024-61")
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+    monkeypatch.setattr(run_stage, "_seed_snapshot_queue_from_sqlite", lambda **_kwargs: None)
+
+    def _fake_upload(*, snapshot_id: str, oscar_app_dir: Path, source_repo: Path) -> dict[str, object]:
+        _ = (snapshot_id, oscar_app_dir, source_repo)
+        raise RuntimeError("upload failed")
+
+    monkeypatch.setattr(run_stage, "_upload_snapshot_dataset", _fake_upload)
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "upload_dataset",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+    assert code == 1
+    assert fake_db.stage_updates[0][:3] == ("CC-MAIN-2024-61", "upload_dataset", "running")
+    assert fake_db.stage_updates[1][:3] == ("CC-MAIN-2024-61", "upload_dataset", "failed")
+    assert "upload failed" in str(fake_db.stage_updates[1][4] or "")
+    assert fake_db.snapshot_updates[-1][0] == "CC-MAIN-2024-61"
+    assert fake_db.snapshot_updates[-1][1] == "failed"

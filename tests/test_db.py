@@ -256,3 +256,30 @@ def test_claim_next_oscar_snapshot_for_stage_requires_prerequisite_completion() 
         )
         assert claimed_next is not None
         assert claimed_next["snapshot_id"] == "snap-a"
+
+
+def test_claim_next_oscar_snapshot_for_stage_respects_allowed_statuses() -> None:
+    with _isolated_database() as db:
+        db.upsert_oscar_snapshot(
+            "snap-completed",
+            source_path="/snapshots/completed",
+            discovered_at="2026-03-01T00:00:00+00:00",
+            status="completed",
+        )
+        db.upsert_oscar_snapshot_stage("snap-completed", "export_parquet", "completed")
+
+        db.upsert_oscar_snapshot(
+            "snap-processing",
+            source_path="/snapshots/processing",
+            discovered_at="2026-03-02T00:00:00+00:00",
+            status="processing",
+        )
+        db.upsert_oscar_snapshot_stage("snap-processing", "export_parquet", "completed")
+
+        claimed = db.claim_next_oscar_snapshot_for_stage(
+            "upload_dataset",
+            required_stage="export_parquet",
+            allowed_snapshot_statuses=["completed"],
+        )
+        assert claimed is not None
+        assert claimed["snapshot_id"] == "snap-completed"

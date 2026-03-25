@@ -18,9 +18,11 @@ from app.db import ACTIVE_STATUSES, ACTIVE_WORKFLOW_STATUSES
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.oscar.config import OscarSettings
 from app.modules.oscar.tasks import (
+    OSCAR_DISCOVER_SNAPSHOTS_TASK_ID,
     OSCAR_DOWNLOAD_RANGES_TASK_ID,
     OSCAR_EXPORT_PARQUET_TASK_ID,
     OSCAR_RESOLVE_OFFSETS_TASK_ID,
+    OSCAR_UPLOAD_DATASET_TASK_ID,
 )
 from app.modules.shayan.config import ShayanSettings
 from app.settings import Settings
@@ -115,6 +117,19 @@ def _test_task_defs(shayan: ShayanSettings):
 def _test_oscar_task_defs(_oscar: OscarSettings):
     return [
         {
+            "task_id": OSCAR_DISCOVER_SNAPSHOTS_TASK_ID,
+            "panel_id": "oscar",
+            "title": "Discover snapshots",
+            "task_type": "ingest",
+            "icon_idle": "Radar",
+            "icon_running": "Square",
+            "cwd": ".",
+            "command": {
+                "mode": "shell",
+                "value": "python3 -c \"print('oscar-discover-ok')\"",
+            },
+        },
+        {
             "task_id": OSCAR_RESOLVE_OFFSETS_TASK_ID,
             "panel_id": "oscar",
             "title": "Resolve offsets (local)",
@@ -151,6 +166,19 @@ def _test_oscar_task_defs(_oscar: OscarSettings):
             "command": {
                 "mode": "shell",
                 "value": "python3 -c \"print('oscar-export-ok')\"",
+            },
+        },
+        {
+            "task_id": OSCAR_UPLOAD_DATASET_TASK_ID,
+            "panel_id": "oscar",
+            "title": "Upload dataset",
+            "task_type": "publish",
+            "icon_idle": "CloudUpload",
+            "icon_running": "Square",
+            "cwd": ".",
+            "command": {
+                "mode": "shell",
+                "value": "python3 -c \"print('oscar-upload-ok')\"",
             },
         },
     ]

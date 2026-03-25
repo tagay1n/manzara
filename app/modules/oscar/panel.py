@@ -112,7 +112,10 @@ def build_oscar_panel(
     return {
         "panel_id": panel_id,
         "title": title,
-        "description": "Snapshot pipeline (resolve offsets -> download ranges -> export parquet).",
+        "description": (
+            "Snapshot pipeline (discover snapshots -> resolve offsets -> download ranges "
+            "-> export parquet -> upload dataset)."
+        ),
         "status_counts": counts,
         "stats_cards": stats_cards,
         "tasks": tasks,

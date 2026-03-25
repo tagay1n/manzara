@@ -58,9 +58,11 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
 
     oscar = panels["oscar"]
     oscar_task_ids = {task["task_id"] for task in oscar["tasks"]}
+    assert "oscar.discover_snapshots" in oscar_task_ids
     assert "oscar.resolve_offsets_local" in oscar_task_ids
     assert "oscar.download_ranges" in oscar_task_ids
     assert "oscar.export_parquet" in oscar_task_ids
+    assert "oscar.upload_dataset" in oscar_task_ids
 
     library = panels["library"]
     library_task_ids = {task["task_id"] for task in library["tasks"]}
@@ -1077,7 +1079,7 @@ def test_workflow_run_skips_download_when_no_new(
     assert step_runs[1]["status"] == "skipped"
 
 
-def test_oscar_pipeline_workflow_runs_three_steps(
+def test_oscar_pipeline_workflow_runs_five_steps(
     test_client,
     wait_for_terminal_workflow_run,
 ) -> None:
@@ -1094,9 +1096,11 @@ def test_oscar_pipeline_workflow_runs_three_steps(
 
     step_runs = main_app.state.db.list_workflow_step_runs(workflow_run_id)
     assert [step["task_id"] for step in step_runs] == [
+        "oscar.discover_snapshots",
         "oscar.resolve_offsets_local",
         "oscar.download_ranges",
         "oscar.export_parquet",
+        "oscar.upload_dataset",
     ]
     assert all(step["status"] == "completed" for step in step_runs)
 

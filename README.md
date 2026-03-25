@@ -47,9 +47,11 @@ Flow tasks (seeded at startup):
 - `maintenance.monocorpus_sync`
 - `maintenance.pgbackrest_backup_full`
 - `maintenance.pgbackrest_backup_incr`
+- `oscar.discover_snapshots`
 - `oscar.resolve_offsets_local`
 - `oscar.download_ranges`
 - `oscar.export_parquet`
+- `oscar.upload_dataset`
 - `maintenance.monocorpus_meta_evaluate`
 - `library.personality_suggestions_refresh`
 - `library.publisher_suggestions_refresh`
@@ -58,7 +60,7 @@ Workflows (seeded at startup):
 - `shayan.weekly_sync` (scan -> conditional download)
 - `maintenance.pgbackrest_full_weekly`
 - `maintenance.pgbackrest_incr_3h`
-- `oscar.snapshot_pipeline` (resolve offsets -> download ranges -> export parquet)
+- `oscar.snapshot_pipeline` (discover snapshots -> resolve offsets -> download ranges -> export parquet -> upload dataset)
 - `library.meta_evaluate`
 - `library.personality_normalization_refresh`
 - `library.publisher_normalization_refresh`
@@ -129,6 +131,17 @@ Environment variables:
 - `OSCAR_REPO_PATH` (default: `/home/tans1q/projects/oscar-corpus-extractor`)
 - `OSCAR_ARTIFACTS_DIR` (default: `~/.manzara/oscar`)
 - `OSCAR_PARQUET_PART_SIZE_MB` (default: `1024`)
+- `OSCAR_HF_UPLOAD_REPO` (target dataset repo for Oscar upload task)
+- `OSCAR_HF_UPLOAD_TOKEN` (optional; falls back to `HF_TOKEN`)
+
+Optional YAML config for Oscar upload task:
+
+```yaml
+oscar:
+  hf_upload:
+    repo: "username/oscar-tt-dataset"
+    token: "hf_..."
+```
 
 Embedded runtimes read YAML config in this order:
 1. `MANZARA_CONFIG_PATH` (if set)

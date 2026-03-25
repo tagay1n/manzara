@@ -1698,13 +1698,23 @@ class Database:
         stage_name: str,
         *,
         required_stage: Optional[str] = None,
+        allowed_snapshot_statuses: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Claim next snapshot ready for a specific stage."""
+        statuses = [
+            str(item).strip()
+            for item in (allowed_snapshot_statuses or ["pending", "processing"])
+            if str(item).strip()
+        ]
+        if not statuses:
+            return None
+        status_placeholders = ", ".join("?" for _ in statuses)
         now = utc_now()
         with self._lock:
             with self._connect() as conn:
+                params: List[Any] = [stage_name, required_stage, *statuses, required_stage]
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT s.snapshot_id
                     FROM oscar_snapshots s
                     LEFT JOIN oscar_snapshot_stages stage_target
@@ -1713,7 +1723,7 @@ class Database:
                     LEFT JOIN oscar_snapshot_stages stage_required
                         ON stage_required.snapshot_id = s.snapshot_id
                        AND stage_required.stage_name = ?
-                    WHERE s.status IN ('pending', 'processing')
+                    WHERE s.status IN ({status_placeholders})
                       AND (
                             stage_target.status IS NULL
                             OR stage_target.status IN ('pending', 'failed')
@@ -1726,7 +1736,7 @@ class Database:
                     FOR UPDATE OF s SKIP LOCKED
                     LIMIT 1
                     """,
-                    (stage_name, required_stage, required_stage),
+                    params,
                 ).fetchone()
                 if row is None:
                     return None
