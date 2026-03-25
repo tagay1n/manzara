@@ -126,6 +126,39 @@
     return value.replace(/[^a-z0-9_-]+/g, "-");
   }
 
+  const VIEW_STATES = {
+    LOADING: "loading",
+    READY: "ready",
+    EMPTY: "empty",
+    ERROR: "error",
+  };
+
+  const VIEW_STATE_VALUES = new Set(Object.values(VIEW_STATES));
+
+  function normalizeViewState(value, fallback = VIEW_STATES.LOADING) {
+    const next = String(value || "").trim().toLowerCase();
+    if (VIEW_STATE_VALUES.has(next)) return next;
+    return String(fallback || VIEW_STATES.LOADING);
+  }
+
+  function attachViewState(state, initial = VIEW_STATES.LOADING) {
+    const target = state && typeof state === "object" ? state : {};
+    target.viewState = normalizeViewState(initial);
+    return {
+      get() {
+        return normalizeViewState(target.viewState);
+      },
+      set(next) {
+        const value = normalizeViewState(next, this.get());
+        target.viewState = value;
+        return value;
+      },
+      is(next) {
+        return this.get() === normalizeViewState(next);
+      },
+    };
+  }
+
   function isActiveStatus(status) {
     const value = String(status || "");
     return (
@@ -327,6 +360,7 @@
   }
 
   window.ManzaraCore = {
+    attachViewState,
     applyStopAllButton,
     api,
     applyPaginationControls,
@@ -334,6 +368,7 @@
     createTabController,
     createSseController,
     DEFAULT_EVENT_TYPES: [...DEFAULT_EVENT_TYPES],
+    VIEW_STATES: { ...VIEW_STATES },
     escapeHtml,
     formatEventBanner,
     formatDateTime,

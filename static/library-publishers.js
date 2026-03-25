@@ -13,6 +13,8 @@ const state = {
   activeTab: "table",
 };
 
+const viewState = window.ManzaraCore.attachViewState(state, "loading");
+
 const TAB_IDS = ["table", "scripts", "clusters", "queue"];
 
 const tabController = window.ManzaraCore.createTabController({
@@ -314,7 +316,7 @@ async function refreshAll() {
 }
 
 function renderPageLoading() {
-  state.viewState = "loading";
+  viewState.set("loading");
   setStatusMessage(document.getElementById("publisher-status"), "Loading publishers...", {
     error: false,
   });
@@ -339,7 +341,7 @@ function renderPageLoading() {
 }
 
 function renderPageError(error) {
-  state.viewState = "error";
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load publishers.");
   setStatusMessage(document.getElementById("publisher-status"), `Publishers unavailable: ${message}`, {
     error: true,
@@ -367,7 +369,7 @@ async function refreshAllWithState({ showLoading = false } = {}) {
   }
   try {
     await Promise.all([refreshOverview(), refreshTable(), refreshInsights()]);
-    state.viewState = "ready";
+    viewState.set("ready");
     applyActiveTab();
     lucide.createIcons();
   } catch (error) {

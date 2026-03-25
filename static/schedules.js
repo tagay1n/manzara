@@ -7,6 +7,8 @@ const state = {
   soundNotifier: null,
 };
 
+const viewState = window.ManzaraCore.attachViewState(state, "loading");
+
 const WEEKDAY_LABELS = {
   1: "Mon",
   2: "Tue",
@@ -237,12 +239,12 @@ function renderGlobalState(payload) {
 }
 
 function renderSchedules(payload) {
-  state.viewState = "ready";
+  viewState.set("ready");
   state.payload = payload;
   const scheduleGrid = document.getElementById("schedule-grid");
   const workflows = payload.workflows || [];
   if (!workflows.length) {
-    state.viewState = "empty";
+    viewState.set("empty");
     scheduleGrid.innerHTML = '<div class="run-row">No schedules available yet.</div>';
   } else {
     scheduleGrid.innerHTML = workflows.map(renderWorkflowCard).join("");
@@ -252,12 +254,12 @@ function renderSchedules(payload) {
 }
 
 function renderSchedulesLoading() {
-  state.viewState = "loading";
+  viewState.set("loading");
   document.getElementById("schedule-grid").innerHTML = '<div class="run-row">Loading schedules...</div>';
 }
 
 function renderSchedulesError(error) {
-  state.viewState = "error";
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load schedules.");
   document.getElementById("schedule-grid").innerHTML = `<div class="run-row">Error: ${escapeHtml(message)}</div>`;
 }

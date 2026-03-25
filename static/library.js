@@ -7,6 +7,8 @@ const state = {
   soundNotifier: null,
 };
 
+const viewState = window.ManzaraCore.attachViewState(state, "loading");
+
 async function api(path, options = {}) {
   return window.ManzaraCore.api(path, options);
 }
@@ -105,7 +107,7 @@ function renderLastRun(run) {
 }
 
 function renderLibrary(payload) {
-  state.viewState = "ready";
+  viewState.set("ready");
   state.payload = payload;
   const dataset = payload.dataset || {};
   const stats = dataset.stats || {};
@@ -129,7 +131,7 @@ function renderLibrary(payload) {
 }
 
 function renderLibraryLoading() {
-  state.viewState = "loading";
+  viewState.set("loading");
   const statusNode = document.getElementById("library-status");
   statusNode.textContent = "Loading library dataset...";
   statusNode.classList.remove("library-status-error");
@@ -139,7 +141,7 @@ function renderLibraryLoading() {
 }
 
 function renderLibraryError(error) {
-  state.viewState = "error";
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load library.");
   const safe = escapeHtml(message);
   const statusNode = document.getElementById("library-status");

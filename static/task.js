@@ -12,6 +12,8 @@ const state = {
   soundNotifier: null,
 };
 
+const viewState = window.ManzaraCore.attachViewState(state, "loading");
+
 async function api(path, options = {}) {
   return window.ManzaraCore.api(path, options);
 }
@@ -149,7 +151,7 @@ function renderGlobalState(payload) {
 }
 
 function renderTaskDetail(payload) {
-  state.viewState = "ready";
+  viewState.set("ready");
   state.payload = payload;
   const task = payload.task;
   const runs = payload.runs || [];
@@ -184,7 +186,7 @@ function renderTaskDetail(payload) {
 }
 
 function renderTaskLoading() {
-  state.viewState = "loading";
+  viewState.set("loading");
   document.getElementById("task-title").textContent = "Loading task...";
   document.getElementById("task-subtitle").textContent = "";
   document.getElementById("task-stat-grid").innerHTML = "";
@@ -193,7 +195,7 @@ function renderTaskLoading() {
 }
 
 function renderTaskError(error) {
-  state.viewState = "error";
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load task details.");
   const safe = escapeHtml(message);
   document.getElementById("task-title").textContent = "Task unavailable";

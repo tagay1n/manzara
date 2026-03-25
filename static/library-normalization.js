@@ -22,6 +22,8 @@ const state = {
   queueRows: [],
 };
 
+const viewState = window.ManzaraCore.attachViewState(state, "loading");
+
 const TAB_IDS = ["queue", "canonicals", "suggestions", "merge", "quality", "history"];
 
 const tabController = window.ManzaraCore.createTabController({
@@ -547,7 +549,7 @@ async function refreshAll() {
 }
 
 function renderPageLoading() {
-  state.viewState = "loading";
+  viewState.set("loading");
   const statusIds = [
     "normalization-status",
     "canonical-status",
@@ -579,7 +581,7 @@ function renderPageLoading() {
 }
 
 function renderPageError(error) {
-  state.viewState = "error";
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load normalization.");
   document.getElementById("normalization-status").textContent = `Normalization unavailable: ${message}`;
   document.getElementById("normalization-status").classList.add("library-status-error");
@@ -624,7 +626,7 @@ async function refreshAllWithState({ showLoading = false } = {}) {
       refreshQuality(),
       refreshHistory(),
     ]);
-    state.viewState = "ready";
+    viewState.set("ready");
     applyActiveTab();
     lucide.createIcons();
   } catch (error) {

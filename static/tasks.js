@@ -7,6 +7,8 @@ const state = {
   soundNotifier: null,
 };
 
+const viewState = window.ManzaraCore.attachViewState(state, "loading");
+
 async function api(path, options = {}) {
   return window.ManzaraCore.api(path, options);
 }
@@ -79,10 +81,10 @@ function renderTasks(payload) {
   const flows = payload.flows || [];
   const taskCount = flows.reduce((acc, flow) => acc + Number(flow.tasks?.length || 0), 0);
   if (taskCount === 0) {
-    state.viewState = "empty";
+    viewState.set("empty");
     flowGrid.innerHTML = '<div class="run-row">No tasks available yet.</div>';
   } else {
-    state.viewState = "ready";
+    viewState.set("ready");
     flowGrid.innerHTML = flows.map(renderTaskFlow).join("");
   }
   renderGlobalState(payload);
@@ -90,12 +92,12 @@ function renderTasks(payload) {
 }
 
 function renderTasksLoading() {
-  state.viewState = "loading";
+  viewState.set("loading");
   document.getElementById("task-flow-grid").innerHTML = '<div class="run-row">Loading tasks...</div>';
 }
 
 function renderTasksError(error) {
-  state.viewState = "error";
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load tasks.");
   document.getElementById("task-flow-grid").innerHTML = `<div class="run-row">Error: ${window.ManzaraCore.escapeHtml(message)}</div>`;
 }

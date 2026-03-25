@@ -337,6 +337,28 @@ function createHarness({
           options.nextNode.disabled = page >= totalPages;
         }
       },
+      attachViewState(state, initial = "loading") {
+        const allowed = new Set(["loading", "ready", "empty", "error"]);
+        const target = state && typeof state === "object" ? state : {};
+        const normalize = (value, fallback = "loading") => {
+          const next = String(value || "").trim().toLowerCase();
+          return allowed.has(next) ? next : fallback;
+        };
+        target.viewState = normalize(initial);
+        return {
+          get() {
+            return normalize(target.viewState);
+          },
+          set(next) {
+            const value = normalize(next, this.get());
+            target.viewState = value;
+            return value;
+          },
+          is(next) {
+            return this.get() === normalize(next);
+          },
+        };
+      },
       cssName(name, fallback = "unknown") {
         const value = String(name || "").trim().toLowerCase();
         if (!value) return fallback;

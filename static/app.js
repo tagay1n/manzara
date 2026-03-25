@@ -14,6 +14,8 @@ const state = {
   soundNotifier: null,
 };
 
+const viewState = window.ManzaraCore.attachViewState(state, "loading");
+
 async function api(path, options = {}) {
   return window.ManzaraCore.api(path, options);
 }
@@ -481,12 +483,12 @@ function renderGlobalState(payload) {
 }
 
 function renderDashboard(payload) {
-  state.viewState = "ready";
+  viewState.set("ready");
   state.dashboard = payload;
   const panelGrid = document.getElementById("panel-grid");
   const panels = Array.isArray(payload.panels) ? payload.panels : [];
   if (!panels.length) {
-    state.viewState = "empty";
+    viewState.set("empty");
     panelGrid.innerHTML = '<div class="run-row">No flows available yet.</div>';
   } else {
     panelGrid.innerHTML = panels.map(renderPanel).join("");
@@ -497,13 +499,13 @@ function renderDashboard(payload) {
 }
 
 function renderDashboardLoading() {
-  state.viewState = "loading";
+  viewState.set("loading");
   document.getElementById("panel-grid").innerHTML = '<div class="run-row">Loading flows...</div>';
   document.getElementById("runs-list").innerHTML = '<div class="run-row">Loading runs...</div>';
 }
 
 function renderDashboardError(error) {
-  state.viewState = "error";
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load dashboard.");
   const safe = escapeHtml(message);
   document.getElementById("panel-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;

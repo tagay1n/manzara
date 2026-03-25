@@ -10,6 +10,8 @@ const state = {
   soundNotifier: null,
 };
 
+const viewState = window.ManzaraCore.attachViewState(state, "loading");
+
 async function api(path, options = {}) {
   return window.ManzaraCore.api(path, options);
 }
@@ -100,7 +102,7 @@ function renderMetaRuns(items) {
 }
 
 function renderDetail(payload) {
-  state.viewState = "ready";
+  viewState.set("ready");
   state.payload = payload;
   const detail = payload.detail || {};
   const classification = detail.classification;
@@ -159,7 +161,7 @@ function renderDetail(payload) {
 }
 
 function renderDetailLoading() {
-  state.viewState = "loading";
+  viewState.set("loading");
   document.getElementById("classification-title").textContent = "Classification";
   const statusNode = document.getElementById("classification-status");
   statusNode.textContent = "Loading classification details...";
@@ -176,7 +178,7 @@ function renderDetailLoading() {
 }
 
 function renderDetailError(error) {
-  state.viewState = "error";
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load classification.");
   document.getElementById("classification-title").textContent = "Classification";
   const statusNode = document.getElementById("classification-status");

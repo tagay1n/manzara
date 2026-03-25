@@ -315,3 +315,19 @@ test("applyPaginationControls updates label and button disabled state", () => {
   assert.equal(prevNode.disabled, false);
   assert.equal(nextNode.disabled, true);
 });
+
+test("attachViewState normalizes and mutates shared state", () => {
+  const core = loadCore();
+  const state = {};
+  const store = core.attachViewState(state, "loading");
+  assert.equal(state.viewState, "loading");
+  assert.equal(store.get(), "loading");
+  assert.equal(store.is("loading"), true);
+
+  store.set("ready");
+  assert.equal(state.viewState, "ready");
+  assert.equal(store.is("ready"), true);
+
+  store.set("invalid");
+  assert.equal(state.viewState, "ready");
+});

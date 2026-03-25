@@ -7,6 +7,8 @@ const state = {
   soundNotifier: null,
 };
 
+const viewState = window.ManzaraCore.attachViewState(state, "loading");
+
 async function api(path, options = {}) {
   return window.ManzaraCore.api(path, options);
 }
@@ -84,7 +86,7 @@ function renderBackupItem(title, item) {
 }
 
 function renderDatabaseState(payload) {
-  state.viewState = "ready";
+  viewState.set("ready");
   state.payload = payload;
   const db = payload.database_state || {};
   renderGlobalState(payload);
@@ -151,7 +153,7 @@ function renderDatabaseState(payload) {
 }
 
 function renderDatabaseLoading() {
-  state.viewState = "loading";
+  viewState.set("loading");
   document.getElementById("db-warning-pill").className = "panel-pill";
   document.getElementById("db-warning-pill").textContent = "Loading";
   document.getElementById("db-status").textContent = "Loading database state...";
@@ -162,7 +164,7 @@ function renderDatabaseLoading() {
 }
 
 function renderDatabaseError(error) {
-  state.viewState = "error";
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load database state.");
   const safe = escapeHtml(message);
   document.getElementById("db-warning-pill").className = "panel-pill state-attention";

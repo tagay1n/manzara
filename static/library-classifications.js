@@ -14,6 +14,8 @@ const state = {
   activeTab: "table",
 };
 
+const viewState = window.ManzaraCore.attachViewState(state, "loading");
+
 const TAB_IDS = [
   "table",
   "tree",
@@ -478,7 +480,7 @@ async function refreshAll() {
 }
 
 function renderPageLoading() {
-  state.viewState = "loading";
+  viewState.set("loading");
   document.getElementById("classification-table-status").textContent = "Loading classifications...";
   document.getElementById("classification-table-status").classList.remove("library-status-error");
   document.getElementById("classification-table-body").innerHTML =
@@ -502,7 +504,7 @@ function renderPageLoading() {
 }
 
 function renderPageError(error) {
-  state.viewState = "error";
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load classifications.");
   const safe = escapeHtml(message);
   document.getElementById("classification-table-status").textContent =
@@ -549,7 +551,7 @@ async function refreshAllWithState({ showLoading = false } = {}) {
       refreshMergeCandidates(),
       refreshGlobal(),
     ]);
-    state.viewState = "ready";
+    viewState.set("ready");
     applyActiveTab();
     lucide.createIcons();
   } catch (error) {
