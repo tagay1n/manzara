@@ -1329,7 +1329,7 @@ def test_task_completion_not_blocked_by_open_stdout_fd(test_client, wait_for_ter
                     "mode": "shell",
                     "value": (
                         "python3 -c \"import subprocess,sys; "
-                        "subprocess.Popen(['python3','-c','import time; time.sleep(8)'], "
+                        "subprocess.Popen(['python3','-c','import time; time.sleep(3)'], "
                         "stdout=sys.stdout, stderr=sys.stderr); "
                         "print('parent-exit', flush=True)\""
                     ),

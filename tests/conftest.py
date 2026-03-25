@@ -7,6 +7,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Iterator, Tuple
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pytest
 import yaml
@@ -80,7 +81,7 @@ def _test_task_defs(shayan: ShayanSettings):
                     "python3 -c \"import time,sys; "
                     "print('long-start'); "
                     "sys.stdout.flush(); "
-                    "time.sleep(30)\""
+                    "time.sleep(8)\""
                 ),
             },
         },
@@ -98,7 +99,7 @@ def _test_task_defs(shayan: ShayanSettings):
                     "python3 -c \"import signal,time,sys; "
                     "signal.signal(signal.SIGINT, lambda _sig, _frame: print('sigint-ignored', flush=True)); "
                     "print('ignore-start', flush=True); "
-                    "time.sleep(30)\""
+                    "time.sleep(8)\""
                 ),
             },
         },
@@ -116,10 +117,25 @@ def _contains_redacted(node: object) -> bool:
 
 
 def _resolve_test_database_url() -> str:
+    def _with_connect_timeout(database_url: str, seconds: int = 3) -> str:
+        split = urlsplit(database_url)
+        params = dict(parse_qsl(split.query, keep_blank_values=True))
+        if "connect_timeout" not in params:
+            params["connect_timeout"] = str(int(seconds))
+        return urlunsplit(
+            (
+                split.scheme,
+                split.netloc,
+                split.path,
+                urlencode(params),
+                split.fragment,
+            )
+        )
+
     for env_name in ("MANZARA_TEST_DATABASE_URL", "MANZARA_DATABASE_URL"):
         value = str(os.environ.get(env_name) or "").strip()
         if value:
-            return value
+            return _with_connect_timeout(value)
 
     config_override = os.environ.get("MANZARA_CONFIG_PATH")
     candidates: list[Path]
@@ -142,7 +158,7 @@ def _resolve_test_database_url() -> str:
             continue
         database_url = str(data.get("database_url") or "").strip()
         if database_url:
-            return database_url
+            return _with_connect_timeout(database_url)
     raise RuntimeError(
         "Tests require database_url. Set MANZARA_TEST_DATABASE_URL or MANZARA_DATABASE_URL."
     )
