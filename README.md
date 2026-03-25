@@ -29,6 +29,7 @@ Manzara is an independent implementation tailored to this repository's workflow 
 Pages:
 - `/dashboard`
 - `/database`
+- `/gemini`
 - `/schedules`
 - `/tasks`
 - `/tasks/{task-slug-or-id}`
@@ -129,6 +130,20 @@ Embedded runtimes read YAML config in this order:
 Secrets policy:
 - `config.yaml` and `config.local.yaml` are local-only (gitignored).
 - Keep `config.example.yaml` masked and in sync with real config structure.
+
+Gemini config (preferred shape):
+
+```yaml
+gemini:
+  accounts:
+    account_a:
+      - "AIza..."
+      - "AIza..."
+    account_b:
+      - "AIza..."
+```
+
+Legacy `gemini_api_keys: []` is still supported as fallback (single default account).
 
 Backup task note:
 - Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.
@@ -236,6 +251,7 @@ Core:
 - `GET /api/tasks`
 - `GET /api/tasks/{task_id_or_slug}`
 - `GET /api/database/state`
+- `GET /api/gemini/state`
 - `POST /api/tasks/{task_id}/toggle`
 - `PATCH /api/tasks/{task_id}/title`
 - `PATCH /api/flows/{panel_id}/title`
@@ -243,6 +259,8 @@ Core:
 - `GET /api/workflows/{workflow_id}`
 - `PATCH /api/schedules/{schedule_id}`
 - `POST /api/system/stop-all`
+- `POST /api/gemini/reset-key`
+- `POST /api/gemini/reset-all`
 - `GET /api/runs/{run_id}/logs`
 - `GET /api/events/stream`
 

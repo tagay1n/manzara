@@ -8,6 +8,7 @@ import re
 import time
 
 import app.tasks as task_runtime
+from app.gemini_config import GeminiKey
 from app.modules.maintenance.workflow import (
     LIBRARY_WORKFLOW_ID,
     MAINTENANCE_BACKUP_FULL_WORKFLOW_ID,
@@ -222,6 +223,94 @@ def test_database_state_endpoint_returns_snapshot_shape(test_client) -> None:
     assert "backup" in snapshot
     assert "full" in snapshot["backup"]
     assert "incremental" in snapshot["backup"]
+
+
+def test_gemini_state_endpoint_returns_grouped_keys(test_client, monkeypatch) -> None:
+    client, _main_app = test_client
+
+    monkeypatch.setattr(
+        "app.gemini_runtime.load_gemini_keys",
+        lambda: [
+            GeminiKey(
+                account_id="acc-a",
+                key_id="acc-a:key-1",
+                key_value="KEY_A_1",
+                masked_key="KEYA...A001",
+            ),
+            GeminiKey(
+                account_id="acc-b",
+                key_id="acc-b:key-2",
+                key_value="KEY_B_2",
+                masked_key="KEYB...B002",
+            ),
+        ],
+    )
+
+    response = client.get("/api/gemini/state")
+    assert response.status_code == 200
+    payload = response.json()["gemini"]
+    assert payload["summary"]["accounts"] == 2
+    assert payload["summary"]["keys"] == 2
+    assert {item["account_id"] for item in payload["accounts"]} == {"acc-a", "acc-b"}
+    assert "global" in payload
+
+
+def test_gemini_reset_key_and_reset_all_clear_exhaustion(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        "app.gemini_runtime.load_gemini_keys",
+        lambda: [
+            GeminiKey(
+                account_id="acc-a",
+                key_id="acc-a:key-1",
+                key_value="KEY_A_1",
+                masked_key="KEYA...A001",
+            ),
+            GeminiKey(
+                account_id="acc-a",
+                key_id="acc-a:key-2",
+                key_value="KEY_A_2",
+                masked_key="KEYA...A002",
+            ),
+        ],
+    )
+
+    _ = client.get("/api/gemini/state")
+    db = main_app.state.db
+    db.ensure_gemini_model_state("acc-a:key-1", "gemini-2.5-flash")
+    db.ensure_gemini_model_state("acc-a:key-2", "gemini-2.5-flash")
+    now_ts = "2026-03-25T00:00:00+00:00"
+    db.mark_gemini_error(
+        "acc-a:key-1",
+        "gemini-2.5-flash",
+        now_ts=now_ts,
+        error_text="quota",
+        exhausted=True,
+    )
+    db.mark_gemini_error(
+        "acc-a:key-2",
+        "gemini-2.5-flash",
+        now_ts=now_ts,
+        error_text="quota",
+        exhausted=True,
+    )
+
+    one = client.post("/api/gemini/reset-key", json={"key_id": "acc-a:key-1"})
+    assert one.status_code == 200
+    assert one.json()["rows_changed"] >= 1
+
+    rows_after_one = db.list_gemini_model_states(model_name="gemini-2.5-flash")
+    by_key = {str(item["key_id"]): bool(item.get("exhausted")) for item in rows_after_one if item.get("model_name")}
+    assert by_key["acc-a:key-1"] is False
+    assert by_key["acc-a:key-2"] is True
+
+    all_resp = client.post("/api/gemini/reset-all")
+    assert all_resp.status_code == 200
+    assert all_resp.json()["rows_changed"] >= 1
+
+    rows_after_all = db.list_gemini_model_states(model_name="gemini-2.5-flash")
+    assert all(bool(item.get("exhausted")) is False for item in rows_after_all if item.get("model_name"))
 
 
 def test_library_classifications_table_endpoint(test_client, monkeypatch) -> None:

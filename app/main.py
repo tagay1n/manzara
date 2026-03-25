@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 
 from app.db import Database
+from app.gemini_runtime import GeminiRuntimeManager
 from app.modules.library.insights import (
     get_classification_detail,
     get_classification_insights,
@@ -196,6 +197,12 @@ def library_page() -> FileResponse:
 def database_page() -> FileResponse:
     """Serve database diagnostics page."""
     return FileResponse(STATIC_DIR / "database.html")
+
+
+@app.get("/gemini")
+def gemini_page() -> FileResponse:
+    """Serve Gemini key/runtime diagnostics page."""
+    return FileResponse(STATIC_DIR / "gemini.html")
 
 
 @app.get("/library/classifications")
@@ -1536,6 +1543,44 @@ def stop_all() -> JSONResponse:
     """Two-step global stop-all action: graceful, then force."""
     result = state.runner.stop_all_toggle()
     return JSONResponse(result)
+
+
+@app.get("/api/gemini/state")
+def gemini_state() -> JSONResponse:
+    """Return Gemini key/runtime snapshot."""
+    manager = GeminiRuntimeManager(
+        state.db,
+        task_id=None,
+        panel_id="library",
+    )
+    return JSONResponse({"gemini": manager.snapshot()})
+
+
+@app.post("/api/gemini/reset-key")
+def gemini_reset_key(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    """Clear exhausted marker for one key across all models."""
+    key_id = str(payload.get("key_id") or "").strip()
+    if not key_id:
+        raise HTTPException(status_code=400, detail="key_id is required")
+    manager = GeminiRuntimeManager(
+        state.db,
+        task_id=None,
+        panel_id="library",
+    )
+    changed = manager.reset_key(key_id)
+    return JSONResponse({"ok": True, "key_id": key_id, "rows_changed": changed})
+
+
+@app.post("/api/gemini/reset-all")
+def gemini_reset_all() -> JSONResponse:
+    """Clear exhausted marker for all keys and models."""
+    manager = GeminiRuntimeManager(
+        state.db,
+        task_id=None,
+        panel_id="library",
+    )
+    changed = manager.reset_all()
+    return JSONResponse({"ok": True, "rows_changed": changed})
 
 
 @app.get("/api/runs/{run_id}/logs")

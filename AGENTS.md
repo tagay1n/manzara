@@ -96,6 +96,20 @@ Notes:
     - Cursor-based forward reads for live follow (`after_log_id`).
     - Cursor-based backward reads for history backfill (`before_log_id`).
     - Bounded batch size (`limit`) for both directions.
+- Gemini usage must be centralized behind a shared runtime manager (no per-task ad-hoc key picking):
+  - Treat Gemini keys as grouped by `account -> keys[]` from config.
+  - Do not hardcode model names; quota/runtime state is per `(account, key, model)`.
+  - Persist Gemini runtime state in PostgreSQL (not artifact files) so restarts keep continuity.
+  - Key exhaustion is model-scoped only; a key exhausted for one model can still be used for others.
+  - Per-key minute throttle: at most one request per minute per `(account, key, model)`.
+  - Selection policy: random account first, then random key in that account; if selected key is cooling down, try another key before waiting.
+  - Daily limits are inferred from Gemini responses (no local fixed RPD enforcement).
+  - On Gemini `429`: log full payload/context and fail current task run; parsing subtypes can be improved incrementally from observed payloads.
+  - On Gemini `5xx`: start a global Gemini pause for 60 seconds and block new Gemini calls during pause.
+  - Enforce Gemini reset blackout window around Pacific reset:
+    - No new Gemini calls from 1 hour before to 1 hour after reset.
+    - In-flight requests may finish gracefully.
+  - At daily reset rollover, clear exhausted markers for all keys.
 
 ## Low-Context Scalability Rules
 These rules apply to both backend and frontend to keep implementation understandable as flows/tasks/pages grow.

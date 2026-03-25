@@ -15,7 +15,7 @@
           <i data-lucide="sparkles"></i>
         </a>
         <nav class="rail-nav">
-          <a href="/dashboard" class="rail-link active" aria-current="page" title="Dashboard">
+          <a href="/dashboard" class="rail-link" title="Dashboard">
             <i data-lucide="layout-grid"></i>
           </a>
           <a href="/schedules" class="rail-link" title="Schedules">
@@ -30,7 +30,7 @@
           <a href="/library" class="rail-link" title="Library">
             <i data-lucide="book-open"></i>
           </a>
-          <a href="/gemini" class="rail-link" title="Gemini">
+          <a href="/gemini" class="rail-link active" aria-current="page" title="Gemini">
             <i data-lucide="key-round"></i>
           </a>
         </nav>
@@ -41,38 +41,27 @@
           <div class="topbar-left">
             <div class="brand-wrap">
               <div class="brand">Manzara</div>
-              <div class="subtitle">Bird-eye view of Tatar content pipelines</div>
+              <div class="subtitle">Gemini keys runtime state</div>
             </div>
-            <label class="jump-box" aria-label="Jump">
-              <i data-lucide="search"></i>
-              <input type="text" placeholder="Jump to page, task, flow..." />
-            </label>
           </div>
           <div class="top-controls">
-            <div id="global-status" class="status-pill">Tasks: 0 • Flows: 0</div>
-            <button
-              id="stop-all-btn"
-              class="icon-btn amber"
-              title="Graceful stop all running tasks; press again to force stop"
-              aria-label="Stop all tasks"
-              disabled
-            >
-              <i data-lucide="square"></i>
+            <div id="global-status" class="status-pill">Keys: 0 • Accounts: 0</div>
+            <button id="reset-all-btn" class="small-btn" title="Reset exhausted status for all keys">
+              Reset all exhausted
             </button>
           </div>
         </header>
 
-        <div class="alert-strip">
-          <i data-lucide="circle-alert"></i>
-          <span>Live stream connected. Task and workflow state updates arrive in real time.</span>
-        </div>
-
         <main class="dashboard">
-          <section id="panel-grid" class="panel-grid"></section>
+          <section class="runs-card">
+            <h2>Gemini Runtime</h2>
+            <div id="gemini-status" class="workflow-footnote">Loading...</div>
+            <div id="gemini-stat-grid" class="stat-grid-compact"></div>
+          </section>
 
           <section class="runs-card">
-            <h2>Recent Runs</h2>
-            <div id="runs-list" class="runs-list"></div>
+            <h2>Accounts + Keys</h2>
+            <div id="gemini-accounts" class="gemini-accounts"></div>
           </section>
         </main>
 
@@ -83,21 +72,8 @@
       </div>
     </div>
 
-    <dialog id="log-dialog" class="log-dialog">
-      <div class="log-head">
-        <h3 id="log-title">Run Logs</h3>
-        <button id="close-logs" class="icon-btn" title="Close logs" aria-label="Close logs">
-          <i data-lucide="x"></i>
-        </button>
-      </div>
-      <pre id="log-content" class="log-content"></pre>
-      <div class="log-controls">
-        <button id="copy-logs" class="small-btn">Copy</button>
-      </div>
-    </dialog>
-
-    <script src="/static/sound-notifier.js"></script>
     <script src="/static/core.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/gemini.js"></script>
   </body>
 </html>
+

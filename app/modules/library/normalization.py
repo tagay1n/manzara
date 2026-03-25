@@ -6,17 +6,19 @@ import json
 import re
 from datetime import datetime
 from difflib import SequenceMatcher
-from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-import yaml
 from sqlalchemy import text
 
 from app.db import Database
+from app.gemini_runtime import (
+    GeminiAllKeysExhaustedError,
+    GeminiQuotaExceededError,
+    GeminiRuntimeManager,
+)
 from app.modules.library.stats import create_runtime_engine
 
 ENTITY_TYPES = {"personality", "publisher"}
-_REDACTED_SENTINEL = "<REDACTED>"
 
 
 def _entity_config(entity_type: str) -> Dict[str, Any]:
@@ -1045,41 +1047,6 @@ def get_evidence(
         }
 
 
-def _candidate_config_paths() -> Iterable[Path]:
-    repo_root = Path(__file__).resolve().parents[3]
-    return (
-        repo_root / "config.local.yaml",
-        repo_root / "config.yaml",
-        repo_root / "config.example.yaml",
-    )
-
-
-def _load_runtime_config() -> Dict[str, Any]:
-    for path in _candidate_config_paths():
-        if not path.exists():
-            continue
-        with path.open("r", encoding="utf-8") as handle:
-            payload = yaml.safe_load(handle) or {}
-        if isinstance(payload, dict):
-            return payload
-    return {}
-
-
-def _extract_gemini_key() -> Optional[str]:
-    payload = _load_runtime_config()
-    keys = payload.get("gemini_api_keys")
-    if not isinstance(keys, list):
-        return None
-    for item in keys:
-        key = str(item or "").strip()
-        if not key:
-            continue
-        if _REDACTED_SENTINEL in key:
-            continue
-        return key
-    return None
-
-
 def _parse_first_json_blob(value: str) -> Optional[Dict[str, Any]]:
     text_value = str(value or "").strip()
     if not text_value:
@@ -1109,15 +1076,11 @@ def _gemini_suggest(
     mentions_count: int,
     marker_count: int,
     canonical_candidates: List[Dict[str, Any]],
+    manager: GeminiRuntimeManager,
 ) -> Optional[Dict[str, Any]]:
-    key = _extract_gemini_key()
-    if not key:
-        return None
-
     try:
         from google import genai
 
-        client = genai.Client(api_key=key)
         candidates_block = "\n".join(
             [
                 f"- id={item['canonical_id']} name={item['display_name']} normalized={item['normalized_name']} aliases={item['linked_aliases']}"
@@ -1136,9 +1099,13 @@ def _gemini_suggest(
             "Rules: choose link only when semantically same, otherwise create or reject."
         )
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
+        response = manager.run_with_key(
+            model_name="gemini-2.5-flash",
+            call=lambda api_key, _lease: genai.Client(api_key=api_key).models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+            ),
+            max_attempts=2,
         )
         raw_text = getattr(response, "text", None)
         if not raw_text and hasattr(response, "candidates"):
@@ -1176,6 +1143,8 @@ def _gemini_suggest(
             "model": "gemini-2.5-flash",
             "rationale": str(parsed.get("rationale") or ""),
         }
+    except (GeminiQuotaExceededError, GeminiAllKeysExhaustedError):
+        raise
     except Exception:
         return None
 
@@ -1186,6 +1155,7 @@ def _heuristic_suggestions(
     *,
     limit: int,
     use_gemini: bool,
+    manager: Optional[GeminiRuntimeManager] = None,
 ) -> List[Dict[str, Any]]:
     canonicals = db.list_normalization_canonicals(entity_type)
     queue = get_review_queue(
@@ -1251,7 +1221,7 @@ def _heuristic_suggestions(
             rationale = "Low-evidence alias, likely noise or formatting variant"
             model = "heuristic"
 
-        if use_gemini and gemini_budget > 0:
+        if use_gemini and gemini_budget > 0 and manager is not None:
             gemini_pick = _gemini_suggest(
                 entity_type=entity_type,
                 raw_name=raw_name,
@@ -1268,6 +1238,7 @@ def _heuristic_suggestions(
                     }
                     for row in ranked[:10]
                 ],
+                manager=manager,
             )
             if gemini_pick:
                 kind = str(gemini_pick.get("suggestion_kind") or kind)
@@ -1303,11 +1274,20 @@ def refresh_suggestions(
     _entity_config(entity_type)
     limit = max(1, min(1000, int(limit)))
 
+    manager: Optional[GeminiRuntimeManager] = None
+    if bool(use_gemini):
+        manager = GeminiRuntimeManager(
+            db,
+            task_id=f"library.{entity_type}_suggestions_refresh",
+            panel_id="library",
+        )
+
     suggestions = _heuristic_suggestions(
         db,
         entity_type,
         limit=limit,
         use_gemini=bool(use_gemini),
+        manager=manager,
     )
     db.replace_open_suggestions(entity_type, suggestions)
 

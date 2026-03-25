@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import datetime
 import json
 import os
-import random
 import re
 import threading
 import time
@@ -27,6 +25,15 @@ from prompts.metadata_evaluation import build_library_applicability_prompt
 from rich import print
 from sqlalchemy import func, select
 
+from app.db import Database
+from app.gemini_runtime import (
+    GeminiAllKeysExhaustedError,
+    GeminiQuotaExceededError,
+    GeminiRuntimeManager,
+    GeminiRuntimeError,
+    GeminiServerPauseError,
+)
+from app.settings import load_settings
 from integrations.gemini import create_client, gemini_api, stream_text
 from integrations.s3 import create_session
 from dirs import Dirs
@@ -37,7 +44,6 @@ from core.paths import get_in_workdir
 from core.config import read_config
 from core.db import get_session
 from core.upstream_meta import load_upstream_metadata
-from core.state import dump_expired_keys, load_expired_keys
 from core.security import decrypt, prefix
 from .isbn_utils import canonicalize_isbn_values
 from .repository import count_docs_for_evaluation, fetch_docs_for_evaluation, mark_docs_as_non_applicable
@@ -112,6 +118,14 @@ class EvaluationTask:
 def evaluate(args) -> None:
     """Run batch evaluation and save results into `metadata.lib`."""
     config = read_config()
+    settings = load_settings()
+    state_db = Database(settings.database_url, schema=settings.database_schema)
+    state_db.init_schema()
+    gemini_manager = GeminiRuntimeManager(
+        state_db,
+        task_id="maintenance.monocorpus_meta_evaluate",
+        panel_id="library",
+    )
     channel = Channel(dry_run=args.dry_run)
     if args.dry_run:
         print("Running in dry-run mode: no DB/file state changes will be persisted.")
@@ -136,18 +150,14 @@ def evaluate(args) -> None:
             if not args.dry_run:
                 _save_non_applicable(non_applicables)
 
-            keys = _pick_keys(config, args.workers, channel)
-            if not keys:
-                print("No gemini keys available, exiting...")
-                break
             known_classifications = _load_known_classifications()
 
             tasks_queue = _create_queue(docs)
-            print(f"Processing batch of {tasks_queue.qsize()} documents with {len(keys)} worker(s)")
+            worker_count = max(1, min(int(args.workers), tasks_queue.qsize()))
+            print(f"Processing batch of {tasks_queue.qsize()} documents with {worker_count} worker(s)")
 
-            for key in keys[: min(len(keys), tasks_queue.qsize())]:
+            for index in range(worker_count):
                 worker = LibraryApplicabilityWorker(
-                    gemini_api_key=key,
                     tasks_queue=tasks_queue,
                     config=config,
                     channel=channel,
@@ -155,8 +165,9 @@ def evaluate(args) -> None:
                     excerpt_chars=excerpt_chars,
                     known_classifications=known_classifications,
                     stop_event=stop_event,
+                    gemini_manager=gemini_manager,
                 )
-                thread = threading.Thread(target=worker, name=f"eval-{key[-6:]}")
+                thread = threading.Thread(target=worker, name=f"eval-{index + 1}")
                 thread.start()
                 workers.append(thread)
                 time.sleep(2)
@@ -165,6 +176,16 @@ def evaluate(args) -> None:
                 thread.join()
 
             channel.dump()
+            if fatal_error := channel.get_fatal_error():
+                raise GeminiRuntimeError(fatal_error)
+        except GeminiRuntimeError:
+            stop_event.set()
+            if tasks_queue is not None:
+                tasks_queue.queue.clear()
+            for thread in workers:
+                thread.join(timeout=120)
+            channel.dump()
+            raise
         except (KeyboardInterrupt, Exception) as e:  # noqa: BLE001
             is_interrupt = isinstance(e, KeyboardInterrupt)
             if is_interrupt:
@@ -220,12 +241,6 @@ def _count_remaining(config: dict, channel: "Channel") -> int:
         lang_codes=lang_codes,
         excluded_md5s=channel.get_all_unprocessable_docs(),
     )
-
-
-def _pick_keys(config: dict, workers: int, channel: "Channel") -> list[str]:
-    keys = list(set(config["gemini_api_keys"]) - channel.exceeded_keys_set)
-    random.shuffle(keys)
-    return keys[:workers]
 
 
 def _early_skip(docs: Iterable[EvaluationTask]) -> tuple[list[EvaluationTask], list[tuple[str, str]]]:
@@ -304,7 +319,6 @@ class LibraryApplicabilityWorker:
 
     def __init__(
         self,
-        gemini_api_key: str,
         tasks_queue: Queue,
         config: dict,
         channel: "Channel",
@@ -312,8 +326,8 @@ class LibraryApplicabilityWorker:
         excerpt_chars: int,
         known_classifications: list[dict[str, Any]] | None = None,
         stop_event: threading.Event | None = None,
+        gemini_manager: GeminiRuntimeManager | None = None,
     ):
-        self.key = gemini_api_key
         self.tasks_queue = tasks_queue
         self.config = config
         self.channel = channel
@@ -322,10 +336,11 @@ class LibraryApplicabilityWorker:
         self.known_classifications = known_classifications or []
         self.stop_event = stop_event or threading.Event()
         self._s3client = None
+        if gemini_manager is None:
+            raise ValueError("gemini_manager is required")
+        self.gemini_manager = gemini_manager
 
     def __call__(self) -> None:
-        gemini_client = create_client(self.key)
-        prev_req_time = None
         while True:
             if self.stop_event.is_set():
                 self.log("Stop signal received, shutting down")
@@ -338,29 +353,30 @@ class LibraryApplicabilityWorker:
 
             try:
                 self.log(f"Evaluating {doc.md5}")
-                prev_req_time = self._sleep_if_needed(prev_req_time, min_delay_seconds=12)
-                evaluation = self._evaluate(doc, gemini_client)
+                evaluation = self._evaluate(doc)
                 if not evaluation:
                     self.log(f"Empty model response for {doc.md5}")
                     self.channel.add_unprocessable_doc(doc.md5)
                     continue
                 self._save_result(doc.md5, evaluation)
-            except ServerError as e:
-                if _is_retryable_server_error(e):
-                    self.log(f"Gemini 503 for {doc.md5}")
-                    self.tasks_queue.put(doc)
-                    prev_req_time = self._sleep_if_needed(prev_req_time, min_delay_seconds=50)
-                    continue
-                self.log(f"ServerError for {doc.md5}: {e}")
-                self.channel.add_unprocessable_doc(doc.md5)
-            except ClientError as e:
-                self.log(f"ClientError for {doc.md5}: {e}")
-                # if _is_daily_free_tier_quota_exhausted(e):
-                #     self.channel.add_exceeded_key(self.key)
-                #     self.tasks_queue.put(doc)
-                #     return
-                # self.channel.add_unprocessable_doc(doc.md5)
-                self.channel.add_exceeded_key(self.key)
+            except GeminiQuotaExceededError as exc:
+                self.log(f"Gemini quota exhausted: {exc}")
+                self.channel.set_fatal_error(str(exc))
+                self.stop_event.set()
+                self.tasks_queue.put(doc)
+                return
+            except GeminiAllKeysExhaustedError as exc:
+                self.log(f"Gemini keys exhausted: {exc}")
+                self.channel.set_fatal_error(str(exc))
+                self.stop_event.set()
+                self.tasks_queue.put(doc)
+                return
+            except GeminiServerPauseError as exc:
+                self.log(f"Gemini server pause active: {exc}")
+                self.tasks_queue.put(doc)
+                continue
+            except (ServerError, ClientError) as exc:
+                self.log(f"Gemini client/server error for {doc.md5}: {exc}")
                 self.channel.add_unprocessable_doc(doc.md5)
                 return
             except Exception as e:  # noqa: BLE001
@@ -369,18 +385,7 @@ class LibraryApplicabilityWorker:
                 self.log(f"Unhandled error for {doc.md5}: {e}\n{traceback.format_exc()}")
                 self.channel.add_unprocessable_doc(doc.md5)
 
-    def _sleep_if_needed(
-        self,
-        prev_req_time: datetime.datetime | None,
-        min_delay_seconds: int = 60,
-    ) -> datetime.datetime:
-        if prev_req_time:
-            elapsed = datetime.datetime.now() - prev_req_time
-            if elapsed < datetime.timedelta(seconds=min_delay_seconds):
-                time.sleep(min_delay_seconds - elapsed.total_seconds())
-        return datetime.datetime.now()
-
-    def _evaluate(self, doc: EvaluationTask, gemini_client) -> Evaluation | None:
+    def _evaluate(self, doc: EvaluationTask) -> Evaluation | None:
         flattened_meta = extract_flat_fields(doc.schema_org)
         excerpt = self._load_content_excerpt(doc)
         upstream_metadata = self._load_upstream_metadata(doc)
@@ -411,45 +416,53 @@ class LibraryApplicabilityWorker:
         prompt = build_library_applicability_prompt(payload, content_excerpt=excerpt)
         self._dump_prompt(doc.md5, prompt)
 
-        response, uploaded_files = gemini_api(
-            prompt=prompt,
-            model=MODEL,
-            client=gemini_client,
-            files=files,
-            schema=Evaluation,
-            timeout_sec=180,
+        def _call(api_key: str, _lease) -> Evaluation | None:
+            gemini_client = create_client(api_key)
+            response, uploaded_files = gemini_api(
+                prompt=prompt,
+                model=MODEL,
+                client=gemini_client,
+                files=files,
+                schema=Evaluation,
+                timeout_sec=180,
+            )
+            try:
+                raw_response = stream_text(response)
+                self.log(
+                    f"Raw eval response for {doc.md5}:\n"
+                    f"{_format_response_for_log(raw_response)}"
+                )
+                if not raw_response:
+                    return None
+                evaluation = Evaluation.model_validate_json(raw_response)
+                evaluation.metadata_patch = _normalize_metadata_patch(
+                    evaluation.metadata_patch,
+                    doc,
+                    self.config,
+                )
+                normalized_ddc, normalized_path = _normalize_library_classification(
+                    evaluation.library_ddc,
+                    evaluation.library_path,
+                    applicable=evaluation.applicable,
+                )
+                evaluation.library_ddc = normalized_ddc
+                evaluation.library_path = normalized_path
+                if evaluation.applicable and (not evaluation.library_ddc or not evaluation.library_path):
+                    self.log(f"Missing mandatory library classification for {doc.md5}")
+                    return None
+                return evaluation
+            finally:
+                for file in uploaded_files:
+                    try:
+                        gemini_client.files.delete(name=file.name)
+                    except Exception as exc:  # noqa: BLE001
+                        self.log(f"Failed to delete uploaded eval file {file.name}: {exc}")
+
+        return self.gemini_manager.run_with_key(
+            model_name=MODEL,
+            call=_call,
+            max_attempts=2,
         )
-        try:
-            raw_response = stream_text(response)
-            self.log(
-                f"Raw eval response for {doc.md5}:\n"
-                f"{_format_response_for_log(raw_response)}"
-            )
-            if not raw_response:
-                return None
-            evaluation = Evaluation.model_validate_json(raw_response)
-            evaluation.metadata_patch = _normalize_metadata_patch(
-                evaluation.metadata_patch,
-                doc,
-                self.config,
-            )
-            normalized_ddc, normalized_path = _normalize_library_classification(
-                evaluation.library_ddc,
-                evaluation.library_path,
-                applicable=evaluation.applicable,
-            )
-            evaluation.library_ddc = normalized_ddc
-            evaluation.library_path = normalized_path
-            if evaluation.applicable and (not evaluation.library_ddc or not evaluation.library_path):
-                self.log(f"Missing mandatory library classification for {doc.md5}")
-                return None
-            return evaluation
-        finally:
-            for file in uploaded_files:
-                try:
-                    gemini_client.files.delete(name=file.name)
-                except Exception as exc:  # noqa: BLE001
-                    self.log(f"Failed to delete uploaded eval file {file.name}: {exc}")
 
     def _load_content_excerpt(self, doc: EvaluationTask) -> str | None:
         if self.excerpt_chars <= 0:
@@ -557,7 +570,7 @@ class LibraryApplicabilityWorker:
                 session.commit()
 
     def log(self, message: str) -> None:
-        print(f"{threading.current_thread().name} {time.strftime('%d-%m-%y %H:%M:%S')} {self.key[-7:]}: {message}")
+        print(f"{threading.current_thread().name} {time.strftime('%d-%m-%y %H:%M:%S')}: {message}")
 
 
 class Channel:
@@ -566,9 +579,8 @@ class Channel:
     def __init__(self, dry_run: bool):
         self.lock = threading.Lock()
         self.dry_run = dry_run
-        self.keys_dir = os.path.join(ARTIFACTS_DIR, "expired_keys")
         self.unprocessable_docs = self._load_file(UNPROCESSABLES_DIR, "unprocessables_eval.txt")
-        self.exceeded_keys_set = load_expired_keys(dir=self.keys_dir)
+        self.fatal_error: str | None = None
 
     def get_all_unprocessable_docs(self) -> set[str]:
         return self.unprocessable_docs
@@ -577,7 +589,6 @@ class Channel:
         if self.dry_run:
             return
         with self.lock:
-            dump_expired_keys(self.exceeded_keys_set, dir=self.keys_dir)
             self._dump_to_file(UNPROCESSABLES_DIR, "unprocessables_eval.txt", self.unprocessable_docs)
 
     def _load_file(self, dir_name: str, file_name: str) -> set[str]:
@@ -598,11 +609,14 @@ class Channel:
         with open(file_path, "w") as f:
             f.write("\n".join(sorted(items)))
 
-    def add_exceeded_key(self, key: str) -> None:
+    def set_fatal_error(self, text: str) -> None:
         with self.lock:
-            self.exceeded_keys_set.add(key)
-            if not self.dry_run:
-                dump_expired_keys(self.exceeded_keys_set, dir=self.keys_dir)
+            if self.fatal_error is None:
+                self.fatal_error = str(text or "").strip() or "Gemini fatal error"
+
+    def get_fatal_error(self) -> str | None:
+        with self.lock:
+            return self.fatal_error
 
     def add_unprocessable_doc(self, md5: str) -> None:
         with self.lock:
@@ -668,54 +682,6 @@ def _build_content_excerpt(text: str, max_chars: int) -> str | None:
     tail = normalized[-chunk:]
     excerpt = EXCERPT_SEPARATOR.join([head, middle, tail])
     return excerpt[:max_chars]
-
-
-def _is_retryable_server_error(error: Exception) -> bool:
-    """Return True for temporary retryable Gemini server errors (503)."""
-    for value in (getattr(error, "status_code", None), getattr(error, "code", None)):
-        if isinstance(value, int) and value == 503:
-            return True
-    message = str(error).casefold()
-    if "503" in message and "unavailable" in message:
-        return True
-    if "currently experiencing high demand" in message:
-        return True
-    return False
-
-
-def _is_daily_free_tier_quota_exhausted(error: Exception) -> bool:
-    """Return True when key hit daily free-tier request quota and worker should rotate key."""
-    text = str(error)
-    if "GenerateRequestsPerDayPerProjectPerModel-FreeTier" in text:
-        return True
-    if "generate_content_free_tier_requests" in text:
-        return True
-    details = getattr(error, "details", None)
-    if not details:
-        return False
-    if isinstance(details, str):
-        return "GenerateRequestsPerDayPerProjectPerModel-FreeTier" in details
-    if not isinstance(details, dict):
-        return False
-    error_obj = details.get("error")
-    if not isinstance(error_obj, dict):
-        return False
-    detail_items = error_obj.get("details")
-    if not isinstance(detail_items, list):
-        return False
-    for item in detail_items:
-        if not isinstance(item, dict):
-            continue
-        violations = item.get("violations")
-        if not isinstance(violations, list):
-            continue
-        for violation in violations:
-            if not isinstance(violation, dict):
-                continue
-            quota_id = str(violation.get("quotaId") or "")
-            if quota_id == "GenerateRequestsPerDayPerProjectPerModel-FreeTier":
-                return True
-    return False
 
 
 def _format_response_for_log(response_text: str | None) -> str:
