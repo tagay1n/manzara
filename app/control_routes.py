@@ -174,7 +174,13 @@ def register_control_routes(
             elif isinstance(raw_enabled, (int, float)):
                 updates["enabled"] = bool(raw_enabled)
             elif isinstance(raw_enabled, str):
-                updates["enabled"] = raw_enabled.strip().lower() in {"1", "true", "yes", "on"}
+                normalized = raw_enabled.strip().lower()
+                if normalized in {"1", "true", "yes", "on"}:
+                    updates["enabled"] = True
+                elif normalized in {"0", "false", "no", "off"}:
+                    updates["enabled"] = False
+                else:
+                    raise HTTPException(status_code=400, detail="enabled must be a boolean-like value")
             else:
                 raise HTTPException(status_code=400, detail="enabled must be a boolean-like value")
 

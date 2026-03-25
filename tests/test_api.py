@@ -195,6 +195,17 @@ def test_update_interval_schedule_minutes(test_client) -> None:
     assert schedule["next_run_at"] is not None
 
 
+def test_update_schedule_rejects_invalid_enabled_string(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.patch(
+        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
+        json={"enabled": "not-a-bool"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "enabled must be a boolean-like value"
+
+
 def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
     client, _main_app = test_client
 
