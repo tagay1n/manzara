@@ -185,8 +185,13 @@ def register_control_routes(
                 raise HTTPException(status_code=400, detail="enabled must be a boolean-like value")
 
         if "day_of_week" in payload:
+            raw_day = payload["day_of_week"]
+            if isinstance(raw_day, bool) or (
+                isinstance(raw_day, float) and not raw_day.is_integer()
+            ):
+                raise HTTPException(status_code=400, detail="day_of_week must be an integer 1..7")
             try:
-                day = int(payload["day_of_week"])
+                day = int(raw_day)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="day_of_week must be an integer 1..7")
             if day < 1 or day > 7:
@@ -204,6 +209,10 @@ def register_control_routes(
             if raw_interval in {None, ""}:
                 updates["interval_minutes"] = None
             else:
+                if isinstance(raw_interval, bool) or (
+                    isinstance(raw_interval, float) and not raw_interval.is_integer()
+                ):
+                    raise HTTPException(status_code=400, detail="interval_minutes must be an integer >= 1")
                 try:
                     interval_minutes = int(raw_interval)
                 except (TypeError, ValueError):
