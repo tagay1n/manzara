@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
 from fastapi import HTTPException
 
@@ -140,6 +140,38 @@ class PayloadBuilder:
             payload["summary"] = self._ops().build_default_run_summary(payload)
         return payload
 
+    @staticmethod
+    def _task_run_payload(task: Mapping[str, Any]) -> Dict[str, Any]:
+        summary = task.get("run_summary")
+        return {
+            "run_id": task.get("run_id"),
+            "status": task.get("run_status") or "idle",
+            "stop_mode": task.get("stop_mode"),
+            "started_at": task.get("started_at"),
+            "finished_at": task.get("finished_at"),
+            "heartbeat_at": task.get("heartbeat_at"),
+            "exit_code": task.get("exit_code"),
+            "error_text": task.get("error_text"),
+            "summary": summary if isinstance(summary, dict) and summary else None,
+        }
+
+    def _task_with_latest_run_payload(
+        self,
+        task: Mapping[str, Any],
+        *,
+        task_slug_map: Mapping[str, str],
+    ) -> Dict[str, Any]:
+        task_id = str(task["task_id"])
+        return {
+            "task_id": task["task_id"],
+            "slug": task_slug_map.get(task_id, task_id),
+            "title": task["title"],
+            "task_type": task["task_type"],
+            "icon_idle": task["icon_idle"],
+            "icon_running": task["icon_running"],
+            "run": self._task_run_payload(task),
+        }
+
     def _count_active_workflows(self, workflows: Optional[list[Dict[str, Any]]] = None) -> int:
         state = self._state()
         rows = workflows if workflows is not None else state.db.list_workflows_with_latest_run()
@@ -231,29 +263,7 @@ class PayloadBuilder:
         for task in tasks:
             panel_id = task["panel_id"]
             tasks_by_panel.setdefault(panel_id, []).append(
-                {
-                    "task_id": task["task_id"],
-                    "slug": task_slug_map.get(str(task["task_id"]), str(task["task_id"])),
-                    "title": task["title"],
-                    "task_type": task["task_type"],
-                    "icon_idle": task["icon_idle"],
-                    "icon_running": task["icon_running"],
-                    "run": {
-                        "run_id": task.get("run_id"),
-                        "status": task.get("run_status") or "idle",
-                        "stop_mode": task.get("stop_mode"),
-                        "started_at": task.get("started_at"),
-                        "finished_at": task.get("finished_at"),
-                        "heartbeat_at": task.get("heartbeat_at"),
-                        "exit_code": task.get("exit_code"),
-                        "error_text": task.get("error_text"),
-                        "summary": (
-                            task.get("run_summary")
-                            if isinstance(task.get("run_summary"), dict) and task.get("run_summary")
-                            else None
-                        ),
-                    },
-                }
+                self._task_with_latest_run_payload(task, task_slug_map=task_slug_map)
             )
 
         workflows = state.db.list_workflows_with_latest_run()
@@ -372,31 +382,7 @@ class PayloadBuilder:
                     "tasks": [],
                 },
             )
-            group["tasks"].append(
-                {
-                    "task_id": task["task_id"],
-                    "slug": task_slug_map.get(str(task["task_id"]), str(task["task_id"])),
-                    "title": task["title"],
-                    "task_type": task["task_type"],
-                    "icon_idle": task["icon_idle"],
-                    "icon_running": task["icon_running"],
-                    "run": {
-                        "run_id": task.get("run_id"),
-                        "status": task.get("run_status") or "idle",
-                        "stop_mode": task.get("stop_mode"),
-                        "started_at": task.get("started_at"),
-                        "finished_at": task.get("finished_at"),
-                        "heartbeat_at": task.get("heartbeat_at"),
-                        "exit_code": task.get("exit_code"),
-                        "error_text": task.get("error_text"),
-                        "summary": (
-                            task.get("run_summary")
-                            if isinstance(task.get("run_summary"), dict) and task.get("run_summary")
-                            else None
-                        ),
-                    },
-                }
-            )
+            group["tasks"].append(self._task_with_latest_run_payload(task, task_slug_map=task_slug_map))
 
         active_runs = state.db.list_active_runs()
 
@@ -467,29 +453,7 @@ class PayloadBuilder:
         for task in tasks_with_latest:
             current_panel_id = str(task["panel_id"])
             tasks_by_panel.setdefault(current_panel_id, []).append(
-                {
-                    "task_id": task["task_id"],
-                    "slug": task_slug_map.get(str(task["task_id"]), str(task["task_id"])),
-                    "title": task["title"],
-                    "task_type": task["task_type"],
-                    "icon_idle": task["icon_idle"],
-                    "icon_running": task["icon_running"],
-                    "run": {
-                        "run_id": task.get("run_id"),
-                        "status": task.get("run_status") or "idle",
-                        "stop_mode": task.get("stop_mode"),
-                        "started_at": task.get("started_at"),
-                        "finished_at": task.get("finished_at"),
-                        "heartbeat_at": task.get("heartbeat_at"),
-                        "exit_code": task.get("exit_code"),
-                        "error_text": task.get("error_text"),
-                        "summary": (
-                            task.get("run_summary")
-                            if isinstance(task.get("run_summary"), dict) and task.get("run_summary")
-                            else None
-                        ),
-                    },
-                }
+                self._task_with_latest_run_payload(task, task_slug_map=task_slug_map)
             )
 
         workflows = state.db.list_workflows_with_latest_run(panel_id=panel_id)
