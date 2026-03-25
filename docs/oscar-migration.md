@@ -22,7 +22,7 @@ Status: draft checklist for controlled migration in small steps.
 - [x] Step 2: Flow skeleton in Manzara (panel + tasks + lightweight runners)
 - [x] Step 3: PostgreSQL state model for snapshot queue/progress
 - [x] Step 4: Implement `resolve_offsets_local`
-- [ ] Step 5: Implement `download_ranges`
+- [x] Step 5: Implement `download_ranges`
 - [ ] Step 6: Implement `export_parquet` (`1024 MB` parts)
 - [ ] Step 7: Workflow automation for next-unprocessed pipeline
 

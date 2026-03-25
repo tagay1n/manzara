@@ -9,15 +9,23 @@ from app.modules.oscar.runtime import run_stage
 
 
 class _FakeDb:
-    def __init__(self, snapshot: str | None):
+    def __init__(self, snapshot: str | None, *, stage_snapshot: str | None = None):
         self._snapshot = snapshot
+        self._stage_snapshot = stage_snapshot
         self.stage_updates: list[tuple[str, str, str, int | None, str | None]] = []
         self.snapshot_updates: list[tuple[str, str, str | None]] = []
+        self.stage_claim_args: list[tuple[str, str | None]] = []
 
     def claim_next_oscar_snapshot(self):
         if not self._snapshot:
             return None
         return {"snapshot_id": self._snapshot, "status": "processing"}
+
+    def claim_next_oscar_snapshot_for_stage(self, stage_name: str, *, required_stage: str | None = None):
+        self.stage_claim_args.append((stage_name, required_stage))
+        if not self._stage_snapshot:
+            return None
+        return {"snapshot_id": self._stage_snapshot, "status": "processing"}
 
     def get_oscar_snapshot(self, snapshot_id: str):
         if self._snapshot and snapshot_id == self._snapshot:
@@ -202,6 +210,136 @@ def test_resolve_offsets_stage_exits_cleanly_when_no_pending_snapshots(
         ]
     )
     assert code == 0
+    assert calls == []
+    assert fake_db.stage_updates == []
+    assert fake_db.snapshot_updates == []
+
+
+def test_download_ranges_stage_success_uses_stage_claim_and_updates_state(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot="CC-MAIN-2024-20")
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+
+    def _fake_run(cmd, *, cwd, env, text, check):  # noqa: ANN001
+        calls.append({"cmd": cmd, "cwd": cwd, "env": env, "text": text, "check": check})
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(run_stage.subprocess, "run", _fake_run)
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "download_ranges",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+    assert code == 0
+    assert fake_db.stage_claim_args == [("download_ranges", "resolve_offsets_local")]
+    assert len(calls) == 1
+    cmd = list(calls[0]["cmd"])
+    assert "download-ranges" in cmd
+    assert cmd[-2:] == ["--snapshot", "CC-MAIN-2024-20"]
+    assert fake_db.stage_updates[0][:3] == ("CC-MAIN-2024-20", "download_ranges", "running")
+    assert fake_db.stage_updates[1][:3] == ("CC-MAIN-2024-20", "download_ranges", "completed")
+    assert fake_db.snapshot_updates[-1] == ("CC-MAIN-2024-20", "processing", None)
+
+
+def test_download_ranges_stage_failure_marks_snapshot_failed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot="CC-MAIN-2024-21")
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+    monkeypatch.setattr(
+        run_stage.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=9, stdout="", stderr="download failed"),
+    )
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "download_ranges",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+    assert code == 1
+    assert fake_db.stage_updates[0][:3] == ("CC-MAIN-2024-21", "download_ranges", "running")
+    assert fake_db.stage_updates[1][:3] == ("CC-MAIN-2024-21", "download_ranges", "failed")
+    assert "download failed" in str(fake_db.stage_updates[1][4] or "")
+    assert fake_db.snapshot_updates[-1][0] == "CC-MAIN-2024-21"
+    assert fake_db.snapshot_updates[-1][1] == "failed"
+
+
+def test_download_ranges_stage_exits_cleanly_when_no_ready_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot=None)
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+    monkeypatch.setattr(run_stage.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "download_ranges",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+    assert code == 0
+    assert fake_db.stage_claim_args == [("download_ranges", "resolve_offsets_local")]
     assert calls == []
     assert fake_db.stage_updates == []
     assert fake_db.snapshot_updates == []

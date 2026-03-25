@@ -1693,6 +1693,81 @@ class Database:
         payload["metadata"] = json.loads(str(payload.pop("metadata_json") or "{}"))
         return payload
 
+    def claim_next_oscar_snapshot_for_stage(
+        self,
+        stage_name: str,
+        *,
+        required_stage: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Claim next snapshot ready for a specific stage."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT s.snapshot_id
+                    FROM oscar_snapshots s
+                    LEFT JOIN oscar_snapshot_stages stage_target
+                        ON stage_target.snapshot_id = s.snapshot_id
+                       AND stage_target.stage_name = ?
+                    LEFT JOIN oscar_snapshot_stages stage_required
+                        ON stage_required.snapshot_id = s.snapshot_id
+                       AND stage_required.stage_name = ?
+                    WHERE s.status IN ('pending', 'processing')
+                      AND (
+                            stage_target.status IS NULL
+                            OR stage_target.status IN ('pending', 'failed')
+                      )
+                      AND (
+                            ? IS NULL
+                            OR stage_required.status = 'completed'
+                      )
+                    ORDER BY COALESCE(s.discovered_at, s.created_at) ASC, s.snapshot_id ASC
+                    FOR UPDATE OF s SKIP LOCKED
+                    LIMIT 1
+                    """,
+                    (stage_name, required_stage, required_stage),
+                ).fetchone()
+                if row is None:
+                    return None
+                snapshot_id = str(row.get("snapshot_id") or "")
+                conn.execute(
+                    """
+                    UPDATE oscar_snapshots
+                    SET status = 'processing',
+                        claimed_at = ?,
+                        updated_at = ?,
+                        error_text = NULL
+                    WHERE snapshot_id = ?
+                    """,
+                    (now, now, snapshot_id),
+                )
+                claimed = conn.execute(
+                    """
+                    SELECT
+                        snapshot_id,
+                        source_path,
+                        source_label,
+                        metadata_json,
+                        status,
+                        discovered_at,
+                        claimed_at,
+                        completed_at,
+                        error_text,
+                        created_at,
+                        updated_at
+                    FROM oscar_snapshots
+                    WHERE snapshot_id = ?
+                    """,
+                    (snapshot_id,),
+                ).fetchone()
+
+        if claimed is None:
+            return None
+        payload = dict(claimed)
+        payload["metadata"] = json.loads(str(payload.pop("metadata_json") or "{}"))
+        return payload
+
     def set_oscar_snapshot_status(
         self,
         snapshot_id: str,

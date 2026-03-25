@@ -43,34 +43,87 @@ def _resolve_stage(
     snapshot_override: str | None,
     limit: int | None,
 ) -> int:
+    return _run_cli_stage(
+        db=db,
+        repo=repo,
+        artifacts=artifacts,
+        stage_name="resolve_offsets_local",
+        cli_command="resolve-offsets-local",
+        no_candidate_message="oscar resolve_offsets_local: no pending snapshot",
+        snapshot_override=snapshot_override,
+        limit=limit,
+    )
+
+
+def _download_ranges_stage(
+    *,
+    db: Database,
+    repo: Path,
+    artifacts: Path,
+    snapshot_override: str | None,
+    limit: int | None,
+) -> int:
+    return _run_cli_stage(
+        db=db,
+        repo=repo,
+        artifacts=artifacts,
+        stage_name="download_ranges",
+        cli_command="download-ranges",
+        no_candidate_message="oscar download_ranges: no snapshot ready after resolve_offsets_local",
+        snapshot_override=snapshot_override,
+        limit=limit,
+        required_stage="resolve_offsets_local",
+    )
+
+
+def _run_cli_stage(
+    *,
+    db: Database,
+    repo: Path,
+    artifacts: Path,
+    stage_name: str,
+    cli_command: str,
+    no_candidate_message: str,
+    snapshot_override: str | None,
+    limit: int | None,
+    required_stage: str | None = None,
+) -> int:
     oscar_app_dir = artifacts
     oscar_app_dir.mkdir(parents=True, exist_ok=True)
     _seed_snapshot_queue_from_sqlite(db=db, oscar_app_dir=oscar_app_dir)
 
-    claimed = db.get_oscar_snapshot(snapshot_override) if snapshot_override else db.claim_next_oscar_snapshot()
-    if snapshot_override and not claimed:
-        db.upsert_oscar_snapshot(snapshot_override, source_label=snapshot_override, status="pending")
+    if snapshot_override:
         claimed = db.get_oscar_snapshot(snapshot_override)
+        if not claimed:
+            db.upsert_oscar_snapshot(snapshot_override, source_label=snapshot_override, status="pending")
+            claimed = db.get_oscar_snapshot(snapshot_override)
+    elif required_stage:
+        claimed = db.claim_next_oscar_snapshot_for_stage(
+            stage_name,
+            required_stage=required_stage,
+        )
+    else:
+        claimed = db.claim_next_oscar_snapshot()
+
     if not claimed:
-        print("oscar resolve_offsets_local: no pending snapshot")
+        print(no_candidate_message)
         return 0
 
     snapshot_id = str(claimed.get("snapshot_id") or "").strip()
     if not snapshot_id:
-        print("oscar resolve_offsets_local: empty snapshot id")
+        print(f"oscar {stage_name}: empty snapshot id")
         return 1
 
-    # Manual snapshot run is allowed even when queue row is not pending.
     if snapshot_override:
         db.set_oscar_snapshot_status(snapshot_id, "processing")
 
-    db.upsert_oscar_snapshot_stage(snapshot_id, "resolve_offsets_local", "running")
+    db.upsert_oscar_snapshot_stage(snapshot_id, stage_name, "running")
 
     command = [
         _python_bin(repo),
         "-m",
         "app.cli",
-        "resolve-offsets-local",
+        cli_command,
         "--snapshot",
         snapshot_id,
     ]
@@ -80,9 +133,9 @@ def _resolve_stage(
     env = os.environ.copy()
     env["OSCAR_APP_DIR"] = str(oscar_app_dir)
 
-    print(f"oscar resolve_offsets_local: snapshot={snapshot_id}")
-    print(f"oscar resolve_offsets_local: command={' '.join(command)}")
-    print(f"oscar resolve_offsets_local: oscar_app_dir={oscar_app_dir}")
+    print(f"oscar {stage_name}: snapshot={snapshot_id}")
+    print(f"oscar {stage_name}: command={' '.join(command)}")
+    print(f"oscar {stage_name}: oscar_app_dir={oscar_app_dir}")
 
     result = subprocess.run(
         command,
@@ -93,22 +146,22 @@ def _resolve_stage(
     )
 
     if int(result.returncode) == 0:
-        db.upsert_oscar_snapshot_stage(snapshot_id, "resolve_offsets_local", "completed")
+        db.upsert_oscar_snapshot_stage(snapshot_id, stage_name, "completed")
         db.set_oscar_snapshot_status(snapshot_id, "processing")
-        print(f"oscar resolve_offsets_local: completed snapshot={snapshot_id}")
+        print(f"oscar {stage_name}: completed snapshot={snapshot_id}")
         return 0
 
     error_text = (result.stderr or result.stdout or "").strip()
     if not error_text:
-        error_text = f"resolve-offsets-local failed with exit code {result.returncode}"
+        error_text = f"{cli_command} failed with exit code {result.returncode}"
     db.upsert_oscar_snapshot_stage(
         snapshot_id,
-        "resolve_offsets_local",
+        stage_name,
         "failed",
         error_text=error_text[:2000],
     )
     db.set_oscar_snapshot_status(snapshot_id, "failed", error_text=error_text[:2000])
-    print(f"oscar resolve_offsets_local: failed snapshot={snapshot_id}")
+    print(f"oscar {stage_name}: failed snapshot={snapshot_id}")
     print(error_text[:2000])
     return 1
 
@@ -164,6 +217,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.stage == "resolve_offsets_local":
         return _resolve_stage(
+            db=db,
+            repo=repo,
+            artifacts=artifacts,
+            snapshot_override=(str(args.snapshot).strip() if args.snapshot else None),
+            limit=args.limit,
+        )
+    if args.stage == "download_ranges":
+        return _download_ranges_stage(
             db=db,
             repo=repo,
             artifacts=artifacts,

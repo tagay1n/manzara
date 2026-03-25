@@ -215,3 +215,44 @@ def test_oscar_snapshot_stage_progress_upserts_by_snapshot_and_stage() -> None:
         assert by_stage["download_ranges"]["status"] == "failed"
         assert by_stage["download_ranges"]["run_id"] == run_id_2
         assert "timeout" in str(by_stage["download_ranges"]["error_text"] or "")
+
+
+def test_claim_next_oscar_snapshot_for_stage_requires_prerequisite_completion() -> None:
+    with _isolated_database() as db:
+        db.upsert_oscar_snapshot(
+            "snap-a",
+            source_path="/snapshots/a",
+            discovered_at="2026-03-01T00:00:00+00:00",
+            status="processing",
+        )
+        db.upsert_oscar_snapshot(
+            "snap-b",
+            source_path="/snapshots/b",
+            discovered_at="2026-03-02T00:00:00+00:00",
+            status="processing",
+        )
+
+        db.upsert_oscar_snapshot_stage("snap-b", "resolve_offsets_local", "completed")
+        claimed = db.claim_next_oscar_snapshot_for_stage(
+            "download_ranges",
+            required_stage="resolve_offsets_local",
+        )
+        assert claimed is not None
+        assert claimed["snapshot_id"] == "snap-b"
+
+        db.upsert_oscar_snapshot_stage("snap-b", "download_ranges", "completed")
+        assert (
+            db.claim_next_oscar_snapshot_for_stage(
+                "download_ranges",
+                required_stage="resolve_offsets_local",
+            )
+            is None
+        )
+
+        db.upsert_oscar_snapshot_stage("snap-a", "resolve_offsets_local", "completed")
+        claimed_next = db.claim_next_oscar_snapshot_for_stage(
+            "download_ranges",
+            required_stage="resolve_offsets_local",
+        )
+        assert claimed_next is not None
+        assert claimed_next["snapshot_id"] == "snap-a"
