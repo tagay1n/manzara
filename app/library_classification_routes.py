@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from app.contracts import ClassificationOperations
 from app.library_route_params import (
     parse_csv_tokens,
     q_limit,
@@ -21,7 +22,7 @@ from app.library_route_params import (
 def register_library_classification_routes(
     app: FastAPI,
     *,
-    operations_provider: Callable[[], Dict[str, Callable[..., Any]]],
+    operations_provider: Callable[[], ClassificationOperations],
     build_classification_detail_payload: Callable[..., Dict[str, Any]],
 ) -> None:
     """Register all `/api/library/classifications*` endpoints."""
@@ -38,7 +39,7 @@ def register_library_classification_routes(
     ) -> JSONResponse:
         """Return paginated classification table."""
         operations = operations_provider()
-        payload = operations["list_classifications"](
+        payload = operations.list_classifications(
             search=search,
             status=status,
             ddc_prefix=ddc_prefix,
@@ -57,7 +58,7 @@ def register_library_classification_routes(
     ) -> JSONResponse:
         """Return hierarchy, distribution, duplicates, and unclassified queue."""
         operations = operations_provider()
-        payload = operations["get_classification_insights"](
+        payload = operations.get_classification_insights(
             row_limit=row_limit,
             duplicate_limit=duplicate_limit,
             unclassified_limit=unclassified_limit,
@@ -73,7 +74,7 @@ def register_library_classification_routes(
         """Preview simplification rules before applying any merge."""
         operations = operations_provider()
         segments = parse_csv_tokens(drop_segments)
-        payload = operations["get_normalization_preview"](
+        payload = operations.get_normalization_preview(
             drop_segments=segments,
             limit=limit,
             row_limit=row_limit,
@@ -88,7 +89,7 @@ def register_library_classification_routes(
     ) -> JSONResponse:
         """Return ranked near-duplicate classification merge suggestions."""
         operations = operations_provider()
-        payload = operations["get_merge_candidates"](
+        payload = operations.get_merge_candidates(
             limit=limit,
             min_score=min_score,
             row_limit=row_limit,

@@ -137,7 +137,7 @@ class PayloadBuilder:
         payload = dict(run)
         summary = payload.get("summary")
         if not isinstance(summary, dict) or not summary:
-            payload["summary"] = self._ops()["build_default_run_summary"](payload)
+            payload["summary"] = self._ops().build_default_run_summary(payload)
         return payload
 
     def _count_active_workflows(self, workflows: Optional[list[Dict[str, Any]]] = None) -> int:
@@ -187,26 +187,26 @@ class PayloadBuilder:
         ops = self._ops()
         state = self._state()
         shayan_workflows = [item for item in workflows if item.get("panel_id") == "shayan"]
-        shayan_panel = ops["build_shayan_panel"](
+        shayan_panel = ops.build_shayan_panel(
             db=state.db,
             shayan=state.settings.shayan,
             tasks=tasks_by_panel.get("shayan", []),
             workflows=shayan_workflows,
             title=panel_titles.get("shayan", "Shayan"),
         )
-        maintenance_panel = ops["build_maintenance_panel"](
+        maintenance_panel = ops.build_maintenance_panel(
             db=state.db,
             maintenance=state.settings.maintenance,
             tasks=tasks_by_panel.get("maintenance", []),
             title=panel_titles.get("maintenance", "Maintenance"),
         )
-        library_panel = ops["build_library_panel"](
+        library_panel = ops.build_library_panel(
             db=state.db,
             maintenance=state.settings.maintenance,
             tasks=tasks_by_panel.get("library", []),
             title=panel_titles.get("library", "Library"),
         )
-        oscar_panel = ops["build_oscar_panel"](
+        oscar_panel = ops.build_oscar_panel(
             db=state.db,
             oscar=state.settings.oscar,
             tasks=tasks_by_panel.get("oscar", []),
@@ -529,7 +529,7 @@ class PayloadBuilder:
                 "pid": None,
                 "exit_code": None,
                 "error_text": None,
-                "summary": ops["build_default_run_summary"]({"status": "idle"}),
+                "summary": ops.build_default_run_summary({"status": "idle"}),
             }
             task_items.append(
                 {
@@ -576,11 +576,11 @@ class PayloadBuilder:
         ops = self._ops()
         active_runs = state.db.list_active_runs()
 
-        last_eval_run = state.db.get_latest_run_for_task(ops["monocorpus_meta_evaluate_task_id"])
+        last_eval_run = state.db.get_latest_run_for_task(ops.monocorpus_meta_evaluate_task_id)
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "global": self._build_global_payload(active_runs=active_runs),
-            "dataset": ops["get_library_dataset_stats"](),
+            "dataset": ops.get_library_dataset_stats(),
             "last_eval_run": last_eval_run,
         }
 
@@ -593,7 +593,7 @@ class PayloadBuilder:
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "global": self._build_global_payload(active_runs=active_runs),
-            "database_state": ops["build_database_state_snapshot"](state.db),
+            "database_state": ops.build_database_state_snapshot(state.db),
         }
 
     def build_classification_detail_payload(
@@ -606,7 +606,7 @@ class PayloadBuilder:
         """Compose classification detail payload with local run context."""
         state = self._state()
         ops = self._ops()
-        detail = ops["get_classification_detail"](
+        detail = ops.get_classification_detail(
             classification_id,
             docs_page=docs_page,
             docs_page_size=docs_page_size,
@@ -615,7 +615,7 @@ class PayloadBuilder:
         active_runs = state.db.list_active_runs()
 
         task_slug_map, _ = self._task_slug_maps()
-        recent_eval_runs = state.db.list_recent_runs_for_task(ops["monocorpus_meta_evaluate_task_id"], limit=10)
+        recent_eval_runs = state.db.list_recent_runs_for_task(ops.monocorpus_meta_evaluate_task_id, limit=10)
         for run in recent_eval_runs:
             task_id = str(run.get("task_id") or "")
             run["task_slug"] = task_slug_map.get(task_id, task_id)
@@ -636,7 +636,7 @@ class PayloadBuilder:
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "global": self._build_global_payload(active_runs=active_runs),
-            "overview": ops["get_personality_overview"](),
+            "overview": ops.get_personality_overview(),
         }
 
     def build_publisher_payload(self) -> Dict[str, Any]:
@@ -648,7 +648,7 @@ class PayloadBuilder:
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "global": self._build_global_payload(active_runs=active_runs),
-            "overview": ops["get_publisher_overview"](),
+            "overview": ops.get_publisher_overview(),
         }
 
     def build_normalization_payload(self, entity_type: str) -> Dict[str, Any]:
@@ -666,10 +666,10 @@ class PayloadBuilder:
             "entity_type": entity_type,
             "entity_label": label,
             "global": self._build_global_payload(active_runs=active_runs),
-            "dashboard": ops["get_normalization_dashboard"](state.db, entity_type),
-            "quality": ops["get_normalization_quality"](state.db, entity_type),
-            "suggestions": ops["list_suggestions"](state.db, entity_type, limit=80),
-            "history_preview": ops["list_normalization_history"](state.db, entity_type, limit=20),
+            "dashboard": ops.get_normalization_dashboard(state.db, entity_type),
+            "quality": ops.get_normalization_quality(state.db, entity_type),
+            "suggestions": ops.list_suggestions(state.db, entity_type, limit=80),
+            "history_preview": ops.list_normalization_history(state.db, entity_type, limit=20),
         }
 
     def build_collections_payload(self) -> Dict[str, Any]:
@@ -681,5 +681,5 @@ class PayloadBuilder:
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "global": self._build_global_payload(active_runs=active_runs),
-            "overview": ops["get_collection_overview"](),
+            "overview": ops.get_collection_overview(),
         }

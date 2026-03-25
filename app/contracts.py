@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Protocol, TypedDict
 JSONDict = Dict[str, Any]
 
 
-class PayloadBuilderOperations(TypedDict):
+class PayloadBuilderOperations(Protocol):
     build_default_run_summary: Callable[[JSONDict], JSONDict]
     build_shayan_panel: Callable[..., JSONDict]
     build_maintenance_panel: Callable[..., JSONDict]
@@ -27,7 +27,7 @@ class PayloadBuilderOperations(TypedDict):
     monocorpus_meta_evaluate_task_id: str
 
 
-class RoutePayloadBuilders(TypedDict):
+class RoutePayloadBuilders(Protocol):
     build_dashboard_payload: Callable[[], JSONDict]
     build_schedules_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
@@ -42,7 +42,7 @@ class RoutePayloadBuilders(TypedDict):
     build_collections_payload: Callable[[], JSONDict]
 
 
-class CoreReadPayloadBuilders(TypedDict):
+class CoreReadPayloadBuilders(Protocol):
     build_dashboard_payload: Callable[[], JSONDict]
     build_schedules_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
@@ -52,7 +52,7 @@ class CoreReadPayloadBuilders(TypedDict):
     build_database_state_payload: Callable[[], JSONDict]
 
 
-class NormalizationOperations(TypedDict):
+class NormalizationOperations(Protocol):
     get_review_queue: Callable[..., Any]
     list_canonicals: Callable[..., Any]
     create_canonical: Callable[..., Any]
@@ -71,14 +71,14 @@ class NormalizationOperations(TypedDict):
     get_normalization_evidence: Callable[..., Any]
 
 
-class ClassificationOperations(TypedDict):
+class ClassificationOperations(Protocol):
     list_classifications: Callable[..., Any]
     get_classification_insights: Callable[..., Any]
     get_normalization_preview: Callable[..., Any]
     get_merge_candidates: Callable[..., Any]
 
 
-class EntitiesOperations(TypedDict):
+class EntitiesOperations(Protocol):
     list_personalities: Callable[..., Any]
     get_personality_insights: Callable[..., Any]
     list_publishers: Callable[..., Any]

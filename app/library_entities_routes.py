@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
+from app.contracts import EntitiesOperations
 from app.library_route_params import q_limit, q_non_negative, q_page, q_page_size, q_text
 
 
@@ -14,7 +15,7 @@ def register_library_entities_routes(
     app: FastAPI,
     *,
     state_provider: Callable[[], Any],
-    operations_provider: Callable[[], Dict[str, Callable[..., Any]]],
+    operations_provider: Callable[[], EntitiesOperations],
     build_personality_payload: Callable[[], Dict[str, Any]],
     build_publisher_payload: Callable[[], Dict[str, Any]],
     build_collections_payload: Callable[[], Dict[str, Any]],
@@ -37,7 +38,7 @@ def register_library_entities_routes(
     ) -> JSONResponse:
         """Return paginated personalities table."""
         operations = operations_provider()
-        payload = operations["list_personalities"](
+        payload = operations.list_personalities(
             search=search,
             script_label=script_label,
             min_docs=min_docs,
@@ -54,7 +55,7 @@ def register_library_entities_routes(
     ) -> JSONResponse:
         """Return personalities insight tabs payload."""
         operations = operations_provider()
-        payload = operations["get_personality_insights"](
+        payload = operations.get_personality_insights(
             cluster_limit=cluster_limit,
             queue_limit=queue_limit,
         )
@@ -76,7 +77,7 @@ def register_library_entities_routes(
     ) -> JSONResponse:
         """Return paginated publishers table."""
         operations = operations_provider()
-        payload = operations["list_publishers"](
+        payload = operations.list_publishers(
             search=search,
             script_label=script_label,
             min_docs=min_docs,
@@ -93,7 +94,7 @@ def register_library_entities_routes(
     ) -> JSONResponse:
         """Return publishers insight tabs payload."""
         operations = operations_provider()
-        payload = operations["get_publisher_insights"](
+        payload = operations.get_publisher_insights(
             cluster_limit=cluster_limit,
             queue_limit=queue_limit,
         )
@@ -115,7 +116,7 @@ def register_library_entities_routes(
     ) -> JSONResponse:
         """Return paginated collections table."""
         operations = operations_provider()
-        payload = operations["list_library_collections"](
+        payload = operations.list_library_collections(
             search=search,
             status=status,
             include=include,
@@ -132,7 +133,7 @@ def register_library_entities_routes(
     ) -> JSONResponse:
         """Return collection insight tabs payload."""
         operations = operations_provider()
-        payload = operations["get_collection_insights"](
+        payload = operations.get_collection_insights(
             cluster_limit=cluster_limit,
             queue_limit=queue_limit,
         )
@@ -145,7 +146,7 @@ def register_library_entities_routes(
     ) -> JSONResponse:
         """Return one collection with linked items."""
         operations = operations_provider()
-        payload = operations["list_collection_items"](collection_id, limit=limit)
+        payload = operations.list_collection_items(collection_id, limit=limit)
         return JSONResponse(payload)
 
     @app.patch("/api/library/collections/{collection_id}")
@@ -157,7 +158,7 @@ def register_library_entities_routes(
         state = state_provider()
         operations = operations_provider()
         try:
-            result = operations["update_collection"](state.db, collection_id, updates=payload)
+            result = operations.update_collection(state.db, collection_id, updates=payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result)

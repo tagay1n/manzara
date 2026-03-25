@@ -1,16 +1,18 @@
-"""Dependency and operation-map builders for app wiring."""
+"""Dependency and operation-service builders for app wiring."""
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from app.contracts import (
     ClassificationOperations,
     CoreReadPayloadBuilders,
     EntitiesOperations,
+    JSONDict,
+    NormalizationOperations,
     PayloadBuilderOperations,
     RoutePayloadBuilders,
-    NormalizationOperations,
 )
 from app.modules.library.collections import (
     get_collection_insights,
@@ -68,140 +70,221 @@ from app.payload_builder import PayloadBuilder
 from app.run_summary import build_default_run_summary
 
 
+@dataclass(frozen=True)
+class PayloadBuilderOperationsService:
+    build_default_run_summary: Callable[[JSONDict], JSONDict]
+    build_shayan_panel: Callable[..., JSONDict]
+    build_maintenance_panel: Callable[..., JSONDict]
+    build_library_panel: Callable[..., JSONDict]
+    build_oscar_panel: Callable[..., JSONDict]
+    get_library_dataset_stats: Callable[..., JSONDict]
+    build_database_state_snapshot: Callable[..., JSONDict]
+    get_classification_detail: Callable[..., JSONDict]
+    get_personality_overview: Callable[..., JSONDict]
+    get_publisher_overview: Callable[..., JSONDict]
+    get_collection_overview: Callable[..., JSONDict]
+    get_normalization_dashboard: Callable[..., JSONDict]
+    get_normalization_quality: Callable[..., JSONDict]
+    list_suggestions: Callable[..., list[JSONDict]]
+    list_normalization_history: Callable[..., list[JSONDict]]
+    monocorpus_meta_evaluate_task_id: str
+
+
+@dataclass(frozen=True)
+class RoutePayloadBuildersService:
+    build_dashboard_payload: Callable[[], JSONDict]
+    build_schedules_payload: Callable[[], JSONDict]
+    build_tasks_payload: Callable[[], JSONDict]
+    build_task_detail_payload: Callable[..., JSONDict]
+    build_flow_detail_payload: Callable[..., JSONDict]
+    build_library_payload: Callable[[], JSONDict]
+    build_database_state_payload: Callable[[], JSONDict]
+    build_classification_detail_payload: Callable[..., JSONDict]
+    build_personality_payload: Callable[[], JSONDict]
+    build_publisher_payload: Callable[[], JSONDict]
+    build_normalization_payload: Callable[[str], JSONDict]
+    build_collections_payload: Callable[[], JSONDict]
+
+
+@dataclass(frozen=True)
+class CoreReadPayloadBuildersService:
+    build_dashboard_payload: Callable[[], JSONDict]
+    build_schedules_payload: Callable[[], JSONDict]
+    build_tasks_payload: Callable[[], JSONDict]
+    build_task_detail_payload: Callable[..., JSONDict]
+    build_flow_detail_payload: Callable[..., JSONDict]
+    build_library_payload: Callable[[], JSONDict]
+    build_database_state_payload: Callable[[], JSONDict]
+
+
+@dataclass(frozen=True)
+class NormalizationOperationsService:
+    get_review_queue: Callable[..., Any]
+    list_canonicals: Callable[..., Any]
+    create_canonical: Callable[..., Any]
+    link_alias: Callable[..., Any]
+    create_and_link_alias: Callable[..., Any]
+    reject_alias: Callable[..., Any]
+    bulk_link_aliases: Callable[..., Any]
+    bulk_reject_aliases: Callable[..., Any]
+    list_suggestions: Callable[..., Any]
+    refresh_suggestions: Callable[..., Any]
+    get_normalization_merge_candidates: Callable[..., Any]
+    merge_canonicals: Callable[..., Any]
+    list_normalization_history: Callable[..., Any]
+    undo_event: Callable[..., Any]
+    get_normalization_quality: Callable[..., Any]
+    get_normalization_evidence: Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class ClassificationOperationsService:
+    list_classifications: Callable[..., Any]
+    get_classification_insights: Callable[..., Any]
+    get_normalization_preview: Callable[..., Any]
+    get_merge_candidates: Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class EntitiesOperationsService:
+    list_personalities: Callable[..., Any]
+    get_personality_insights: Callable[..., Any]
+    list_publishers: Callable[..., Any]
+    get_publisher_insights: Callable[..., Any]
+    list_library_collections: Callable[..., Any]
+    get_collection_insights: Callable[..., Any]
+    list_collection_items: Callable[..., Any]
+    update_collection: Callable[..., Any]
+
+
+def _apply_overrides(service: Any, overrides: dict[str, Any] | None) -> Any:
+    if not overrides:
+        return service
+    return type(service)(**{**service.__dict__, **overrides})
+
+
 def build_payload_builder_operations() -> PayloadBuilderOperations:
     """Build operation set consumed by PayloadBuilder internals."""
-    return {
-        "build_default_run_summary": build_default_run_summary,
-        "build_shayan_panel": build_shayan_panel,
-        "build_maintenance_panel": build_maintenance_panel,
-        "build_library_panel": build_library_panel,
-        "build_oscar_panel": build_oscar_panel,
-        "get_library_dataset_stats": get_library_dataset_stats,
-        "build_database_state_snapshot": build_database_state_snapshot,
-        "get_classification_detail": get_classification_detail,
-        "get_personality_overview": get_personality_overview,
-        "get_publisher_overview": get_publisher_overview,
-        "get_collection_overview": get_collection_overview,
-        "get_normalization_dashboard": get_normalization_dashboard,
-        "get_normalization_quality": get_normalization_quality,
-        "list_suggestions": list_suggestions,
-        "list_normalization_history": list_normalization_history,
-        "monocorpus_meta_evaluate_task_id": MONOCORPUS_META_EVALUATE_TASK_ID,
-    }
+    return PayloadBuilderOperationsService(
+        build_default_run_summary=build_default_run_summary,
+        build_shayan_panel=build_shayan_panel,
+        build_maintenance_panel=build_maintenance_panel,
+        build_library_panel=build_library_panel,
+        build_oscar_panel=build_oscar_panel,
+        get_library_dataset_stats=get_library_dataset_stats,
+        build_database_state_snapshot=build_database_state_snapshot,
+        get_classification_detail=get_classification_detail,
+        get_personality_overview=get_personality_overview,
+        get_publisher_overview=get_publisher_overview,
+        get_collection_overview=get_collection_overview,
+        get_normalization_dashboard=get_normalization_dashboard,
+        get_normalization_quality=get_normalization_quality,
+        list_suggestions=list_suggestions,
+        list_normalization_history=list_normalization_history,
+        monocorpus_meta_evaluate_task_id=MONOCORPUS_META_EVALUATE_TASK_ID,
+    )
 
 
 def build_payload_builder_operations_with_overrides(
     overrides: dict[str, Any] | None = None,
 ) -> PayloadBuilderOperations:
     """Build PayloadBuilder operations and apply optional key overrides."""
-    operations = build_payload_builder_operations()
-    if overrides:
-        operations.update(overrides)
-    return operations
+    return _apply_overrides(build_payload_builder_operations(), overrides)
 
 
 def build_normalization_operations() -> NormalizationOperations:
-    """Build normalization route operations map."""
-    return {
-        "get_review_queue": get_review_queue,
-        "list_canonicals": list_canonicals,
-        "create_canonical": create_canonical,
-        "link_alias": link_alias,
-        "create_and_link_alias": create_and_link_alias,
-        "reject_alias": reject_alias,
-        "bulk_link_aliases": bulk_link_aliases,
-        "bulk_reject_aliases": bulk_reject_aliases,
-        "list_suggestions": list_suggestions,
-        "refresh_suggestions": refresh_suggestions,
-        "get_normalization_merge_candidates": get_normalization_merge_candidates,
-        "merge_canonicals": merge_canonicals,
-        "list_normalization_history": list_normalization_history,
-        "undo_event": undo_event,
-        "get_normalization_quality": get_normalization_quality,
-        "get_normalization_evidence": get_normalization_evidence,
-    }
+    """Build normalization route operations service."""
+    return NormalizationOperationsService(
+        get_review_queue=get_review_queue,
+        list_canonicals=list_canonicals,
+        create_canonical=create_canonical,
+        link_alias=link_alias,
+        create_and_link_alias=create_and_link_alias,
+        reject_alias=reject_alias,
+        bulk_link_aliases=bulk_link_aliases,
+        bulk_reject_aliases=bulk_reject_aliases,
+        list_suggestions=list_suggestions,
+        refresh_suggestions=refresh_suggestions,
+        get_normalization_merge_candidates=get_normalization_merge_candidates,
+        merge_canonicals=merge_canonicals,
+        list_normalization_history=list_normalization_history,
+        undo_event=undo_event,
+        get_normalization_quality=get_normalization_quality,
+        get_normalization_evidence=get_normalization_evidence,
+    )
 
 
 def build_normalization_operations_with_overrides(
     overrides: dict[str, Any] | None = None,
 ) -> NormalizationOperations:
-    """Build normalization operations and apply optional key overrides."""
-    operations = build_normalization_operations()
-    if overrides:
-        operations.update(overrides)
-    return operations
+    """Build normalization operations and apply optional field overrides."""
+    return _apply_overrides(build_normalization_operations(), overrides)
 
 
 def build_classification_operations() -> ClassificationOperations:
-    """Build classification route operations map."""
-    return {
-        "list_classifications": list_classifications,
-        "get_classification_insights": get_classification_insights,
-        "get_normalization_preview": get_normalization_preview,
-        "get_merge_candidates": get_merge_candidates,
-    }
+    """Build classification route operations service."""
+    return ClassificationOperationsService(
+        list_classifications=list_classifications,
+        get_classification_insights=get_classification_insights,
+        get_normalization_preview=get_normalization_preview,
+        get_merge_candidates=get_merge_candidates,
+    )
 
 
 def build_classification_operations_with_overrides(
     overrides: dict[str, Any] | None = None,
 ) -> ClassificationOperations:
-    """Build classification operations and apply optional key overrides."""
-    operations = build_classification_operations()
-    if overrides:
-        operations.update(overrides)
-    return operations
+    """Build classification operations and apply optional field overrides."""
+    return _apply_overrides(build_classification_operations(), overrides)
 
 
 def build_entities_operations() -> EntitiesOperations:
-    """Build entities/personality/publisher/collection route operations map."""
-    return {
-        "list_personalities": list_personalities,
-        "get_personality_insights": get_personality_insights,
-        "list_publishers": list_publishers,
-        "get_publisher_insights": get_publisher_insights,
-        "list_library_collections": list_library_collections,
-        "get_collection_insights": get_collection_insights,
-        "list_collection_items": list_collection_items,
-        "update_collection": update_collection,
-    }
+    """Build entities/personality/publisher/collection operations service."""
+    return EntitiesOperationsService(
+        list_personalities=list_personalities,
+        get_personality_insights=get_personality_insights,
+        list_publishers=list_publishers,
+        get_publisher_insights=get_publisher_insights,
+        list_library_collections=list_library_collections,
+        get_collection_insights=get_collection_insights,
+        list_collection_items=list_collection_items,
+        update_collection=update_collection,
+    )
 
 
 def build_entities_operations_with_overrides(
     overrides: dict[str, Any] | None = None,
 ) -> EntitiesOperations:
-    """Build entities operations and apply optional key overrides."""
-    operations = build_entities_operations()
-    if overrides:
-        operations.update(overrides)
-    return operations
+    """Build entities operations and apply optional field overrides."""
+    return _apply_overrides(build_entities_operations(), overrides)
 
 
 def build_route_payload_builders(payload_builder: PayloadBuilder) -> RoutePayloadBuilders:
     """Build payload callbacks exposed to API route modules."""
-    return {
-        "build_dashboard_payload": payload_builder.build_dashboard_payload,
-        "build_schedules_payload": payload_builder.build_schedules_payload,
-        "build_tasks_payload": payload_builder.build_tasks_payload,
-        "build_task_detail_payload": payload_builder.build_task_detail_payload,
-        "build_flow_detail_payload": payload_builder.build_flow_detail_payload,
-        "build_library_payload": payload_builder.build_library_payload,
-        "build_database_state_payload": payload_builder.build_database_state_payload,
-        "build_classification_detail_payload": payload_builder.build_classification_detail_payload,
-        "build_personality_payload": payload_builder.build_personality_payload,
-        "build_publisher_payload": payload_builder.build_publisher_payload,
-        "build_normalization_payload": payload_builder.build_normalization_payload,
-        "build_collections_payload": payload_builder.build_collections_payload,
-    }
+    return RoutePayloadBuildersService(
+        build_dashboard_payload=payload_builder.build_dashboard_payload,
+        build_schedules_payload=payload_builder.build_schedules_payload,
+        build_tasks_payload=payload_builder.build_tasks_payload,
+        build_task_detail_payload=payload_builder.build_task_detail_payload,
+        build_flow_detail_payload=payload_builder.build_flow_detail_payload,
+        build_library_payload=payload_builder.build_library_payload,
+        build_database_state_payload=payload_builder.build_database_state_payload,
+        build_classification_detail_payload=payload_builder.build_classification_detail_payload,
+        build_personality_payload=payload_builder.build_personality_payload,
+        build_publisher_payload=payload_builder.build_publisher_payload,
+        build_normalization_payload=payload_builder.build_normalization_payload,
+        build_collections_payload=payload_builder.build_collections_payload,
+    )
 
 
 def build_core_read_payload_builders(payload_builders: RoutePayloadBuilders) -> CoreReadPayloadBuilders:
-    """Select only read payload callbacks required by core read routes."""
-    return {
-        "build_dashboard_payload": payload_builders["build_dashboard_payload"],
-        "build_schedules_payload": payload_builders["build_schedules_payload"],
-        "build_tasks_payload": payload_builders["build_tasks_payload"],
-        "build_task_detail_payload": payload_builders["build_task_detail_payload"],
-        "build_flow_detail_payload": payload_builders["build_flow_detail_payload"],
-        "build_library_payload": payload_builders["build_library_payload"],
-        "build_database_state_payload": payload_builders["build_database_state_payload"],
-    }
+    """Select read payload callbacks required by core read routes."""
+    return CoreReadPayloadBuildersService(
+        build_dashboard_payload=payload_builders.build_dashboard_payload,
+        build_schedules_payload=payload_builders.build_schedules_payload,
+        build_tasks_payload=payload_builders.build_tasks_payload,
+        build_task_detail_payload=payload_builders.build_task_detail_payload,
+        build_flow_detail_payload=payload_builders.build_flow_detail_payload,
+        build_library_payload=payload_builders.build_library_payload,
+        build_database_state_payload=payload_builders.build_database_state_payload,
+    )

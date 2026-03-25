@@ -98,56 +98,52 @@ def test_route_payload_builders_bind_payload_builder_methods() -> None:
             return {"ok": "collections"}
 
     builders = build_route_payload_builders(_FakeBuilder())
-    assert builders["build_dashboard_payload"]() == {"ok": "dashboard"}
-    assert builders["build_task_detail_payload"]("abc", limit=7) == {"task_key": "abc", "limit": 7}
-    assert builders["build_flow_detail_payload"]("flow", limit_per_task=9) == {
+    assert builders.build_dashboard_payload() == {"ok": "dashboard"}
+    assert builders.build_task_detail_payload("abc", limit=7) == {"task_key": "abc", "limit": 7}
+    assert builders.build_flow_detail_payload("flow", limit_per_task=9) == {
         "flow_key": "flow",
         "limit_per_task": 9,
     }
-    assert builders["build_classification_detail_payload"](11, docs_page=2, docs_page_size=50) == {
+    assert builders.build_classification_detail_payload(11, docs_page=2, docs_page_size=50) == {
         "classification_id": 11,
         "docs_page": 2,
         "docs_page_size": 50,
     }
-    assert builders["build_normalization_payload"]("personality") == {"entity_type": "personality"}
+    assert builders.build_normalization_payload("personality") == {"entity_type": "personality"}
 
 
-def test_route_operation_maps_expose_expected_keys() -> None:
-    normalization_keys = set(build_normalization_operations().keys())
-    classification_keys = set(build_classification_operations().keys())
-    entities_keys = set(build_entities_operations().keys())
+def test_route_operation_services_expose_expected_attributes() -> None:
+    normalization = build_normalization_operations()
+    classification = build_classification_operations()
+    entities = build_entities_operations()
 
-    assert {
-        "get_review_queue",
-        "list_canonicals",
-        "create_canonical",
-        "link_alias",
-        "create_and_link_alias",
-        "reject_alias",
-        "bulk_link_aliases",
-        "bulk_reject_aliases",
-        "list_suggestions",
-        "refresh_suggestions",
-        "get_normalization_merge_candidates",
-        "merge_canonicals",
-        "list_normalization_history",
-        "undo_event",
-        "get_normalization_quality",
-        "get_normalization_evidence",
-    } <= normalization_keys
-    assert {
-        "list_classifications",
-        "get_classification_insights",
-        "get_normalization_preview",
-        "get_merge_candidates",
-    } <= classification_keys
-    assert {
-        "list_personalities",
-        "get_personality_insights",
-        "list_publishers",
-        "get_publisher_insights",
-        "list_library_collections",
-        "get_collection_insights",
-        "list_collection_items",
-        "update_collection",
-    } <= entities_keys
+    assert callable(normalization.get_review_queue)
+    assert callable(normalization.list_canonicals)
+    assert callable(normalization.create_canonical)
+    assert callable(normalization.link_alias)
+    assert callable(normalization.create_and_link_alias)
+    assert callable(normalization.reject_alias)
+    assert callable(normalization.bulk_link_aliases)
+    assert callable(normalization.bulk_reject_aliases)
+    assert callable(normalization.list_suggestions)
+    assert callable(normalization.refresh_suggestions)
+    assert callable(normalization.get_normalization_merge_candidates)
+    assert callable(normalization.merge_canonicals)
+    assert callable(normalization.list_normalization_history)
+    assert callable(normalization.undo_event)
+    assert callable(normalization.get_normalization_quality)
+    assert callable(normalization.get_normalization_evidence)
+
+    assert callable(classification.list_classifications)
+    assert callable(classification.get_classification_insights)
+    assert callable(classification.get_normalization_preview)
+    assert callable(classification.get_merge_candidates)
+
+    assert callable(entities.list_personalities)
+    assert callable(entities.get_personality_insights)
+    assert callable(entities.list_publishers)
+    assert callable(entities.get_publisher_insights)
+    assert callable(entities.list_library_collections)
+    assert callable(entities.get_collection_insights)
+    assert callable(entities.list_collection_items)
+    assert callable(entities.update_collection)

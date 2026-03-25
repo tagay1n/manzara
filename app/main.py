@@ -18,6 +18,12 @@ from app.constants import (
     STATIC_DIR,
     TITLE_MAX_LENGTH,
 )
+from app.contracts import (
+    ClassificationOperations,
+    EntitiesOperations,
+    NormalizationOperations,
+    PayloadBuilderOperations,
+)
 from app.db import Database
 from app.dependencies import (
     build_classification_operations_with_overrides,
@@ -107,7 +113,7 @@ _SLUG_SEPARATOR_PATTERN = SLUG_SEPARATOR_PATTERN
 _SLUG_CLEAN_PATTERN = SLUG_CLEAN_PATTERN
 
 
-def _payload_builder_operations() -> Dict[str, Any]:
+def _payload_builder_operations() -> PayloadBuilderOperations:
     """Build payload operations from module-level symbols (patch-friendly for tests)."""
     return build_payload_builder_operations_with_overrides(
         {
@@ -130,7 +136,7 @@ def _payload_builder_operations() -> Dict[str, Any]:
     )
 
 
-def _normalization_operations() -> Dict[str, Any]:
+def _normalization_operations() -> NormalizationOperations:
     """Build normalization operations from module-level symbols."""
     return build_normalization_operations_with_overrides(
         {
@@ -154,7 +160,7 @@ def _normalization_operations() -> Dict[str, Any]:
     )
 
 
-def _classification_operations() -> Dict[str, Any]:
+def _classification_operations() -> ClassificationOperations:
     """Build classification operations from module-level symbols."""
     return build_classification_operations_with_overrides(
         {
@@ -166,7 +172,7 @@ def _classification_operations() -> Dict[str, Any]:
     )
 
 
-def _entities_operations() -> Dict[str, Any]:
+def _entities_operations() -> EntitiesOperations:
     """Build entities operations from module-level symbols."""
     return build_entities_operations_with_overrides(
         {

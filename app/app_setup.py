@@ -60,7 +60,7 @@ def register_app_routes(
         app,
         state_provider=state_provider,
         normalization_entity_types=normalization_entity_types,
-        build_normalization_payload=lambda entity_type: payload_provider()["build_normalization_payload"](
+        build_normalization_payload=lambda entity_type: payload_provider().build_normalization_payload(
             entity_type
         ),
         operations_provider=normalization_operations_provider,
@@ -68,17 +68,17 @@ def register_app_routes(
     register_library_classification_routes(
         app,
         operations_provider=classification_operations_provider,
-        build_classification_detail_payload=lambda classification_id, **kwargs: payload_provider()[
-            "build_classification_detail_payload"
-        ](classification_id, **kwargs),
+        build_classification_detail_payload=lambda classification_id, **kwargs: payload_provider().build_classification_detail_payload(
+            classification_id, **kwargs
+        ),
     )
     register_library_entities_routes(
         app,
         state_provider=state_provider,
         operations_provider=entities_operations_provider,
-        build_personality_payload=lambda: payload_provider()["build_personality_payload"](),
-        build_publisher_payload=lambda: payload_provider()["build_publisher_payload"](),
-        build_collections_payload=lambda: payload_provider()["build_collections_payload"](),
+        build_personality_payload=lambda: payload_provider().build_personality_payload(),
+        build_publisher_payload=lambda: payload_provider().build_publisher_payload(),
+        build_collections_payload=lambda: payload_provider().build_collections_payload(),
     )
     register_core_read_routes(
         app,
