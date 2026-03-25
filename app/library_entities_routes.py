@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+
+from app.library_route_params import q_limit, q_non_negative, q_page, q_page_size, q_text
 
 
 def register_library_entities_routes(
@@ -26,12 +28,12 @@ def register_library_entities_routes(
 
     @app.get("/api/library/personalities/table")
     def get_library_personalities_table(
-        search: str = Query("", max_length=120),
-        script_label: str = Query("", max_length=40),
-        min_docs: int = Query(0, ge=0),
-        page: int = Query(1, ge=1),
-        page_size: int = Query(25, ge=1, le=100),
-        sort: str = Query("docs_desc", max_length=40),
+        search: str = q_text(),
+        script_label: str = q_text(max_length=40),
+        min_docs: int = q_non_negative(),
+        page: int = q_page(),
+        page_size: int = q_page_size(default=25, max_value=100),
+        sort: str = q_text(default="docs_desc", max_length=40),
     ) -> JSONResponse:
         """Return paginated personalities table."""
         operations = operations_provider()
@@ -47,8 +49,8 @@ def register_library_entities_routes(
 
     @app.get("/api/library/personalities/insights")
     def get_library_personalities_insights(
-        cluster_limit: int = Query(24, ge=1, le=100),
-        queue_limit: int = Query(40, ge=1, le=200),
+        cluster_limit: int = q_limit(default=24, minimum=1, maximum=100),
+        queue_limit: int = q_limit(default=40, minimum=1, maximum=200),
     ) -> JSONResponse:
         """Return personalities insight tabs payload."""
         operations = operations_provider()
@@ -65,12 +67,12 @@ def register_library_entities_routes(
 
     @app.get("/api/library/publishers/table")
     def get_library_publishers_table(
-        search: str = Query("", max_length=120),
-        script_label: str = Query("", max_length=40),
-        min_docs: int = Query(0, ge=0),
-        page: int = Query(1, ge=1),
-        page_size: int = Query(25, ge=1, le=100),
-        sort: str = Query("docs_desc", max_length=40),
+        search: str = q_text(),
+        script_label: str = q_text(max_length=40),
+        min_docs: int = q_non_negative(),
+        page: int = q_page(),
+        page_size: int = q_page_size(default=25, max_value=100),
+        sort: str = q_text(default="docs_desc", max_length=40),
     ) -> JSONResponse:
         """Return paginated publishers table."""
         operations = operations_provider()
@@ -86,8 +88,8 @@ def register_library_entities_routes(
 
     @app.get("/api/library/publishers/insights")
     def get_library_publishers_insights(
-        cluster_limit: int = Query(24, ge=1, le=100),
-        queue_limit: int = Query(40, ge=1, le=200),
+        cluster_limit: int = q_limit(default=24, minimum=1, maximum=100),
+        queue_limit: int = q_limit(default=40, minimum=1, maximum=200),
     ) -> JSONResponse:
         """Return publishers insight tabs payload."""
         operations = operations_provider()
@@ -104,12 +106,12 @@ def register_library_entities_routes(
 
     @app.get("/api/library/collections/table")
     def get_library_collections_table(
-        search: str = Query("", max_length=120),
-        status: str = Query("", max_length=40),
-        include: str = Query("all", max_length=10),
-        page: int = Query(1, ge=1),
-        page_size: int = Query(25, ge=1, le=100),
-        sort: str = Query("updated_desc", max_length=40),
+        search: str = q_text(),
+        status: str = q_text(max_length=40),
+        include: str = q_text(default="all", max_length=10),
+        page: int = q_page(),
+        page_size: int = q_page_size(default=25, max_value=100),
+        sort: str = q_text(default="updated_desc", max_length=40),
     ) -> JSONResponse:
         """Return paginated collections table."""
         operations = operations_provider()
@@ -125,8 +127,8 @@ def register_library_entities_routes(
 
     @app.get("/api/library/collections/insights")
     def get_library_collections_insights(
-        cluster_limit: int = Query(24, ge=1, le=200),
-        queue_limit: int = Query(40, ge=1, le=200),
+        cluster_limit: int = q_limit(default=24, minimum=1, maximum=200),
+        queue_limit: int = q_limit(default=40, minimum=1, maximum=200),
     ) -> JSONResponse:
         """Return collection insight tabs payload."""
         operations = operations_provider()
@@ -139,7 +141,7 @@ def register_library_entities_routes(
     @app.get("/api/library/collections/{collection_id}/items")
     def get_library_collection_items(
         collection_id: int,
-        limit: int = Query(400, ge=1, le=2000),
+        limit: int = q_limit(default=400, minimum=1, maximum=2000),
     ) -> JSONResponse:
         """Return one collection with linked items."""
         operations = operations_provider()

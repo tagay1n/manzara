@@ -7,6 +7,8 @@ from typing import Any, Callable, Dict, Iterable
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
+from app.library_route_params import q_limit, q_non_negative, q_page, q_page_size, q_ratio, q_text
+
 
 def register_library_normalization_routes(
     app: FastAPI,
@@ -34,12 +36,12 @@ def register_library_normalization_routes(
     @app.get("/api/library/normalization/{entity_type}/queue")
     def get_library_normalization_queue(
         entity_type: str,
-        status: str = Query("all", max_length=40),
-        search: str = Query("", max_length=120),
-        script_label: str = Query("", max_length=40),
-        min_docs: int = Query(0, ge=0),
-        page: int = Query(1, ge=1),
-        page_size: int = Query(40, ge=1, le=200),
+        status: str = q_text(default="all", max_length=40),
+        search: str = q_text(),
+        script_label: str = q_text(max_length=40),
+        min_docs: int = q_non_negative(),
+        page: int = q_page(),
+        page_size: int = q_page_size(default=40, max_value=200),
     ) -> JSONResponse:
         """Return normalization review queue."""
         state = state_provider()
@@ -60,7 +62,7 @@ def register_library_normalization_routes(
     @app.get("/api/library/normalization/{entity_type}/canonicals")
     def get_library_normalization_canonicals(
         entity_type: str,
-        search: str = Query("", max_length=160),
+        search: str = q_text(max_length=160),
     ) -> JSONResponse:
         """Return canonical registry entries for normalization entity."""
         state = state_provider()
@@ -244,7 +246,7 @@ def register_library_normalization_routes(
     @app.get("/api/library/normalization/{entity_type}/suggestions")
     def get_library_normalization_suggestions(
         entity_type: str,
-        limit: int = Query(200, ge=1, le=1000),
+        limit: int = q_limit(default=200, minimum=1, maximum=1000),
     ) -> JSONResponse:
         """Return open suggestions for normalization queue."""
         state = state_provider()
@@ -277,8 +279,8 @@ def register_library_normalization_routes(
     @app.get("/api/library/normalization/{entity_type}/merge-candidates")
     def get_library_normalization_merge_candidates(
         entity_type: str,
-        min_score: float = Query(0.84, ge=0.0, le=1.0),
-        limit: int = Query(80, ge=1, le=300),
+        min_score: float = q_ratio(default=0.84),
+        limit: int = q_limit(default=80, minimum=1, maximum=300),
     ) -> JSONResponse:
         """Return possible canonical merge candidates."""
         state = state_provider()
@@ -326,7 +328,7 @@ def register_library_normalization_routes(
     @app.get("/api/library/normalization/{entity_type}/history")
     def get_library_normalization_history(
         entity_type: str,
-        limit: int = Query(200, ge=1, le=1000),
+        limit: int = q_limit(default=200, minimum=1, maximum=1000),
     ) -> JSONResponse:
         """Return normalization action history."""
         state = state_provider()
@@ -361,7 +363,7 @@ def register_library_normalization_routes(
     def get_library_normalization_alias_evidence(
         entity_type: str,
         raw_name: str = Query(..., min_length=1, max_length=240),
-        limit: int = Query(20, ge=1, le=200),
+        limit: int = q_limit(default=20, minimum=1, maximum=200),
     ) -> JSONResponse:
         """Return sample docs where alias appears."""
         operations = operations_provider()
