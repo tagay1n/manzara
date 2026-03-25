@@ -83,6 +83,7 @@ from app.modules.shayan.workflow import (
 )
 from app.modules.oscar.panel import build_oscar_panel
 from app.modules.oscar.tasks import oscar_task_definitions
+from app.modules.oscar.workflow import oscar_pipeline_workflow_bundle
 from app.settings import Settings, load_settings
 from app.tasks import TaskRunner
 from app.workflows import WorkflowService
@@ -142,6 +143,7 @@ def on_startup() -> None:
     state.db.seed_workflow_bundle(library_workflow_bundle())
     state.db.seed_workflow_bundle(library_personality_normalization_workflow_bundle())
     state.db.seed_workflow_bundle(library_publisher_normalization_workflow_bundle())
+    state.db.seed_workflow_bundle(oscar_pipeline_workflow_bundle())
 
     recovered_runs = state.db.recover_active_runs()
     if recovered_runs > 0:

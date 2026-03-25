@@ -17,6 +17,7 @@ from app.modules.maintenance.workflow import (
     MAINTENANCE_BACKUP_INCR_SCHEDULE_ID,
     MAINTENANCE_BACKUP_INCR_WORKFLOW_ID,
 )
+from app.modules.oscar.workflow import OSCAR_PIPELINE_WORKFLOW_ID
 from app.modules.shayan.workflow import SHAYAN_WEEKLY_SCHEDULE_ID, SHAYAN_WEEKLY_WORKFLOW_ID
 
 
@@ -129,6 +130,7 @@ def test_schedules_endpoint_returns_workflows(test_client) -> None:
     assert LIBRARY_WORKFLOW_ID in workflow_ids
     assert MAINTENANCE_BACKUP_FULL_WORKFLOW_ID in workflow_ids
     assert MAINTENANCE_BACKUP_INCR_WORKFLOW_ID in workflow_ids
+    assert OSCAR_PIPELINE_WORKFLOW_ID in workflow_ids
 
 
 def test_update_interval_schedule_minutes(test_client) -> None:
@@ -1028,6 +1030,30 @@ def test_workflow_run_skips_download_when_no_new(
     assert step_runs[0]["status"] == "completed"
     assert step_runs[1]["task_id"] == "shayan.download_new"
     assert step_runs[1]["status"] == "skipped"
+
+
+def test_oscar_pipeline_workflow_runs_three_steps(
+    test_client,
+    wait_for_terminal_workflow_run,
+) -> None:
+    client, main_app = test_client
+
+    response = client.post(f"/api/workflows/{OSCAR_PIPELINE_WORKFLOW_ID}/run")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "start"
+    workflow_run_id = int(payload["workflow_run"]["workflow_run_id"])
+
+    workflow_run = wait_for_terminal_workflow_run(main_app, workflow_run_id)
+    assert workflow_run["status"] == "completed"
+
+    step_runs = main_app.state.db.list_workflow_step_runs(workflow_run_id)
+    assert [step["task_id"] for step in step_runs] == [
+        "oscar.resolve_offsets_local",
+        "oscar.download_ranges",
+        "oscar.export_parquet",
+    ]
+    assert all(step["status"] == "completed" for step in step_runs)
 
 
 def test_toggle_task_reports_sudo_password_required(test_client, monkeypatch) -> None:

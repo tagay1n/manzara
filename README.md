@@ -58,6 +58,7 @@ Workflows (seeded at startup):
 - `shayan.weekly_sync` (scan -> conditional download)
 - `maintenance.pgbackrest_full_weekly`
 - `maintenance.pgbackrest_incr_3h`
+- `oscar.snapshot_pipeline` (resolve offsets -> download ranges -> export parquet)
 - `library.meta_evaluate`
 - `library.personality_normalization_refresh`
 - `library.publisher_normalization_refresh`

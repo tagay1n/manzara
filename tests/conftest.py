@@ -17,6 +17,11 @@ from sqlalchemy import create_engine, text
 from app.db import ACTIVE_STATUSES, ACTIVE_WORKFLOW_STATUSES
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.oscar.config import OscarSettings
+from app.modules.oscar.tasks import (
+    OSCAR_DOWNLOAD_RANGES_TASK_ID,
+    OSCAR_EXPORT_PARQUET_TASK_ID,
+    OSCAR_RESOLVE_OFFSETS_TASK_ID,
+)
 from app.modules.shayan.config import ShayanSettings
 from app.settings import Settings
 
@@ -102,6 +107,50 @@ def _test_task_defs(shayan: ShayanSettings):
                     "print('ignore-start', flush=True); "
                     "time.sleep(8)\""
                 ),
+            },
+        },
+    ]
+
+
+def _test_oscar_task_defs(_oscar: OscarSettings):
+    return [
+        {
+            "task_id": OSCAR_RESOLVE_OFFSETS_TASK_ID,
+            "panel_id": "oscar",
+            "title": "Resolve offsets (local)",
+            "task_type": "extract",
+            "icon_idle": "Search",
+            "icon_running": "Square",
+            "cwd": ".",
+            "command": {
+                "mode": "shell",
+                "value": "python3 -c \"print('oscar-resolve-ok')\"",
+            },
+        },
+        {
+            "task_id": OSCAR_DOWNLOAD_RANGES_TASK_ID,
+            "panel_id": "oscar",
+            "title": "Download ranges",
+            "task_type": "download",
+            "icon_idle": "Download",
+            "icon_running": "Square",
+            "cwd": ".",
+            "command": {
+                "mode": "shell",
+                "value": "python3 -c \"print('oscar-download-ok')\"",
+            },
+        },
+        {
+            "task_id": OSCAR_EXPORT_PARQUET_TASK_ID,
+            "panel_id": "oscar",
+            "title": "Export parquet",
+            "task_type": "export",
+            "icon_idle": "Table2",
+            "icon_running": "Square",
+            "cwd": ".",
+            "command": {
+                "mode": "shell",
+                "value": "python3 -c \"print('oscar-export-ok')\"",
             },
         },
     ]
@@ -215,6 +264,7 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
     )
 
     monkeypatch.setattr(main_app, "shayan_task_definitions", _test_task_defs)
+    monkeypatch.setattr(main_app, "oscar_task_definitions", _test_oscar_task_defs)
     main_app.state = main_app.AppState(settings)
 
     with TestClient(main_app.app) as client:

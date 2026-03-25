@@ -24,7 +24,7 @@ Status: draft checklist for controlled migration in small steps.
 - [x] Step 4: Implement `resolve_offsets_local`
 - [x] Step 5: Implement `download_ranges`
 - [x] Step 6: Implement `export_parquet` (`1024 MB` parts)
-- [ ] Step 7: Workflow automation for next-unprocessed pipeline
+- [x] Step 7: Workflow automation for next-unprocessed pipeline
 
 ## Intended Runtime Data Model (for Step 3)
 
