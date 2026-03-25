@@ -1070,6 +1070,28 @@ def test_library_normalization_reject_rejects_invalid_suggestion_ids(test_client
     assert response.json()["detail"] == "suggestion_ids must be integers"
 
 
+def test_library_normalization_bulk_link_rejects_invalid_raw_names_shape(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.post(
+        "/api/library/normalization/personality/bulk/link",
+        json={"raw_names": "Alias One", "canonical_id": 9},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "raw_names must be a list of strings"
+
+
+def test_library_normalization_bulk_reject_rejects_invalid_raw_names_shape(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.post(
+        "/api/library/normalization/personality/bulk/reject",
+        json={"raw_names": "Alias One"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "raw_names must be a list of strings"
+
+
 def test_library_normalization_refresh_suggestions_endpoint(test_client, monkeypatch) -> None:
     client, main_app = test_client
 

@@ -44,6 +44,19 @@ def register_library_normalization_routes(
                 raise HTTPException(status_code=400, detail="suggestion_ids must be integers") from exc
         return suggestion_ids
 
+    def _parse_raw_names(payload: Dict[str, Any]) -> list[str]:
+        raw_value = payload.get("raw_names")
+        if raw_value is None:
+            return []
+        if not isinstance(raw_value, (list, tuple, set)):
+            raise HTTPException(status_code=400, detail="raw_names must be a list of strings")
+        names: list[str] = []
+        for item in raw_value:
+            value = str(item or "").strip()
+            if value:
+                names.append(value)
+        return names
+
     @app.get("/api/library/normalization/{entity_type}")
     def get_library_normalization(entity_type: str) -> JSONResponse:
         """Return normalization workbench summary payload."""
@@ -219,7 +232,7 @@ def register_library_normalization_routes(
         state = state_provider()
         operations = operations_provider()
         normalized = _require_normalization_entity(entity_type)
-        raw_names = payload.get("raw_names") or []
+        raw_names = _parse_raw_names(payload)
         canonical_id = payload.get("canonical_id")
         try:
             canonical_int = int(canonical_id)
@@ -230,7 +243,7 @@ def register_library_normalization_routes(
             result = operations.bulk_link_aliases(
                 state.db,
                 normalized,
-                raw_names=[str(item) for item in raw_names],
+                raw_names=raw_names,
                 canonical_id=canonical_int,
             )
         except ValueError as exc:
@@ -246,12 +259,12 @@ def register_library_normalization_routes(
         state = state_provider()
         operations = operations_provider()
         normalized = _require_normalization_entity(entity_type)
-        raw_names = payload.get("raw_names") or []
+        raw_names = _parse_raw_names(payload)
         try:
             result = operations.bulk_reject_aliases(
                 state.db,
                 normalized,
-                raw_names=[str(item) for item in raw_names],
+                raw_names=raw_names,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
