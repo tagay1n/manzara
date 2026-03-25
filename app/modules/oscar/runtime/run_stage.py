@@ -76,6 +76,30 @@ def _download_ranges_stage(
     )
 
 
+def _export_parquet_stage(
+    *,
+    db: Database,
+    repo: Path,
+    artifacts: Path,
+    snapshot_override: str | None,
+    limit: int | None,
+    part_size_mb: int,
+) -> int:
+    return _run_cli_stage(
+        db=db,
+        repo=repo,
+        artifacts=artifacts,
+        stage_name="export_parquet",
+        cli_command="export-parquet",
+        no_candidate_message="oscar export_parquet: no snapshot ready after download_ranges",
+        snapshot_override=snapshot_override,
+        limit=limit,
+        required_stage="download_ranges",
+        extra_args=["--split", str(max(1, int(part_size_mb)))],
+        success_snapshot_status="completed",
+    )
+
+
 def _run_cli_stage(
     *,
     db: Database,
@@ -87,6 +111,8 @@ def _run_cli_stage(
     snapshot_override: str | None,
     limit: int | None,
     required_stage: str | None = None,
+    extra_args: Sequence[str] | None = None,
+    success_snapshot_status: str = "processing",
 ) -> int:
     oscar_app_dir = artifacts
     oscar_app_dir.mkdir(parents=True, exist_ok=True)
@@ -129,6 +155,8 @@ def _run_cli_stage(
     ]
     if limit is not None and int(limit) > 0:
         command.extend(["--limit", str(int(limit))])
+    if extra_args:
+        command.extend([str(item) for item in extra_args if str(item).strip()])
 
     env = os.environ.copy()
     env["OSCAR_APP_DIR"] = str(oscar_app_dir)
@@ -147,7 +175,7 @@ def _run_cli_stage(
 
     if int(result.returncode) == 0:
         db.upsert_oscar_snapshot_stage(snapshot_id, stage_name, "completed")
-        db.set_oscar_snapshot_status(snapshot_id, "processing")
+        db.set_oscar_snapshot_status(snapshot_id, success_snapshot_status)
         print(f"oscar {stage_name}: completed snapshot={snapshot_id}")
         return 0
 
@@ -233,7 +261,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.stage == "export_parquet":
-        print(f"part_size_mb={max(1, int(args.part_size_mb))}")
+        return _export_parquet_stage(
+            db=db,
+            repo=repo,
+            artifacts=artifacts,
+            snapshot_override=(str(args.snapshot).strip() if args.snapshot else None),
+            limit=args.limit,
+            part_size_mb=max(1, int(args.part_size_mb)),
+        )
     print("status=not_implemented_yet")
     return 0
 

@@ -343,3 +343,141 @@ def test_download_ranges_stage_exits_cleanly_when_no_ready_snapshot(
     assert calls == []
     assert fake_db.stage_updates == []
     assert fake_db.snapshot_updates == []
+
+
+def test_export_parquet_stage_success_marks_snapshot_completed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot="CC-MAIN-2024-30")
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+
+    def _fake_run(cmd, *, cwd, env, text, check):  # noqa: ANN001
+        calls.append({"cmd": cmd, "cwd": cwd, "env": env, "text": text, "check": check})
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(run_stage.subprocess, "run", _fake_run)
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "export_parquet",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+            "--part-size-mb",
+            "1024",
+        ]
+    )
+    assert code == 0
+    assert fake_db.stage_claim_args == [("export_parquet", "download_ranges")]
+    assert len(calls) == 1
+    cmd = list(calls[0]["cmd"])
+    assert "export-parquet" in cmd
+    assert "--split" in cmd
+    assert "1024" in cmd
+    assert "--snapshot" in cmd
+    snapshot_idx = cmd.index("--snapshot")
+    assert cmd[snapshot_idx + 1] == "CC-MAIN-2024-30"
+    assert fake_db.stage_updates[0][:3] == ("CC-MAIN-2024-30", "export_parquet", "running")
+    assert fake_db.stage_updates[1][:3] == ("CC-MAIN-2024-30", "export_parquet", "completed")
+    assert fake_db.snapshot_updates[-1] == ("CC-MAIN-2024-30", "completed", None)
+
+
+def test_export_parquet_stage_failure_marks_snapshot_failed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot="CC-MAIN-2024-31")
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+    monkeypatch.setattr(
+        run_stage.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=7, stdout="", stderr="export failed"),
+    )
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "export_parquet",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+            "--part-size-mb",
+            "1024",
+        ]
+    )
+    assert code == 1
+    assert fake_db.stage_updates[0][:3] == ("CC-MAIN-2024-31", "export_parquet", "running")
+    assert fake_db.stage_updates[1][:3] == ("CC-MAIN-2024-31", "export_parquet", "failed")
+    assert "export failed" in str(fake_db.stage_updates[1][4] or "")
+    assert fake_db.snapshot_updates[-1][0] == "CC-MAIN-2024-31"
+    assert fake_db.snapshot_updates[-1][1] == "failed"
+
+
+def test_export_parquet_stage_exits_cleanly_when_no_ready_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb(snapshot=None, stage_snapshot=None)
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+    monkeypatch.setattr(run_stage.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    repo = tmp_path / "oscar-corpus-extractor"
+    artifacts = tmp_path / "artifacts"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    code = run_stage.main(
+        [
+            "--stage",
+            "export_parquet",
+            "--repo-path",
+            str(repo),
+            "--artifacts-dir",
+            str(artifacts),
+        ]
+    )
+    assert code == 0
+    assert fake_db.stage_claim_args == [("export_parquet", "download_ranges")]
+    assert calls == []
+    assert fake_db.stage_updates == []
+    assert fake_db.snapshot_updates == []
