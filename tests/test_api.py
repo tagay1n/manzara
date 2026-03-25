@@ -499,6 +499,18 @@ def test_gemini_reset_key_and_reset_all_clear_exhaustion(test_client, monkeypatc
     assert all(bool(item.get("exhausted")) is False for item in rows_after_all if item.get("model_name"))
 
 
+def test_gemini_reset_key_rejects_missing_or_blank_key_id(test_client) -> None:
+    client, _main_app = test_client
+
+    missing = client.post("/api/gemini/reset-key", json={})
+    assert missing.status_code == 400
+    assert missing.json()["detail"] == "key_id is required"
+
+    blank = client.post("/api/gemini/reset-key", json={"key_id": "   "})
+    assert blank.status_code == 400
+    assert blank.json()["detail"] == "key_id is required"
+
+
 def test_gemini_400_rejection_does_not_exhaust_or_pause_key(test_client, monkeypatch) -> None:
     _client, main_app = test_client
     monkeypatch.setattr(
