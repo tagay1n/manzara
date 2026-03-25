@@ -28,6 +28,22 @@ def register_library_normalization_routes(
             raise HTTPException(status_code=404, detail="Normalization entity type not found")
         return normalized
 
+    def _parse_suggestion_ids(payload: Dict[str, Any]) -> list[int]:
+        raw_value = payload.get("suggestion_ids")
+        if raw_value is None:
+            return []
+        if not isinstance(raw_value, (list, tuple, set)):
+            raise HTTPException(status_code=400, detail="suggestion_ids must be integers")
+        suggestion_ids: list[int] = []
+        for item in raw_value:
+            if str(item).strip() == "":
+                continue
+            try:
+                suggestion_ids.append(int(item))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="suggestion_ids must be integers") from exc
+        return suggestion_ids
+
     @app.get("/api/library/normalization/{entity_type}")
     def get_library_normalization(entity_type: str) -> JSONResponse:
         """Return normalization workbench summary payload."""
@@ -121,8 +137,7 @@ def register_library_normalization_routes(
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="confidence must be a number")
 
-        suggestion_ids_raw = payload.get("suggestion_ids") or []
-        suggestion_ids = [int(item) for item in suggestion_ids_raw if str(item).strip()]
+        suggestion_ids = _parse_suggestion_ids(payload)
 
         try:
             result = operations.link_alias(
@@ -150,8 +165,7 @@ def register_library_normalization_routes(
         normalized = _require_normalization_entity(entity_type)
         raw_name = str(payload.get("raw_name") or "").strip()
         display_name = str(payload.get("display_name") or "").strip()
-        suggestion_ids_raw = payload.get("suggestion_ids") or []
-        suggestion_ids = [int(item) for item in suggestion_ids_raw if str(item).strip()]
+        suggestion_ids = _parse_suggestion_ids(payload)
         if not raw_name:
             raise HTTPException(status_code=400, detail="raw_name is required")
         if not display_name:
@@ -182,8 +196,7 @@ def register_library_normalization_routes(
         raw_name = str(payload.get("raw_name") or "").strip()
         if not raw_name:
             raise HTTPException(status_code=400, detail="raw_name is required")
-        suggestion_ids_raw = payload.get("suggestion_ids") or []
-        suggestion_ids = [int(item) for item in suggestion_ids_raw if str(item).strip()]
+        suggestion_ids = _parse_suggestion_ids(payload)
 
         try:
             result = operations.reject_alias(

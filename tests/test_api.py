@@ -1048,6 +1048,28 @@ def test_library_normalization_link_decision_endpoint(test_client, monkeypatch) 
     assert payload["event"]["event_id"] == 4
 
 
+def test_library_normalization_link_rejects_invalid_suggestion_ids(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.post(
+        "/api/library/normalization/personality/decisions/link",
+        json={"raw_name": "Тукай", "canonical_id": 9, "suggestion_ids": ["bad"]},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "suggestion_ids must be integers"
+
+
+def test_library_normalization_reject_rejects_invalid_suggestion_ids(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.post(
+        "/api/library/normalization/personality/decisions/reject",
+        json={"raw_name": "Тукай", "suggestion_ids": ["bad"]},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "suggestion_ids must be integers"
+
+
 def test_library_normalization_refresh_suggestions_endpoint(test_client, monkeypatch) -> None:
     client, main_app = test_client
 
