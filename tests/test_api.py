@@ -40,6 +40,7 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     panels = {panel["panel_id"]: panel for panel in payload["panels"]}
     assert "shayan" in panels
     assert "maintenance" in panels
+    assert "oscar" in panels
 
     shayan = panels["shayan"]
     task_ids = {task["task_id"] for task in shayan["tasks"]}
@@ -53,6 +54,12 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     assert "maintenance.pgbackrest_backup_full" in maintenance_task_ids
     assert "maintenance.pgbackrest_backup_incr" in maintenance_task_ids
     assert "maintenance.monocorpus_meta_evaluate" not in maintenance_task_ids
+
+    oscar = panels["oscar"]
+    oscar_task_ids = {task["task_id"] for task in oscar["tasks"]}
+    assert "oscar.resolve_offsets_local" in oscar_task_ids
+    assert "oscar.download_ranges" in oscar_task_ids
+    assert "oscar.export_parquet" in oscar_task_ids
 
     library = panels["library"]
     library_task_ids = {task["task_id"] for task in library["tasks"]}
@@ -84,6 +91,7 @@ def test_rename_flow_and_task_title(test_client) -> None:
     main_app.state.db.seed_panels(main_app._PANEL_DEFS)
     main_app.state.db.seed_tasks(main_app.shayan_task_definitions(main_app.state.settings.shayan))
     main_app.state.db.seed_tasks(main_app.maintenance_task_definitions(main_app.state.settings.maintenance))
+    main_app.state.db.seed_tasks(main_app.oscar_task_definitions(main_app.state.settings.oscar))
 
     payload_after_seed = client.get("/api/dashboard").json()
     panels_after_seed = {panel["panel_id"]: panel for panel in payload_after_seed["panels"]}
@@ -145,7 +153,7 @@ def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
     assert response.status_code == 200
     payload = response.json()
     flow_ids = {flow["panel_id"] for flow in payload["flows"]}
-    assert {"shayan", "maintenance", "library"} <= flow_ids
+    assert {"shayan", "maintenance", "oscar", "library"} <= flow_ids
 
     shayan = next(item for item in payload["flows"] if item["panel_id"] == "shayan")
     task_ids = {task["task_id"] for task in shayan["tasks"]}

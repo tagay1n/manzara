@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, text
 
 from app.db import ACTIVE_STATUSES, ACTIVE_WORKFLOW_STATUSES
 from app.modules.maintenance.config import MaintenanceSettings
+from app.modules.oscar.config import OscarSettings
 from app.modules.shayan.config import ShayanSettings
 from app.settings import Settings
 
@@ -199,11 +200,17 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
         monocorpus_repo_path=tmp_path / "monocorpus",
         pgbackrest_stanza="monocorpus",
     )
+    oscar = OscarSettings(
+        repo_path=tmp_path / "oscar-corpus-extractor",
+        artifacts_dir=tmp_path / ".manzara" / "oscar",
+        parquet_part_size_mb=1024,
+    )
     settings = Settings(
         database_url=database_url,
         database_schema=schema_name,
         shayan=shayan,
         maintenance=maintenance,
+        oscar=oscar,
         scheduler_enabled=False,
     )
 

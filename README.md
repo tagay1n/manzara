@@ -14,7 +14,7 @@ Current architecture:
 - FastAPI backend
 - PostgreSQL state store (tasks, runs, logs, events, workflows, schedules)
 - Schema management via Alembic migrations (no runtime DDL bootstrap)
-- Modular flows in one monorepo (`shayan`, `maintenance`, `library`)
+- Modular flows in one monorepo (`shayan`, `maintenance`, `oscar`, `library`)
 - Live updates via SSE (`/api/events/stream`)
 
 ## UI Reference
@@ -47,6 +47,9 @@ Flow tasks (seeded at startup):
 - `maintenance.monocorpus_sync`
 - `maintenance.pgbackrest_backup_full`
 - `maintenance.pgbackrest_backup_incr`
+- `oscar.resolve_offsets_local`
+- `oscar.download_ranges`
+- `oscar.export_parquet`
 - `maintenance.monocorpus_meta_evaluate`
 - `library.personality_suggestions_refresh`
 - `library.publisher_suggestions_refresh`
@@ -122,6 +125,9 @@ Environment variables:
 - `SHAYAN_ARTIFACTS_DIR` (default: `~/.manzara/shayan`)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 - `PG_BACKREST_STANZA` (default: `monocorpus`)
+- `OSCAR_REPO_PATH` (default: `/home/tans1q/projects/oscar-corpus-extractor`)
+- `OSCAR_ARTIFACTS_DIR` (default: `~/.manzara/oscar`)
+- `OSCAR_PARQUET_PART_SIZE_MB` (default: `1024`)
 
 Embedded runtimes read YAML config in this order:
 1. `MANZARA_CONFIG_PATH` (if set)

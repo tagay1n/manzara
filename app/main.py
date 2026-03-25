@@ -81,6 +81,8 @@ from app.modules.shayan.tasks import shayan_task_definitions
 from app.modules.shayan.workflow import (
     shayan_workflow_bundle,
 )
+from app.modules.oscar.panel import build_oscar_panel
+from app.modules.oscar.tasks import oscar_task_definitions
 from app.settings import Settings, load_settings
 from app.tasks import TaskRunner
 from app.workflows import WorkflowService
@@ -96,6 +98,7 @@ _SLUG_CLEAN_PATTERN = re.compile(r"[^\w-]+", flags=re.UNICODE)
 _PANEL_DEFS = [
     {"panel_id": "shayan", "title": "Shayan"},
     {"panel_id": "maintenance", "title": "Maintenance"},
+    {"panel_id": "oscar", "title": "Oscar"},
     {"panel_id": "library", "title": "Library"},
 ]
 
@@ -130,6 +133,7 @@ def on_startup() -> None:
     task_defs = [
         *shayan_task_definitions(state.settings.shayan),
         *maintenance_task_definitions(state.settings.maintenance),
+        *oscar_task_definitions(state.settings.oscar),
     ]
     state.db.seed_tasks(task_defs)
     state.db.seed_workflow_bundle(shayan_workflow_bundle(state.settings.shayan))
@@ -401,6 +405,12 @@ def build_dashboard_payload() -> Dict[str, Any]:
         tasks=tasks_by_panel.get("library", []),
         title=panel_titles.get("library", "Library"),
     )
+    oscar_panel = build_oscar_panel(
+        db=state.db,
+        oscar=state.settings.oscar,
+        tasks=tasks_by_panel.get("oscar", []),
+        title=panel_titles.get("oscar", "Oscar"),
+    )
 
     active_runs = state.db.list_active_runs()
     stop_all_state = "disabled"
@@ -432,7 +442,7 @@ def build_dashboard_payload() -> Dict[str, Any]:
             "failed_runs": len([r for r in state.db.list_recent_runs(50) if r["status"] == "failed"]),
             "stop_all_state": stop_all_state,
         },
-        "panels": [shayan_panel, maintenance_panel, library_panel],
+        "panels": [shayan_panel, maintenance_panel, oscar_panel, library_panel],
         "recent_runs": recent_runs,
         "scheduler": {
             "enabled": state.settings.scheduler_enabled,

@@ -13,6 +13,7 @@ from app.modules.maintenance.config import (
     MaintenanceSettings,
     load_maintenance_settings,
 )
+from app.modules.oscar.config import OscarSettings, load_oscar_settings
 from app.modules.shayan.config import ShayanSettings, load_shayan_settings
 
 
@@ -24,6 +25,7 @@ class Settings:
     database_schema: str
     shayan: ShayanSettings
     maintenance: MaintenanceSettings
+    oscar: OscarSettings
     scheduler_enabled: bool
 
 
@@ -85,5 +87,6 @@ def load_settings() -> Settings:
         database_schema=database_schema,
         shayan=load_shayan_settings(),
         maintenance=load_maintenance_settings(),
+        oscar=load_oscar_settings(),
         scheduler_enabled=scheduler_enabled,
     )
