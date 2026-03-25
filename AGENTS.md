@@ -87,7 +87,7 @@ Notes:
 - Keep flow modules isolated (`app/modules/<flow>/...`) with clear ownership boundaries.
 - No silent failures: surface actionable error context in run state, logs, and SSE events.
 - Logging/observability is mandatory for task execution paths:
-  - Every task run must have a dedicated artifact log file under `_artifacts/task_runs/<task_id>/run-<run_id>.log`.
+  - Every task run must have a dedicated artifact log file under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...` when overridden).
   - Use one uniform structured line format for runtime-emitted lines: timestamp, level, run/task/panel/source context, message.
   - Persist user-visible stdout/stderr lines to DB logs and mirror them into artifact run logs with context metadata.
   - Include explicit start/final status lines in runtime logs so long-running task outcomes are auditable offline.

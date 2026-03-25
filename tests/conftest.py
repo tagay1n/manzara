@@ -33,7 +33,7 @@ def _test_task_defs(shayan: ShayanSettings):
                 "mode": "shell",
                 "value": (
                     "python3 -c \"import pathlib; "
-                    "p=pathlib.Path('_artifacts/snapshots/latest.json'); "
+                    f"p=pathlib.Path({shayan.latest_snapshot_file.as_posix()!r}); "
                     "p.parent.mkdir(parents=True, exist_ok=True); "
                     "p.write_text('{\\\"entries\\\": {}}', encoding='utf-8'); "
                     "print('scan-ok')\""
@@ -166,7 +166,7 @@ def test_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Tup
     schema_name = f"manzara_test_{uuid.uuid4().hex[:10]}"
 
     shayan_repo = tmp_path / "shayan"
-    artifacts = shayan_repo / "_artifacts"
+    artifacts = tmp_path / ".manzara" / "shayan"
     snapshots = artifacts / "snapshots"
     snapshots.mkdir(parents=True, exist_ok=True)
     (artifacts / "status.json").write_text("{}", encoding="utf-8")

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, TextIO
 
+from app.artifacts import task_runs_dir
 from app.db import Database
 from app.runtime_states import (
     TASK_RUN_STATUS_FAILED,
@@ -102,7 +103,7 @@ class TaskRunner:
         self.db = db
         self._lock = threading.Lock()
         self._processes: Dict[int, ProcessHandle] = {}
-        self._artifacts_root = Path(__file__).resolve().parent.parent / "_artifacts" / "task_runs"
+        self._artifacts_root = task_runs_dir()
         self._artifacts_root.mkdir(parents=True, exist_ok=True)
 
     def check_task_start(

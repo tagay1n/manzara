@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.artifacts import flow_artifacts_dir
+
 
 @dataclass(frozen=True)
 class ShayanSettings:
@@ -25,11 +27,15 @@ def load_shayan_settings() -> ShayanSettings:
 
     repo_path = Path(os.environ.get("SHAYAN_REPO_PATH", str(repo_default))).expanduser()
     output_path = Path(os.environ.get("SHAYAN_OUTPUT_PATH", str(output_default))).expanduser()
+    artifacts_dir = Path(
+        os.environ.get("SHAYAN_ARTIFACTS_DIR", str(flow_artifacts_dir("shayan")))
+    ).expanduser()
+    (artifacts_dir / "snapshots").mkdir(parents=True, exist_ok=True)
 
     return ShayanSettings(
         repo_path=repo_path,
         output_path=output_path,
-        status_file=repo_path / "_artifacts" / "status.json",
-        summary_file=repo_path / "_artifacts" / "last-main-run-summary.json",
-        latest_snapshot_file=repo_path / "_artifacts" / "snapshots" / "latest.json",
+        status_file=artifacts_dir / "status.json",
+        summary_file=artifacts_dir / "last-main-run-summary.json",
+        latest_snapshot_file=artifacts_dir / "snapshots" / "latest.json",
     )

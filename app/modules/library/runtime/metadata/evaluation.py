@@ -35,6 +35,7 @@ from app.gemini_runtime import (
     GeminiServerPauseError,
 )
 from app.settings import load_settings
+from app.artifacts import flow_artifacts_dir
 from integrations.gemini import create_client, gemini_api, stream_text
 from integrations.s3 import create_session
 from dirs import Dirs
@@ -58,7 +59,7 @@ LEGAL_DOC_PATTERNS = [
     re.compile(r"^(?=.*common_crawl)(?=.*npa_ta_).*\.pdf$"),
     re.compile(r"^(?=.*pdf законов с pravo\.gov).*\.pdf$"),
 ]
-ARTIFACTS_DIR = "_artifacts"
+ARTIFACTS_DIR = str(flow_artifacts_dir("library"))
 UNPROCESSABLES_DIR = os.path.join(ARTIFACTS_DIR, "unprocessables")
 DEFAULT_KNOWN_CLASSIFICATIONS_LIMIT = 500
 HIGH_DEMAND_SLEEP_SECONDS = 60
@@ -598,8 +599,10 @@ class Channel:
 
     def _load_file(self, dir_name: str, file_name: str) -> set[str]:
         candidates = [os.path.join(dir_name, file_name)]
-        if dir_name.startswith(f"{ARTIFACTS_DIR}/"):
-            candidates.append(os.path.join(dir_name.removeprefix(f"{ARTIFACTS_DIR}/"), file_name))
+        leaf_dir = os.path.basename(dir_name.rstrip("/"))
+        if leaf_dir:
+            candidates.append(os.path.join("_artifacts", leaf_dir, file_name))
+            candidates.append(os.path.join(leaf_dir, file_name))
 
         loaded = set()
         for file_path in candidates:

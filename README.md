@@ -69,7 +69,7 @@ Runtime control behavior:
 - Task toggle: `start -> graceful stop -> force stop`
 - Header stop-all button: first press graceful, second press force
 - Run logs stream into DB and are visible in UI
-- Each run also writes a dedicated artifact log file under `_artifacts/task_runs/<task_id>/run-<run_id>.log`
+- Each run also writes a dedicated artifact log file under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...` when overridden)
 
 Library data tooling currently includes:
 - Classification views and merge/normalization previews
@@ -116,8 +116,10 @@ Environment variables:
 - `MANZARA_DB_SCHEMA` (default: `monocorpus`)
 - `MANZARA_ENABLE_SCHEDULER` (default: `1`; set `0` to disable scheduler)
 - `MANZARA_CONFIG_PATH` (optional explicit YAML config path for embedded runtimes)
+- `MANZARA_ARTIFACTS_ROOT` (default: `~/.manzara`; shared artifact root)
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
 - `SHAYAN_OUTPUT_PATH` (default: `/home/tans1q/video-archive`)
+- `SHAYAN_ARTIFACTS_DIR` (default: `~/.manzara/shayan`)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 - `PG_BACKREST_STANZA` (default: `monocorpus`)
 
@@ -191,8 +193,8 @@ sudo -u postgres psql -d postgres -c "REVOKE pg_read_all_settings FROM tans1q;"
 Inspect artifact run logs:
 
 ```bash
-ls -lah _artifacts/task_runs
-tail -f _artifacts/task_runs/<task_id>/run-<run_id>.log
+ls -lah ~/.manzara/task_runs
+tail -f ~/.manzara/task_runs/<task_id>/run-<run_id>.log
 ```
 
 Artifact log line standard:
