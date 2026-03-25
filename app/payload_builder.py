@@ -8,6 +8,8 @@ from typing import Any, Callable, Dict, Iterable, Optional
 
 from fastapi import HTTPException
 
+from app.contracts import PayloadBuilderOperations
+
 
 class PayloadBuilder:
     """Compose API payloads from DB/runtime state using injected operations."""
@@ -20,7 +22,7 @@ class PayloadBuilder:
         normalization_entity_types: Iterable[str],
         slug_separator_pattern: re.Pattern[str],
         slug_clean_pattern: re.Pattern[str],
-        ops_provider: Callable[[], Dict[str, Any]],
+        ops_provider: Callable[[], PayloadBuilderOperations],
     ) -> None:
         self._state_provider = state_provider
         self._panel_defs_provider = panel_defs_provider
@@ -32,7 +34,7 @@ class PayloadBuilder:
     def _state(self) -> Any:
         return self._state_provider()
 
-    def _ops(self) -> Dict[str, Any]:
+    def _ops(self) -> PayloadBuilderOperations:
         return self._ops_provider()
 
     def _slugify(self, value: Any) -> str:

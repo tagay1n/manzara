@@ -81,7 +81,6 @@ def register_stream_routes(
         after_event_id: int = Query(0, ge=0),
     ) -> StreamingResponse:
         """Server-Sent Events stream for near-real-time dashboard updates."""
-        state = state_provider()
         header_last_event: Optional[str] = request.headers.get("last-event-id")
         cursor = after_event_id
         if header_last_event is not None:

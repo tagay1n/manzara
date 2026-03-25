@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable
+from typing import Iterable
 
 from fastapi import FastAPI
 
+from app.contracts import (
+    ClassificationOperationsProvider,
+    EntitiesOperationsProvider,
+    NormalizationOperationsProvider,
+    RoutePayloadBuildersProvider,
+    StateProvider,
+    StreamRouteHandlers,
+)
+from app.dependencies import build_core_read_payload_builders
 from app.control_routes import register_control_routes
 from app.core_read_routes import register_core_read_routes
 from app.library_classification_routes import register_library_classification_routes
@@ -19,17 +28,17 @@ from app.stream_routes import register_stream_routes
 def register_app_routes(
     app: FastAPI,
     *,
-    state_provider: Callable[[], Any],
+    state_provider: StateProvider,
     static_dir: Path,
     normalization_entity_types: Iterable[str],
     title_max_length: int,
     sse_poll_interval_seconds: float,
     sse_heartbeat_every_empty_polls: int,
-    payload_provider: Callable[[], Dict[str, Callable[..., Dict[str, Any]]]],
-    normalization_operations_provider: Callable[[], Dict[str, Callable[..., Any]]],
-    classification_operations_provider: Callable[[], Dict[str, Callable[..., Any]]],
-    entities_operations_provider: Callable[[], Dict[str, Callable[..., Any]]],
-) -> Dict[str, Any]:
+    payload_provider: RoutePayloadBuildersProvider,
+    normalization_operations_provider: NormalizationOperationsProvider,
+    classification_operations_provider: ClassificationOperationsProvider,
+    entities_operations_provider: EntitiesOperationsProvider,
+) -> StreamRouteHandlers:
     """Register all application routes and return stream route handlers."""
     register_page_routes(
         app,
@@ -51,9 +60,9 @@ def register_app_routes(
         app,
         state_provider=state_provider,
         normalization_entity_types=normalization_entity_types,
-        build_normalization_payload=lambda entity_type: payload_provider()[
-            "build_normalization_payload"
-        ](entity_type),
+        build_normalization_payload=lambda entity_type: payload_provider()["build_normalization_payload"](
+            entity_type
+        ),
         operations_provider=normalization_operations_provider,
     )
     register_library_classification_routes(
@@ -73,14 +82,6 @@ def register_app_routes(
     )
     register_core_read_routes(
         app,
-        payload_provider=lambda: {
-            "build_dashboard_payload": payload_provider()["build_dashboard_payload"],
-            "build_schedules_payload": payload_provider()["build_schedules_payload"],
-            "build_tasks_payload": payload_provider()["build_tasks_payload"],
-            "build_task_detail_payload": payload_provider()["build_task_detail_payload"],
-            "build_flow_detail_payload": payload_provider()["build_flow_detail_payload"],
-            "build_library_payload": payload_provider()["build_library_payload"],
-            "build_database_state_payload": payload_provider()["build_database_state_payload"],
-        },
+        payload_provider=lambda: build_core_read_payload_builders(payload_provider()),
     )
     return stream_route_handlers
