@@ -6,9 +6,7 @@ const state = {
   eventCursor: 0,
   eventStreamController: null,
   selectedRunId: null,
-  logRunId: null,
-  logAfterId: 0,
-  logPollTimer: null,
+  logViewer: null,
   soundNotifier: null,
 };
 
@@ -262,50 +260,17 @@ async function stopAll() {
   queueRefresh(0);
 }
 
-async function fetchLogs() {
-  if (!state.logRunId) return;
-  const response = await api(
-    `/api/runs/${state.logRunId}/logs?after_log_id=${state.logAfterId}&limit=400`
-  );
-  const content = document.getElementById("log-content");
-  for (const line of response.lines) {
-    content.textContent += `${line.line}\n`;
-  }
-  state.logAfterId = response.next_after_log_id;
-  content.scrollTop = content.scrollHeight;
-}
-
-async function openLogs(runId, taskTitle) {
-  state.logRunId = runId;
-  state.logAfterId = 0;
-  document.getElementById("log-title").textContent = `Logs • ${taskTitle} • run ${runId}`;
-  document.getElementById("log-content").textContent = "";
-  const dialog = document.getElementById("log-dialog");
-  if (!dialog.open) {
-    dialog.showModal();
-  }
-
-  await fetchLogs();
-
-  if (state.logPollTimer) {
-    clearInterval(state.logPollTimer);
-  }
-  state.logPollTimer = setInterval(() => {
-    fetchLogs().catch((error) => console.error(error));
-  }, 1500);
-}
-
-function closeLogs() {
-  const dialog = document.getElementById("log-dialog");
-  if (dialog.open) {
-    dialog.close();
-  }
-  if (state.logPollTimer) {
-    clearInterval(state.logPollTimer);
-    state.logPollTimer = null;
-  }
-  state.logRunId = null;
-  state.logAfterId = 0;
+function initLogViewer() {
+  state.logViewer = window.ManzaraCore.createRunLogViewer({
+    api,
+    dialogNode: document.getElementById("log-dialog"),
+    titleNode: document.getElementById("log-title"),
+    contentNode: document.getElementById("log-content"),
+    tailLimit: 400,
+    followLimit: 400,
+    backfillLimit: 400,
+    pollIntervalMs: 1500,
+  });
 }
 
 function setupEventStream() {
@@ -349,13 +314,17 @@ function attachUiHandlers() {
     if (!btn) return;
     const runId = Number(btn.dataset.runId || 0);
     if (!runId) return;
-    openLogs(runId, state.payload?.task?.title || state.taskId).catch((error) =>
+    state.logViewer?.open(runId, state.payload?.task?.title || state.taskId).catch((error) =>
       console.error(error)
     );
   });
 
-  document.getElementById("close-logs").addEventListener("click", closeLogs);
-  document.getElementById("log-dialog").addEventListener("close", closeLogs);
+  document.getElementById("close-logs").addEventListener("click", () => {
+    state.logViewer?.close();
+  });
+  document.getElementById("log-dialog").addEventListener("close", () => {
+    state.logViewer?.close({ closeDialog: false });
+  });
 
   document.getElementById("copy-logs").addEventListener("click", async () => {
     const text = document.getElementById("log-content").textContent;
@@ -370,9 +339,11 @@ async function bootstrap() {
   }
 
   initSoundNotifier();
+  initLogViewer();
   window.addEventListener("beforeunload", () => {
     teardownSoundNotifier();
-    closeLogs();
+    state.logViewer?.destroy();
+    state.logViewer = null;
     if (state.eventStreamController) {
       state.eventStreamController.stop();
       state.eventStreamController = null;

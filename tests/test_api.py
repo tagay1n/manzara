@@ -828,6 +828,53 @@ def test_toggle_task_start_and_complete(test_client, wait_for_terminal_run) -> N
     assert any("quick-ok" in line["line"] for line in logs)
 
 
+def test_run_logs_support_tail_and_backfill_pagination(test_client) -> None:
+    client, main_app = test_client
+    task = main_app.state.db.get_task("shayan.quick")
+    assert task is not None
+    run_id = main_app.state.db.create_run(task)
+    main_app.state.db.mark_run_started(run_id, pid=99999)
+    for index in range(1, 21):
+        main_app.state.db.append_log(run_id, "stdout", f"line-{index:02d}")
+    main_app.state.db.finish_run(run_id, "completed", 0, None)
+
+    all_payload = client.get(f"/api/runs/{run_id}/logs?limit=2000")
+    assert all_payload.status_code == 200
+    all_lines = all_payload.json()["lines"]
+    assert len(all_lines) >= 20
+    all_ids = [int(item["log_id"]) for item in all_lines]
+
+    tail_payload = client.get(f"/api/runs/{run_id}/logs?tail=true&limit=5")
+    assert tail_payload.status_code == 200
+    tail = tail_payload.json()
+    tail_ids = [int(item["log_id"]) for item in tail["lines"]]
+    assert tail_ids == all_ids[-5:]
+    assert int(tail["next_after_log_id"]) == all_ids[-1]
+    assert int(tail["next_before_log_id"]) == all_ids[-5]
+    assert tail["has_more_before"] is True
+
+    backfill_payload = client.get(
+        f"/api/runs/{run_id}/logs?before_log_id={tail['next_before_log_id']}&limit=4"
+    )
+    assert backfill_payload.status_code == 200
+    backfill = backfill_payload.json()
+    backfill_ids = [int(item["log_id"]) for item in backfill["lines"]]
+    assert backfill_ids == all_ids[-9:-5]
+    assert int(backfill["next_after_log_id"]) == all_ids[-6]
+    assert int(backfill["next_before_log_id"]) == all_ids[-9]
+    assert backfill["has_more_before"] is True
+
+
+def test_run_logs_reject_conflicting_cursor_modes(test_client) -> None:
+    client, main_app = test_client
+    task = main_app.state.db.get_task("shayan.quick")
+    assert task is not None
+    run_id = main_app.state.db.create_run(task)
+
+    conflict = client.get(f"/api/runs/{run_id}/logs?tail=true&after_log_id=10")
+    assert conflict.status_code == 400
+    assert "cannot be combined" in conflict.json()["detail"]
+
 def test_task_run_writes_artifact_log_with_uniform_format(
     test_client,
     wait_for_terminal_run,

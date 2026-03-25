@@ -67,6 +67,12 @@ Notes:
 - Keep rendering safe by default; do not inject unsanitized HTML.
 - Reuse design tokens/components for consistency across pages; avoid one-off styling drift.
 - Add lightweight client observability for failures with route/task/run context where possible.
+- Task/run log viewing must use one shared behavior across the app (not per-page custom logic):
+  - On open, load only the latest `N` lines (tail behavior), not full history.
+  - Keep appending new lines from backend as they arrive (follow behavior).
+  - On upward scroll near the top, load previous `N` lines and prepend while preserving viewport position.
+  - Use cursor-based pagination (for example `before_log_id` / `after_log_id`) instead of offset pagination for large logs.
+  - Keep the log viewer implementation centralized and reused by all task pages/components.
 - Use European date/time presentation in UI by default:
   - 24-hour clock (`HH:mm`, no AM/PM).
   - Day-first date order (`DD.MM.YYYY` where a concrete date string is shown).
@@ -86,6 +92,10 @@ Notes:
   - Persist user-visible stdout/stderr lines to DB logs and mirror them into artifact run logs with context metadata.
   - Include explicit start/final status lines in runtime logs so long-running task outcomes are auditable offline.
   - Keep secrets out of logs (mask/redact credentials and tokens).
+  - Log API access patterns must support efficient tail/follow UX at scale:
+    - Cursor-based forward reads for live follow (`after_log_id`).
+    - Cursor-based backward reads for history backfill (`before_log_id`).
+    - Bounded batch size (`limit`) for both directions.
 
 ## Low-Context Scalability Rules
 These rules apply to both backend and frontend to keep implementation understandable as flows/tasks/pages grow.

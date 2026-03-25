@@ -951,9 +951,48 @@ class Database:
             row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
 
-    def get_logs(self, run_id: int, after_log_id: int = 0, limit: int = 300) -> List[Dict[str, Any]]:
-        """Return run log lines after marker."""
+    def get_logs(
+        self,
+        run_id: int,
+        after_log_id: int = 0,
+        limit: int = 300,
+        *,
+        before_log_id: Optional[int] = None,
+        tail: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Return run log lines using cursor pagination (after/before) or tail mode."""
+        limit = max(1, min(int(limit), 5000))
         with self._connect() as conn:
+            if before_log_id is not None and int(before_log_id) > 0:
+                rows = conn.execute(
+                    """
+                    SELECT log_id, run_id, ts, stream, line
+                    FROM run_logs
+                    WHERE run_id = ? AND log_id < ?
+                    ORDER BY log_id DESC
+                    LIMIT ?
+                    """,
+                    (run_id, int(before_log_id), limit),
+                ).fetchall()
+                lines = [dict(row) for row in rows]
+                lines.reverse()
+                return lines
+
+            if tail:
+                rows = conn.execute(
+                    """
+                    SELECT log_id, run_id, ts, stream, line
+                    FROM run_logs
+                    WHERE run_id = ?
+                    ORDER BY log_id DESC
+                    LIMIT ?
+                    """,
+                    (run_id, limit),
+                ).fetchall()
+                lines = [dict(row) for row in rows]
+                lines.reverse()
+                return lines
+
             rows = conn.execute(
                 """
                 SELECT log_id, run_id, ts, stream, line
@@ -965,6 +1004,20 @@ class Database:
                 (run_id, after_log_id, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def has_logs_before(self, run_id: int, log_id: int) -> bool:
+        """Return True when older logs exist before cursor."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 AS has_row
+                FROM run_logs
+                WHERE run_id = ? AND log_id < ?
+                LIMIT 1
+                """,
+                (run_id, int(log_id)),
+            ).fetchone()
+        return row is not None
 
     def list_active_runs(self) -> List[Dict[str, Any]]:
         """Return active runs across all tasks."""

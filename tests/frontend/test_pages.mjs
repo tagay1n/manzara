@@ -485,6 +485,46 @@ function createHarness({
           },
         };
       },
+      createRunLogViewer(options = {}) {
+        let activeRunId = null;
+        return {
+          async open(runId, taskTitle = "Task") {
+            activeRunId = Number(runId || 0);
+            if (options.titleNode) {
+              options.titleNode.textContent = `Logs • ${taskTitle} • run ${activeRunId}`;
+            }
+            if (options.contentNode) {
+              options.contentNode.textContent = "";
+            }
+            if (options.dialogNode && !options.dialogNode.open) {
+              options.dialogNode.showModal?.();
+            }
+          },
+          close(closeOptions = {}) {
+            activeRunId = null;
+            if (options.contentNode && closeOptions.keepContent !== true) {
+              options.contentNode.textContent = "";
+            }
+            if (closeOptions.closeDialog !== false && options.dialogNode?.open) {
+              options.dialogNode.close?.();
+            }
+          },
+          destroy() {
+            this.close();
+          },
+          async loadOlder() {},
+          async pollFollow() {},
+          getState() {
+            return {
+              activeRunId,
+              nextAfterLogId: 0,
+              nextBeforeLogId: 0,
+              hasMoreBefore: false,
+              bufferedLines: 0,
+            };
+          },
+        };
+      },
     },
   };
 

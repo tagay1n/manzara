@@ -1542,18 +1542,54 @@ def stop_all() -> JSONResponse:
 def run_logs(
     run_id: int,
     after_log_id: int = Query(0, ge=0),
+    before_log_id: Optional[int] = Query(None, gt=0),
+    tail: bool = Query(False),
     limit: int = Query(400, ge=1, le=2000),
 ) -> JSONResponse:
-    """Return logs for one run with incremental pagination."""
+    """Return logs for one run with cursor pagination (after/before/tail)."""
     run = state.db.get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    lines = state.db.get_logs(run_id=run_id, after_log_id=after_log_id, limit=limit)
+
+    if tail and (after_log_id > 0 or before_log_id is not None):
+        raise HTTPException(
+            status_code=400,
+            detail="tail mode cannot be combined with after_log_id or before_log_id",
+        )
+    if before_log_id is not None and after_log_id > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="before_log_id cannot be combined with after_log_id",
+        )
+
+    lines = state.db.get_logs(
+        run_id=run_id,
+        after_log_id=after_log_id,
+        before_log_id=before_log_id,
+        tail=tail,
+        limit=limit,
+    )
+    next_after_log_id = int(lines[-1]["log_id"]) if lines else int(after_log_id or 0)
+    if lines:
+        next_before_log_id = int(lines[0]["log_id"])
+    elif before_log_id is not None:
+        next_before_log_id = int(before_log_id)
+    else:
+        next_before_log_id = 0
+
+    has_more_before = (
+        state.db.has_logs_before(run_id, next_before_log_id)
+        if next_before_log_id > 0
+        else False
+    )
+
     return JSONResponse(
         {
             "run": run,
             "lines": lines,
-            "next_after_log_id": lines[-1]["log_id"] if lines else after_log_id,
+            "next_after_log_id": next_after_log_id,
+            "next_before_log_id": next_before_log_id,
+            "has_more_before": has_more_before,
         }
     )
 

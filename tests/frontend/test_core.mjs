@@ -13,6 +13,7 @@ function loadCore({ fetchImpl, EventSourceImpl, timerApi, documentImpl } = {}) {
     JSON,
     Number,
     encodeURIComponent,
+    URLSearchParams,
     console,
     fetch:
       fetchImpl ||
@@ -34,6 +35,8 @@ function loadCore({ fetchImpl, EventSourceImpl, timerApi, documentImpl } = {}) {
         return 1;
       }),
     clearTimeout: timerApi?.clearTimeout || (() => {}),
+    setInterval: timerApi?.setInterval || (() => 1),
+    clearInterval: timerApi?.clearInterval || (() => {}),
     document:
       documentImpl ||
       {
@@ -330,4 +333,124 @@ test("attachViewState normalizes and mutates shared state", () => {
 
   store.set("invalid");
   assert.equal(state.viewState, "ready");
+});
+
+test("createRunLogViewer uses tail on open then follows and backfills with cursors", async () => {
+  const calls = [];
+  const responses = {
+    tail: {
+      run: { run_id: 77 },
+      lines: [
+        { log_id: 10, line: "line-10" },
+        { log_id: 11, line: "line-11" },
+        { log_id: 12, line: "line-12" },
+      ],
+      next_after_log_id: 12,
+      next_before_log_id: 10,
+      has_more_before: true,
+    },
+    follow: {
+      run: { run_id: 77 },
+      lines: [{ log_id: 13, line: "line-13" }],
+      next_after_log_id: 13,
+      next_before_log_id: 10,
+      has_more_before: true,
+    },
+    backfill: {
+      run: { run_id: 77 },
+      lines: [{ log_id: 9, line: "line-09" }],
+      next_after_log_id: 9,
+      next_before_log_id: 9,
+      has_more_before: false,
+    },
+  };
+
+  const fakeApi = async (path) => {
+    calls.push(path);
+    if (path.includes("tail=true")) return responses.tail;
+    if (path.includes("after_log_id=12")) return responses.follow;
+    if (path.includes("before_log_id=10")) return responses.backfill;
+    throw new Error(`unexpected request: ${path}`);
+  };
+
+  let intervalId = 0;
+  let clearedInterval = 0;
+  const core = loadCore({
+    timerApi: {
+      setInterval(_fn, _ms) {
+        intervalId += 1;
+        return intervalId;
+      },
+      clearInterval(id) {
+        clearedInterval = Number(id || 0);
+      },
+    },
+  });
+
+  const titleNode = { textContent: "" };
+  const listeners = new Map();
+  let text = "";
+  const contentNode = {
+    clientHeight: 100,
+    scrollTop: 0,
+    scrollHeight: 0,
+    addEventListener(type, handler) {
+      listeners.set(type, handler);
+    },
+    removeEventListener(type) {
+      listeners.delete(type);
+    },
+    get textContent() {
+      return text;
+    },
+    set textContent(value) {
+      text = String(value || "");
+      this.scrollHeight = text.length * 2;
+    },
+  };
+  const dialogNode = {
+    open: false,
+    showModal() {
+      this.open = true;
+    },
+    close() {
+      this.open = false;
+    },
+  };
+
+  const viewer = core.createRunLogViewer({
+    api: fakeApi,
+    titleNode,
+    contentNode,
+    dialogNode,
+    tailLimit: 3,
+    followLimit: 2,
+    backfillLimit: 2,
+  });
+
+  await viewer.open(77, "Demo");
+  assert.equal(dialogNode.open, true);
+  assert.equal(titleNode.textContent, "Logs • Demo • run 77");
+  assert.match(contentNode.textContent, /line-10\nline-11\nline-12\n$/);
+  assert.match(calls[0], /\/api\/runs\/77\/logs\?/);
+  assert.match(calls[0], /tail=true/);
+
+  await viewer.pollFollow();
+  assert.match(contentNode.textContent, /line-13\n$/);
+  assert.match(calls[1], /after_log_id=12/);
+
+  await viewer.loadOlder();
+  assert.match(contentNode.textContent, /^line-09\nline-10\n/);
+  assert.match(calls[2], /before_log_id=10/);
+
+  const snapshot = viewer.getState();
+  assert.equal(snapshot.activeRunId, 77);
+  assert.equal(snapshot.nextAfterLogId, 13);
+  assert.equal(snapshot.nextBeforeLogId, 9);
+  assert.equal(snapshot.hasMoreBefore, false);
+
+  viewer.close();
+  assert.equal(dialogNode.open, false);
+  assert.equal(clearedInterval > 0, true);
+  assert.equal(viewer.getState().activeRunId, null);
 });
