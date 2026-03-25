@@ -1,4 +1,7 @@
 gemini:
+  models:
+    library_meta_evaluate: "gemini-3-flash-preview"
+    library_normalization: "gemini-2.5-flash"
   accounts:
     tt:
       - "<REDACTED>"

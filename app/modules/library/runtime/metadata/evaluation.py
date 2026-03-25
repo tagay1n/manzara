@@ -26,6 +26,7 @@ from rich import print
 from sqlalchemy import func, select
 
 from app.db import Database
+from app.gemini_config import DEFAULT_GEMINI_MODELS, load_gemini_models
 from app.gemini_runtime import (
     GeminiAllKeysExhaustedError,
     GeminiQuotaExceededError,
@@ -51,9 +52,6 @@ from .isbn_utils import canonicalize_isbn_values
 from .repository import count_docs_for_evaluation, fetch_docs_for_evaluation, mark_docs_as_non_applicable
 from .url_utils import normalize_url_list
 
-
-MODEL = "gemini-3-flash-preview"
-EVAL_METHOD = f"{MODEL}/v1"
 
 LEGAL_DOC_PATTERNS = [
     re.compile(r"^(?=.*common_crawl)(?=.*npa_ta_).*\.pdf$"),
@@ -84,6 +82,11 @@ MANAGED_TERMSETS = {
     CATEGORY_PATH_TERMSET.casefold(),
     GENRE_TERMSET.casefold(),
 }
+
+
+def _resolve_meta_evaluate_model() -> str:
+    models = load_gemini_models()
+    return str(models.get("library_meta_evaluate") or "").strip() or DEFAULT_GEMINI_MODELS["library_meta_evaluate"]
 
 
 class Evaluation(BaseModel):
@@ -123,6 +126,8 @@ def evaluate(args) -> None:
     settings = load_settings()
     state_db = Database(settings.database_url, schema=settings.database_schema)
     state_db.init_schema()
+    model_name = _resolve_meta_evaluate_model()
+    eval_method = f"{model_name}/v1"
     gemini_manager = GeminiRuntimeManager(
         state_db,
         task_id="maintenance.monocorpus_meta_evaluate",
@@ -168,6 +173,8 @@ def evaluate(args) -> None:
                     known_classifications=known_classifications,
                     stop_event=stop_event,
                     gemini_manager=gemini_manager,
+                    model_name=model_name,
+                    eval_method=eval_method,
                 )
                 thread = threading.Thread(target=worker, name=f"eval-{index + 1}")
                 thread.start()
@@ -329,6 +336,8 @@ class LibraryApplicabilityWorker:
         known_classifications: list[dict[str, Any]] | None = None,
         stop_event: threading.Event | None = None,
         gemini_manager: GeminiRuntimeManager | None = None,
+        model_name: str | None = None,
+        eval_method: str | None = None,
     ):
         self.tasks_queue = tasks_queue
         self.config = config
@@ -341,6 +350,8 @@ class LibraryApplicabilityWorker:
         if gemini_manager is None:
             raise ValueError("gemini_manager is required")
         self.gemini_manager = gemini_manager
+        self.model_name = str(model_name or "").strip() or DEFAULT_GEMINI_MODELS["library_meta_evaluate"]
+        self.eval_method = str(eval_method or "").strip() or f"{self.model_name}/v1"
 
     def __call__(self) -> None:
         while True:
@@ -426,7 +437,7 @@ class LibraryApplicabilityWorker:
             gemini_client = create_client(api_key)
             response, uploaded_files = gemini_api(
                 prompt=prompt,
-                model=MODEL,
+                model=self.model_name,
                 client=gemini_client,
                 files=files,
                 schema=Evaluation,
@@ -465,7 +476,7 @@ class LibraryApplicabilityWorker:
                         self.log(f"Failed to delete uploaded eval file {file.name}: {exc}")
 
         return self.gemini_manager.run_with_key(
-            model_name=MODEL,
+            model_name=self.model_name,
             call=_call,
             max_attempts=2,
         )
@@ -539,7 +550,7 @@ class LibraryApplicabilityWorker:
             metadata = session.get(Metadata, md5)
             if metadata:
                 metadata.lib = bool(evaluation.applicable)
-                metadata.lib_eval_method = EVAL_METHOD
+                metadata.lib_eval_method = self.eval_method
                 if evaluation.applicable and evaluation.library_ddc and evaluation.library_path:
                     metadata.classification_id = _resolve_classification_id(
                         session,

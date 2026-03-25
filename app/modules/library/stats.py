@@ -19,7 +19,6 @@ def _candidate_config_paths() -> Iterable[Path]:
     return (
         REPO_ROOT / "config.local.yaml",
         REPO_ROOT / "config.yaml",
-        REPO_ROOT / "config.example.yaml",
     )
 
 

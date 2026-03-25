@@ -52,7 +52,6 @@ def _load_database_url() -> str:
         candidates = [
             Path("config.local.yaml"),
             Path("config.yaml"),
-            Path("config.example.yaml"),
         ]
 
     for candidate in candidates:

@@ -36,7 +36,6 @@ def read_config(config_file: str = "config.yaml"):
         candidates = [
             REPO_ROOT / "config.local.yaml",
             REPO_ROOT / "config.yaml",
-            REPO_ROOT / "config.example.yaml",
         ]
 
     checked: list[str] = []

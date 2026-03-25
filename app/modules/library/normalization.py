@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from sqlalchemy import text
 
 from app.db import Database
+from app.gemini_config import DEFAULT_GEMINI_MODELS, load_gemini_models
 from app.gemini_runtime import (
     GeminiAllKeysExhaustedError,
     GeminiQuotaExceededError,
@@ -19,6 +20,11 @@ from app.gemini_runtime import (
 from app.modules.library.stats import create_runtime_engine
 
 ENTITY_TYPES = {"personality", "publisher"}
+
+
+def _resolve_normalization_model() -> str:
+    models = load_gemini_models()
+    return str(models.get("library_normalization") or "").strip() or DEFAULT_GEMINI_MODELS["library_normalization"]
 
 
 def _entity_config(entity_type: str) -> Dict[str, Any]:
@@ -1099,10 +1105,11 @@ def _gemini_suggest(
             "Rules: choose link only when semantically same, otherwise create or reject."
         )
 
+        model_name = _resolve_normalization_model()
         response = manager.run_with_key(
-            model_name="gemini-2.5-flash",
+            model_name=model_name,
             call=lambda api_key, _lease: genai.Client(api_key=api_key).models.generate_content(
-                model="gemini-2.5-flash",
+                model=model_name,
                 contents=prompt,
             ),
             max_attempts=2,
@@ -1140,7 +1147,7 @@ def _gemini_suggest(
             "target_canonical_id": target_id,
             "confidence": confidence,
             "confidence_band": _confidence_band(confidence),
-            "model": "gemini-2.5-flash",
+            "model": model_name,
             "rationale": str(parsed.get("rationale") or ""),
         }
     except (GeminiQuotaExceededError, GeminiAllKeysExhaustedError):
@@ -1245,7 +1252,7 @@ def _heuristic_suggestions(
                 target_id = gemini_pick.get("target_canonical_id")
                 confidence = float(gemini_pick.get("confidence") or confidence)
                 rationale = str(gemini_pick.get("rationale") or rationale)
-                model = str(gemini_pick.get("model") or "gemini-2.5-flash")
+                model = str(gemini_pick.get("model") or _resolve_normalization_model())
             gemini_budget -= 1
 
         suggestion = {

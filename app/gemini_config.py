@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
@@ -11,6 +12,10 @@ import yaml
 
 
 _REDACTED_SENTINEL = "<REDACTED>"
+DEFAULT_GEMINI_MODELS: Dict[str, str] = {
+    "library_meta_evaluate": "gemini-3-flash-preview",
+    "library_normalization": "gemini-2.5-flash",
+}
 
 
 @dataclass(frozen=True)
@@ -24,11 +29,13 @@ class GeminiKey:
 
 
 def _candidate_config_paths() -> Sequence[Path]:
+    env_override = str(os.environ.get("MANZARA_CONFIG_PATH") or "").strip()
+    if env_override:
+        return (Path(env_override).expanduser(),)
     repo_root = Path(__file__).resolve().parent.parent
     return (
         repo_root / "config.local.yaml",
         repo_root / "config.yaml",
-        repo_root / "config.example.yaml",
     )
 
 
@@ -149,3 +156,21 @@ def load_gemini_keys() -> List[GeminiKey]:
         return keys
     return list(_iter_legacy_shape(payload))
 
+
+def load_gemini_models() -> Dict[str, str]:
+    """Load Gemini model aliases used by task logic."""
+    payload = _load_config_payload()
+    overrides: Dict[str, str] = {}
+    gemini = payload.get("gemini")
+    if isinstance(gemini, dict):
+        models = gemini.get("models")
+        if isinstance(models, dict):
+            for raw_alias, raw_model in models.items():
+                alias = str(raw_alias or "").strip()
+                model = str(raw_model or "").strip()
+                if alias and model:
+                    overrides[alias] = model
+    return {
+        **DEFAULT_GEMINI_MODELS,
+        **overrides,
+    }

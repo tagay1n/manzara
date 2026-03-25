@@ -148,7 +148,6 @@ Embedded runtimes read YAML config in this order:
 1. `MANZARA_CONFIG_PATH` (if set)
 2. `./config.local.yaml`
 3. `./config.yaml`
-4. `./config.example.yaml` (masked, reference only)
 
 Secrets policy:
 - `config.yaml` and `config.local.yaml` are local-only (gitignored).
@@ -158,6 +157,9 @@ Gemini config (preferred shape):
 
 ```yaml
 gemini:
+  models:
+    library_meta_evaluate: "gemini-3-flash-preview"
+    library_normalization: "gemini-2.5-flash"
   accounts:
     account_a:
       - "AIza..."
