@@ -10,7 +10,7 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 - `N/A`: policy/process requirement, not directly verifiable in code.
 
 ## Automated Baseline (current)
-- `pytest`: `97 passed` (`.venv/bin/python -m pytest -q`)
+- `pytest`: `98 passed` (`.venv/bin/python -m pytest -q`)
 - `frontend tests`: `node --test tests/frontend/*.mjs` passed (`core helpers` + `dashboard/schedules/tasks/task/library/database/classification-list/classification-detail/personality/publisher/normalization page behavior`)
 - `requirements files`: only `requirements.txt` found (`rg --files -g 'requirements*.txt'`)
 
