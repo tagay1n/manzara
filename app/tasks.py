@@ -383,13 +383,13 @@ class TaskRunner:
                 log_thread.start()
 
             exit_code = proc.wait()
+            if log_thread is not None and log_thread.is_alive():
+                log_thread.join(timeout=1.5)
             if proc.stdout is not None:
                 try:
                     proc.stdout.close()
                 except OSError:
                     pass
-            if log_thread is not None and log_thread.is_alive():
-                log_thread.join(timeout=1.5)
 
             final_run = self.db.get_run(run_id)
             stop_mode = final_run.get("stop_mode") if final_run else None
@@ -768,6 +768,8 @@ class TaskRunner:
                     message=safe_line,
                 )
         except Exception as exc:
+            if self._is_benign_log_stream_close(exc):
+                return
             # Do not break task lifecycle on log-stream errors, but emit
             # actionable context for UI/DB/artifact diagnostics.
             error_line = self._sanitize_log_line(f"log_stream_error={exc}")
@@ -791,6 +793,13 @@ class TaskRunner:
                 message=error_line,
             )
             return
+
+    @staticmethod
+    def _is_benign_log_stream_close(exc: Exception) -> bool:
+        text = str(exc or "").strip().lower()
+        if not text:
+            return False
+        return "i/o operation on closed file" in text or "closed file" in text
 
     def _open_run_log(self, task: Dict[str, Any], run_id: int) -> tuple[Optional[TextIO], Optional[str]]:
         task_id = str(task.get("task_id") or "unknown")

@@ -1612,6 +1612,29 @@ def test_stream_stdout_failures_emit_actionable_log_line(test_client) -> None:
     assert "log_stream_error=stream exploded" in combined
 
 
+def test_stream_stdout_closed_file_error_is_ignored(test_client) -> None:
+    _client, main_app = test_client
+    runner = main_app.state.runner
+    task = main_app.state.db.get_task("shayan.quick")
+    assert task is not None
+    run_id = main_app.state.db.create_run(task)
+
+    class _ClosedStream:
+        def __iter__(self):
+            return self
+
+        def __next__(self) -> str:
+            raise ValueError("I/O operation on closed file")
+
+    class _Proc:
+        stdout = _ClosedStream()
+
+    runner._stream_stdout_lines(_Proc(), run_id, task["task_id"], task["panel_id"])
+    logs = main_app.state.db.get_logs(run_id, after_log_id=0, limit=50)
+    combined = "\n".join(str(item.get("line") or "") for item in logs)
+    assert "log_stream_error=" not in combined
+
+
 def test_task_completion_not_blocked_by_open_stdout_fd(test_client, wait_for_terminal_run) -> None:
     client, main_app = test_client
 
