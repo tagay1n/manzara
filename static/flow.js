@@ -311,7 +311,40 @@ function queueRefresh(delayMs = 250) {
   }, delayMs);
 }
 
+function findTaskById(taskId) {
+  const tasks = state.payload?.tasks;
+  if (!Array.isArray(tasks)) return null;
+  return tasks.find((item) => String(item?.task_id || "") === String(taskId || "")) || null;
+}
+
+function applyOptimisticTaskAction(taskId) {
+  const task = findTaskById(taskId);
+  if (!task) return;
+
+  const run = task.run && typeof task.run === "object" ? task.run : {};
+  const status = String(run.status || "idle");
+  if (status === "starting" || status === "running") {
+    task.run = { ...run, status: "stopping_graceful" };
+  } else if (status === "stopping_graceful") {
+    task.run = { ...run, status: "stopping_force" };
+  } else {
+    const nowIso = new Date().toISOString();
+    task.run = {
+      ...run,
+      status: "starting",
+      started_at: run.started_at || nowIso,
+      finished_at: null,
+      exit_code: null,
+      error_text: null,
+    };
+  }
+}
+
 async function toggleTask(taskId) {
+  applyOptimisticTaskAction(taskId);
+  if (state.payload) {
+    renderFlow(state.payload);
+  }
   const result = await api(`/api/tasks/${encodeURIComponent(taskId)}/toggle`, {
     method: "POST",
     body: JSON.stringify({}),

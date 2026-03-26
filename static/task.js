@@ -281,7 +281,50 @@ function queueRefresh(delayMs = 250) {
   }, delayMs);
 }
 
+function applyOptimisticToggleState() {
+  if (!state.payload || !state.payload.task) return;
+  const runs = Array.isArray(state.payload.runs) ? state.payload.runs : [];
+  state.payload.runs = runs;
+  const selected = selectedRun();
+  if (!selected) {
+    const nowIso = new Date().toISOString();
+    const optimisticRun = {
+      run_id: null,
+      status: "starting",
+      started_at: nowIso,
+      finished_at: null,
+      exit_code: null,
+      error_text: null,
+      summary: { status: "starting", message: "Starting..." },
+    };
+    runs.unshift(optimisticRun);
+    state.selectedRunId = optimisticRun.run_id;
+    return;
+  }
+
+  const currentStatus = String(selected.status || "idle");
+  if (currentStatus === "starting" || currentStatus === "running") {
+    selected.status = "stopping_graceful";
+  } else if (currentStatus === "stopping_graceful") {
+    selected.status = "stopping_force";
+  } else {
+    selected.status = "starting";
+    selected.started_at = selected.started_at || new Date().toISOString();
+    selected.finished_at = null;
+    selected.exit_code = null;
+    selected.error_text = null;
+  }
+
+  if (runs.length > 0 && Number(runs[0]?.run_id || 0) === Number(selected.run_id || 0)) {
+    runs[0] = { ...runs[0], ...selected };
+  }
+}
+
 async function toggleTask() {
+  applyOptimisticToggleState();
+  if (state.payload) {
+    renderTaskDetail(state.payload);
+  }
   const result = await api(`/api/tasks/${encodeURIComponent(state.taskId)}/toggle`, {
     method: "POST",
     body: JSON.stringify({}),

@@ -1032,6 +1032,79 @@ test("flow page bootstraps, renders tasks and summaries, and refreshes on SSE", 
   assert.ok(after > before);
 });
 
+test("flow page shows immediate starting state after task toggle click", async () => {
+  const payload = {
+    global: {
+      active_tasks: 0,
+      active_workflows: 0,
+      stop_all_state: "disabled",
+    },
+    flow: {
+      panel_id: "shayan",
+      slug: "shayan",
+      title: "Shayan",
+      description: "Flow summary",
+      stats_cards: [],
+    },
+    tasks: [
+      {
+        task_id: "shayan.scan_changes",
+        slug: "scan-changes",
+        title: "Scan for changes",
+        task_type: "scan",
+        icon_idle: "RefreshCw",
+        icon_running: "Square",
+        run: {
+          run_id: 71,
+          status: "completed",
+          started_at: "2026-03-24T10:00:00Z",
+          finished_at: "2026-03-24T10:00:02Z",
+          exit_code: 0,
+          error_text: null,
+          summary: { status: "completed", message: "Completed." },
+        },
+        runs: [],
+      },
+    ],
+  };
+
+  const harness = createHarness({
+    source: FLOW_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "flow-title",
+      "flow-subtitle",
+      "flow-stat-grid",
+      "flow-task-grid",
+      "last-event",
+      "close-logs",
+      "log-dialog",
+      "copy-logs",
+      "log-title",
+      "log-content",
+    ],
+    locationPathname: "/flows/shayan",
+    apiResolver(path) {
+      if (path === "/api/flows/shayan?limit_per_task=20") {
+        return JSON.parse(JSON.stringify(payload));
+      }
+      if (path === "/api/tasks/shayan.scan_changes/toggle") {
+        return { action: "start" };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  await harness.flush();
+  assert.match(harness.elements.get("flow-task-grid").innerHTML, /Completed/);
+  harness.elements.get("flow-task-grid").dispatch("click", {
+    target: { closest: (selector) => (selector === "button" ? { classList: { contains: (name) => name === "task-toggle" }, dataset: { taskId: "shayan.scan_changes" } } : null) },
+  });
+  await harness.flush();
+  assert.match(harness.elements.get("flow-task-grid").innerHTML, /Starting|data-lucide="square"/);
+});
+
 test("dashboard page renders empty state for panels and runs", async () => {
   const payload = {
     global: {
