@@ -21,7 +21,7 @@ class ShayanSettings:
 def load_shayan_settings() -> ShayanSettings:
     """Load Shayan settings from environment with local defaults."""
     repo_default = Path("/home/tans1q/projects/shayan-video-downloader")
-    output_default = Path("/home/tans1q/video-archive")
+    output_default = Path("~/.manzara/shayan")
 
     repo_path = Path(os.environ.get("SHAYAN_REPO_PATH", str(repo_default))).expanduser()
     output_path = Path(os.environ.get("SHAYAN_OUTPUT_PATH", str(output_default))).expanduser()

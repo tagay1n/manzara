@@ -1969,6 +1969,19 @@ class Database:
             ).scalar()
         return int(value or 0)
 
+    def shayan_manifest_yadisk_uploaded_count(self) -> int:
+        """Return count of manifest entries uploaded to Yandex Disk."""
+        with self._connect() as conn:
+            value = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM shayan_manifest_entries
+                WHERE yadisk_status = 'uploaded'
+                  AND COALESCE(yadisk_uploaded_payload_hash, '') = COALESCE(payload_hash, '')
+                """
+            ).scalar()
+        return int(value or 0)
+
     def replace_shayan_manifest_entries(self, entries: Dict[str, Any]) -> int:
         """Replace Shayan manifest entries with the provided payload map."""
         normalized = _normalize_shayan_entries(entries)
@@ -2014,6 +2027,113 @@ class Database:
                         ),
                     )
         return len(keys)
+
+    def list_shayan_manifest_upload_candidates(
+        self,
+        *,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Return manifest rows that require Yandex Disk upload/re-upload."""
+        row_limit = max(1, min(int(limit), 5000))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    entry_key,
+                    payload_json,
+                    payload_hash,
+                    yadisk_status,
+                    yadisk_uploaded_payload_hash,
+                    yadisk_remote_path,
+                    yadisk_uploaded_at,
+                    yadisk_last_attempt_at,
+                    yadisk_last_error
+                FROM shayan_manifest_entries
+                WHERE NOT (
+                    COALESCE(yadisk_status, 'pending') = 'uploaded'
+                    AND COALESCE(yadisk_uploaded_payload_hash, '') = COALESCE(payload_hash, '')
+                    AND COALESCE(yadisk_remote_path, '') <> ''
+                )
+                ORDER BY updated_at ASC, entry_key ASC
+                LIMIT ?
+                """,
+                (row_limit,),
+            ).fetchall()
+
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            try:
+                parsed = json.loads(str(payload.pop("payload_json") or "{}"))
+            except Exception:
+                parsed = {}
+            payload["payload"] = parsed if isinstance(parsed, dict) else {}
+            result.append(payload)
+        return result
+
+    def mark_shayan_manifest_yadisk_uploaded(
+        self,
+        entry_key: str,
+        *,
+        remote_path: str,
+        payload_hash: str,
+    ) -> int:
+        """Mark one manifest entry as uploaded to Yandex Disk."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE shayan_manifest_entries
+                    SET
+                        yadisk_status = 'uploaded',
+                        yadisk_remote_path = ?,
+                        yadisk_uploaded_payload_hash = ?,
+                        yadisk_uploaded_at = ?,
+                        yadisk_last_attempt_at = ?,
+                        yadisk_last_error = NULL,
+                        updated_at = ?
+                    WHERE entry_key = ?
+                    """,
+                    (
+                        str(remote_path or "").strip() or None,
+                        str(payload_hash or "").strip() or None,
+                        now,
+                        now,
+                        now,
+                        str(entry_key),
+                    ),
+                )
+        return int(cur.rowcount)
+
+    def mark_shayan_manifest_yadisk_failed(
+        self,
+        entry_key: str,
+        *,
+        error_text: str,
+    ) -> int:
+        """Mark one manifest entry Yandex Disk upload as failed."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE shayan_manifest_entries
+                    SET
+                        yadisk_status = 'failed',
+                        yadisk_last_attempt_at = ?,
+                        yadisk_last_error = ?,
+                        updated_at = ?
+                    WHERE entry_key = ?
+                    """,
+                    (
+                        now,
+                        str(error_text or "").strip()[:4000],
+                        now,
+                        str(entry_key),
+                    ),
+                )
+        return int(cur.rowcount)
 
     def get_latest_shayan_snapshot(self) -> Optional[Dict[str, Any]]:
         """Return latest Shayan snapshot header row."""

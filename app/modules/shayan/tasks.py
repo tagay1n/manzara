@@ -30,6 +30,13 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
         + f" --repo-path {repo_path}"
         + f" --output-path {output_path}"
     )
+    upload_cmd = (
+        py_bootstrap
+        + '"$PY_BIN" -m app.modules.shayan.runtime.run_stage'
+        + " --stage upload_yadisk"
+        + f" --repo-path {repo_path}"
+        + f" --output-path {output_path}"
+    )
 
     return [
         {
@@ -51,5 +58,15 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": download_cmd},
+        },
+        {
+            "task_id": "shayan.upload_yadisk",
+            "panel_id": "shayan",
+            "title": "Upload to Yandex Disk",
+            "task_type": "upload",
+            "icon_idle": "CloudUpload",
+            "icon_running": "Square",
+            "cwd": str(app_root),
+            "command": {"mode": "shell", "value": upload_cmd},
         },
     ]

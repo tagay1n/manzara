@@ -54,6 +54,7 @@ Routing note:
 Flow tasks (seeded at startup):
 - `shayan.scan_changes`
 - `shayan.download_new`
+- `shayan.upload_yadisk`
 - `maintenance.monocorpus_sync`
 - `maintenance.pgbackrest_backup_full`
 - `maintenance.pgbackrest_backup_incr`
@@ -99,6 +100,7 @@ Runtime control behavior:
 - Each run also writes a dedicated artifact log file under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...` when overridden)
 - Task and flow pages render run history with backend-provided structured summaries (`runs.summary_json`)
 - Shayan scan/download run summaries include structured task artifacts (for example scan added/changed/removed counts) in `runs.summary_json.artifacts`.
+- Shayan Yandex upload keeps resumable state in `shayan_manifest_entries` (`yadisk_status`, `yadisk_uploaded_payload_hash`, `yadisk_remote_path`, `yadisk_last_error`, timestamps).
 
 Library data tooling currently includes:
 - Classification views and merge/normalization previews
@@ -147,7 +149,9 @@ Environment variables:
 - `MANZARA_CONFIG_PATH` (optional explicit YAML config path for embedded runtimes)
 - `MANZARA_ARTIFACTS_ROOT` (default: `~/.manzara`; shared artifact root)
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
-- `SHAYAN_OUTPUT_PATH` (default: `/home/tans1q/video-archive`)
+- `SHAYAN_OUTPUT_PATH` (default: `~/.manzara/shayan`)
+- `SHAYAN_YADISK_OAUTH_TOKEN` (optional override; defaults to `shayan.yadisk.oauth_token` or `yandex.disk.oauth_token` in YAML)
+- `SHAYAN_YADISK_TARGET_DIR` (optional override; defaults to `shayan.yadisk.target_dir` or `yandex.disk.target_dir` in YAML)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 - `PG_BACKREST_STANZA` (default: `monocorpus`)
 - `OSCAR_REPO_PATH` (default: `/home/tans1q/projects/oscar-corpus-extractor`)
@@ -163,6 +167,14 @@ oscar:
   hf_upload:
     repo: "username/oscar-tt-dataset"
     token: "hf_..."
+```
+
+Optional YAML config for Shayan upload task:
+
+```yaml
+shayan:
+  yadisk:
+    target_dir: "/neurotatarlar/videos/shayan"
 ```
 
 Embedded runtimes read YAML config in this order:

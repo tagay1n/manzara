@@ -27,6 +27,15 @@ def build_shayan_panel(
     latest_download_payload = latest_download_artifacts.get("artifacts") or {}
     downloaded_last_run = int(latest_download_payload.get("downloaded") or 0)
     failed_last_run = int(latest_download_payload.get("failed") or 0)
+    latest_upload_runs = db.list_recent_runs_for_task("shayan.upload_yadisk", limit=10)
+    latest_completed_upload = next(
+        (run for run in latest_upload_runs if str(run.get("status") or "") == "completed"),
+        {},
+    )
+    latest_upload_artifacts = latest_completed_upload.get("summary") or {}
+    latest_upload_payload = latest_upload_artifacts.get("artifacts") or {}
+    uploaded_last_run = int(latest_upload_payload.get("uploaded") or 0)
+    upload_failed_last_run = int(latest_upload_payload.get("failed") or 0)
 
     workflow_items: List[Dict[str, Any]] = []
     for workflow in workflows:
@@ -68,8 +77,11 @@ def build_shayan_panel(
         "title": title,
         "stats": {
             "downloaded_files_total": db.shayan_manifest_entry_count(),
+            "uploaded_to_yadisk_total": db.shayan_manifest_yadisk_uploaded_count(),
             "newly_downloaded_last_run": downloaded_last_run,
             "failed_last_run": failed_last_run,
+            "uploaded_last_run": uploaded_last_run,
+            "upload_failed_last_run": upload_failed_last_run,
             "last_successful_run": db.last_successful_run("shayan"),
             "last_scan": latest_scan.get("generated_at") or latest_scan.get("created_at"),
         },

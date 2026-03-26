@@ -6,17 +6,22 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 import re
 import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
+import yaml
 
 from app.db import Database
 from app.settings import load_settings
 
-STAGES = ["scan_changes", "download_new"]
+from yadisk_client import ConflictResolution, YaDisk
+
+
+STAGES = ["scan_changes", "download_new", "upload_yadisk"]
 ARTIFACTS_PREFIX = "MANZARA_RUN_ARTIFACTS_JSON="
 _EPISODES_SUMMARY_RE = re.compile(
     r"episodes:\s*"
@@ -119,6 +124,83 @@ def _run_id_from_env() -> Optional[int]:
 
 def _emit_artifacts(payload: Dict[str, Any]) -> None:
     print(ARTIFACTS_PREFIX + json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def _contains_redacted(node: Any) -> bool:
+    if isinstance(node, str):
+        return "<REDACTED>" in node
+    if isinstance(node, dict):
+        return any(_contains_redacted(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_contains_redacted(value) for value in node)
+    return False
+
+
+def _load_runtime_config_payload() -> Dict[str, Any]:
+    env_override = str(os.environ.get("MANZARA_CONFIG_PATH") or "").strip()
+    repo_root = Path(__file__).resolve().parents[4]
+    candidates: list[Path]
+    if env_override:
+        candidates = [Path(env_override).expanduser()]
+    else:
+        candidates = [
+            repo_root / "config.local.yaml",
+            repo_root / "config.yaml",
+        ]
+
+    for path in candidates:
+        if not path.exists():
+            continue
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict):
+            continue
+        if _contains_redacted(payload):
+            continue
+        return payload
+    return {}
+
+
+def _lookup_nested(payload: Dict[str, Any], *keys: str) -> Any:
+    node: Any = payload
+    for key in keys:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def _safe_value(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _load_yadisk_upload_settings() -> Tuple[str, str]:
+    payload = _load_runtime_config_payload()
+    token = _safe_value(
+        os.environ.get("SHAYAN_YADISK_OAUTH_TOKEN")
+        or _lookup_nested(payload, "shayan", "yadisk", "oauth_token")
+        or _lookup_nested(payload, "yandex", "disk", "oauth_token")
+    )
+    if not token:
+        raise RuntimeError(
+            "Yandex Disk OAuth token is missing. Set SHAYAN_YADISK_OAUTH_TOKEN "
+            "or configure shayan.yadisk.oauth_token/yandex.disk.oauth_token."
+        )
+
+    target_dir = _safe_value(
+        os.environ.get("SHAYAN_YADISK_TARGET_DIR")
+        or _lookup_nested(payload, "shayan", "yadisk", "target_dir")
+        or _lookup_nested(payload, "yandex", "disk", "target_dir")
+    )
+    if not target_dir:
+        raise RuntimeError(
+            "Yandex Disk target directory is missing. Set SHAYAN_YADISK_TARGET_DIR "
+            "or configure shayan.yadisk.target_dir/yandex.disk.target_dir."
+        )
+    return token, target_dir.rstrip("/")
+
+
+def _create_yadisk_client(token: str) -> YaDisk:
+    return YaDisk(token)
 
 
 def _scan_changes_stage(
@@ -365,6 +447,124 @@ def _download_new_stage(
     return 0
 
 
+def _extract_local_file_path(payload: Dict[str, Any], output_path: Path) -> Optional[Path]:
+    raw = str(payload.get("file") or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return (output_path / candidate).resolve()
+
+
+def _relative_video_path(local_file: Path, output_path: Path) -> str:
+    try:
+        rel = local_file.relative_to(output_path)
+        return rel.as_posix().lstrip("/")
+    except Exception:
+        pass
+    raw = local_file.as_posix()
+    marker = "/videos/"
+    idx = raw.rfind(marker)
+    if idx >= 0:
+        return raw[idx + 1 :].lstrip("/")
+    return local_file.name
+
+
+def _build_remote_upload_path(local_file: Path, output_path: Path, target_dir: str) -> str:
+    rel = _relative_video_path(local_file, output_path)
+    return posixpath.normpath(posixpath.join(target_dir, rel))
+
+
+def _upload_yadisk_stage(
+    *,
+    db: Database,
+    output_path: Path,
+) -> int:
+    try:
+        token, target_dir = _load_yadisk_upload_settings()
+    except Exception as exc:
+        print(f"shayan upload_yadisk: failed settings: {exc}", flush=True)
+        return 1
+
+    client = _create_yadisk_client(token)
+    try:
+        valid = client.check_token()
+    except Exception as exc:
+        print(f"shayan upload_yadisk: token validation failed: {type(exc).__name__}: {exc}", flush=True)
+        return 1
+    if valid is False:
+        print("shayan upload_yadisk: token validation failed: check_token returned false", flush=True)
+        return 1
+
+    candidates = db.list_shayan_manifest_upload_candidates(limit=5000)
+    uploaded = 0
+    failed = 0
+    missing_local = 0
+
+    for item in candidates:
+        entry_key = str(item.get("entry_key") or "").strip()
+        payload_hash = str(item.get("payload_hash") or "").strip()
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        if not entry_key or not payload_hash:
+            continue
+
+        local_file = _extract_local_file_path(payload, output_path)
+        if local_file is None:
+            db.mark_shayan_manifest_yadisk_failed(
+                entry_key,
+                error_text="local_file_missing_in_payload",
+            )
+            failed += 1
+            missing_local += 1
+            continue
+        if not local_file.exists():
+            db.mark_shayan_manifest_yadisk_failed(
+                entry_key,
+                error_text=f"local_file_missing:{local_file}",
+            )
+            failed += 1
+            missing_local += 1
+            continue
+
+        remote_path = _build_remote_upload_path(local_file, output_path, target_dir)
+        remote_dir = posixpath.dirname(remote_path)
+        try:
+            uploaded_path, _remote_md5 = client.upload_or_replace(
+                str(local_file),
+                remote_dir=remote_dir,
+                conflict_resolution=ConflictResolution.REPLACE_IF_DIFFERENT,
+            )
+            db.mark_shayan_manifest_yadisk_uploaded(
+                entry_key,
+                remote_path=str(uploaded_path or remote_path),
+                payload_hash=payload_hash,
+            )
+            uploaded += 1
+        except Exception as exc:
+            db.mark_shayan_manifest_yadisk_failed(
+                entry_key,
+                error_text=f"{type(exc).__name__}: {exc}",
+            )
+            failed += 1
+
+    artifacts = {
+        "kind": "shayan.upload_yadisk_summary",
+        "target_dir": target_dir,
+        "considered": len(candidates),
+        "uploaded": uploaded,
+        "failed": failed,
+        "missing_local": missing_local,
+    }
+    _emit_artifacts(artifacts)
+    print(
+        "shayan upload_yadisk: completed "
+        f"considered={len(candidates)} uploaded={uploaded} failed={failed} missing_local={missing_local}",
+        flush=True,
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     settings = load_settings()
@@ -383,6 +583,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _download_new_stage(
             db=db,
             repo_path=repo_path,
+            output_path=output_path,
+        )
+
+    if args.stage == "upload_yadisk":
+        return _upload_yadisk_stage(
+            db=db,
             output_path=output_path,
         )
 
