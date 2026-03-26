@@ -31,6 +31,20 @@ def _wait_for_status(main_app, run_id: int, expected: set[str], timeout_seconds:
     raise AssertionError(f"Run {run_id} did not reach expected status: {expected}")
 
 
+def test_root_redirects_to_tasks_page(test_client) -> None:
+    client, _main_app = test_client
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code in {302, 307, 308}
+    assert response.headers["location"] == "/tasks"
+
+
+def test_dashboard_page_redirects_to_tasks_page(test_client) -> None:
+    client, _main_app = test_client
+    response = client.get("/dashboard", follow_redirects=False)
+    assert response.status_code in {302, 307, 308}
+    assert response.headers["location"] == "/tasks"
+
+
 def test_dashboard_lists_shayan_tasks(test_client) -> None:
     client, _main_app = test_client
 

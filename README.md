@@ -30,7 +30,6 @@ Manzara is an independent implementation tailored to this repository's workflow 
 ## Current Product Scope
 
 Pages:
-- `/dashboard`
 - `/database`
 - `/gemini`
 - `/schedules`
@@ -45,6 +44,10 @@ Pages:
 - `/library/collections`
 - `/library/normalization/personality`
 - `/library/normalization/publisher`
+
+Routing note:
+- `/` redirects to `/tasks`
+- `/dashboard` redirects to `/tasks` (dashboard page is currently disabled)
 
 Flow tasks (seeded at startup):
 - `shayan.scan_changes`

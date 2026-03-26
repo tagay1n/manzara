@@ -19,12 +19,16 @@ def register_page_routes(
     allowed_normalization = {str(item) for item in normalization_entity_types}
 
     async def _index(_request: Request) -> RedirectResponse:
-        return RedirectResponse(url="/dashboard", status_code=307)
+        return RedirectResponse(url="/tasks", status_code=307)
 
     app.add_api_route("/", _index, methods=["GET"])
 
+    async def _dashboard_redirect(_request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/tasks", status_code=307)
+
+    app.add_api_route("/dashboard", _dashboard_redirect, methods=["GET"])
+
     routes = [
-        ("/dashboard", "dashboard.html"),
         ("/schedules", "schedules.html"),
         ("/tasks", "tasks.html"),
         ("/library", "library.html"),
