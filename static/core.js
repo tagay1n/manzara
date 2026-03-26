@@ -136,6 +136,21 @@
     return value.replace(/[^a-z0-9_-]+/g, "-");
   }
 
+  function toLucideIcon(name, fallback = "play") {
+    const raw = String(name || "").trim();
+    const fallbackName = String(fallback || "play").trim().toLowerCase() || "play";
+    if (!raw) return fallbackName;
+    const normalized = raw
+      .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+      .replaceAll("_", "-")
+      .replace(/\s+/g, "-")
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/-{2,}/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return normalized || fallbackName;
+  }
+
   const VIEW_STATES = {
     LOADING: "loading",
     READY: "ready",
@@ -629,6 +644,7 @@
     api,
     applyPaginationControls,
     cssName,
+    toLucideIcon,
     createTabController,
     createSseController,
     createRunLogViewer,

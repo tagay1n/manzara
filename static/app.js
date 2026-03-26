@@ -60,13 +60,6 @@ function maybeShowTaskActionError(result) {
   }
 }
 
-function lucideName(name) {
-  return String(name)
-    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-    .replaceAll("_", "-")
-    .toLowerCase();
-}
-
 function cssName(name, fallback = "unknown") {
   return window.ManzaraCore.cssName(name, fallback);
 }
@@ -110,7 +103,7 @@ function taskControlModel(task) {
   }
 
   return {
-    icon: lucideName(task.icon_idle),
+    icon: window.ManzaraCore.toLucideIcon(task.icon_idle, "play"),
     title: `Start ${task.title}`,
     btnClass: "",
     disabled: false,

@@ -109,7 +109,11 @@ function toggleButtonModel(task, run) {
   if (status === "starting" || status === "running") {
     return { icon: "square", title: "Request graceful stop", cls: "active" };
   }
-  return { icon: cssName(task.icon_idle, "play"), title: `Start ${task.title}`, cls: "" };
+  return {
+    icon: window.ManzaraCore.toLucideIcon(task.icon_idle, "play"),
+    title: `Start ${task.title}`,
+    cls: "",
+  };
 }
 
 function renderRunList(runs) {

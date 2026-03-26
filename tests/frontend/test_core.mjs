@@ -107,6 +107,15 @@ test("applyStopAllButton renders force/graceful states", () => {
   assert.equal(button.disabled, true);
 });
 
+test("toLucideIcon normalizes camel/snake/space names and falls back", () => {
+  const core = loadCore();
+  assert.equal(core.toLucideIcon("RefreshCw"), "refresh-cw");
+  assert.equal(core.toLucideIcon("refresh_cw"), "refresh-cw");
+  assert.equal(core.toLucideIcon("Refresh Cw"), "refresh-cw");
+  assert.equal(core.toLucideIcon(""), "play");
+  assert.equal(core.toLucideIcon("", "square"), "square");
+});
+
 test("api returns parsed json and raises meaningful HTTP errors", async () => {
   const okCore = loadCore({
     fetchImpl: async () => ({

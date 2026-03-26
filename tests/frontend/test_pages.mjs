@@ -449,6 +449,20 @@ function createHarness({
         if (!value) return fallback;
         return value.replace(/[^a-z0-9_-]+/g, "-");
       },
+      toLucideIcon(name, fallback = "play") {
+        const raw = String(name || "").trim();
+        const fallbackName = String(fallback || "play").trim().toLowerCase() || "play";
+        if (!raw) return fallbackName;
+        const normalized = raw
+          .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+          .replaceAll("_", "-")
+          .replace(/\s+/g, "-")
+          .toLowerCase()
+          .replace(/[^a-z0-9-]+/g, "-")
+          .replace(/-{2,}/g, "-")
+          .replace(/^-+|-+$/g, "");
+        return normalized || fallbackName;
+      },
       isActiveStatus(status) {
         const value = String(status || "");
         return (
@@ -829,6 +843,71 @@ test("task page renders running control state and toggles task endpoint", async 
   assert.equal(toggleCalls.length, 1);
   const detailCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/quick?limit=20");
   assert.ok(detailCalls.length >= 2);
+});
+
+test("task page normalizes idle icon names for lucide glyph rendering", async () => {
+  const detailPayload = {
+    task: {
+      task_id: "shayan.scan_changes",
+      slug: "scan",
+      title: "Scan for changes",
+      task_type: "scan",
+      icon_idle: "RefreshCw",
+    },
+    panel: { title: "Shayan" },
+    stats: {
+      total_runs: 1,
+      status_counts: { completed: 1, failed: 0 },
+      last_success_at: "2026-03-24T10:00:01Z",
+    },
+    runs: [
+      {
+        run_id: 51,
+        status: "completed",
+        started_at: "2026-03-24T10:00:00Z",
+        finished_at: "2026-03-24T10:00:01Z",
+        exit_code: 0,
+        error_text: null,
+        summary: { status: "completed", message: "Done" },
+      },
+    ],
+    global: {
+      active_tasks: 0,
+      active_workflows: 0,
+      stop_all_state: "disabled",
+    },
+  };
+
+  const harness = createHarness({
+    source: TASK_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "task-toggle-btn",
+      "task-title",
+      "task-subtitle",
+      "task-stat-grid",
+      "task-run-list",
+      "run-result",
+      "last-event",
+      "close-logs",
+      "log-dialog",
+      "copy-logs",
+      "log-title",
+      "log-content",
+    ],
+    locationPathname: "/tasks/scan",
+    apiResolver(path) {
+      if (path === "/api/tasks/scan?limit=20") {
+        return JSON.parse(JSON.stringify(detailPayload));
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  await harness.flush();
+  const toggleBtn = harness.elements.get("task-toggle-btn");
+  assert.match(toggleBtn.innerHTML, /data-lucide="refresh-cw"/);
 });
 
 test("task page renders loading then error when task detail fetch fails", async () => {

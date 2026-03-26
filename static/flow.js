@@ -96,10 +96,7 @@ function taskControlModel(task) {
   }
 
   return {
-    icon: String(task.icon_idle || "play")
-      .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-      .replaceAll("_", "-")
-      .toLowerCase(),
+    icon: window.ManzaraCore.toLucideIcon(task.icon_idle, "play"),
     title: `Start ${task.title}`,
     btnClass: "",
     disabled: false,
