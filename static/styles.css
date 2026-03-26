@@ -1409,6 +1409,60 @@ button {
   overflow: auto;
 }
 
+.shayan-change-section {
+  border: 1px solid #2a4876;
+  border-radius: 8px;
+  background: rgba(12, 24, 46, 0.75);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.shayan-change-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.shayan-change-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.small-btn.active-tab {
+  border-color: #46d59c;
+  color: #d6ffea;
+  background: rgba(14, 72, 52, 0.85);
+}
+
+.shayan-change-list {
+  display: grid;
+  gap: 8px;
+}
+
+.shayan-change-row {
+  border: 1px solid #27456f;
+  border-radius: 8px;
+  background: rgba(10, 20, 38, 0.9);
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.shayan-change-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.shayan-change-title {
+  font-weight: 600;
+  color: #d8e8ff;
+}
+
 .small-btn {
   border: 1px solid #305686;
   border-radius: 8px;

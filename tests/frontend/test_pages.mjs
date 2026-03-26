@@ -975,15 +975,125 @@ test("task page renders structured run artifacts from backend summary", async ()
       if (path === "/api/tasks/scan?limit=20") {
         return JSON.parse(JSON.stringify(detailPayload));
       }
+      if (path.startsWith("/api/runs/51/shayan-changes?")) {
+        return {
+          run: { run_id: 51 },
+          items: [],
+          stats: { added: 0, changed: 0, removed: 0, total: 0 },
+          next_after_change_id: 0,
+          has_more: false,
+        };
+      }
       throw new Error(`unexpected path: ${path}`);
     },
   });
 
   await harness.flush();
+  await harness.flush();
   const html = harness.elements.get("run-result").innerHTML;
   assert.match(html, /Run artifacts/i);
   assert.match(html, /episodes_added/i);
   assert.match(html, /snapshot_diff/i);
+  assert.doesNotMatch(html, /Detailed changes/i);
+});
+
+test("task page renders shayan detailed changes when endpoint has rows", async () => {
+  const detailPayload = {
+    task: {
+      task_id: "shayan.scan_changes",
+      slug: "scan",
+      title: "Scan for changes",
+      task_type: "scan",
+      icon_idle: "RefreshCw",
+    },
+    panel: { title: "Shayan" },
+    stats: {
+      total_runs: 1,
+      status_counts: { completed: 1, failed: 0 },
+      last_success_at: "2026-03-24T10:00:01Z",
+    },
+    runs: [
+      {
+        run_id: 51,
+        status: "completed",
+        started_at: "2026-03-24T10:00:00Z",
+        finished_at: "2026-03-24T10:00:01Z",
+        exit_code: 0,
+        error_text: null,
+        summary: {
+          status: "completed",
+          message: "Scan completed",
+          artifacts: {
+            kind: "shayan.snapshot_diff",
+            episodes_added: 3,
+            episodes_changed: 2,
+            episodes_removed: 1,
+          },
+        },
+      },
+    ],
+    global: {
+      active_tasks: 0,
+      active_workflows: 0,
+      stop_all_state: "disabled",
+    },
+  };
+
+  const harness = createHarness({
+    source: TASK_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "task-toggle-btn",
+      "task-title",
+      "task-subtitle",
+      "task-stat-grid",
+      "task-run-list",
+      "run-result",
+      "last-event",
+      "close-logs",
+      "log-dialog",
+      "copy-logs",
+      "log-title",
+      "log-content",
+    ],
+    locationPathname: "/tasks/scan",
+    apiResolver(path) {
+      if (path === "/api/tasks/scan?limit=20") {
+        return JSON.parse(JSON.stringify(detailPayload));
+      }
+      if (path.startsWith("/api/runs/51/shayan-changes?")) {
+        return {
+          run: { run_id: 51 },
+          items: [
+            {
+              change_id: 1,
+              run_id: 51,
+              change_type: "added",
+              entry_key: "cartoons::alpha::s1::e2",
+              category: "cartoons",
+              program: "Alpha",
+              season: 1,
+              episode: 2,
+              title: "New episode",
+            },
+          ],
+          stats: { added: 1, changed: 0, removed: 0, total: 1 },
+          next_after_change_id: 1,
+          has_more: false,
+        };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  await harness.flush();
+  await harness.flush();
+  const html = harness.elements.get("run-result").innerHTML;
+  assert.match(html, /Detailed changes/i);
+  assert.match(html, /Added \(1\)/i);
+  assert.match(html, /S01E02/i);
+  assert.match(html, /New episode/i);
 });
 
 test("task page applies toggle response run and enables logs immediately", async () => {

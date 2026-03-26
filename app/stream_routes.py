@@ -75,6 +75,55 @@ def register_stream_routes(
             }
         )
 
+    @app.get("/api/runs/{run_id}/shayan-changes")
+    def run_shayan_changes(
+        run_id: int,
+        change_type: Optional[str] = Query(None),
+        after_change_id: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=500),
+    ) -> JSONResponse:
+        """Return detailed Shayan per-run change rows with cursor pagination."""
+        state = state_provider()
+        run = state.db.get_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        normalized_type = None
+        if change_type is not None:
+            normalized_type = str(change_type).strip().lower()
+            if normalized_type not in {"added", "changed", "removed"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="change_type must be one of: added, changed, removed",
+                )
+
+        items = state.db.list_shayan_run_changes(
+            run_id=run_id,
+            change_type=normalized_type,
+            after_change_id=after_change_id,
+            limit=limit,
+        )
+        next_after_change_id = int(items[-1]["change_id"]) if items else int(after_change_id or 0)
+        has_more = False
+        if items:
+            more = state.db.list_shayan_run_changes(
+                run_id=run_id,
+                change_type=normalized_type,
+                after_change_id=next_after_change_id,
+                limit=1,
+            )
+            has_more = bool(more)
+
+        return JSONResponse(
+            {
+                "run": run,
+                "items": items,
+                "stats": state.db.count_shayan_run_changes(run_id),
+                "next_after_change_id": next_after_change_id,
+                "has_more": has_more,
+            }
+        )
+
     @app.get("/api/events/stream")
     async def events_stream(
         request: Request,

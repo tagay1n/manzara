@@ -11,13 +11,14 @@ from app.modules.shayan.runtime import run_stage
 
 class _FakeDb:
     def __init__(self) -> None:
-        self.latest_hashes: dict[str, str] = {}
+        self.latest_snapshot_entries: dict[str, dict] = {}
         self.latest_manifest: dict[str, dict] = {}
         self.created_snapshots: list[dict] = []
         self.replaced_manifests: list[dict] = []
+        self.replaced_changes: list[tuple[int, list[dict]]] = []
 
-    def get_latest_shayan_snapshot_entry_hashes(self):
-        return dict(self.latest_hashes)
+    def get_latest_shayan_snapshot_entries(self):
+        return dict(self.latest_snapshot_entries)
 
     def create_shayan_snapshot(
         self,
@@ -46,14 +47,20 @@ class _FakeDb:
         self.latest_manifest = payload
         return len(payload)
 
+    def replace_shayan_run_changes(self, run_id, changes):  # noqa: ANN001
+        normalized = [dict(item) for item in changes]
+        self.replaced_changes.append((int(run_id), normalized))
+        return len(normalized)
+
 
 def test_scan_stage_stores_snapshot_and_emits_artifacts(
     monkeypatch,
     tmp_path: Path,
     capsys,
 ) -> None:
+    monkeypatch.delenv("MANZARA_TASK_RUN_ID", raising=False)
     fake_db = _FakeDb()
-    fake_db.latest_hashes = {"ep-1": "old"}
+    fake_db.latest_snapshot_entries = {"ep-1": {"title": "Episode 1"}}
 
     monkeypatch.setattr(
         run_stage,
@@ -104,10 +111,73 @@ def test_scan_stage_stores_snapshot_and_emits_artifacts(
     snapshot = fake_db.created_snapshots[0]
     assert snapshot["source"] == "https://tt.shayantv.ru"
     assert len(snapshot["entries"]) == 2
+    assert fake_db.replaced_changes == []
 
     stdout = capsys.readouterr().out
     assert "MANZARA_RUN_ARTIFACTS_JSON=" in stdout
     assert '"episodes_added": 1' in stdout
+
+
+def test_scan_stage_persists_detailed_changes_when_run_id_is_available(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fake_db = _FakeDb()
+    fake_db.latest_snapshot_entries = {
+        "ep-1": {"category": "cartoons", "program": "Alpha", "season": 1, "episode": 1, "title": "One"}
+    }
+
+    monkeypatch.setenv("MANZARA_TASK_RUN_ID", "42")
+    monkeypatch.setattr(
+        run_stage,
+        "load_settings",
+        lambda: SimpleNamespace(
+            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
+            database_schema="monocorpus",
+        ),
+    )
+    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
+
+    def _fake_run(command, *, cwd):  # noqa: ANN001
+        _ = cwd
+        output_file = Path(command[command.index("--output-file") + 1])
+        output_file.write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-03-26T10:00:00+00:00",
+                    "source": "https://tt.shayantv.ru",
+                    "entries": {
+                        "ep-1": {"category": "cartoons", "program": "Alpha", "season": 1, "episode": 1, "title": "One updated"},
+                        "ep-2": {"category": "cartoons", "program": "Beta", "season": 2, "episode": 3, "title": "Three"},
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return 0, ["scan-ok"]
+
+    monkeypatch.setattr(run_stage, "_run_command_streaming", _fake_run)
+
+    repo = tmp_path / "shayan-video-downloader"
+    repo.mkdir(parents=True, exist_ok=True)
+    output = tmp_path / "output"
+    code = run_stage.main(
+        [
+            "--stage",
+            "scan_changes",
+            "--repo-path",
+            str(repo),
+            "--output-path",
+            str(output),
+        ]
+    )
+    assert code == 0
+    assert len(fake_db.replaced_changes) == 1
+    run_id, rows = fake_db.replaced_changes[0]
+    assert run_id == 42
+    by_type = {row["change_type"] for row in rows}
+    assert by_type == {"added", "changed"}
 
 
 def test_download_stage_replaces_manifest_and_emits_summary_metrics(

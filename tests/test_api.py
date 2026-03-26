@@ -1453,6 +1453,68 @@ def test_run_logs_reject_conflicting_cursor_modes(test_client) -> None:
     assert conflict.status_code == 400
     assert "cannot be combined" in conflict.json()["detail"]
 
+
+def test_run_shayan_changes_endpoint_returns_paginated_rows(test_client) -> None:
+    client, main_app = test_client
+    task = main_app.state.db.get_task("shayan.scan_changes")
+    assert task is not None
+    run_id = main_app.state.db.create_run(task)
+    main_app.state.db.mark_run_started(run_id, pid=1234)
+    main_app.state.db.finish_run(run_id, "completed", 0, None)
+
+    main_app.state.db.replace_shayan_run_changes(
+        run_id,
+        [
+            {
+                "change_type": "added",
+                "entry_key": "a",
+                "category": "cartoons",
+                "program": "Alpha",
+                "season": 1,
+                "episode": 1,
+                "title": "One",
+                "old_payload": {},
+                "new_payload": {"title": "One"},
+            },
+            {
+                "change_type": "changed",
+                "entry_key": "b",
+                "category": "cartoons",
+                "program": "Beta",
+                "season": 1,
+                "episode": 2,
+                "title": "Two",
+                "old_payload": {"title": "Old"},
+                "new_payload": {"title": "Two"},
+            },
+            {
+                "change_type": "removed",
+                "entry_key": "c",
+                "category": "cartoons",
+                "program": "Gamma",
+                "season": 1,
+                "episode": 3,
+                "title": "Three",
+                "old_payload": {"title": "Three"},
+                "new_payload": {},
+            },
+        ],
+    )
+
+    first = client.get(f"/api/runs/{run_id}/shayan-changes?change_type=added&limit=1")
+    assert first.status_code == 200
+    first_payload = first.json()
+    assert first_payload["stats"]["added"] == 1
+    assert first_payload["stats"]["changed"] == 1
+    assert first_payload["stats"]["removed"] == 1
+    assert len(first_payload["items"]) == 1
+    assert first_payload["items"][0]["change_type"] == "added"
+    assert first_payload["has_more"] is False
+
+    invalid = client.get(f"/api/runs/{run_id}/shayan-changes?change_type=unknown")
+    assert invalid.status_code == 400
+    assert "change_type must be one of" in invalid.json()["detail"]
+
 def test_task_run_writes_artifact_log_with_uniform_format(
     test_client,
     wait_for_terminal_run,

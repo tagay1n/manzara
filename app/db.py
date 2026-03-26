@@ -2037,10 +2037,15 @@ class Database:
 
     def get_latest_shayan_snapshot_entry_hashes(self) -> Dict[str, str]:
         """Return entry hash map for the most recent Shayan snapshot."""
+        entries = self.get_latest_shayan_snapshot_entries()
+        return {key: _json_hash(value) for key, value in entries.items()}
+
+    def get_latest_shayan_snapshot_entries(self) -> Dict[str, Dict[str, Any]]:
+        """Return full entry payload map for the most recent Shayan snapshot."""
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT e.entry_key, e.payload_hash
+                SELECT e.entry_key, e.payload_json
                 FROM shayan_snapshot_entries e
                 JOIN shayan_snapshots s
                   ON s.snapshot_id = e.snapshot_id
@@ -2053,11 +2058,17 @@ class Database:
                 ORDER BY e.entry_key ASC
                 """
             ).fetchall()
-        return {
-            str(row.get("entry_key") or ""): str(row.get("payload_hash") or "")
-            for row in rows
-            if str(row.get("entry_key") or "").strip()
-        }
+        payload: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            entry_key = str(row.get("entry_key") or "").strip()
+            if not entry_key:
+                continue
+            try:
+                value = json.loads(str(row.get("payload_json") or "{}"))
+            except Exception:
+                value = {}
+            payload[entry_key] = value if isinstance(value, dict) else {}
+        return payload
 
     def create_shayan_snapshot(
         self,
@@ -2119,6 +2130,135 @@ class Database:
                         ),
                     )
         return created_snapshot_id
+
+    def replace_shayan_run_changes(
+        self,
+        run_id: int,
+        changes: List[Dict[str, Any]],
+    ) -> int:
+        """Replace detailed Shayan changes for one run."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute("DELETE FROM shayan_run_changes WHERE run_id = ?", (run_id,))
+                for item in changes:
+                    change_type = str(item.get("change_type") or "").strip().lower()
+                    if change_type not in {"added", "changed", "removed"}:
+                        continue
+                    entry_key = str(item.get("entry_key") or "").strip()
+                    if not entry_key:
+                        continue
+                    season = item.get("season")
+                    episode = item.get("episode")
+                    conn.execute(
+                        """
+                        INSERT INTO shayan_run_changes (
+                            run_id,
+                            change_type,
+                            entry_key,
+                            category,
+                            program,
+                            season,
+                            episode,
+                            title,
+                            old_payload_json,
+                            new_payload_json,
+                            created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            int(run_id),
+                            change_type,
+                            entry_key,
+                            str(item.get("category") or "").strip() or None,
+                            str(item.get("program") or "").strip() or None,
+                            int(season) if season is not None else None,
+                            int(episode) if episode is not None else None,
+                            str(item.get("title") or "").strip() or None,
+                            json.dumps(item.get("old_payload") or {}, ensure_ascii=False),
+                            json.dumps(item.get("new_payload") or {}, ensure_ascii=False),
+                            now,
+                        ),
+                    )
+        return len(changes)
+
+    def list_shayan_run_changes(
+        self,
+        run_id: int,
+        *,
+        change_type: Optional[str] = None,
+        after_change_id: int = 0,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Return detailed Shayan change rows for one run."""
+        row_limit = max(1, min(int(limit), 500))
+        params: List[Any] = [int(run_id), int(after_change_id)]
+        where = "WHERE run_id = ? AND change_id > ?"
+        normalized = str(change_type or "").strip().lower()
+        if normalized:
+            where += " AND change_type = ?"
+            params.append(normalized)
+        params.append(row_limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    change_id,
+                    run_id,
+                    change_type,
+                    entry_key,
+                    category,
+                    program,
+                    season,
+                    episode,
+                    title,
+                    old_payload_json,
+                    new_payload_json,
+                    created_at
+                FROM shayan_run_changes
+                {where}
+                ORDER BY change_id ASC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            try:
+                payload["old_payload"] = json.loads(str(payload.pop("old_payload_json") or "{}"))
+            except Exception:
+                payload["old_payload"] = {}
+            try:
+                payload["new_payload"] = json.loads(str(payload.pop("new_payload_json") or "{}"))
+            except Exception:
+                payload["new_payload"] = {}
+            result.append(payload)
+        return result
+
+    def count_shayan_run_changes(
+        self,
+        run_id: int,
+    ) -> Dict[str, int]:
+        """Return detailed Shayan change counters grouped by type for one run."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT change_type, COUNT(*) AS count
+                FROM shayan_run_changes
+                WHERE run_id = ?
+                GROUP BY change_type
+                """,
+                (run_id,),
+            ).fetchall()
+        counts = {str(row.get("change_type") or ""): int(row.get("count") or 0) for row in rows}
+        return {
+            "added": int(counts.get("added") or 0),
+            "changed": int(counts.get("changed") or 0),
+            "removed": int(counts.get("removed") or 0),
+            "total": int(sum(counts.values())),
+        }
 
     def run_count_by_status(self, panel_id: str) -> Dict[str, int]:
         """Return run status counters for one panel."""

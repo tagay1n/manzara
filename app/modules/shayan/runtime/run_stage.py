@@ -128,7 +128,8 @@ def _scan_changes_stage(
     output_path: Path,
 ) -> int:
     _ = output_path  # not used by scan stage
-    previous = db.get_latest_shayan_snapshot_entry_hashes()
+    previous_entries = db.get_latest_shayan_snapshot_entries()
+    previous = _hash_map(previous_entries)
     with tempfile.TemporaryDirectory(prefix="manzara-shayan-scan-") as tmp_dir_raw:
         tmp_dir = Path(tmp_dir_raw)
         snapshot_file = tmp_dir / "latest.json"
@@ -161,12 +162,24 @@ def _scan_changes_stage(
 
     generated_at = str(payload.get("generated_at") or datetime.now(timezone.utc).isoformat())
     source = str(payload.get("source") or "https://tt.shayantv.ru")
+    run_id = _run_id_from_env()
     snapshot_id = db.create_shayan_snapshot(
         entries,
-        run_id=_run_id_from_env(),
+        run_id=run_id,
         source=source,
         generated_at=generated_at,
     )
+    if run_id is not None:
+        db.replace_shayan_run_changes(
+            run_id,
+            _build_change_rows(
+                before_entries=previous_entries,
+                after_entries=entries,
+                added_ids=added,
+                changed_ids=changed,
+                removed_ids=removed,
+            ),
+        )
     artifacts = {
         "kind": "shayan.snapshot_diff",
         "snapshot_id": snapshot_id,
@@ -187,6 +200,79 @@ def _scan_changes_stage(
         flush=True,
     )
     return 0
+
+def _to_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _extract_meta(entry_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "entry_key": entry_key,
+        "category": str(payload.get("category") or "").strip() or None,
+        "program": str(payload.get("program") or "").strip() or None,
+        "season": _to_int(payload.get("season")),
+        "episode": _to_int(payload.get("episode")),
+        "title": str(payload.get("title") or "").strip() or None,
+    }
+
+
+def _build_change_rows(
+    *,
+    before_entries: Dict[str, Any],
+    after_entries: Dict[str, Any],
+    added_ids: Sequence[str],
+    changed_ids: Sequence[str],
+    removed_ids: Sequence[str],
+) -> list[Dict[str, Any]]:
+    rows: list[Dict[str, Any]] = []
+    for entry_id in added_ids:
+        new_payload = after_entries.get(entry_id) or {}
+        meta = _extract_meta(entry_id, new_payload)
+        rows.append(
+            {
+                "change_type": "added",
+                **meta,
+                "old_payload": {},
+                "new_payload": new_payload,
+            }
+        )
+    for entry_id in changed_ids:
+        old_payload = before_entries.get(entry_id) or {}
+        new_payload = after_entries.get(entry_id) or {}
+        meta = _extract_meta(entry_id, new_payload if isinstance(new_payload, dict) else old_payload)
+        rows.append(
+            {
+                "change_type": "changed",
+                **meta,
+                "old_payload": old_payload,
+                "new_payload": new_payload,
+            }
+        )
+    for entry_id in removed_ids:
+        old_payload = before_entries.get(entry_id) or {}
+        meta = _extract_meta(entry_id, old_payload)
+        rows.append(
+            {
+                "change_type": "removed",
+                **meta,
+                "old_payload": old_payload,
+                "new_payload": {},
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            str(item.get("program") or ""),
+            int(item.get("season") or 0),
+            int(item.get("episode") or 0),
+            str(item.get("title") or ""),
+            str(item.get("entry_key") or ""),
+            str(item.get("change_type") or ""),
+        )
+    )
+    return rows
 
 
 def _extract_download_metrics(lines: Sequence[str]) -> Dict[str, int]:
