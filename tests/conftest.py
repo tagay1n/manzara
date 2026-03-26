@@ -41,11 +41,16 @@ def _test_task_defs(shayan: ShayanSettings):
             "command": {
                 "mode": "shell",
                 "value": (
-                    "python3 -c \"import pathlib; "
-                    f"p=pathlib.Path({shayan.latest_snapshot_file.as_posix()!r}); "
-                    "p.parent.mkdir(parents=True, exist_ok=True); "
-                    "p.write_text('{\\\"entries\\\": {}}', encoding='utf-8'); "
-                    "print('scan-ok')\""
+                    "python3 -c \"import json; "
+                    "print('scan-ok'); "
+                    "print('MANZARA_RUN_ARTIFACTS_JSON=' + json.dumps({"
+                    "\\\"kind\\\": \\\"shayan.snapshot_diff\\\", "
+                    "\\\"episodes_before\\\": 0, "
+                    "\\\"episodes_after\\\": 0, "
+                    "\\\"episodes_added\\\": 0, "
+                    "\\\"episodes_changed\\\": 0, "
+                    "\\\"episodes_removed\\\": 0"
+                    "}))\""
                 ),
             },
         },
@@ -305,17 +310,12 @@ def test_client(
     oscar_repo = tmp_path / "oscar-corpus-extractor"
     oscar_repo.mkdir(parents=True, exist_ok=True)
     artifacts = tmp_path / ".manzara" / "shayan"
-    snapshots = artifacts / "snapshots"
-    snapshots.mkdir(parents=True, exist_ok=True)
-    (artifacts / "status.json").write_text("{}", encoding="utf-8")
-    (artifacts / "last-main-run-summary.json").write_text("{}", encoding="utf-8")
+    artifacts.mkdir(parents=True, exist_ok=True)
 
     shayan = ShayanSettings(
         repo_path=shayan_repo,
         output_path=tmp_path / "output",
-        status_file=artifacts / "status.json",
-        summary_file=artifacts / "last-main-run-summary.json",
-        latest_snapshot_file=artifacts / "snapshots" / "latest.json",
+        artifacts_dir=artifacts,
     )
     maintenance = MaintenanceSettings(
         monocorpus_repo_path=monocorpus_repo,

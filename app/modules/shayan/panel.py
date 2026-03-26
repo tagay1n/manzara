@@ -2,33 +2,10 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any, Dict, List
 
 from app.db import Database
 from app.modules.shayan.config import ShayanSettings
-
-
-def _read_json_file(path: Path) -> Dict[str, Any]:
-    """Load JSON object from disk; return empty object if unavailable."""
-    try:
-        if not path.exists():
-            return {}
-        value = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(value, dict):
-            return value
-        return {}
-    except Exception:
-        return {}
-
-
-def _status_entry_count(status_payload: Dict[str, Any]) -> int:
-    """Count entries in legacy status map or snapshot-like payload."""
-    if "entries" in status_payload and isinstance(status_payload.get("entries"), dict):
-        return len(status_payload["entries"])
-    return len(status_payload)
-
 
 def build_shayan_panel(
     db: Database,
@@ -39,9 +16,17 @@ def build_shayan_panel(
     title: str = "Shayan",
 ) -> Dict[str, Any]:
     """Build dashboard panel payload for Shayan."""
-    shayan_status = _read_json_file(shayan.status_file)
-    shayan_summary = _read_json_file(shayan.summary_file)
-    latest_snapshot = _read_json_file(shayan.latest_snapshot_file)
+    _ = shayan
+    latest_scan = db.get_latest_shayan_snapshot() or {}
+    latest_download_runs = db.list_recent_runs_for_task("shayan.download_new", limit=10)
+    latest_completed_download = next(
+        (run for run in latest_download_runs if str(run.get("status") or "") == "completed"),
+        {},
+    )
+    latest_download_artifacts = latest_completed_download.get("summary") or {}
+    latest_download_payload = latest_download_artifacts.get("artifacts") or {}
+    downloaded_last_run = int(latest_download_payload.get("downloaded") or 0)
+    failed_last_run = int(latest_download_payload.get("failed") or 0)
 
     workflow_items: List[Dict[str, Any]] = []
     for workflow in workflows:
@@ -82,13 +67,11 @@ def build_shayan_panel(
         "panel_id": "shayan",
         "title": title,
         "stats": {
-            "downloaded_files_total": _status_entry_count(shayan_status),
-            "newly_downloaded_last_run": int(
-                (shayan_summary.get("episodes") or {}).get("downloaded", 0)
-            ),
-            "failed_last_run": int((shayan_summary.get("episodes") or {}).get("failed", 0)),
+            "downloaded_files_total": db.shayan_manifest_entry_count(),
+            "newly_downloaded_last_run": downloaded_last_run,
+            "failed_last_run": failed_last_run,
             "last_successful_run": db.last_successful_run("shayan"),
-            "last_scan": latest_snapshot.get("generated_at"),
+            "last_scan": latest_scan.get("generated_at") or latest_scan.get("created_at"),
         },
         "status_counts": db.run_count_by_status("shayan"),
         "workflows": workflow_items,

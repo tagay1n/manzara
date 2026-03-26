@@ -40,6 +40,7 @@ Notes:
 - Prioritize operational visibility (run state, logs, artifacts, failures).
 - Runtime state store is PostgreSQL only (`MANZARA_DATABASE_URL`) in schema `monocorpus` by default (`MANZARA_DB_SCHEMA`); do not reintroduce SQLite runtime paths.
 - Known temporary exception: Oscar stage runner still reads legacy `state.sqlite` for snapshot queue seeding; keep changes isolated and plan full PostgreSQL cutover cleanup later.
+- Shayan state (download manifest + snapshot history) is PostgreSQL-backed. Do not use persistent `status.json` / `latest.json` as runtime source of truth.
 - Artifact location rule (all flows/tasks): write all task/flow artifacts (logs, temp files, exports, caches, run metadata) only under `~/.manzara` by default (or under `MANZARA_ARTIFACTS_ROOT` when explicitly overridden). Do not write artifacts into repository-root folders such as `_artifacts`.
 - Keep secrets out of git: treat `config.yaml` as local-only and maintain masked `config.example.yaml` in sync with config structure changes.
 - Runtime loaders must not use `config.example.yaml` as an input source; it is reference-only.
@@ -97,6 +98,9 @@ Notes:
   - For integer control fields, require integral values (no implicit truncation from floats).
 - Keep flow modules isolated (`app/modules/<flow>/...`) with clear ownership boundaries.
 - No silent failures: surface actionable error context in run state, logs, and SSE events.
+- Task lifecycle requirements apply to all tasks:
+  - Every task must support graceful shutdown on stop request (finish current safe boundary, persist state, then exit cleanly).
+  - Every task must be resumable after interruption/restart; progress/state checkpoints must allow continuing without starting from scratch.
 - Logging/observability is mandatory for task execution paths:
   - Every task run must have a dedicated artifact log file under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...` when overridden).
   - Use one uniform structured line format for runtime-emitted lines: timestamp, level, run/task/panel/source context, message.

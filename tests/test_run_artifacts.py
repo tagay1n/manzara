@@ -87,3 +87,29 @@ def test_shayan_download_artifacts_reads_summary_file(tmp_path: Path) -> None:
     assert artifacts["kind"] == "shayan.download_summary"
     assert artifacts["downloaded"] == 12
     assert artifacts["failed"] == 3
+
+
+def test_embedded_log_artifacts_take_precedence(tmp_path: Path) -> None:
+    snapshot = tmp_path / "snapshot.json"
+    _write_snapshot(snapshot, {"ep-1": {"title": "Episode 1"}})
+    task = {
+        "task_id": "shayan.scan_changes",
+        "panel_id": "shayan",
+        "command": {
+            "mode": "shell",
+            "value": "echo scan",
+            "artifacts": {"snapshot_file": str(snapshot)},
+        },
+    }
+    pre_state = capture_pre_run_artifacts(task)
+    _write_snapshot(snapshot, {"ep-2": {"title": "Episode 2"}})
+    artifacts = collect_post_run_artifacts(
+        task,
+        status="completed",
+        pre_state=pre_state,
+        log_lines=[
+            "line 1",
+            'MANZARA_RUN_ARTIFACTS_JSON={"kind":"custom","value":42}',
+        ],
+    )
+    assert artifacts == {"kind": "custom", "value": 42}

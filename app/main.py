@@ -199,7 +199,6 @@ class AppState:
         self.workflow_service = WorkflowService(
             self.db,
             self.runner,
-            shayan_snapshot_file=settings.shayan.latest_snapshot_file,
         )
 
 

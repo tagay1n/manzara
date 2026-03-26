@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from app.modules.shayan.state_migration import migrate_legacy_shayan_state_if_needed
+
 
 def startup_app(
     *,
@@ -20,6 +22,28 @@ def startup_app(
     db.seed_tasks(task_defs)
     for bundle in workflow_bundles:
         db.seed_workflow_bundle(bundle)
+
+    try:
+        migration = migrate_legacy_shayan_state_if_needed(
+            db,
+            artifacts_dir=state.settings.shayan.artifacts_dir,
+        )
+        if migration.get("migrated"):
+            db.insert_event(
+                "shayan.state_migrated",
+                task_id=None,
+                run_id=None,
+                panel_id="shayan",
+                payload=migration,
+            )
+    except Exception as exc:
+        db.insert_event(
+            "shayan.state_migration_failed",
+            task_id=None,
+            run_id=None,
+            panel_id="shayan",
+            payload={"error": str(exc)},
+        )
 
     recovered_runs = db.recover_active_runs()
     if recovered_runs > 0:

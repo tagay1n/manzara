@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -26,6 +27,28 @@ from app.runtime_states import (
     WORKFLOW_RUN_STATUS_STARTING,
     task_status_from_stop_mode,
 )
+
+
+def _json_hash(payload: Any) -> str:
+    normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _normalize_shayan_entries(raw: Any) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    source = raw
+    entries = source.get("entries")
+    if isinstance(entries, dict):
+        source = entries
+
+    normalized: Dict[str, Any] = {}
+    for key, value in source.items():
+        entry_key = str(key or "").strip()
+        if not entry_key:
+            continue
+        normalized[entry_key] = value if isinstance(value, dict) else {"value": value}
+    return normalized
 
 
 def utc_now() -> str:
@@ -1915,6 +1938,187 @@ class Database:
                 (snapshot_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_shayan_manifest_entries(self) -> Dict[str, Dict[str, Any]]:
+        """Return full Shayan manifest as key->payload map."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT entry_key, payload_json
+                FROM shayan_manifest_entries
+                ORDER BY entry_key ASC
+                """
+            ).fetchall()
+        payload: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            key = str(row.get("entry_key") or "").strip()
+            if not key:
+                continue
+            try:
+                value = json.loads(str(row.get("payload_json") or "{}"))
+            except Exception:
+                value = {}
+            payload[key] = value if isinstance(value, dict) else {}
+        return payload
+
+    def shayan_manifest_entry_count(self) -> int:
+        """Return number of persisted Shayan manifest entries."""
+        with self._connect() as conn:
+            value = conn.execute(
+                "SELECT COUNT(*) AS count FROM shayan_manifest_entries"
+            ).scalar()
+        return int(value or 0)
+
+    def replace_shayan_manifest_entries(self, entries: Dict[str, Any]) -> int:
+        """Replace Shayan manifest entries with the provided payload map."""
+        normalized = _normalize_shayan_entries(entries)
+        keys = list(normalized.keys())
+        now = utc_now()
+
+        with self._lock:
+            with self._connect() as conn:
+                if keys:
+                    placeholders = ", ".join("?" for _ in keys)
+                    conn.execute(
+                        f"""
+                        DELETE FROM shayan_manifest_entries
+                        WHERE entry_key NOT IN ({placeholders})
+                        """,
+                        keys,
+                    )
+                else:
+                    conn.execute("DELETE FROM shayan_manifest_entries")
+
+                for entry_key in keys:
+                    payload = normalized[entry_key]
+                    conn.execute(
+                        """
+                        INSERT INTO shayan_manifest_entries (
+                            entry_key,
+                            payload_json,
+                            payload_hash,
+                            created_at,
+                            updated_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(entry_key) DO UPDATE SET
+                            payload_json=excluded.payload_json,
+                            payload_hash=excluded.payload_hash,
+                            updated_at=excluded.updated_at
+                        """,
+                        (
+                            entry_key,
+                            json.dumps(payload, ensure_ascii=False),
+                            _json_hash(payload),
+                            now,
+                            now,
+                        ),
+                    )
+        return len(keys)
+
+    def get_latest_shayan_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Return latest Shayan snapshot header row."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    snapshot_id,
+                    run_id,
+                    source,
+                    generated_at,
+                    entries_count,
+                    created_at,
+                    updated_at
+                FROM shayan_snapshots
+                ORDER BY COALESCE(generated_at, created_at) DESC, snapshot_id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_latest_shayan_snapshot_entry_hashes(self) -> Dict[str, str]:
+        """Return entry hash map for the most recent Shayan snapshot."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.entry_key, e.payload_hash
+                FROM shayan_snapshot_entries e
+                JOIN shayan_snapshots s
+                  ON s.snapshot_id = e.snapshot_id
+                WHERE s.snapshot_id = (
+                    SELECT snapshot_id
+                    FROM shayan_snapshots
+                    ORDER BY COALESCE(generated_at, created_at) DESC, snapshot_id DESC
+                    LIMIT 1
+                )
+                ORDER BY e.entry_key ASC
+                """
+            ).fetchall()
+        return {
+            str(row.get("entry_key") or ""): str(row.get("payload_hash") or "")
+            for row in rows
+            if str(row.get("entry_key") or "").strip()
+        }
+
+    def create_shayan_snapshot(
+        self,
+        entries: Dict[str, Any],
+        *,
+        run_id: Optional[int] = None,
+        source: Optional[str] = None,
+        generated_at: Optional[str] = None,
+    ) -> int:
+        """Persist one full Shayan snapshot with versioned entries."""
+        normalized = _normalize_shayan_entries(entries)
+        now = utc_now()
+        created_snapshot_id = 0
+
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    INSERT INTO shayan_snapshots (
+                        run_id,
+                        source,
+                        generated_at,
+                        entries_count,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    RETURNING snapshot_id
+                    """,
+                    (
+                        run_id,
+                        source,
+                        generated_at,
+                        len(normalized),
+                        now,
+                        now,
+                    ),
+                ).fetchone()
+                created_snapshot_id = int((row or {}).get("snapshot_id") or 0)
+                if created_snapshot_id <= 0:
+                    raise RuntimeError("Failed to create Shayan snapshot row")
+
+                for entry_key, payload in normalized.items():
+                    conn.execute(
+                        """
+                        INSERT INTO shayan_snapshot_entries (
+                            snapshot_id,
+                            entry_key,
+                            payload_json,
+                            payload_hash,
+                            created_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            created_snapshot_id,
+                            entry_key,
+                            json.dumps(payload, ensure_ascii=False),
+                            _json_hash(payload),
+                            now,
+                        ),
+                    )
+        return created_snapshot_id
 
     def run_count_by_status(self, panel_id: str) -> Dict[str, int]:
         """Return run status counters for one panel."""

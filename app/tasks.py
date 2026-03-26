@@ -320,6 +320,10 @@ class TaskRunner:
                 )
 
             command_text, stdin_text = self._prepare_command(command["value"], sudo_password)
+            proc_env = os.environ.copy()
+            proc_env["MANZARA_TASK_RUN_ID"] = str(run_id)
+            proc_env["MANZARA_TASK_ID"] = str(task.get("task_id") or "")
+            proc_env["MANZARA_PANEL_ID"] = str(task.get("panel_id") or "")
 
             proc = subprocess.Popen(
                 command_text,
@@ -331,6 +335,7 @@ class TaskRunner:
                 text=True,
                 bufsize=1,
                 preexec_fn=os.setsid,
+                env=proc_env,
             )
 
             handle = ProcessHandle(
@@ -446,6 +451,7 @@ class TaskRunner:
                 task,
                 status=str(status),
                 pre_state=pre_artifacts,
+                log_lines=[str(item.get("line") or "") for item in log_rows],
             )
             summary = build_structured_run_summary(
                 task_id=str(task["task_id"]),

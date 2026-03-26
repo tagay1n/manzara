@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 from typing import Any, Dict, List
 
 from app.modules.shayan.config import ShayanSettings
@@ -10,22 +11,24 @@ from app.modules.shayan.config import ShayanSettings
 
 def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
     """Return Shayan task definitions for dashboard and runtime."""
+    app_root = Path(__file__).resolve().parents[3]
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
-    snapshot_file = shlex.quote(str(shayan.latest_snapshot_file))
-    status_file = shlex.quote(str(shayan.status_file))
-    summary_file = shlex.quote(str(shayan.summary_file))
+    repo_path = shlex.quote(str(shayan.repo_path))
+    output_path = shlex.quote(str(shayan.output_path))
 
     scan_cmd = (
         py_bootstrap
-        + '"$PY_BIN" app/main.py snapshot --category all '
-        + f"--output-file {snapshot_file}"
+        + '"$PY_BIN" -m app.modules.shayan.runtime.run_stage'
+        + " --stage scan_changes"
+        + f" --repo-path {repo_path}"
+        + f" --output-path {output_path}"
     )
     download_cmd = (
         py_bootstrap
-        + '"$PY_BIN" app/main.py main --category all '
-        + f'--output {shlex.quote(str(shayan.output_path))} '
-        + f"--status-file {status_file} "
-        + f"--summary-file {summary_file}"
+        + '"$PY_BIN" -m app.modules.shayan.runtime.run_stage'
+        + " --stage download_new"
+        + f" --repo-path {repo_path}"
+        + f" --output-path {output_path}"
     )
 
     return [
@@ -36,14 +39,8 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "task_type": "scan",
             "icon_idle": "RefreshCw",
             "icon_running": "Square",
-            "cwd": str(shayan.repo_path),
-            "command": {
-                "mode": "shell",
-                "value": scan_cmd,
-                "artifacts": {
-                    "snapshot_file": str(shayan.latest_snapshot_file),
-                },
-            },
+            "cwd": str(app_root),
+            "command": {"mode": "shell", "value": scan_cmd},
         },
         {
             "task_id": "shayan.download_new",
@@ -52,14 +49,7 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "task_type": "download",
             "icon_idle": "Play",
             "icon_running": "Square",
-            "cwd": str(shayan.repo_path),
-            "command": {
-                "mode": "shell",
-                "value": download_cmd,
-                "artifacts": {
-                    "status_file": str(shayan.status_file),
-                    "summary_file": str(shayan.summary_file),
-                },
-            },
+            "cwd": str(app_root),
+            "command": {"mode": "shell", "value": download_cmd},
         },
     ]

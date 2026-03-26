@@ -19,6 +19,8 @@ Current architecture:
 
 Transitional note:
 - Oscar runtime currently keeps one legacy bridge that reads `state.sqlite` for snapshot queue seeding. Core runtime state remains PostgreSQL-backed.
+- Shayan flow now keeps persistent state in PostgreSQL (`shayan_manifest_entries`, `shayan_snapshots`, `shayan_snapshot_entries`).
+- Legacy `~/.manzara/shayan/status.json` and `~/.manzara/shayan/snapshots/latest.json` are used only for one-time migration when DB state is empty; they are not runtime source of truth after cutover.
 
 ## UI Reference
 
@@ -96,6 +98,7 @@ Runtime control behavior:
 - Run logs stream into DB and are visible in UI
 - Each run also writes a dedicated artifact log file under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...` when overridden)
 - Task and flow pages render run history with backend-provided structured summaries (`runs.summary_json`)
+- Shayan scan/download run summaries include structured task artifacts (for example scan added/changed/removed counts) in `runs.summary_json.artifacts`.
 
 Library data tooling currently includes:
 - Classification views and merge/normalization previews

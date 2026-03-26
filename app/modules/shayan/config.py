@@ -15,9 +15,7 @@ class ShayanSettings:
 
     repo_path: Path
     output_path: Path
-    status_file: Path
-    summary_file: Path
-    latest_snapshot_file: Path
+    artifacts_dir: Path
 
 
 def load_shayan_settings() -> ShayanSettings:
@@ -28,12 +26,10 @@ def load_shayan_settings() -> ShayanSettings:
     repo_path = Path(os.environ.get("SHAYAN_REPO_PATH", str(repo_default))).expanduser()
     output_path = Path(os.environ.get("SHAYAN_OUTPUT_PATH", str(output_default))).expanduser()
     artifacts_dir = flow_artifacts_dir("shayan")
-    (artifacts_dir / "snapshots").mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     return ShayanSettings(
         repo_path=repo_path,
         output_path=output_path,
-        status_file=artifacts_dir / "status.json",
-        summary_file=artifacts_dir / "last-main-run-summary.json",
-        latest_snapshot_file=artifacts_dir / "snapshots" / "latest.json",
+        artifacts_dir=artifacts_dir,
     )

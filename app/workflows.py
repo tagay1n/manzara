@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from datetime import datetime, time as dt_time, timedelta, timezone
-from pathlib import Path
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -31,12 +29,10 @@ class WorkflowService:
         db: Database,
         runner: TaskRunner,
         *,
-        shayan_snapshot_file: Path,
         tick_seconds: float = 1.0,
     ):
         self.db = db
         self.runner = runner
-        self.shayan_snapshot_file = shayan_snapshot_file
         self.tick_seconds = tick_seconds
 
         self._stop_event = threading.Event()
@@ -605,9 +601,7 @@ class WorkflowService:
 
     def _collect_pre_state(self, task_id: str) -> Dict[str, Any]:
         if task_id == "shayan.scan_changes":
-            return {
-                "scan_before_count": self._snapshot_entry_count(self.shayan_snapshot_file),
-            }
+            return {}
         return {}
 
     def _collect_post_state(
@@ -616,41 +610,35 @@ class WorkflowService:
         pre_state: Dict[str, Any],
         task_run: Dict[str, Any],
     ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        _ = pre_state
         if task_id != "shayan.scan_changes":
             return {}, {}
 
-        after_count = self._snapshot_entry_count(self.shayan_snapshot_file)
-        before_count = int(pre_state.get("scan_before_count", 0))
-        new_count = max(after_count - before_count, 0)
+        summary = task_run.get("summary") if isinstance(task_run, dict) else {}
+        artifacts = summary.get("artifacts") if isinstance(summary, dict) else {}
+        if not isinstance(artifacts, dict):
+            artifacts = {}
+        before_count = int(artifacts.get("episodes_before") or 0)
+        after_count = int(artifacts.get("episodes_after") or 0)
+        new_count = int(artifacts.get("episodes_added") or 0)
 
         output = {
             "scan_before_count": before_count,
             "scan_after_count": after_count,
             "scan_new_items_count": new_count,
             "task_status": task_run.get("status"),
+            "scan_changed_items_count": int(artifacts.get("episodes_changed") or 0),
+            "scan_removed_items_count": int(artifacts.get("episodes_removed") or 0),
         }
 
         updates = {
             "scan_before_count": before_count,
             "scan_after_count": after_count,
             "scan_new_items_count": new_count,
+            "scan_changed_items_count": int(artifacts.get("episodes_changed") or 0),
+            "scan_removed_items_count": int(artifacts.get("episodes_removed") or 0),
         }
         return output, updates
-
-    def _snapshot_entry_count(self, path: Path) -> int:
-        try:
-            if not path.exists():
-                return 0
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict) and isinstance(payload.get("entries"), dict):
-                return len(payload["entries"])
-            if isinstance(payload, dict):
-                return len(payload)
-            if isinstance(payload, list):
-                return len(payload)
-        except Exception:
-            return 0
-        return 0
 
     def _parse_time_of_day(self, value: str) -> tuple[int, int]:
         parts = value.split(":")
