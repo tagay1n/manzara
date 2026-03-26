@@ -98,6 +98,19 @@ function runSummaryMessage(run) {
   return `Run ${status}.`;
 }
 
+function renderSummaryArtifacts(summary) {
+  const artifacts = summary?.artifacts;
+  if (!artifacts || typeof artifacts !== "object") return "";
+  const text = JSON.stringify(artifacts, null, 2);
+  if (!text) return "";
+  return `
+    <details class="run-artifacts-box" open>
+      <summary>Run artifacts</summary>
+      <pre>${escapeHtml(text)}</pre>
+    </details>
+  `;
+}
+
 function toggleButtonModel(task, run) {
   const status = run?.status || "idle";
   if (status === "stopping_graceful") {
@@ -161,6 +174,7 @@ function renderRunResult(run) {
     </div>
     <div class="workflow-footnote">${escapeHtml(runSummaryMessage(run))}</div>
     ${summaryRows ? `<div class="run-result-grid">${summaryRows}</div>` : ""}
+    ${renderSummaryArtifacts(summary)}
     ${
       errorText
         ? `<div class="run-error-box">${escapeHtml(errorText)}</div>`

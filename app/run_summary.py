@@ -69,6 +69,7 @@ def build_structured_run_summary(
     started_at: Any,
     finished_at: Any,
     log_lines: List[str],
+    artifacts: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build task-aware structured summary object."""
     summary = build_default_run_summary(
@@ -84,6 +85,8 @@ def build_structured_run_summary(
     summary["panel_id"] = panel_id
     summary["stop_mode"] = stop_mode
     summary["kind"] = task_id
+    if isinstance(artifacts, dict) and artifacts:
+        summary["artifacts"] = artifacts
 
     if task_id.startswith("maintenance.pgbackrest_backup_"):
         summary["kind"] = "maintenance.pgbackrest_backup"
@@ -133,9 +136,27 @@ def build_structured_run_summary(
 
     if panel_id == "shayan" and status == "completed":
         if task_id.endswith(".scan_changes"):
-            summary["message"] = "Scan completed."
+            scan_artifacts = artifacts if isinstance(artifacts, dict) else {}
+            added = int(scan_artifacts.get("episodes_added") or 0)
+            changed = int(scan_artifacts.get("episodes_changed") or 0)
+            removed = int(scan_artifacts.get("episodes_removed") or 0)
+            if scan_artifacts.get("kind") == "shayan.snapshot_diff":
+                summary["highlights"].append({"label": "Added", "value": str(added)})
+                summary["highlights"].append({"label": "Changed", "value": str(changed)})
+                summary["highlights"].append({"label": "Removed", "value": str(removed)})
+                summary["message"] = f"Scan completed: +{added} ~{changed} -{removed}."
+            else:
+                summary["message"] = "Scan completed."
         elif task_id.endswith(".download_new"):
-            summary["message"] = "Download completed."
+            download_artifacts = artifacts if isinstance(artifacts, dict) else {}
+            downloaded = int(download_artifacts.get("downloaded") or 0)
+            failed = int(download_artifacts.get("failed") or 0)
+            if download_artifacts.get("kind") == "shayan.download_summary":
+                summary["highlights"].append({"label": "Downloaded", "value": str(downloaded)})
+                summary["highlights"].append({"label": "Failed", "value": str(failed)})
+                summary["message"] = f"Download completed: {downloaded} downloaded, {failed} failed."
+            else:
+                summary["message"] = "Download completed."
         else:
             summary["message"] = "Task completed."
         return summary
@@ -145,4 +166,3 @@ def build_structured_run_summary(
         return summary
 
     return summary
-

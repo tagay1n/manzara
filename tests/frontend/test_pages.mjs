@@ -910,6 +910,82 @@ test("task page normalizes idle icon names for lucide glyph rendering", async ()
   assert.match(toggleBtn.innerHTML, /data-lucide="refresh-cw"/);
 });
 
+test("task page renders structured run artifacts from backend summary", async () => {
+  const detailPayload = {
+    task: {
+      task_id: "shayan.scan_changes",
+      slug: "scan",
+      title: "Scan for changes",
+      task_type: "scan",
+      icon_idle: "RefreshCw",
+    },
+    panel: { title: "Shayan" },
+    stats: {
+      total_runs: 1,
+      status_counts: { completed: 1, failed: 0 },
+      last_success_at: "2026-03-24T10:00:01Z",
+    },
+    runs: [
+      {
+        run_id: 51,
+        status: "completed",
+        started_at: "2026-03-24T10:00:00Z",
+        finished_at: "2026-03-24T10:00:01Z",
+        exit_code: 0,
+        error_text: null,
+        summary: {
+          status: "completed",
+          message: "Scan completed",
+          artifacts: {
+            kind: "shayan.snapshot_diff",
+            episodes_added: 3,
+            episodes_changed: 2,
+            episodes_removed: 1,
+          },
+        },
+      },
+    ],
+    global: {
+      active_tasks: 0,
+      active_workflows: 0,
+      stop_all_state: "disabled",
+    },
+  };
+
+  const harness = createHarness({
+    source: TASK_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "task-toggle-btn",
+      "task-title",
+      "task-subtitle",
+      "task-stat-grid",
+      "task-run-list",
+      "run-result",
+      "last-event",
+      "close-logs",
+      "log-dialog",
+      "copy-logs",
+      "log-title",
+      "log-content",
+    ],
+    locationPathname: "/tasks/scan",
+    apiResolver(path) {
+      if (path === "/api/tasks/scan?limit=20") {
+        return JSON.parse(JSON.stringify(detailPayload));
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  await harness.flush();
+  const html = harness.elements.get("run-result").innerHTML;
+  assert.match(html, /Run artifacts/i);
+  assert.match(html, /episodes_added/i);
+  assert.match(html, /snapshot_diff/i);
+});
+
 test("task page applies toggle response run and enables logs immediately", async () => {
   const detailPayload = {
     task: {

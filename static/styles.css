@@ -1382,6 +1382,33 @@ button {
   white-space: pre-wrap;
 }
 
+.run-artifacts-box {
+  border: 1px solid #2a4876;
+  border-radius: 8px;
+  background: rgba(14, 28, 52, 0.82);
+  padding: 8px;
+}
+
+.run-artifacts-box summary {
+  cursor: pointer;
+  color: #bdd7ff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.run-artifacts-box pre {
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #23416e;
+  background: rgba(6, 14, 28, 0.92);
+  color: #9ec7ff;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 260px;
+  overflow: auto;
+}
+
 .small-btn {
   border: 1px solid #305686;
   border-radius: 8px;

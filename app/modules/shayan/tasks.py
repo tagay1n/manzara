@@ -37,7 +37,13 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "icon_idle": "RefreshCw",
             "icon_running": "Square",
             "cwd": str(shayan.repo_path),
-            "command": {"mode": "shell", "value": scan_cmd},
+            "command": {
+                "mode": "shell",
+                "value": scan_cmd,
+                "artifacts": {
+                    "snapshot_file": str(shayan.latest_snapshot_file),
+                },
+            },
         },
         {
             "task_id": "shayan.download_new",
@@ -47,6 +53,13 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "icon_idle": "Play",
             "icon_running": "Square",
             "cwd": str(shayan.repo_path),
-            "command": {"mode": "shell", "value": download_cmd},
+            "command": {
+                "mode": "shell",
+                "value": download_cmd,
+                "artifacts": {
+                    "status_file": str(shayan.status_file),
+                    "summary_file": str(shayan.summary_file),
+                },
+            },
         },
     ]

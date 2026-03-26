@@ -27,9 +27,7 @@ def load_shayan_settings() -> ShayanSettings:
 
     repo_path = Path(os.environ.get("SHAYAN_REPO_PATH", str(repo_default))).expanduser()
     output_path = Path(os.environ.get("SHAYAN_OUTPUT_PATH", str(output_default))).expanduser()
-    artifacts_dir = Path(
-        os.environ.get("SHAYAN_ARTIFACTS_DIR", str(flow_artifacts_dir("shayan")))
-    ).expanduser()
+    artifacts_dir = flow_artifacts_dir("shayan")
     (artifacts_dir / "snapshots").mkdir(parents=True, exist_ok=True)
 
     return ShayanSettings(

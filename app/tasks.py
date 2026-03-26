@@ -25,6 +25,7 @@ from app.runtime_states import (
     task_terminal_event_type,
 )
 from app.modules.maintenance.backup_s3_verify import verify_backup_objects_in_s3
+from app.run_artifacts import capture_pre_run_artifacts, collect_post_run_artifacts
 from app.run_summary import build_structured_run_summary
 
 
@@ -308,6 +309,7 @@ class TaskRunner:
                 raise ValueError("Unsupported command mode")
 
             run_log_file, run_log_path = self._open_run_log(task, run_id)
+            pre_artifacts = capture_pre_run_artifacts(task)
 
             backup_state_before: Optional[Dict[str, Any]] = None
             if self._is_pgbackrest_backup_task(task):
@@ -440,6 +442,11 @@ class TaskRunner:
             )
             run_row = self.db.get_run(run_id) or {}
             log_rows = self.db.get_logs(run_id, after_log_id=0, limit=5000)
+            task_artifacts = collect_post_run_artifacts(
+                task,
+                status=str(status),
+                pre_state=pre_artifacts,
+            )
             summary = build_structured_run_summary(
                 task_id=str(task["task_id"]),
                 panel_id=str(task["panel_id"]),
@@ -450,6 +457,7 @@ class TaskRunner:
                 started_at=run_row.get("started_at"),
                 finished_at=run_row.get("finished_at"),
                 log_lines=[str(item.get("line") or "") for item in log_rows],
+                artifacts=task_artifacts,
             )
             self.db.update_run_summary(run_id, summary)
             self.db.insert_event(
@@ -488,6 +496,7 @@ class TaskRunner:
                 started_at=failed_row.get("started_at"),
                 finished_at=failed_row.get("finished_at"),
                 log_lines=[],
+                artifacts={},
             )
             self.db.update_run_summary(run_id, failed_summary)
             self.db.insert_event(

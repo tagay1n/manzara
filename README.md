@@ -145,7 +145,6 @@ Environment variables:
 - `MANZARA_ARTIFACTS_ROOT` (default: `~/.manzara`; shared artifact root)
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
 - `SHAYAN_OUTPUT_PATH` (default: `/home/tans1q/video-archive`)
-- `SHAYAN_ARTIFACTS_DIR` (default: `~/.manzara/shayan`)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 - `PG_BACKREST_STANZA` (default: `monocorpus`)
 - `OSCAR_REPO_PATH` (default: `/home/tans1q/projects/oscar-corpus-extractor`)
