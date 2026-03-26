@@ -344,11 +344,15 @@ function applyToggleResult(result) {
 }
 
 async function toggleTask() {
+  const targetTaskId = String(state.payload?.task?.task_id || state.taskId || "").trim();
+  if (!targetTaskId) {
+    throw new Error("Task id is missing");
+  }
   applyOptimisticToggleState();
   if (state.payload) {
     renderTaskDetail(state.payload);
   }
-  const result = await api(`/api/tasks/${encodeURIComponent(state.taskId)}/toggle`, {
+  const result = await api(`/api/tasks/${encodeURIComponent(targetTaskId)}/toggle`, {
     method: "POST",
     body: JSON.stringify({}),
   });

@@ -135,6 +135,17 @@ test("api returns parsed json and raises meaningful HTTP errors", async () => {
   await assert.rejects(failCore.api("/x"), /upstream unavailable/);
 });
 
+test("api extracts JSON detail from error responses", async () => {
+  const core = loadCore({
+    fetchImpl: async () => ({
+      ok: false,
+      status: 404,
+      text: async () => '{"detail":"Task not found"}',
+    }),
+  });
+  await assert.rejects(core.api("/x"), /Task not found/);
+});
+
 test("createSseController updates cursor, dispatches events, and reconnects", () => {
   const created = [];
   const scheduled = [];

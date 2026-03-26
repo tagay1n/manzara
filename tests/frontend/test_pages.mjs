@@ -822,7 +822,7 @@ test("task page renders running control state and toggles task endpoint", async 
       if (path === "/api/tasks/quick?limit=20") {
         return JSON.parse(JSON.stringify(detailPayload));
       }
-      if (path === "/api/tasks/quick/toggle") {
+      if (path === "/api/tasks/shayan.quick/toggle") {
         return { action: "stop_graceful" };
       }
       throw new Error(`unexpected path: ${path}`);
@@ -839,7 +839,7 @@ test("task page renders running control state and toggles task endpoint", async 
   await harness.timer.runAllTimeouts();
   await harness.flush();
 
-  const toggleCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/quick/toggle");
+  const toggleCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/shayan.quick/toggle");
   assert.equal(toggleCalls.length, 1);
   const detailCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/quick?limit=20");
   assert.ok(detailCalls.length >= 2);
@@ -956,7 +956,7 @@ test("task page applies toggle response run and enables logs immediately", async
       if (path === "/api/tasks/scan?limit=20") {
         return JSON.parse(JSON.stringify(detailPayload));
       }
-      if (path === "/api/tasks/scan/toggle") {
+      if (path === "/api/tasks/shayan.scan_changes/toggle") {
         return {
           action: "start",
           run: {
@@ -979,6 +979,9 @@ test("task page applies toggle response run and enables logs immediately", async
   await harness.flush();
   assert.match(harness.elements.get("run-result").innerHTML, /#88|Run starting/i);
   assert.match(harness.elements.get("run-result").innerHTML, /show-run-logs/i);
+
+  const toggleCall = harness.apiCalls.find((call) => call.path.endsWith("/toggle"));
+  assert.equal(toggleCall?.path, "/api/tasks/shayan.scan_changes/toggle");
 });
 
 test("task page renders loading then error when task detail fetch fails", async () => {

@@ -220,7 +220,19 @@
     });
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || `HTTP ${response.status}`);
+      let normalizedMessage = "";
+      if (text) {
+        try {
+          const parsed = JSON.parse(text);
+          const detail = parsed?.detail;
+          if (typeof detail === "string" && detail.trim()) {
+            normalizedMessage = detail.trim();
+          }
+        } catch (_error) {
+          // Non-JSON errors fall back to raw response text.
+        }
+      }
+      throw new Error(normalizedMessage || text || `HTTP ${response.status}`);
     }
     return response.json();
   }
