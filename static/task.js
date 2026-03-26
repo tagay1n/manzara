@@ -320,6 +320,29 @@ function applyOptimisticToggleState() {
   }
 }
 
+function applyToggleResult(result) {
+  if (!state.payload || !result || typeof result !== "object") return;
+  const run = result.run && typeof result.run === "object" ? result.run : null;
+  if (!run) return;
+
+  const runs = Array.isArray(state.payload.runs) ? state.payload.runs : [];
+  state.payload.runs = runs;
+  const runId = Number(run.run_id || 0);
+  if (runId > 0) {
+    const index = runs.findIndex((item) => Number(item?.run_id || 0) === runId);
+    if (index >= 0) {
+      runs[index] = { ...runs[index], ...run };
+    } else {
+      runs.unshift({ ...run });
+    }
+    state.selectedRunId = runId;
+    return;
+  }
+  if (runs.length > 0) {
+    runs[0] = { ...runs[0], ...run };
+  }
+}
+
 async function toggleTask() {
   applyOptimisticToggleState();
   if (state.payload) {
@@ -330,6 +353,10 @@ async function toggleTask() {
     body: JSON.stringify({}),
   });
   maybeShowTaskActionError(result);
+  applyToggleResult(result);
+  if (state.payload) {
+    renderTaskDetail(state.payload);
+  }
   queueRefresh(0);
 }
 
@@ -376,7 +403,10 @@ function setupEventStream() {
 function attachUiHandlers() {
 
   document.getElementById("task-toggle-btn").addEventListener("click", () => {
-    toggleTask().catch((error) => console.error(error));
+    toggleTask().catch((error) => {
+      console.error(error);
+      window.alert(error?.message || String(error));
+    });
   });
 
   document.getElementById("stop-all-btn").addEventListener("click", () => {

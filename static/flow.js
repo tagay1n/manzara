@@ -340,6 +340,41 @@ function applyOptimisticTaskAction(taskId) {
   }
 }
 
+function applyTaskActionResult(taskId, result) {
+  const task = findTaskById(taskId);
+  if (!task || !result || typeof result !== "object") return;
+
+  const action = String(result.action || "");
+  const run = result.run && typeof result.run === "object" ? result.run : null;
+  if (run) {
+    task.run = { ...(task.run || {}), ...run };
+    const runs = Array.isArray(task.runs) ? task.runs : [];
+    task.runs = runs;
+    const runId = Number(run.run_id || 0);
+    if (runId > 0) {
+      const index = runs.findIndex((item) => Number(item?.run_id || 0) === runId);
+      if (index >= 0) {
+        runs[index] = { ...runs[index], ...run };
+      } else {
+        runs.unshift({ ...run });
+      }
+    }
+    return;
+  }
+
+  if (action === "start") {
+    const nowIso = new Date().toISOString();
+    task.run = {
+      ...(task.run || {}),
+      status: "starting",
+      started_at: task.run?.started_at || nowIso,
+      finished_at: null,
+      exit_code: null,
+      error_text: null,
+    };
+  }
+}
+
 async function toggleTask(taskId) {
   applyOptimisticTaskAction(taskId);
   if (state.payload) {
@@ -350,6 +385,10 @@ async function toggleTask(taskId) {
     body: JSON.stringify({}),
   });
   maybeShowTaskActionError(result);
+  applyTaskActionResult(taskId, result);
+  if (state.payload) {
+    renderFlow(state.payload);
+  }
   queueRefresh(0);
 }
 
@@ -405,7 +444,10 @@ function attachUiHandlers() {
     if (target.classList.contains("task-toggle")) {
       const taskId = target.dataset.taskId;
       if (taskId) {
-        toggleTask(taskId).catch((error) => console.error(error));
+        toggleTask(taskId).catch((error) => {
+          console.error(error);
+          window.alert(error?.message || String(error));
+        });
       }
       return;
     }

@@ -910,6 +910,77 @@ test("task page normalizes idle icon names for lucide glyph rendering", async ()
   assert.match(toggleBtn.innerHTML, /data-lucide="refresh-cw"/);
 });
 
+test("task page applies toggle response run and enables logs immediately", async () => {
+  const detailPayload = {
+    task: {
+      task_id: "shayan.scan_changes",
+      slug: "scan",
+      title: "Scan for changes",
+      task_type: "scan",
+      icon_idle: "RefreshCw",
+    },
+    panel: { title: "Shayan" },
+    stats: {
+      total_runs: 0,
+      status_counts: { completed: 0, failed: 0 },
+      last_success_at: null,
+    },
+    runs: [],
+    global: {
+      active_tasks: 0,
+      active_workflows: 0,
+      stop_all_state: "disabled",
+    },
+  };
+
+  const harness = createHarness({
+    source: TASK_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "task-toggle-btn",
+      "task-title",
+      "task-subtitle",
+      "task-stat-grid",
+      "task-run-list",
+      "run-result",
+      "last-event",
+      "close-logs",
+      "log-dialog",
+      "copy-logs",
+      "log-title",
+      "log-content",
+    ],
+    locationPathname: "/tasks/scan",
+    apiResolver(path) {
+      if (path === "/api/tasks/scan?limit=20") {
+        return JSON.parse(JSON.stringify(detailPayload));
+      }
+      if (path === "/api/tasks/scan/toggle") {
+        return {
+          action: "start",
+          run: {
+            run_id: 88,
+            status: "starting",
+            started_at: "2026-03-24T10:00:05Z",
+            finished_at: null,
+            exit_code: null,
+            error_text: null,
+          },
+        };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  await harness.flush();
+  assert.match(harness.elements.get("run-result").innerHTML, /No run selected|No runs yet/);
+  harness.elements.get("task-toggle-btn").dispatch("click");
+  await harness.flush();
+  assert.match(harness.elements.get("run-result").innerHTML, /#88|Run starting/i);
+  assert.match(harness.elements.get("run-result").innerHTML, /show-run-logs/i);
+});
+
 test("task page renders loading then error when task detail fetch fails", async () => {
   const harness = createHarness({
     source: TASK_SOURCE,
@@ -1090,7 +1161,17 @@ test("flow page shows immediate starting state after task toggle click", async (
         return JSON.parse(JSON.stringify(payload));
       }
       if (path === "/api/tasks/shayan.scan_changes/toggle") {
-        return { action: "start" };
+        return {
+          action: "start",
+          run: {
+            run_id: 99,
+            status: "starting",
+            started_at: "2026-03-24T10:00:05Z",
+            finished_at: null,
+            exit_code: null,
+            error_text: null,
+          },
+        };
       }
       throw new Error(`unexpected path: ${path}`);
     },
@@ -1102,7 +1183,9 @@ test("flow page shows immediate starting state after task toggle click", async (
     target: { closest: (selector) => (selector === "button" ? { classList: { contains: (name) => name === "task-toggle" }, dataset: { taskId: "shayan.scan_changes" } } : null) },
   });
   await harness.flush();
-  assert.match(harness.elements.get("flow-task-grid").innerHTML, /Starting|data-lucide="square"/);
+  const html = harness.elements.get("flow-task-grid").innerHTML;
+  assert.match(html, /Starting|data-lucide="square"/);
+  assert.match(html, /data-run-id="99"/);
 });
 
 test("dashboard page renders empty state for panels and runs", async () => {
