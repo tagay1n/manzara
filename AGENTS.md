@@ -39,7 +39,6 @@ Notes:
 - Prefer explicit module boundaries over ad-hoc scripts.
 - Prioritize operational visibility (run state, logs, artifacts, failures).
 - Runtime state store is PostgreSQL only (`MANZARA_DATABASE_URL`) in schema `monocorpus` by default (`MANZARA_DB_SCHEMA`); do not reintroduce SQLite runtime paths.
-- Known temporary exception: Oscar stage runner still reads legacy `state.sqlite` for snapshot queue seeding; keep changes isolated and plan full PostgreSQL cutover cleanup later.
 - Shayan state (download manifest + snapshot history) is PostgreSQL-backed. Do not use persistent `status.json` / `latest.json` as runtime source of truth.
 - Artifact location rule (all flows/tasks): write all task/flow artifacts (logs, temp files, exports, caches, run metadata) only under `~/.manzara` by default (or under `MANZARA_ARTIFACTS_ROOT` when explicitly overridden). Do not write artifacts into repository-root folders such as `_artifacts`.
 - Keep secrets out of git: treat `config.yaml` as local-only and maintain masked `config.example.yaml` in sync with config structure changes.

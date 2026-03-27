@@ -91,9 +91,6 @@ from app.modules.maintenance.workflow import (
     maintenance_backup_full_workflow_bundle,
     maintenance_backup_incr_workflow_bundle,
 )
-from app.modules.oscar.panel import build_oscar_panel
-from app.modules.oscar.tasks import oscar_task_definitions
-from app.modules.oscar.workflow import oscar_pipeline_workflow_bundle
 from app.modules.shayan.panel import build_shayan_panel
 from app.modules.shayan.tasks import shayan_task_definitions
 from app.modules.shayan.workflow import shayan_workflow_bundle
@@ -121,7 +118,6 @@ def _payload_builder_operations() -> PayloadBuilderOperations:
             "build_shayan_panel": build_shayan_panel,
             "build_maintenance_panel": build_maintenance_panel,
             "build_library_panel": build_library_panel,
-            "build_oscar_panel": build_oscar_panel,
             "get_library_dataset_stats": get_library_dataset_stats,
             "build_database_state_snapshot": build_database_state_snapshot,
             "get_classification_detail": get_classification_detail,
@@ -220,14 +216,12 @@ def _build_startup_registry() -> Dict[str, list[Dict[str, Any]]]:
         panel_defs=_PANEL_DEFS,
         shayan_task_definitions=shayan_task_definitions,
         maintenance_task_definitions=maintenance_task_definitions,
-        oscar_task_definitions=oscar_task_definitions,
         shayan_workflow_bundle=shayan_workflow_bundle,
         maintenance_backup_full_workflow_bundle=maintenance_backup_full_workflow_bundle,
         maintenance_backup_incr_workflow_bundle=maintenance_backup_incr_workflow_bundle,
         library_workflow_bundle=library_workflow_bundle,
         library_personality_normalization_workflow_bundle=library_personality_normalization_workflow_bundle,
         library_publisher_normalization_workflow_bundle=library_publisher_normalization_workflow_bundle,
-        oscar_pipeline_workflow_bundle=oscar_pipeline_workflow_bundle,
     )
     return {
         "panel_defs": registry.panel_defs,

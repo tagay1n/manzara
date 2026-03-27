@@ -1,2 +1,0 @@
-"""Oscar runtime entrypoints."""
-

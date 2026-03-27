@@ -238,16 +238,9 @@ class PayloadBuilder:
             tasks=tasks_by_panel.get("library", []),
             title=panel_titles.get("library", "Library"),
         )
-        oscar_panel = ops.build_oscar_panel(
-            db=state.db,
-            oscar=state.settings.oscar,
-            tasks=tasks_by_panel.get("oscar", []),
-            title=panel_titles.get("oscar", "Oscar"),
-        )
         return {
             "shayan": shayan_panel,
             "maintenance": maintenance_panel,
-            "oscar": oscar_panel,
             "library": library_panel,
         }
 
@@ -275,7 +268,6 @@ class PayloadBuilder:
         ordered_panels = [
             panel_payloads["shayan"],
             panel_payloads["maintenance"],
-            panel_payloads["oscar"],
             panel_payloads["library"],
         ]
         for panel in ordered_panels:

@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 
-_SNAPSHOT_RE = re.compile(r"snapshot=([A-Za-z0-9._:-]+)")
 _BACKUP_LABEL_RE = re.compile(r"new backup label\s*=\s*([^\s]+)", re.IGNORECASE)
 _BACKUP_SIZE_RE = re.compile(r"\b(?:full|incr)\s+backup size\s*=\s*([^,]+)", re.IGNORECASE)
 
@@ -114,24 +113,6 @@ def build_structured_run_summary(
             summary["message"] = f"Backup completed: {backup_label}"
         elif status == "completed":
             summary["message"] = "Backup completed."
-        return summary
-
-    if panel_id == "oscar":
-        snapshot = None
-        for line in log_lines:
-            match = _SNAPSHOT_RE.search(line)
-            if match:
-                snapshot = match.group(1).strip()
-        if snapshot:
-            summary["highlights"].append({"label": "Snapshot", "value": snapshot})
-        stage_name = task_id.split(".", 1)[-1] if "." in task_id else task_id
-        stage_label = stage_name.replace("_", " ")
-        if status == "completed":
-            summary["message"] = f"{stage_label} completed."
-        elif status == "failed":
-            summary["message"] = summary.get("message") or f"{stage_label} failed."
-        else:
-            summary["message"] = f"{stage_label} {status.replace('_', ' ')}."
         return summary
 
     if panel_id == "shayan" and status == "completed":

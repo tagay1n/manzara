@@ -14,11 +14,10 @@ Current architecture:
 - FastAPI backend
 - PostgreSQL state store (tasks, runs, logs, events, workflows, schedules)
 - Schema management via Alembic migrations (no runtime DDL bootstrap)
-- Modular flows in one monorepo (`shayan`, `maintenance`, `oscar`, `library`)
+- Modular flows in one monorepo (`shayan`, `maintenance`, `library`)
 - Live updates via SSE (`/api/events/stream`)
 
 Transitional note:
-- Oscar runtime currently keeps one legacy bridge that reads `state.sqlite` for snapshot queue seeding. Core runtime state remains PostgreSQL-backed.
 - Shayan flow now keeps persistent state in PostgreSQL (`shayan_manifest_entries`, `shayan_snapshots`, `shayan_snapshot_entries`).
 - Legacy `~/.manzara/shayan/status.json` and `~/.manzara/shayan/snapshots/latest.json` are used only for one-time migration when DB state is empty; they are not runtime source of truth after cutover.
 
@@ -58,11 +57,6 @@ Flow tasks (seeded at startup):
 - `maintenance.monocorpus_sync`
 - `maintenance.pgbackrest_backup_full`
 - `maintenance.pgbackrest_backup_incr`
-- `oscar.discover_snapshots`
-- `oscar.resolve_offsets_local`
-- `oscar.download_ranges`
-- `oscar.export_parquet`
-- `oscar.upload_dataset`
 - `maintenance.monocorpus_meta_evaluate`
 - `library.collection_detect`
 - `library.collection_apply`
@@ -73,7 +67,6 @@ Workflows (seeded at startup):
 - `shayan.weekly_sync` (scan -> conditional download)
 - `maintenance.pgbackrest_full_weekly`
 - `maintenance.pgbackrest_incr_3h`
-- `oscar.snapshot_pipeline` (discover snapshots -> resolve offsets -> download ranges -> export parquet -> upload dataset)
 - `library.meta_evaluate`
 - `library.personality_normalization_refresh`
 - `library.publisher_normalization_refresh`
@@ -154,20 +147,6 @@ Environment variables:
 - `SHAYAN_YADISK_TARGET_DIR` (optional override; defaults to `shayan.yadisk.target_dir` or `yandex.disk.target_dir` in YAML)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 - `PG_BACKREST_STANZA` (default: `monocorpus`)
-- `OSCAR_REPO_PATH` (default: `/home/tans1q/projects/oscar-corpus-extractor`)
-- `OSCAR_ARTIFACTS_DIR` (default: `~/.manzara/oscar`)
-- `OSCAR_PARQUET_PART_SIZE_MB` (default: `1024`)
-- `OSCAR_HF_UPLOAD_REPO` (target dataset repo for Oscar upload task)
-- `OSCAR_HF_UPLOAD_TOKEN` (optional; falls back to `HF_TOKEN`)
-
-Optional YAML config for Oscar upload task:
-
-```yaml
-oscar:
-  hf_upload:
-    repo: "username/oscar-tt-dataset"
-    token: "hf_..."
-```
 
 Optional YAML config for Shayan upload task:
 

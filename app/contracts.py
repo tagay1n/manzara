@@ -13,7 +13,6 @@ class PayloadBuilderOperations(Protocol):
     build_shayan_panel: Callable[..., JSONDict]
     build_maintenance_panel: Callable[..., JSONDict]
     build_library_panel: Callable[..., JSONDict]
-    build_oscar_panel: Callable[..., JSONDict]
     get_library_dataset_stats: Callable[..., JSONDict]
     build_database_state_snapshot: Callable[..., JSONDict]
     get_classification_detail: Callable[..., JSONDict]

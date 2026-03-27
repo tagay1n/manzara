@@ -17,7 +17,6 @@ def test_startup_seed_registry_uses_injected_factories() -> None:
     settings = SimpleNamespace(
         shayan=SimpleNamespace(),
         maintenance=SimpleNamespace(),
-        oscar=SimpleNamespace(),
     )
     panel_defs = [{"panel_id": "x", "title": "X"}]
 
@@ -26,18 +25,16 @@ def test_startup_seed_registry_uses_injected_factories() -> None:
         panel_defs=panel_defs,
         shayan_task_definitions=lambda _cfg: [{"task_id": "a"}],
         maintenance_task_definitions=lambda _cfg: [{"task_id": "b"}],
-        oscar_task_definitions=lambda _cfg: [{"task_id": "c"}],
         shayan_workflow_bundle=lambda _cfg: {"workflow_id": "w1"},
         maintenance_backup_full_workflow_bundle=lambda: {"workflow_id": "w2"},
         maintenance_backup_incr_workflow_bundle=lambda: {"workflow_id": "w3"},
         library_workflow_bundle=lambda: {"workflow_id": "w4"},
         library_personality_normalization_workflow_bundle=lambda: {"workflow_id": "w5"},
         library_publisher_normalization_workflow_bundle=lambda: {"workflow_id": "w6"},
-        oscar_pipeline_workflow_bundle=lambda: {"workflow_id": "w7"},
     )
 
     assert registry.panel_defs == panel_defs
-    assert [item["task_id"] for item in registry.task_defs] == ["a", "b", "c"]
+    assert [item["task_id"] for item in registry.task_defs] == ["a", "b"]
     assert [item["workflow_id"] for item in registry.workflow_bundles] == [
         "w1",
         "w2",
@@ -45,7 +42,6 @@ def test_startup_seed_registry_uses_injected_factories() -> None:
         "w4",
         "w5",
         "w6",
-        "w7",
     ]
 
 

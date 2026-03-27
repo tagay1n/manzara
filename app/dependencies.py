@@ -64,7 +64,6 @@ from app.modules.maintenance.panel import (
     build_maintenance_panel,
 )
 from app.modules.maintenance.tasks import MONOCORPUS_META_EVALUATE_TASK_ID
-from app.modules.oscar.panel import build_oscar_panel
 from app.modules.shayan.panel import build_shayan_panel
 from app.payload_builder import PayloadBuilder
 from app.run_summary import build_default_run_summary
@@ -76,7 +75,6 @@ class PayloadBuilderOperationsService:
     build_shayan_panel: Callable[..., JSONDict]
     build_maintenance_panel: Callable[..., JSONDict]
     build_library_panel: Callable[..., JSONDict]
-    build_oscar_panel: Callable[..., JSONDict]
     get_library_dataset_stats: Callable[..., JSONDict]
     build_database_state_snapshot: Callable[..., JSONDict]
     get_classification_detail: Callable[..., JSONDict]
@@ -170,7 +168,6 @@ def build_payload_builder_operations() -> PayloadBuilderOperations:
         build_shayan_panel=build_shayan_panel,
         build_maintenance_panel=build_maintenance_panel,
         build_library_panel=build_library_panel,
-        build_oscar_panel=build_oscar_panel,
         get_library_dataset_stats=get_library_dataset_stats,
         build_database_state_snapshot=build_database_state_snapshot,
         get_classification_detail=get_classification_detail,

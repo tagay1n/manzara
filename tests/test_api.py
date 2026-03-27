@@ -17,7 +17,6 @@ from app.modules.maintenance.workflow import (
     MAINTENANCE_BACKUP_INCR_SCHEDULE_ID,
     MAINTENANCE_BACKUP_INCR_WORKFLOW_ID,
 )
-from app.modules.oscar.workflow import OSCAR_PIPELINE_WORKFLOW_ID
 from app.modules.shayan.workflow import SHAYAN_WEEKLY_SCHEDULE_ID, SHAYAN_WEEKLY_WORKFLOW_ID
 
 
@@ -55,7 +54,6 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     panels = {panel["panel_id"]: panel for panel in payload["panels"]}
     assert "shayan" in panels
     assert "maintenance" in panels
-    assert "oscar" in panels
 
     shayan = panels["shayan"]
     task_ids = {task["task_id"] for task in shayan["tasks"]}
@@ -70,64 +68,11 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     assert "maintenance.pgbackrest_backup_incr" in maintenance_task_ids
     assert "maintenance.monocorpus_meta_evaluate" not in maintenance_task_ids
 
-    oscar = panels["oscar"]
-    oscar_task_ids = {task["task_id"] for task in oscar["tasks"]}
-    assert "oscar.discover_snapshots" in oscar_task_ids
-    assert "oscar.resolve_offsets_local" in oscar_task_ids
-    assert "oscar.download_ranges" in oscar_task_ids
-    assert "oscar.export_parquet" in oscar_task_ids
-    assert "oscar.upload_dataset" in oscar_task_ids
-
     library = panels["library"]
     library_task_ids = {task["task_id"] for task in library["tasks"]}
     assert "maintenance.monocorpus_meta_evaluate" in library_task_ids
     assert "library.collection_detect" in library_task_ids
     assert "library.collection_apply" in library_task_ids
-
-
-def test_dashboard_oscar_panel_includes_snapshot_queue_stats(test_client) -> None:
-    client, main_app = test_client
-    db = main_app.state.db
-
-    db.upsert_oscar_snapshot(
-        "CC-MAIN-2024-10",
-        source_path="/snapshots/10",
-        status="pending",
-        discovered_at="2026-03-01T00:00:00+00:00",
-    )
-    db.upsert_oscar_snapshot(
-        "CC-MAIN-2024-11",
-        source_path="/snapshots/11",
-        status="processing",
-        discovered_at="2026-03-02T00:00:00+00:00",
-    )
-    db.upsert_oscar_snapshot(
-        "CC-MAIN-2024-12",
-        source_path="/snapshots/12",
-        status="pending",
-        discovered_at="2026-03-03T00:00:00+00:00",
-    )
-    db.set_oscar_snapshot_status("CC-MAIN-2024-12", "completed")
-    db.upsert_oscar_snapshot(
-        "CC-MAIN-2024-13",
-        source_path="/snapshots/13",
-        status="pending",
-        discovered_at="2026-03-04T00:00:00+00:00",
-    )
-    db.set_oscar_snapshot_status("CC-MAIN-2024-13", "failed", error_text="test")
-
-    payload = client.get("/api/dashboard").json()
-    panels = {panel["panel_id"]: panel for panel in payload["panels"]}
-    oscar = panels["oscar"]
-    cards = {str(item["label"]): str(item["value"]) for item in oscar["stats_cards"]}
-
-    assert cards["Snapshots Total"] == "4"
-    assert cards["Pending"] == "1"
-    assert cards["Processing"] == "1"
-    assert cards["Completed"] == "1"
-    assert cards["Failed"] == "1"
-    assert cards["Current Snapshot"] == "CC-MAIN-2024-11"
-    assert cards["Last Completed Snapshot"] == "CC-MAIN-2024-12"
 
 
 def test_rename_flow_and_task_title(test_client) -> None:
@@ -153,7 +98,6 @@ def test_rename_flow_and_task_title(test_client) -> None:
     main_app.state.db.seed_panels(main_app._PANEL_DEFS)
     main_app.state.db.seed_tasks(main_app.shayan_task_definitions(main_app.state.settings.shayan))
     main_app.state.db.seed_tasks(main_app.maintenance_task_definitions(main_app.state.settings.maintenance))
-    main_app.state.db.seed_tasks(main_app.oscar_task_definitions(main_app.state.settings.oscar))
 
     payload_after_seed = client.get("/api/dashboard").json()
     panels_after_seed = {panel["panel_id"]: panel for panel in payload_after_seed["panels"]}
@@ -191,7 +135,6 @@ def test_schedules_endpoint_returns_workflows(test_client) -> None:
     assert LIBRARY_WORKFLOW_ID in workflow_ids
     assert MAINTENANCE_BACKUP_FULL_WORKFLOW_ID in workflow_ids
     assert MAINTENANCE_BACKUP_INCR_WORKFLOW_ID in workflow_ids
-    assert OSCAR_PIPELINE_WORKFLOW_ID in workflow_ids
 
 
 def test_update_interval_schedule_minutes(test_client) -> None:
@@ -300,7 +243,7 @@ def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
     assert response.status_code == 200
     payload = response.json()
     flow_ids = {flow["panel_id"] for flow in payload["flows"]}
-    assert {"shayan", "maintenance", "oscar", "library"} <= flow_ids
+    assert {"shayan", "maintenance", "library"} <= flow_ids
 
     shayan = next(item for item in payload["flows"] if item["panel_id"] == "shayan")
     task_ids = {task["task_id"] for task in shayan["tasks"]}
@@ -1294,32 +1237,6 @@ def test_workflow_run_skips_download_when_no_new(
     assert step_runs[0]["status"] == "completed"
     assert step_runs[1]["task_id"] == "shayan.download_new"
     assert step_runs[1]["status"] == "skipped"
-
-
-def test_oscar_pipeline_workflow_runs_five_steps(
-    test_client,
-    wait_for_terminal_workflow_run,
-) -> None:
-    client, main_app = test_client
-
-    response = client.post(f"/api/workflows/{OSCAR_PIPELINE_WORKFLOW_ID}/run")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["action"] == "start"
-    workflow_run_id = int(payload["workflow_run"]["workflow_run_id"])
-
-    workflow_run = wait_for_terminal_workflow_run(main_app, workflow_run_id)
-    assert workflow_run["status"] == "completed"
-
-    step_runs = main_app.state.db.list_workflow_step_runs(workflow_run_id)
-    assert [step["task_id"] for step in step_runs] == [
-        "oscar.discover_snapshots",
-        "oscar.resolve_offsets_local",
-        "oscar.download_ranges",
-        "oscar.export_parquet",
-        "oscar.upload_dataset",
-    ]
-    assert all(step["status"] == "completed" for step in step_runs)
 
 
 def test_toggle_task_reports_sudo_password_required(test_client, monkeypatch) -> None:

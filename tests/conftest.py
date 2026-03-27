@@ -16,14 +16,6 @@ from sqlalchemy import create_engine, text
 
 from app.db import ACTIVE_STATUSES, ACTIVE_WORKFLOW_STATUSES, Database
 from app.modules.maintenance.config import MaintenanceSettings
-from app.modules.oscar.config import OscarSettings
-from app.modules.oscar.tasks import (
-    OSCAR_DISCOVER_SNAPSHOTS_TASK_ID,
-    OSCAR_DOWNLOAD_RANGES_TASK_ID,
-    OSCAR_EXPORT_PARQUET_TASK_ID,
-    OSCAR_RESOLVE_OFFSETS_TASK_ID,
-    OSCAR_UPLOAD_DATASET_TASK_ID,
-)
 from app.modules.shayan.config import ShayanSettings
 from app.settings import Settings
 
@@ -114,76 +106,6 @@ def _test_task_defs(shayan: ShayanSettings):
                     "print('ignore-start', flush=True); "
                     "time.sleep(8)\""
                 ),
-            },
-        },
-    ]
-
-
-def _test_oscar_task_defs(_oscar: OscarSettings):
-    return [
-        {
-            "task_id": OSCAR_DISCOVER_SNAPSHOTS_TASK_ID,
-            "panel_id": "oscar",
-            "title": "Discover snapshots",
-            "task_type": "ingest",
-            "icon_idle": "Radar",
-            "icon_running": "Square",
-            "cwd": ".",
-            "command": {
-                "mode": "shell",
-                "value": "python3 -c \"print('oscar-discover-ok')\"",
-            },
-        },
-        {
-            "task_id": OSCAR_RESOLVE_OFFSETS_TASK_ID,
-            "panel_id": "oscar",
-            "title": "Resolve offsets (local)",
-            "task_type": "extract",
-            "icon_idle": "Search",
-            "icon_running": "Square",
-            "cwd": ".",
-            "command": {
-                "mode": "shell",
-                "value": "python3 -c \"print('oscar-resolve-ok')\"",
-            },
-        },
-        {
-            "task_id": OSCAR_DOWNLOAD_RANGES_TASK_ID,
-            "panel_id": "oscar",
-            "title": "Download ranges",
-            "task_type": "download",
-            "icon_idle": "Download",
-            "icon_running": "Square",
-            "cwd": ".",
-            "command": {
-                "mode": "shell",
-                "value": "python3 -c \"print('oscar-download-ok')\"",
-            },
-        },
-        {
-            "task_id": OSCAR_EXPORT_PARQUET_TASK_ID,
-            "panel_id": "oscar",
-            "title": "Export parquet",
-            "task_type": "export",
-            "icon_idle": "Table2",
-            "icon_running": "Square",
-            "cwd": ".",
-            "command": {
-                "mode": "shell",
-                "value": "python3 -c \"print('oscar-export-ok')\"",
-            },
-        },
-        {
-            "task_id": OSCAR_UPLOAD_DATASET_TASK_ID,
-            "panel_id": "oscar",
-            "title": "Upload dataset",
-            "task_type": "publish",
-            "icon_idle": "CloudUpload",
-            "icon_running": "Square",
-            "cwd": ".",
-            "command": {
-                "mode": "shell",
-                "value": "python3 -c \"print('oscar-upload-ok')\"",
             },
         },
     ]
@@ -307,8 +229,6 @@ def test_client(
     shayan_repo.mkdir(parents=True, exist_ok=True)
     monocorpus_repo = tmp_path / "monocorpus"
     monocorpus_repo.mkdir(parents=True, exist_ok=True)
-    oscar_repo = tmp_path / "oscar-corpus-extractor"
-    oscar_repo.mkdir(parents=True, exist_ok=True)
     artifacts = tmp_path / ".manzara" / "shayan"
     artifacts.mkdir(parents=True, exist_ok=True)
 
@@ -321,22 +241,15 @@ def test_client(
         monocorpus_repo_path=monocorpus_repo,
         pgbackrest_stanza="monocorpus",
     )
-    oscar = OscarSettings(
-        repo_path=oscar_repo,
-        artifacts_dir=tmp_path / ".manzara" / "oscar",
-        parquet_part_size_mb=1024,
-    )
     settings = Settings(
         database_url=database_url,
         database_schema=schema_name,
         shayan=shayan,
         maintenance=maintenance,
-        oscar=oscar,
         scheduler_enabled=False,
     )
 
     monkeypatch.setattr(main_app, "shayan_task_definitions", _test_task_defs)
-    monkeypatch.setattr(main_app, "oscar_task_definitions", _test_oscar_task_defs)
     main_app.state = main_app.AppState(settings)
     monkeypatch.setattr(main_app.state.db, "init_schema", lambda: None)
 
