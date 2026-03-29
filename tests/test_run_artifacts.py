@@ -113,3 +113,30 @@ def test_embedded_log_artifacts_take_precedence(tmp_path: Path) -> None:
         ],
     )
     assert artifacts == {"kind": "custom", "value": 42}
+
+
+def test_maintenance_sync_artifacts_extract_from_logs() -> None:
+    task = {
+        "task_id": "maintenance.monocorpus_sync",
+        "panel_id": "maintenance",
+        "command": {
+            "mode": "shell",
+            "value": "echo sync",
+        },
+    }
+    artifacts = collect_post_run_artifacts(
+        task,
+        status="completed",
+        pre_state={},
+        log_lines=[
+            "some line",
+            (
+                "MANZARA_RUN_ARTIFACTS_JSON="
+                '{"kind":"maintenance.sync_summary","rows_added":11,"rows_moved":4,"rows_deleted":2}'
+            ),
+        ],
+    )
+    assert artifacts["kind"] == "maintenance.sync_summary"
+    assert artifacts["rows_added"] == 11
+    assert artifacts["rows_moved"] == 4
+    assert artifacts["rows_deleted"] == 2

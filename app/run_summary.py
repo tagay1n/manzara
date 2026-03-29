@@ -115,6 +115,23 @@ def build_structured_run_summary(
             summary["message"] = "Backup completed."
         return summary
 
+    if task_id == "maintenance.monocorpus_sync" and status == "completed":
+        sync_artifacts = artifacts if isinstance(artifacts, dict) else {}
+        if sync_artifacts.get("kind") == "maintenance.sync_summary":
+            rows_added = int(sync_artifacts.get("rows_added") or 0)
+            rows_moved = int(sync_artifacts.get("rows_moved") or 0)
+            rows_deleted = int(sync_artifacts.get("rows_deleted") or 0)
+            summary["kind"] = "maintenance.monocorpus_sync"
+            summary["highlights"].append({"label": "Added", "value": str(rows_added)})
+            summary["highlights"].append({"label": "Moved", "value": str(rows_moved)})
+            summary["highlights"].append({"label": "Deleted", "value": str(rows_deleted)})
+            summary["message"] = (
+                f"Sync completed: +{rows_added} moved={rows_moved} deleted={rows_deleted}."
+            )
+        else:
+            summary["message"] = "Sync completed."
+        return summary
+
     if panel_id == "shayan" and status == "completed":
         if task_id.endswith(".scan_changes"):
             scan_artifacts = artifacts if isinstance(artifacts, dict) else {}

@@ -63,23 +63,26 @@ Error Handling:
 - State persistence for interrupted operations
 """
 
-from core.config import read_config
-from core.yadisk import walk_yadisk, download_file_locally
-from core.security import encrypt
-from core.db import get_session
-from integrations.yadisk import YaDisk
-from rich import print
-from models import Document
-from integrations.s3 import create_session
-from sqlalchemy import select
-from metadata.fields import extract_isbn_values, parse_meta
+import json
 import os
 from collections import defaultdict
+
 import pymupdf
 import typer
+from core.config import read_config
+from core.db import get_session
+from core.security import encrypt
+from core.yadisk import download_file_locally, walk_yadisk
+from integrations.s3 import create_session
+from integrations.yadisk import YaDisk
+from metadata.fields import extract_isbn_values, parse_meta
+from models import Document
+from rich import print
 from rich.console import Console
 from rich.table import Table
+from sqlalchemy import select
 from yadisk.exceptions import PathNotFoundError
+
 from .constants import TATAR_BCP_47_CODES, NOT_DOCUMENT_TYPES
 from .plan import flush, get_wiping_plan
 from .repository import (
@@ -100,6 +103,11 @@ def sync():
     """
     config = read_config()
     s3client = create_session(config)
+    run_stats = {
+        "rows_added": 0,
+        "rows_moved": 0,
+        "rows_deleted": 0,
+    }
 
     with YaDisk(config['yandex']['disk']['oauth_token']) as yaclient:
         print("Requesting all upstream metadata urls") 
@@ -129,17 +137,24 @@ def sync():
                             if doc := session.get(Document, file.md5):
                                 session.delete(doc)
                                 session.commit()
+                                run_stats["rows_deleted"] += 1
                         del docs_for_wiping[file.md5]
                         flush(docs_for_wiping)
                     else:
                         meta = upstream_metas.get(file.md5)
-                        if doc := _process_file(
+                        process_result = _process_file(
                             yaclient, file, all_md5s,
                             skipped, meta, config, lang_tag, entry_point
-                        ):
+                        )
+                        if process_result:
+                            doc, action = process_result
                             with get_session() as session:
                                 session.merge(doc)
                                 session.commit()
+                            if action == "added":
+                                run_stats["rows_added"] += 1
+                            elif action == "moved":
+                                run_stats["rows_moved"] += 1
 
                 except Exception as e:
                     import traceback
@@ -147,6 +162,7 @@ def sync():
             if skipped:
                 print("Skipped by MIME type files:")
                 print(*skipped, sep="\n")
+    _emit_sync_run_artifacts(run_stats)
             
 def _define_docs_for_wiping(yaclient, config):
     """Build and persist a plan of documents to move/remove."""
@@ -346,7 +362,7 @@ def _is_limited_doc_path(path: str) -> bool:
 
 
 def _process_file(ya_client, file, all_md5s, skipped_by_mime_type_files, upstream_meta, config, lang_tag, entry_point):
-    """Process a single Yandex Disk file and return a Document to upsert."""
+    """Process a single Yandex Disk file and return ``(Document, action)`` to upsert."""
     if file.path.startswith("disk:/neurotatarlar/kitaplar/monocorpus/Anna's archive/") and file.path.endswith('.txt'):
         print(f"Skipping Anna's archive file '{file.path}'")
         return
@@ -366,7 +382,8 @@ def _process_file(ya_client, file, all_md5s, skipped_by_mime_type_files, upstrea
         ya_public_key, ya_public_url = publish_file(ya_client, file.path)
     
     ya_path = file.path.removeprefix('disk:')    
-    if file.md5 in all_md5s:
+    is_existing_doc = file.md5 in all_md5s
+    if is_existing_doc:
         # compare with ya_resource_id
         # if 'resource_id' is the same, then skip, due to we have it in gsheet
         # if not, then remove from yadisk due to it is duplicate
@@ -392,5 +409,20 @@ def _process_file(ya_client, file, all_md5s, skipped_by_mime_type_files, upstrea
     doc.upstream_meta_url=upstream_meta
     doc.full = not _is_limited_doc_path(file.path)
     # update gsheet
-    all_md5s[file.md5] = {"resource_id": doc.ya_resource_id, "upstream_meta_url": doc.upstream_meta_url} 
-    return doc
+    all_md5s[file.md5] = {
+        "resource_id": doc.ya_resource_id,
+        "upstream_meta_url": doc.upstream_meta_url,
+        "ya_path": doc.ya_path,
+        "ya_public_url": doc.ya_public_url,
+    }
+    return doc, ("moved" if is_existing_doc else "added")
+
+
+def _emit_sync_run_artifacts(stats: dict[str, int]) -> None:
+    payload = {
+        "kind": "maintenance.sync_summary",
+        "rows_added": int(stats.get("rows_added", 0)),
+        "rows_moved": int(stats.get("rows_moved", 0)),
+        "rows_deleted": int(stats.get("rows_deleted", 0)),
+    }
+    print(f"MANZARA_RUN_ARTIFACTS_JSON={json.dumps(payload, ensure_ascii=False)}")
