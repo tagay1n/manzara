@@ -216,6 +216,12 @@ test("createSseController updates cursor, dispatches events, and reconnects", ()
   assert.equal(created[1].closed, true);
 });
 
+test("DEFAULT_EVENT_TYPES includes task.artifact for live artifact updates", () => {
+  const core = loadCore();
+  assert.equal(Array.isArray(core.DEFAULT_EVENT_TYPES), true);
+  assert.equal(core.DEFAULT_EVENT_TYPES.includes("task.artifact"), true);
+});
+
 test("createTabController toggles active tab and rejects unknown tabs", () => {
   function makeNode() {
     const classes = new Set();

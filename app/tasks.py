@@ -28,6 +28,7 @@ from app.modules.maintenance.backup_s3_verify import (
     wait_for_pgbackrest_s3_change,
 )
 from app.run_artifacts import capture_pre_run_artifacts, collect_post_run_artifacts
+from app.run_artifact_channel import RUN_ARTIFACT_PATH_ENV, read_run_artifact
 from app.run_summary import build_structured_run_summary
 
 
@@ -312,6 +313,7 @@ class TaskRunner:
 
             run_log_file, run_log_path = self._open_run_log(task, run_id)
             pre_artifacts = capture_pre_run_artifacts(task)
+            artifact_output_path = self._artifact_output_path(task, run_id)
 
             backup_s3_state_before: Optional[Dict[str, Any]] = None
             if self._is_pgbackrest_backup_task(task):
@@ -324,6 +326,7 @@ class TaskRunner:
             proc_env["MANZARA_TASK_RUN_ID"] = str(run_id)
             proc_env["MANZARA_TASK_ID"] = str(task.get("task_id") or "")
             proc_env["MANZARA_PANEL_ID"] = str(task.get("panel_id") or "")
+            proc_env[RUN_ARTIFACT_PATH_ENV] = str(artifact_output_path)
 
             proc = subprocess.Popen(
                 command_text,
@@ -445,12 +448,22 @@ class TaskRunner:
             )
             run_row = self.db.get_run(run_id) or {}
             log_rows = self.db.get_logs(run_id, after_log_id=0, limit=5000)
+            emitted_artifact = read_run_artifact(artifact_output_path)
             task_artifacts = collect_post_run_artifacts(
                 task,
                 status=str(status),
                 pre_state=pre_artifacts,
-                log_lines=[str(item.get("line") or "") for item in log_rows],
+                artifact_payload=emitted_artifact,
             )
+            artifact_event_payload = self._artifact_event_payload(task_artifacts)
+            if artifact_event_payload:
+                self.db.insert_event(
+                    "task.artifact",
+                    task_id=task["task_id"],
+                    run_id=run_id,
+                    panel_id=task["panel_id"],
+                    payload=artifact_event_payload,
+                )
             summary = build_structured_run_summary(
                 task_id=str(task["task_id"]),
                 panel_id=str(task["panel_id"]),
@@ -700,6 +713,42 @@ class TaskRunner:
             return handle, str(log_path)
         except Exception:
             return None, None
+
+    def _artifact_output_path(self, task: Dict[str, Any], run_id: int) -> Path:
+        task_id = str(task.get("task_id") or "unknown")
+        task_dir = self._artifacts_root / self._safe_slug(task_id)
+        task_dir.mkdir(parents=True, exist_ok=True)
+        return task_dir / f"run-{run_id}.artifact.json"
+
+    def _artifact_event_payload(self, artifacts: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(artifacts, dict) or not artifacts:
+            return {}
+        kind = str(artifacts.get("kind") or "").strip()
+        if not kind:
+            return {}
+        payload: Dict[str, Any] = {"kind": kind}
+        if kind == "shayan.snapshot_diff":
+            payload["episodes_added"] = int(artifacts.get("episodes_added") or 0)
+            payload["episodes_changed"] = int(artifacts.get("episodes_changed") or 0)
+            payload["episodes_removed"] = int(artifacts.get("episodes_removed") or 0)
+            return payload
+        if kind == "shayan.download_summary":
+            payload["downloaded"] = int(artifacts.get("downloaded") or 0)
+            payload["failed"] = int(artifacts.get("failed") or 0)
+            payload["manifest_added"] = int(artifacts.get("manifest_added") or 0)
+            payload["manifest_changed"] = int(artifacts.get("manifest_changed") or 0)
+            return payload
+        if kind == "shayan.upload_yadisk_summary":
+            payload["uploaded"] = int(artifacts.get("uploaded") or 0)
+            payload["failed"] = int(artifacts.get("failed") or 0)
+            payload["missing_local"] = int(artifacts.get("missing_local") or 0)
+            return payload
+        if kind == "maintenance.sync_summary":
+            payload["rows_added"] = int(artifacts.get("rows_added") or 0)
+            payload["rows_moved"] = int(artifacts.get("rows_moved") or 0)
+            payload["rows_deleted"] = int(artifacts.get("rows_deleted") or 0)
+            return payload
+        return payload
 
     def _write_run_log(
         self,

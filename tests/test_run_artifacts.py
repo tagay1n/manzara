@@ -89,7 +89,7 @@ def test_shayan_download_artifacts_reads_summary_file(tmp_path: Path) -> None:
     assert artifacts["failed"] == 3
 
 
-def test_embedded_log_artifacts_take_precedence(tmp_path: Path) -> None:
+def test_explicit_artifact_payload_takes_precedence(tmp_path: Path) -> None:
     snapshot = tmp_path / "snapshot.json"
     _write_snapshot(snapshot, {"ep-1": {"title": "Episode 1"}})
     task = {
@@ -107,10 +107,7 @@ def test_embedded_log_artifacts_take_precedence(tmp_path: Path) -> None:
         task,
         status="completed",
         pre_state=pre_state,
-        log_lines=[
-            "line 1",
-            'MANZARA_RUN_ARTIFACTS_JSON={"kind":"custom","value":42}',
-        ],
+        artifact_payload={"kind": "custom", "value": 42},
     )
     assert artifacts == {"kind": "custom", "value": 42}
 
@@ -128,12 +125,14 @@ def test_maintenance_sync_artifacts_extract_from_logs() -> None:
         task,
         status="completed",
         pre_state={},
+        artifact_payload={
+            "kind": "maintenance.sync_summary",
+            "rows_added": 11,
+            "rows_moved": 4,
+            "rows_deleted": 2,
+        },
         log_lines=[
             "some line",
-            (
-                "MANZARA_RUN_ARTIFACTS_JSON="
-                '{"kind":"maintenance.sync_summary","rows_added":11,"rows_moved":4,"rows_deleted":2}'
-            ),
         ],
     )
     assert artifacts["kind"] == "maintenance.sync_summary"

@@ -91,6 +91,8 @@ def test_scan_stage_stores_snapshot_and_emits_artifacts(
     capsys,
 ) -> None:
     monkeypatch.delenv("MANZARA_TASK_RUN_ID", raising=False)
+    artifact_path = tmp_path / "run-artifact.json"
+    monkeypatch.setenv("MANZARA_RUN_ARTIFACT_PATH", str(artifact_path))
     fake_db = _FakeDb()
     fake_db.latest_snapshot_entries = {"ep-1": {"title": "Episode 1"}}
 
@@ -145,9 +147,10 @@ def test_scan_stage_stores_snapshot_and_emits_artifacts(
     assert len(snapshot["entries"]) == 2
     assert fake_db.replaced_changes == []
 
-    stdout = capsys.readouterr().out
-    assert "MANZARA_RUN_ARTIFACTS_JSON=" in stdout
-    assert '"episodes_added": 1' in stdout
+    _ = capsys.readouterr().out
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "shayan.snapshot_diff"
+    assert int(payload["episodes_added"]) == 1
 
 
 def test_scan_stage_persists_detailed_changes_when_run_id_is_available(
@@ -217,6 +220,8 @@ def test_download_stage_replaces_manifest_and_emits_summary_metrics(
     tmp_path: Path,
     capsys,
 ) -> None:
+    artifact_path = tmp_path / "run-artifact.json"
+    monkeypatch.setenv("MANZARA_RUN_ARTIFACT_PATH", str(artifact_path))
     fake_db = _FakeDb()
     fake_db.latest_manifest = {
         "ep-1": {"title": "Episode 1", "file": "videos/ep1.mkv"},
@@ -271,9 +276,10 @@ def test_download_stage_replaces_manifest_and_emits_summary_metrics(
     assert len(fake_db.replaced_manifests) == 1
     assert len(fake_db.replaced_manifests[0]) == 2
 
-    stdout = capsys.readouterr().out
-    assert "MANZARA_RUN_ARTIFACTS_JSON=" in stdout
-    assert '"downloaded": 1' in stdout
+    _ = capsys.readouterr().out
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "shayan.download_summary"
+    assert int(payload["downloaded"]) == 1
 
 
 def test_download_stage_fails_when_updated_manifest_is_empty(
@@ -325,6 +331,8 @@ def test_upload_yadisk_stage_uploads_available_files_and_marks_missing(
     tmp_path: Path,
     capsys,
 ) -> None:
+    artifact_path = tmp_path / "run-artifact.json"
+    monkeypatch.setenv("MANZARA_RUN_ARTIFACT_PATH", str(artifact_path))
     fake_db = _FakeDb()
     existing_file = tmp_path / "videos" / "cartoons" / "Show" / "S01" / "S01E01.mkv"
     existing_file.parent.mkdir(parents=True, exist_ok=True)
@@ -400,7 +408,8 @@ def test_upload_yadisk_stage_uploads_available_files_and_marks_missing(
     assert fake_db.failed_rows[0]["entry_key"] == "ep-2"
     assert "local_file_missing" in fake_db.failed_rows[0]["error_text"]
 
-    stdout = capsys.readouterr().out
-    assert "MANZARA_RUN_ARTIFACTS_JSON=" in stdout
-    assert '"uploaded": 1' in stdout
-    assert '"failed": 1' in stdout
+    _ = capsys.readouterr().out
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == "shayan.upload_yadisk_summary"
+    assert int(payload["uploaded"]) == 1
+    assert int(payload["failed"]) == 1

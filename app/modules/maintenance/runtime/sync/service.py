@@ -66,6 +66,7 @@ Error Handling:
 import json
 import os
 from collections import defaultdict
+from pathlib import Path
 
 import pymupdf
 import typer
@@ -425,4 +426,15 @@ def _emit_sync_run_artifacts(stats: dict[str, int]) -> None:
         "rows_moved": int(stats.get("rows_moved", 0)),
         "rows_deleted": int(stats.get("rows_deleted", 0)),
     }
-    print(f"MANZARA_RUN_ARTIFACTS_JSON={json.dumps(payload, ensure_ascii=False)}")
+    raw_path = str(os.environ.get("MANZARA_RUN_ARTIFACT_PATH") or "").strip()
+    if not raw_path:
+        print("sync artifacts channel unavailable: MANZARA_RUN_ARTIFACT_PATH is not set")
+        return
+    target = Path(raw_path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    tmp_path.write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    tmp_path.replace(target)

@@ -59,6 +59,7 @@ Notes:
   - Treat it as visual/UX direction (console layout, density, hierarchy, panel style), while keeping Manzara-specific information architecture and behavior.
 - Treat backend API/event contracts as authoritative; align frontend types and adapters to backend schemas.
 - Bootstrap page state with API on initial load, then apply important runtime state transitions from SSE events.
+- For task artifacts/counters, UI live updates must come from explicit SSE artifact events (not from parsing stdout/stderr logs).
 - Route all HTTP calls through a shared client layer (timeouts, retries, auth headers, error normalization).
 - Model view states explicitly: `loading`, `ready`, `empty`, `error`.
 - Keep server-driven state synchronized from API/SSE; avoid shadow copies of domain truth on frontend.
@@ -76,6 +77,9 @@ Notes:
   - On upward scroll near the top, load previous `N` lines and prepend while preserving viewport position.
   - Use cursor-based pagination (for example `before_log_id` / `after_log_id`) instead of offset pagination for large logs.
   - Keep the log viewer implementation centralized and reused by all task pages/components.
+- Keep artifact presentation split by purpose:
+  - Live task cards/history counters should use compact SSE payloads (for example added/changed/removed counts).
+  - Detailed per-item diffs/lists should come from dedicated backend endpoints backed by PostgreSQL tables.
 - Routing/UI shape for operations must stay consistent:
   - Flow pages (`/flows/{slug}`) show flow-level stats + all flow tasks.
   - Task pages (`/tasks/{slug}`) own per-task history (newest first, default page-size 20 unless explicitly overridden by product requirement).
@@ -110,6 +114,12 @@ Notes:
     - Cursor-based forward reads for live follow (`after_log_id`).
     - Cursor-based backward reads for history backfill (`before_log_id`).
     - Bounded batch size (`limit`) for both directions.
+- Task artifact contract (all flows/tasks):
+  - Do not use stdout/stderr log parsing as the source of truth for structured run artifacts.
+  - Emit structured artifact events explicitly (SSE event type such as `task.artifact`) with minimal JSON payload required for live UX.
+  - Persist artifact payloads in PostgreSQL and use them when building run summaries/history cards.
+  - For large detail payloads, persist normalized rows in dedicated tables and expose API endpoints for paginated drill-down.
+  - Shayan and Maintenance Sync must follow this event-first artifact pattern (live counters via SSE, details via DB/API).
 - Gemini usage must be centralized behind a shared runtime manager (no per-task ad-hoc key picking):
   - Treat Gemini keys as grouped by `account -> keys[]` from config.
   - Do not hardcode model names in task logic; resolve model aliases from config (`gemini.models`), while quota/runtime state stays per `(account, key, model)`.

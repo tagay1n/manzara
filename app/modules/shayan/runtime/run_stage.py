@@ -16,13 +16,13 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 import yaml
 
 from app.db import Database
+from app.run_artifact_channel import emit_run_artifact
 from app.settings import load_settings
 
 from yadisk_client import ConflictResolution, YaDisk
 
 
 STAGES = ["scan_changes", "download_new", "upload_yadisk"]
-ARTIFACTS_PREFIX = "MANZARA_RUN_ARTIFACTS_JSON="
 _EPISODES_SUMMARY_RE = re.compile(
     r"episodes:\s*"
     r"seen\s+(?P<seen>\d+)\s*\|\s*"
@@ -123,7 +123,9 @@ def _run_id_from_env() -> Optional[int]:
 
 
 def _emit_artifacts(payload: Dict[str, Any]) -> None:
-    print(ARTIFACTS_PREFIX + json.dumps(payload, ensure_ascii=False), flush=True)
+    if emit_run_artifact(payload):
+        return
+    print("shayan artifacts channel unavailable: MANZARA_RUN_ARTIFACT_PATH is not set", flush=True)
 
 
 def _contains_redacted(node: Any) -> bool:

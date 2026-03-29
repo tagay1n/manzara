@@ -7,9 +7,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-_RUN_ARTIFACTS_PREFIX = "MANZARA_RUN_ARTIFACTS_JSON="
-
-
 def capture_pre_run_artifacts(task: Dict[str, Any]) -> Dict[str, Any]:
     """Capture task-specific pre-run state used for post-run diffing."""
     task_id = str(task.get("task_id") or "")
@@ -24,36 +21,20 @@ def collect_post_run_artifacts(
     *,
     status: str,
     pre_state: Dict[str, Any],
+    artifact_payload: Dict[str, Any] | None = None,
     log_lines: list[str] | None = None,
 ) -> Dict[str, Any]:
     """Build task-specific artifact payload for one run."""
+    _ = log_lines
     task_id = str(task.get("task_id") or "")
     if status != "completed":
         return {}
-    embedded = _extract_artifacts_from_logs(log_lines or [])
-    if embedded:
-        return embedded
+    if isinstance(artifact_payload, dict) and artifact_payload:
+        return artifact_payload
     handler = _POST_COLLECT_HANDLERS.get(task_id)
     if handler is None:
         return {}
     return handler(task, pre_state)
-
-
-def _extract_artifacts_from_logs(lines: list[str]) -> Dict[str, Any]:
-    for line in reversed([str(item or "") for item in lines]):
-        text = line.strip()
-        if not text.startswith(_RUN_ARTIFACTS_PREFIX):
-            continue
-        payload_text = text[len(_RUN_ARTIFACTS_PREFIX) :].strip()
-        if not payload_text:
-            continue
-        try:
-            payload = json.loads(payload_text)
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            return payload
-    return {}
 
 
 def _capture_pre_shayan_scan(task: Dict[str, Any]) -> Dict[str, Any]:

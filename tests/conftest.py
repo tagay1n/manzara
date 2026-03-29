@@ -32,18 +32,7 @@ def _test_task_defs(shayan: ShayanSettings):
             "cwd": str(shayan.repo_path),
             "command": {
                 "mode": "shell",
-                "value": (
-                    "python3 -c \"import json; "
-                    "print('scan-ok'); "
-                    "print('MANZARA_RUN_ARTIFACTS_JSON=' + json.dumps({"
-                    "\\\"kind\\\": \\\"shayan.snapshot_diff\\\", "
-                    "\\\"episodes_before\\\": 0, "
-                    "\\\"episodes_after\\\": 0, "
-                    "\\\"episodes_added\\\": 0, "
-                    "\\\"episodes_changed\\\": 0, "
-                    "\\\"episodes_removed\\\": 0"
-                    "}))\""
-                ),
+                "value": "python3 -c \"print('scan-ok')\"",
             },
         },
         {

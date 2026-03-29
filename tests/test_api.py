@@ -1323,6 +1323,71 @@ def test_toggle_task_start_and_complete(test_client, wait_for_terminal_run) -> N
     assert any("quick-ok" in line["line"] for line in logs)
 
 
+def test_task_artifact_event_and_summary_without_log_parsing(
+    test_client,
+    wait_for_terminal_run,
+) -> None:
+    client, main_app = test_client
+
+    main_app.state.db.seed_tasks(
+        [
+            {
+                "task_id": "maintenance.artifact_file_emit",
+                "panel_id": "maintenance",
+                "title": "artifact file emit",
+                "task_type": "sync",
+                "icon_idle": "Play",
+                "icon_running": "Square",
+                "cwd": ".",
+                "command": {
+                    "mode": "shell",
+                    "value": (
+                        "python3 -c \"import json,os,pathlib; "
+                        "p=pathlib.Path(os.environ['MANZARA_RUN_ARTIFACT_PATH']); "
+                        "p.parent.mkdir(parents=True,exist_ok=True); "
+                        "tmp=p.with_suffix(p.suffix + '.tmp'); "
+                        "tmp.write_text(json.dumps({'kind':'maintenance.sync_summary','rows_added':3,'rows_moved':1,'rows_deleted':2}),encoding='utf-8'); "
+                        "tmp.replace(p); "
+                        "print('runtime done')\""
+                    ),
+                },
+            }
+        ]
+    )
+
+    response = client.post("/api/tasks/maintenance.artifact_file_emit/toggle")
+    assert response.status_code == 200
+    run_id = int(response.json()["run"]["run_id"])
+    run = wait_for_terminal_run(main_app, run_id)
+    assert run["status"] == "completed"
+
+    artifacts = None
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        run_payload = main_app.state.db.get_run(run_id)
+        summary = run_payload.get("summary") if isinstance(run_payload, dict) else {}
+        current = summary.get("artifacts") if isinstance(summary, dict) else None
+        if isinstance(current, dict) and current.get("kind"):
+            artifacts = current
+            break
+        time.sleep(0.05)
+
+    assert isinstance(artifacts, dict)
+    assert artifacts.get("kind") == "maintenance.sync_summary"
+    assert int(artifacts.get("rows_added") or 0) == 3
+    assert int(artifacts.get("rows_moved") or 0) == 1
+    assert int(artifacts.get("rows_deleted") or 0) == 2
+
+    events = main_app.state.db.get_events_after(0, limit=400)
+    artifact_events = [event for event in events if str(event.get("type") or "") == "task.artifact"]
+    assert artifact_events
+    latest = artifact_events[-1]
+    assert int(latest.get("run_id") or 0) == run_id
+    payload = latest.get("payload") if isinstance(latest.get("payload"), dict) else {}
+    assert payload.get("kind") == "maintenance.sync_summary"
+    assert int(payload.get("rows_added") or 0) == 3
+
+
 def test_run_logs_support_tail_and_backfill_pagination(test_client) -> None:
     client, main_app = test_client
     task = main_app.state.db.get_task("shayan.quick")

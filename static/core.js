@@ -6,6 +6,7 @@
     "task.stop_requested",
     "task.force_stop_requested",
     "task.stopped",
+    "task.artifact",
     "task.completed",
     "task.failed",
     "workflow.started",
