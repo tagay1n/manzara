@@ -22,6 +22,14 @@ def startup_app(
     db.seed_tasks(task_defs)
     for bundle in workflow_bundles:
         db.seed_workflow_bundle(bundle)
+    db.prune_runtime_definitions(
+        panel_ids=[str(item.get("panel_id") or "") for item in panel_defs],
+        task_ids=[str(item.get("task_id") or "") for item in task_defs],
+        workflow_ids=[
+            str((bundle.get("workflow") or {}).get("workflow_id") or "")
+            for bundle in workflow_bundles
+        ],
+    )
 
     try:
         migration = migrate_legacy_shayan_state_if_needed(

@@ -206,6 +206,232 @@ class Database:
         payload["summary"] = self._decode_summary(payload.pop("summary_json", "{}"))
         return payload
 
+    @staticmethod
+    def _normalize_id_list(values: Sequence[str]) -> List[str]:
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            value = str(raw or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
+
+    @staticmethod
+    def _placeholders(count: int) -> str:
+        return ", ".join("?" for _ in range(max(0, int(count))))
+
+    def _select_obsolete_ids(
+        self,
+        conn: _ConnectionAdapter,
+        *,
+        table: str,
+        id_column: str,
+        keep_ids: Sequence[str],
+    ) -> List[str]:
+        keep = self._normalize_id_list(keep_ids)
+        if keep:
+            rows = conn.execute(
+                f"SELECT {id_column} FROM {table} WHERE {id_column} NOT IN ({self._placeholders(len(keep))})",
+                keep,
+            ).fetchall()
+        else:
+            rows = conn.execute(f"SELECT {id_column} FROM {table}").fetchall()
+        return [str(row[id_column]) for row in rows if str(row.get(id_column) or "").strip()]
+
+    def _delete_in(
+        self,
+        conn: _ConnectionAdapter,
+        *,
+        table: str,
+        id_column: str,
+        values: Sequence[Any],
+    ) -> int:
+        items = [value for value in values if value is not None]
+        if not items:
+            return 0
+        cur = conn.execute(
+            f"DELETE FROM {table} WHERE {id_column} IN ({self._placeholders(len(items))})",
+            items,
+        )
+        return int(cur.rowcount or 0)
+
+    def prune_runtime_definitions(
+        self,
+        *,
+        panel_ids: Sequence[str],
+        task_ids: Sequence[str],
+        workflow_ids: Sequence[str],
+    ) -> Dict[str, int]:
+        """Remove stale panel/task/workflow definitions and dependent runtime rows."""
+        keep_panels = self._normalize_id_list(panel_ids)
+        keep_tasks = self._normalize_id_list(task_ids)
+        keep_workflows = self._normalize_id_list(workflow_ids)
+
+        stats = {
+            "panels_removed": 0,
+            "tasks_removed": 0,
+            "workflows_removed": 0,
+            "workflow_runs_removed": 0,
+            "runs_removed": 0,
+            "events_removed": 0,
+            "workflow_step_runs_removed": 0,
+        }
+
+        with self._lock:
+            with self._connect() as conn:
+                obsolete_workflow_ids = self._select_obsolete_ids(
+                    conn,
+                    table="workflows",
+                    id_column="workflow_id",
+                    keep_ids=keep_workflows,
+                )
+                obsolete_task_ids = self._select_obsolete_ids(
+                    conn,
+                    table="task_definitions",
+                    id_column="task_id",
+                    keep_ids=keep_tasks,
+                )
+                obsolete_panel_ids = self._select_obsolete_ids(
+                    conn,
+                    table="panel_definitions",
+                    id_column="panel_id",
+                    keep_ids=keep_panels,
+                )
+
+                obsolete_schedule_ids: List[str] = []
+                obsolete_workflow_run_ids: List[int] = []
+                if obsolete_workflow_ids:
+                    wf_rows = conn.execute(
+                        "SELECT schedule_id FROM workflow_schedules WHERE workflow_id IN "
+                        f"({self._placeholders(len(obsolete_workflow_ids))})",
+                        obsolete_workflow_ids,
+                    ).fetchall()
+                    obsolete_schedule_ids = [
+                        str(row["schedule_id"])
+                        for row in wf_rows
+                        if str(row.get("schedule_id") or "").strip()
+                    ]
+
+                    run_rows = conn.execute(
+                        "SELECT workflow_run_id FROM workflow_runs WHERE workflow_id IN "
+                        f"({self._placeholders(len(obsolete_workflow_ids))})",
+                        obsolete_workflow_ids,
+                    ).fetchall()
+                    obsolete_workflow_run_ids.extend(
+                        int(row["workflow_run_id"])
+                        for row in run_rows
+                        if row.get("workflow_run_id") is not None
+                    )
+                    if obsolete_schedule_ids:
+                        schedule_run_rows = conn.execute(
+                            "SELECT workflow_run_id FROM workflow_runs WHERE schedule_id IN "
+                            f"({self._placeholders(len(obsolete_schedule_ids))})",
+                            obsolete_schedule_ids,
+                        ).fetchall()
+                        obsolete_workflow_run_ids.extend(
+                            int(row["workflow_run_id"])
+                            for row in schedule_run_rows
+                            if row.get("workflow_run_id") is not None
+                        )
+                    obsolete_workflow_run_ids = sorted(set(obsolete_workflow_run_ids))
+
+                if obsolete_workflow_run_ids:
+                    stats["workflow_step_runs_removed"] += self._delete_in(
+                        conn,
+                        table="workflow_step_runs",
+                        id_column="workflow_run_id",
+                        values=obsolete_workflow_run_ids,
+                    )
+                    stats["workflow_runs_removed"] += self._delete_in(
+                        conn,
+                        table="workflow_runs",
+                        id_column="workflow_run_id",
+                        values=obsolete_workflow_run_ids,
+                    )
+
+                if obsolete_workflow_ids:
+                    stats["workflows_removed"] += self._delete_in(
+                        conn,
+                        table="workflow_steps",
+                        id_column="workflow_id",
+                        values=obsolete_workflow_ids,
+                    )
+                    _ = self._delete_in(
+                        conn,
+                        table="workflow_schedules",
+                        id_column="workflow_id",
+                        values=obsolete_workflow_ids,
+                    )
+                    stats["workflows_removed"] += self._delete_in(
+                        conn,
+                        table="workflows",
+                        id_column="workflow_id",
+                        values=obsolete_workflow_ids,
+                    )
+
+                obsolete_run_ids: List[int] = []
+                if obsolete_task_ids:
+                    run_rows = conn.execute(
+                        "SELECT run_id FROM runs WHERE task_id IN "
+                        f"({self._placeholders(len(obsolete_task_ids))})",
+                        obsolete_task_ids,
+                    ).fetchall()
+                    obsolete_run_ids = [
+                        int(row["run_id"])
+                        for row in run_rows
+                        if row.get("run_id") is not None
+                    ]
+                    if obsolete_run_ids:
+                        stats["workflow_step_runs_removed"] += self._delete_in(
+                            conn,
+                            table="workflow_step_runs",
+                            id_column="task_run_id",
+                            values=obsolete_run_ids,
+                        )
+                        stats["events_removed"] += self._delete_in(
+                            conn,
+                            table="events",
+                            id_column="run_id",
+                            values=obsolete_run_ids,
+                        )
+                    stats["events_removed"] += self._delete_in(
+                        conn,
+                        table="events",
+                        id_column="task_id",
+                        values=obsolete_task_ids,
+                    )
+                    if obsolete_run_ids:
+                        stats["runs_removed"] += self._delete_in(
+                            conn,
+                            table="runs",
+                            id_column="run_id",
+                            values=obsolete_run_ids,
+                        )
+                    stats["tasks_removed"] += self._delete_in(
+                        conn,
+                        table="task_definitions",
+                        id_column="task_id",
+                        values=obsolete_task_ids,
+                    )
+
+                if obsolete_panel_ids:
+                    stats["events_removed"] += self._delete_in(
+                        conn,
+                        table="events",
+                        id_column="panel_id",
+                        values=obsolete_panel_ids,
+                    )
+                    stats["panels_removed"] += self._delete_in(
+                        conn,
+                        table="panel_definitions",
+                        id_column="panel_id",
+                        values=obsolete_panel_ids,
+                    )
+
+        return stats
+
     def seed_tasks(self, task_defs: List[Dict[str, Any]]) -> None:
         """Insert or update known task definitions."""
         now = utc_now()
