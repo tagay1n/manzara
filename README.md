@@ -253,6 +253,12 @@ Observability notes:
 - Artifact run logs are durable per-run files for offline auditing and long-task troubleshooting.
 - Stream reader failures now emit explicit `log_stream_error=...` lines (DB + SSE + artifact log) instead of failing silently.
 
+Decision log policy:
+- Decision entries preserve the original wording exactly as authored.
+- Spelling, grammar, and typos are intentionally not corrected in the original entry.
+- Clarifications may be added only as separate notes, without editing the original text.
+- Formatting-only adjustments are allowed (for example timestamp, author, tags, list layout).
+
 Manual normalization suggestion refresh:
 
 ```bash
