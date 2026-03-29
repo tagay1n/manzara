@@ -147,6 +147,8 @@ Environment variables:
 - `SHAYAN_YADISK_TARGET_DIR` (optional override; defaults to `shayan.yadisk.target_dir` or `yandex.disk.target_dir` in YAML)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 - `PG_BACKREST_STANZA` (default: `monocorpus`)
+- `PG_BACKREST_S3_BUCKET` (default: `tt-monocorpus-postgres-backups`; used for S3 backup verification)
+- `PG_BACKREST_S3_ENDPOINT` (default: `https://storage.yandexcloud.net`)
 
 Optional YAML config for Shayan upload task:
 
@@ -191,13 +193,16 @@ Model policy:
 Backup task note:
 - Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.
 - Manual and scheduled runs are non-interactive. If sudo access is not configured, backup tasks fail.
+- Success validation is S3-based:
+  - capture S3 backup-label snapshot before run
+  - wait for a new label after run (default poll window: up to 120 seconds)
+  - verify required files for the new label exist in S3
 - Configure passwordless sudo for backup commands:
 
 ```bash
 PG=$(command -v pgbackrest)
 printf 'tans1q ALL=(postgres) NOPASSWD: %s --stanza=monocorpus --type=full backup\n' "$PG" | sudo tee /etc/sudoers.d/manzara-pgbackrest >/dev/null
 printf 'tans1q ALL=(postgres) NOPASSWD: %s --stanza=monocorpus --type=incr backup\n' "$PG" | sudo tee -a /etc/sudoers.d/manzara-pgbackrest >/dev/null
-printf 'tans1q ALL=(postgres) NOPASSWD: %s --stanza=monocorpus info --output=json\n' "$PG" | sudo tee -a /etc/sudoers.d/manzara-pgbackrest >/dev/null
 sudo chmod 440 /etc/sudoers.d/manzara-pgbackrest
 sudo visudo -cf /etc/sudoers.d/manzara-pgbackrest
 ```
@@ -207,7 +212,6 @@ sudo visudo -cf /etc/sudoers.d/manzara-pgbackrest
 ```bash
 sudo -n -u postgres pgbackrest --stanza=monocorpus --type=full backup
 sudo -n -u postgres pgbackrest --stanza=monocorpus --type=incr backup
-sudo -n -u postgres pgbackrest --stanza=monocorpus info --output=json
 ```
 
 - Database state page permissions:

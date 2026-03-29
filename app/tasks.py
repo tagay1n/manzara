@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -24,7 +23,10 @@ from app.runtime_states import (
     resolve_task_terminal_status,
     task_terminal_event_type,
 )
-from app.modules.maintenance.backup_s3_verify import verify_backup_objects_in_s3
+from app.modules.maintenance.backup_s3_verify import (
+    capture_pgbackrest_s3_state,
+    wait_for_pgbackrest_s3_change,
+)
 from app.run_artifacts import capture_pre_run_artifacts, collect_post_run_artifacts
 from app.run_summary import build_structured_run_summary
 
@@ -311,12 +313,10 @@ class TaskRunner:
             run_log_file, run_log_path = self._open_run_log(task, run_id)
             pre_artifacts = capture_pre_run_artifacts(task)
 
-            backup_state_before: Optional[Dict[str, Any]] = None
+            backup_s3_state_before: Optional[Dict[str, Any]] = None
             if self._is_pgbackrest_backup_task(task):
-                backup_state_before = self._capture_pgbackrest_repo_state(
+                backup_s3_state_before = self._capture_pgbackrest_s3_state(
                     command_value=command["value"],
-                    cwd=cwd,
-                    sudo_password=sudo_password,
                 )
 
             command_text, stdin_text = self._prepare_command(command["value"], sudo_password)
@@ -407,9 +407,7 @@ class TaskRunner:
                     run_id=run_id,
                     task=task,
                     command_value=command["value"],
-                    cwd=cwd,
-                    sudo_password=sudo_password,
-                    backup_state_before=backup_state_before,
+                    backup_s3_state_before=backup_s3_state_before,
                 )
                 if validation_error:
                     self._emit_task_log(
@@ -531,73 +529,20 @@ class TaskRunner:
         run_id: int,
         task: Dict[str, Any],
         command_value: str,
-        cwd: str,
-        sudo_password: Optional[str],
-        backup_state_before: Optional[Dict[str, Any]],
+        backup_s3_state_before: Optional[Dict[str, Any]],
     ) -> Optional[str]:
         """Return error message when task-specific success criteria are not met."""
         task_id = str(task.get("task_id") or "")
         if not task_id.startswith("maintenance.pgbackrest_backup_"):
             return None
 
-        logs = self.db.get_logs(run_id, after_log_id=0, limit=5000)
-        raw_lines = [str(row.get("line") or "") for row in logs]
-        lines = [line.lower() for line in raw_lines]
+        if not backup_s3_state_before or not backup_s3_state_before.get("ok"):
+            reason = str((backup_s3_state_before or {}).get("error") or "unable to capture pre-backup S3 state")
+            return f"S3 backup verification failed before run: {reason}"
 
-        has_new_label = any("new backup label =" in line for line in lines)
-        has_backup_size = any(" backup size =" in line for line in lines)
-        if not (has_new_label and has_backup_size):
-            missing: list[str] = []
-            if not has_new_label:
-                missing.append("new backup label")
-            if not has_backup_size:
-                missing.append("backup size")
-            missing_text = ", ".join(missing)
-            return (
-                "Backup finished without repository-change evidence "
-                f"({missing_text} marker not found in pgBackRest logs)."
-            )
-
-        if not backup_state_before or not backup_state_before.get("ok"):
-            reason = str((backup_state_before or {}).get("error") or "unable to capture pre-backup state")
-            return f"Backup repository state check failed before run: {reason}"
-
-        backup_state_after = self._capture_pgbackrest_repo_state(
+        s3_result = wait_for_pgbackrest_s3_change(
+            before_state=backup_s3_state_before,
             command_value=command_value,
-            cwd=cwd,
-            sudo_password=sudo_password,
-        )
-        if not backup_state_after.get("ok"):
-            reason = str(backup_state_after.get("error") or "unable to capture post-backup state")
-            return f"Backup repository state check failed after run: {reason}"
-
-        before_fp = str(backup_state_before.get("fingerprint") or "")
-        after_fp = str(backup_state_after.get("fingerprint") or "")
-        before_labels = set(backup_state_before.get("labels") or [])
-        after_labels = set(backup_state_after.get("labels") or [])
-        labels_added = sorted(after_labels - before_labels)
-
-        # A changed repo fingerprint means pgBackRest repository metadata changed,
-        # which implies object storage files were added/modified.
-        if before_fp == after_fp:
-            return (
-                "Backup command exited successfully, but pgBackRest repository state did not change. "
-                "Object storage appears unchanged."
-            )
-
-        self._emit_task_log(
-            run_id=run_id,
-            task_id=task["task_id"],
-            panel_id=task["panel_id"],
-            line=(
-                "Backup repository state changed: "
-                f"labels_before={len(before_labels)}, labels_after={len(after_labels)}, "
-                f"labels_added={labels_added if labels_added else '[]'}"
-            ),
-        )
-
-        s3_result = verify_backup_objects_in_s3(
-            raw_lines,
             monocorpus_repo_path=Path(
                 str(os.environ.get("MONOCORPUS_REPO_PATH") or "/home/tans1q/projects/monocorpus")
             ),
@@ -606,12 +551,17 @@ class TaskRunner:
             reason = str(s3_result.get("error") or "backup files not found in S3")
             return f"S3 backup verification failed: {reason}"
 
+        labels_before = backup_s3_state_before.get("labels") or []
+        labels_added = s3_result.get("labels_added") or []
+
         self._emit_task_log(
             run_id=run_id,
             task_id=task["task_id"],
             panel_id=task["panel_id"],
             line=(
                 "S3 backup verification passed: "
+                f"labels_before={len(labels_before)}, "
+                f"labels_added={labels_added if labels_added else '[]'}, "
                 f"bucket={s3_result.get('bucket')}, "
                 f"prefix={s3_result.get('prefix')}, "
                 f"objects={s3_result.get('object_count')}"
@@ -650,103 +600,17 @@ class TaskRunner:
         task_id = str(task.get("task_id") or "")
         return task_id.startswith("maintenance.pgbackrest_backup_")
 
-    def _capture_pgbackrest_repo_state(
+    def _capture_pgbackrest_s3_state(
         self,
         *,
         command_value: str,
-        cwd: str,
-        sudo_password: Optional[str],
     ) -> Dict[str, Any]:
-        info_command = self._derive_pgbackrest_info_command(command_value)
-        if not info_command:
-            return {
-                "ok": False,
-                "error": "could not derive pgBackRest info command from task command",
-            }
-
-        prepared_command, stdin_text = self._prepare_command(info_command, sudo_password)
-        try:
-            result = subprocess.run(
-                prepared_command,
-                cwd=cwd,
-                shell=True,
-                input=stdin_text,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-        except FileNotFoundError:
-            return {"ok": False, "error": "pgBackRest command not found"}
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "pgBackRest info command timed out"}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-
-        if int(result.returncode) != 0:
-            stderr = (result.stderr or "").strip()
-            stdout = (result.stdout or "").strip()
-            reason = stderr or stdout or f"exit code {result.returncode}"
-            return {"ok": False, "error": reason[:400]}
-
-        try:
-            payload = json.loads((result.stdout or "").strip() or "[]")
-        except json.JSONDecodeError as exc:
-            return {"ok": False, "error": f"invalid pgBackRest info JSON: {exc}"}
-
-        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        labels = sorted(self._extract_pgbackrest_labels(payload))
-        return {
-            "ok": True,
-            "fingerprint": fingerprint,
-            "labels": labels,
-        }
-
-    def _derive_pgbackrest_info_command(self, command_value: str) -> Optional[str]:
-        try:
-            tokens = shlex.split(command_value, posix=True)
-        except ValueError:
-            return None
-        if not tokens:
-            return None
-
-        if tokens[-1] == "backup":
-            tokens = tokens[:-1]
-
-        filtered: list[str] = []
-        i = 0
-        while i < len(tokens):
-            token = tokens[i]
-            if token.startswith("--type="):
-                i += 1
-                continue
-            if token == "--type":
-                i += 2
-                continue
-            filtered.append(token)
-            i += 1
-
-        if "pgbackrest" not in filtered:
-            return None
-        filtered.extend(["info", "--output=json"])
-        return shlex.join(filtered)
-
-    def _extract_pgbackrest_labels(self, payload: Any) -> set[str]:
-        labels: set[str] = set()
-        items = payload if isinstance(payload, list) else [payload]
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            backups = item.get("backup")
-            if not isinstance(backups, list):
-                continue
-            for backup in backups:
-                if not isinstance(backup, dict):
-                    continue
-                label = backup.get("label")
-                if isinstance(label, str) and label.strip():
-                    labels.add(label.strip())
-        return labels
+        return capture_pgbackrest_s3_state(
+            command_value=command_value,
+            monocorpus_repo_path=Path(
+                str(os.environ.get("MONOCORPUS_REPO_PATH") or "/home/tans1q/projects/monocorpus")
+            ),
+        )
 
     def _stream_stdout_lines(
         self,
