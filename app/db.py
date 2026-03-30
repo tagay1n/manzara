@@ -1820,6 +1820,106 @@ class Database:
             payload[key] = value if isinstance(value, dict) else {}
         return payload
 
+    def get_shayan_manifest_entry(self, entry_key: str) -> Optional[Dict[str, Any]]:
+        """Return one Shayan manifest entry with decoded payload."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    entry_key,
+                    payload_json,
+                    payload_hash,
+                    yadisk_status,
+                    yadisk_remote_path,
+                    yadisk_uploaded_payload_hash,
+                    yadisk_uploaded_at,
+                    yadisk_last_attempt_at,
+                    yadisk_last_error,
+                    created_at,
+                    updated_at
+                FROM shayan_manifest_entries
+                WHERE entry_key = ?
+                LIMIT 1
+                """,
+                (str(entry_key),),
+            ).fetchone()
+        if not row:
+            return None
+        payload = dict(row)
+        try:
+            parsed_payload = json.loads(str(payload.pop("payload_json") or "{}"))
+        except Exception:
+            parsed_payload = {}
+        payload["payload"] = parsed_payload if isinstance(parsed_payload, dict) else {}
+        return payload
+
+    def delete_shayan_manifest_entry(self, entry_key: str) -> bool:
+        """Delete one Shayan manifest entry by key."""
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    DELETE FROM shayan_manifest_entries
+                    WHERE entry_key = ?
+                    """,
+                    (str(entry_key),),
+                )
+        return int(cur.rowcount or 0) > 0
+
+    def list_shayan_catalog_rows(self) -> List[Dict[str, Any]]:
+        """Return merged latest-snapshot + manifest rows for Shayan catalog views."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                WITH latest_snapshot AS (
+                    SELECT snapshot_id
+                    FROM shayan_snapshots
+                    ORDER BY COALESCE(generated_at, created_at) DESC, snapshot_id DESC
+                    LIMIT 1
+                )
+                SELECT
+                    COALESCE(s.entry_key, m.entry_key) AS entry_key,
+                    s.payload_json AS snapshot_payload_json,
+                    m.payload_json AS manifest_payload_json,
+                    m.payload_hash AS manifest_payload_hash,
+                    m.yadisk_status,
+                    m.yadisk_remote_path,
+                    m.yadisk_uploaded_payload_hash,
+                    m.yadisk_uploaded_at,
+                    m.yadisk_last_attempt_at,
+                    m.yadisk_last_error,
+                    m.updated_at AS manifest_updated_at
+                FROM shayan_snapshot_entries s
+                FULL OUTER JOIN shayan_manifest_entries m
+                  ON m.entry_key = s.entry_key
+                WHERE s.snapshot_id = (SELECT snapshot_id FROM latest_snapshot)
+                   OR s.snapshot_id IS NULL
+                ORDER BY COALESCE(s.entry_key, m.entry_key) ASC
+                """
+            ).fetchall()
+
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            snapshot_raw = str(payload.pop("snapshot_payload_json") or "")
+            manifest_raw = str(payload.pop("manifest_payload_json") or "")
+            try:
+                snapshot_payload = json.loads(snapshot_raw) if snapshot_raw else {}
+            except Exception:
+                snapshot_payload = {}
+            try:
+                manifest_payload = json.loads(manifest_raw) if manifest_raw else {}
+            except Exception:
+                manifest_payload = {}
+            payload["snapshot_payload"] = (
+                snapshot_payload if isinstance(snapshot_payload, dict) else {}
+            )
+            payload["manifest_payload"] = (
+                manifest_payload if isinstance(manifest_payload, dict) else {}
+            )
+            result.append(payload)
+        return result
+
     def shayan_manifest_entry_count(self) -> int:
         """Return number of persisted Shayan manifest entries."""
         with self._connect() as conn:

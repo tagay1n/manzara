@@ -341,6 +341,130 @@ def test_flow_detail_endpoint_accepts_flow_slug(test_client) -> None:
     assert payload["flow"]["slug"] == "shayan-console"
 
 
+def test_shayan_catalog_endpoint_returns_programs_and_episode_flags(test_client) -> None:
+    client, main_app = test_client
+    db = main_app.state.db
+
+    entry_1 = {
+        "category": "cartoons",
+        "program": "Show One",
+        "season": 1,
+        "episode": 1,
+        "title": "Pilot",
+        "file": "videos/cartoons/Show One/S01/S01E01.mkv",
+    }
+    entry_2 = {
+        "category": "shows",
+        "program": "Show Two",
+        "season": 2,
+        "episode": 3,
+        "title": "Episode 3",
+        "file": "videos/shows/Show Two/S02/S02E03.mkv",
+    }
+    db.create_shayan_snapshot({"ep-1": entry_1, "ep-2": entry_2})
+    db.replace_shayan_manifest_entries({"ep-1": entry_1})
+    with db._connect() as conn:
+        conn.execute(
+            """
+            UPDATE shayan_manifest_entries
+            SET
+                yadisk_status = 'uploaded',
+                yadisk_uploaded_payload_hash = payload_hash,
+                yadisk_remote_path = '/remote/videos/cartoons/Show One/S01/S01E01.mkv'
+            WHERE entry_key = ?
+            """,
+            ("ep-1",),
+        )
+
+    local_path = main_app.state.settings.shayan.output_path / "videos" / "cartoons" / "Show One" / "S01"
+    local_path.mkdir(parents=True, exist_ok=True)
+    (local_path / "S01E01.mkv").write_text("video-bytes", encoding="utf-8")
+
+    response = client.get("/api/shayan/catalog")
+    assert response.status_code == 200
+    payload = response.json()
+    assert int(payload["stats"]["programs"]) == 2
+    assert int(payload["stats"]["episodes"]) == 2
+    assert int(payload["stats"]["downloaded"]) == 1
+    assert int(payload["stats"]["uploaded"]) == 1
+
+    programs = payload["programs"]
+    show_one = next(item for item in programs if item["program"] == "Show One")
+    show_one_ep = show_one["episodes"][0]
+    assert show_one_ep["entry_key"] == "ep-1"
+    assert show_one_ep["downloaded"] is True
+    assert show_one_ep["uploaded"] is True
+    assert show_one_ep["season"] == 1
+    assert show_one_ep["episode"] == 1
+
+    show_two = next(item for item in programs if item["program"] == "Show Two")
+    show_two_ep = show_two["episodes"][0]
+    assert show_two_ep["entry_key"] == "ep-2"
+    assert show_two_ep["downloaded"] is False
+    assert show_two_ep["uploaded"] is False
+
+
+def test_shayan_redownload_episode_resets_manifest_and_requests_download(test_client) -> None:
+    client, main_app = test_client
+    db = main_app.state.db
+
+    entry = {
+        "category": "cartoons",
+        "program": "Show One",
+        "season": 1,
+        "episode": 1,
+        "title": "Pilot",
+        "file": "videos/cartoons/Show One/S01/S01E01.mkv",
+    }
+    db.create_shayan_snapshot({"ep-1": entry})
+    db.replace_shayan_manifest_entries({"ep-1": entry})
+    with db._connect() as conn:
+        conn.execute(
+            """
+            UPDATE shayan_manifest_entries
+            SET
+                yadisk_status = 'uploaded',
+                yadisk_uploaded_payload_hash = payload_hash,
+                yadisk_remote_path = '/remote/videos/cartoons/Show One/S01/S01E01.mkv'
+            WHERE entry_key = ?
+            """,
+            ("ep-1",),
+        )
+
+    local_dir = main_app.state.settings.shayan.output_path / "videos" / "cartoons" / "Show One" / "S01"
+    local_dir.mkdir(parents=True, exist_ok=True)
+    local_file = local_dir / "S01E01.mkv"
+    local_file.write_text("video-bytes", encoding="utf-8")
+
+    captured: dict[str, str] = {}
+
+    def _fake_start_task(task_id, *, sudo_password=None):
+        captured["task_id"] = str(task_id)
+        _ = sudo_password
+        return {"action": "captured", "run": None}
+
+    main_app.state.runner.start_task = _fake_start_task  # type: ignore[method-assign]
+
+    response = client.post("/api/shayan/episodes/ep-1/redownload")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["entry_key"] == "ep-1"
+    assert payload["manifest_deleted"] is True
+    assert payload["local_deleted"] is True
+    assert payload["download"]["action"] == "captured"
+    assert captured["task_id"] == "shayan.download_new"
+
+    assert local_file.exists() is False
+    assert "ep-1" not in db.list_shayan_manifest_entries()
+
+    catalog = client.get("/api/shayan/catalog").json()
+    show_one = next(item for item in catalog["programs"] if item["program"] == "Show One")
+    episode = show_one["episodes"][0]
+    assert episode["entry_key"] == "ep-1"
+    assert episode["downloaded"] is False
+    assert episode["uploaded"] is False
+
+
 def test_library_endpoint_returns_dataset_stats(test_client, monkeypatch) -> None:
     client, main_app = test_client
 

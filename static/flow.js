@@ -1,5 +1,6 @@
 const state = {
   payload: null,
+  shayanCatalog: null,
   viewState: "loading",
   flowKey: null,
   refreshTimer: null,
@@ -122,6 +123,136 @@ function runSummaryMessage(run) {
   if (status === "failed") return String(run?.error_text || "Run failed.");
   if (status === "stopped") return "Run stopped.";
   return `Run ${status}.`;
+}
+
+function renderFlagChip(value) {
+  const enabled = Boolean(value);
+  const icon = enabled ? "check" : "x";
+  const text = enabled ? "Yes" : "No";
+  const cls = enabled ? "is-true" : "is-false";
+  return `<span class="flag-chip ${cls}"><i data-lucide="${icon}"></i>${escapeHtml(text)}</span>`;
+}
+
+function renderShayanProgram(program) {
+  const episodes = Array.isArray(program?.episodes) ? program.episodes : [];
+  const stats = program?.stats || {};
+  const summary = `${Number(stats.downloaded || 0)}/${Number(stats.episodes || episodes.length)} downloaded • ${Number(stats.uploaded || 0)} uploaded`;
+  const rows = episodes
+    .map((episode) => {
+      const entryKey = String(episode?.entry_key || "");
+      const seasonText = episode?.season === null || episode?.season === undefined ? "-" : String(episode.season);
+      const episodeText = episode?.episode === null || episode?.episode === undefined ? "-" : String(episode.episode);
+      const titleText = String(episode?.title || "-");
+      return `
+        <tr>
+          <td>${escapeHtml(seasonText)}</td>
+          <td>${escapeHtml(episodeText)}</td>
+          <td>${escapeHtml(titleText)}</td>
+          <td>${renderFlagChip(Boolean(episode?.downloaded))}</td>
+          <td>${renderFlagChip(Boolean(episode?.uploaded))}</td>
+          <td>
+            <div class="shayan-episode-actions">
+              <button
+                class="icon-btn shayan-redownload-btn"
+                data-entry-key="${escapeHtml(entryKey)}"
+                title="Re-download episode"
+                aria-label="Re-download episode"
+              >
+                <i data-lucide="rotate-cw"></i>
+              </button>
+            </div>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+  return `
+    <details class="shayan-program">
+      <summary>
+        <div>
+          <div class="shayan-program-title">${escapeHtml(String(program?.program || "Unknown program"))}</div>
+          <div class="shayan-program-meta">${escapeHtml(String(program?.category || "unknown"))}</div>
+        </div>
+        <div class="shayan-program-meta">${escapeHtml(summary)}</div>
+      </summary>
+      <div class="shayan-program-body">
+        <div class="shayan-episodes-table-wrap">
+          <table class="shayan-episodes-table">
+            <thead>
+              <tr>
+                <th>Season</th>
+                <th>Episode</th>
+                <th>Title</th>
+                <th>Downloaded</th>
+                <th>Uploaded</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function renderShayanCatalog(catalog) {
+  const cardNode = document.getElementById("shayan-catalog-card");
+  const statsNode = document.getElementById("shayan-catalog-stats");
+  const listNode = document.getElementById("shayan-program-list");
+  const subtitleNode = document.getElementById("shayan-catalog-subtitle");
+  if (!cardNode || !statsNode || !listNode || !subtitleNode) return;
+  state.shayanCatalog = catalog && typeof catalog === "object" ? catalog : null;
+  const payload = state.shayanCatalog || {};
+  const stats = payload.stats && typeof payload.stats === "object" ? payload.stats : {};
+  const programs = Array.isArray(payload.programs) ? payload.programs : [];
+
+  cardNode.hidden = false;
+  subtitleNode.textContent = `${Number(stats.programs || 0)} programs • ${Number(stats.episodes || 0)} episodes`;
+  statsNode.innerHTML = [
+    { label: "Programs", value: Number(stats.programs || 0) },
+    { label: "Episodes", value: Number(stats.episodes || 0) },
+    { label: "Downloaded", value: Number(stats.downloaded || 0) },
+    { label: "Uploaded", value: Number(stats.uploaded || 0) },
+  ]
+    .map(
+      (item) =>
+        `<div class="stat"><div class="stat-label">${escapeHtml(String(item.label))}</div><div class="stat-value">${escapeHtml(String(item.value))}</div></div>`
+    )
+    .join("");
+  listNode.innerHTML = programs.length
+    ? programs.map(renderShayanProgram).join("")
+    : '<div class="run-row">No known episodes in current source snapshot.</div>';
+  lucide.createIcons();
+}
+
+function hideShayanCatalog() {
+  const cardNode = document.getElementById("shayan-catalog-card");
+  if (cardNode) {
+    cardNode.hidden = true;
+  }
+  state.shayanCatalog = null;
+}
+
+async function refreshShayanCatalog() {
+  const cardNode = document.getElementById("shayan-catalog-card");
+  if (!cardNode) return;
+  const payload = await api("/api/shayan/catalog");
+  renderShayanCatalog(payload);
+}
+
+function markEpisodePendingRedownload(entryKey) {
+  const catalog = state.shayanCatalog;
+  if (!catalog || !Array.isArray(catalog.programs)) return;
+  for (const program of catalog.programs) {
+    const episodes = Array.isArray(program?.episodes) ? program.episodes : [];
+    for (const episode of episodes) {
+      if (String(episode?.entry_key || "") !== String(entryKey || "")) continue;
+      episode.downloaded = false;
+      episode.uploaded = false;
+      return;
+    }
+  }
 }
 
 function renderTaskRuns(runs, taskTitle) {
@@ -268,6 +399,7 @@ function renderFlowLoading() {
   document.getElementById("flow-subtitle").textContent = "";
   document.getElementById("flow-stat-grid").innerHTML = "";
   document.getElementById("flow-task-grid").innerHTML = '<div class="run-row">Loading tasks...</div>';
+  hideShayanCatalog();
 }
 
 function renderFlowError(error) {
@@ -278,6 +410,7 @@ function renderFlowError(error) {
   document.getElementById("flow-subtitle").textContent = safe;
   document.getElementById("flow-stat-grid").innerHTML = "";
   document.getElementById("flow-task-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  hideShayanCatalog();
 }
 
 function readFlowKeyFromPath() {
@@ -293,6 +426,16 @@ async function refreshFlow({ showLoading = false } = {}) {
   try {
     const payload = await api(`/api/flows/${encodeURIComponent(state.flowKey)}?limit_per_task=20`);
     renderFlow(payload);
+    const panelId = String(payload?.flow?.panel_id || "");
+    if (panelId === "shayan") {
+      try {
+        await refreshShayanCatalog();
+      } catch (error) {
+        console.error(error);
+      }
+    } else {
+      hideShayanCatalog();
+    }
   } catch (error) {
     renderFlowError(error);
     throw error;
@@ -402,6 +545,19 @@ async function stopAll() {
   queueRefresh(0);
 }
 
+async function redownloadEpisode(entryKey) {
+  if (!entryKey) return;
+  markEpisodePendingRedownload(entryKey);
+  if (state.shayanCatalog) {
+    renderShayanCatalog(state.shayanCatalog);
+  }
+  await api(`/api/shayan/episodes/${encodeURIComponent(entryKey)}/redownload`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  queueRefresh(0);
+}
+
 function initLogViewer() {
   state.logViewer = window.ManzaraCore.createRunLogViewer({
     api,
@@ -460,6 +616,20 @@ function attachUiHandlers() {
       }
     }
   });
+
+  const programList = document.getElementById("shayan-program-list");
+  if (programList) {
+    programList.addEventListener("click", (event) => {
+      const target = event.target.closest("button.shayan-redownload-btn");
+      if (!target) return;
+      const entryKey = String(target.dataset.entryKey || "");
+      if (!entryKey) return;
+      redownloadEpisode(entryKey).catch((error) => {
+        console.error(error);
+        window.alert(error?.message || String(error));
+      });
+    });
+  }
 
   document.getElementById("close-logs").addEventListener("click", () => {
     state.logViewer?.close();
