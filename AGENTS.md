@@ -112,6 +112,8 @@ Notes:
   - Every task run must have a dedicated artifact log file under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...` when overridden).
   - Use one uniform structured line format for runtime-emitted lines: timestamp, level, run/task/panel/source context, message.
   - Persist user-visible stdout/stderr lines to DB logs and mirror them into artifact run logs with context metadata.
+  - Task implementations must emit transparent progress logs at meaningful boundaries (start, per-item processing for batch jobs, success/failure decisions, final summary).
+  - For data-mutating batch tasks, log each successful item with stable identifiers (for example entry id/path) so results are auditable without parsing external systems.
   - Include explicit start/final status lines in runtime logs so long-running task outcomes are auditable offline.
   - Keep secrets out of logs (mask/redact credentials and tokens).
   - Log API access patterns must support efficient tail/follow UX at scale:

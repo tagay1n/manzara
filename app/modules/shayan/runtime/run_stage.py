@@ -557,11 +557,18 @@ def _upload_yadisk_stage(
         return 1
 
     candidates = db.list_shayan_manifest_upload_candidates(limit=5000)
+    print(
+        "shayan upload_yadisk: start "
+        f"considered={len(candidates)} "
+        f"target_dirs={json.dumps(upload_settings.category_target_dirs, ensure_ascii=False, sort_keys=True)}",
+        flush=True,
+    )
     uploaded = 0
     failed = 0
     missing_local = 0
 
-    for item in candidates:
+    total = len(candidates)
+    for idx, item in enumerate(candidates, start=1):
         entry_key = str(item.get("entry_key") or "").strip()
         payload_hash = str(item.get("payload_hash") or "").strip()
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
@@ -576,6 +583,11 @@ def _upload_yadisk_stage(
             )
             failed += 1
             missing_local += 1
+            print(
+                "shayan upload_yadisk: failed "
+                f"progress={idx}/{total} entry_key={entry_key} reason=local_file_missing_in_payload",
+                flush=True,
+            )
             continue
         if not local_file.exists():
             db.mark_shayan_manifest_yadisk_failed(
@@ -584,6 +596,12 @@ def _upload_yadisk_stage(
             )
             failed += 1
             missing_local += 1
+            print(
+                "shayan upload_yadisk: failed "
+                f"progress={idx}/{total} entry_key={entry_key} reason=local_file_missing "
+                f"local_file={local_file}",
+                flush=True,
+            )
             continue
 
         category = _extract_category(payload, local_file, output_path)
@@ -594,6 +612,12 @@ def _upload_yadisk_stage(
                 error_text=f"missing_target_dir_for_category:{category or 'unknown'}",
             )
             failed += 1
+            print(
+                "shayan upload_yadisk: failed "
+                f"progress={idx}/{total} entry_key={entry_key} reason=missing_target_dir "
+                f"category={category or 'unknown'}",
+                flush=True,
+            )
             continue
         rel_within_category = _relative_path_within_category(
             local_file=local_file,
@@ -602,6 +626,12 @@ def _upload_yadisk_stage(
         )
         remote_path = posixpath.normpath(posixpath.join(target_dir, rel_within_category))
         remote_dir = posixpath.dirname(remote_path)
+        print(
+            "shayan upload_yadisk: uploading "
+            f"progress={idx}/{total} entry_key={entry_key} category={category or 'unknown'} "
+            f"local_file={local_file} remote_path={remote_path}",
+            flush=True,
+        )
         try:
             uploaded_path, _remote_md5 = client.upload_or_replace(
                 str(local_file),
@@ -614,12 +644,24 @@ def _upload_yadisk_stage(
                 payload_hash=payload_hash,
             )
             uploaded += 1
+            print(
+                "shayan upload_yadisk: uploaded "
+                f"progress={idx}/{total} entry_key={entry_key} category={category or 'unknown'} "
+                f"remote_path={uploaded_path or remote_path}",
+                flush=True,
+            )
         except Exception as exc:
             db.mark_shayan_manifest_yadisk_failed(
                 entry_key,
                 error_text=f"{type(exc).__name__}: {exc}",
             )
             failed += 1
+            print(
+                "shayan upload_yadisk: failed "
+                f"progress={idx}/{total} entry_key={entry_key} "
+                f"reason={type(exc).__name__}: {exc}",
+                flush=True,
+            )
 
     artifacts = {
         "kind": "shayan.upload_yadisk_summary",

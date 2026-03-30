@@ -414,7 +414,11 @@ def test_upload_yadisk_stage_uploads_available_files_and_marks_missing(
     assert fake_db.failed_rows[0]["entry_key"] == "ep-2"
     assert "local_file_missing" in fake_db.failed_rows[0]["error_text"]
 
-    _ = capsys.readouterr().out
+    output_text = capsys.readouterr().out
+    assert "shayan upload_yadisk: start considered=2" in output_text
+    assert "shayan upload_yadisk: uploading progress=1/2 entry_key=ep-1" in output_text
+    assert "shayan upload_yadisk: uploaded progress=1/2 entry_key=ep-1" in output_text
+    assert "shayan upload_yadisk: failed progress=2/2 entry_key=ep-2 reason=local_file_missing" in output_text
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert payload["kind"] == "shayan.upload_yadisk_summary"
     assert int(payload["uploaded"]) == 1
