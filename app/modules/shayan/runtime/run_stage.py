@@ -535,6 +535,16 @@ def _resolve_target_dir_for_category(settings: YaDiskUploadSettings, category: s
     return str(settings.category_target_dirs.get(category_key) or "").strip()
 
 
+def _calculate_local_md5(path: Path) -> str:
+    digest = hashlib.md5()  # noqa: S324 - md5 required for Yandex Disk compatibility checks
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _upload_yadisk_stage(
     *,
     db: Database,
@@ -566,6 +576,8 @@ def _upload_yadisk_stage(
     uploaded = 0
     failed = 0
     missing_local = 0
+    hash_mismatch = 0
+    deleted_local = 0
 
     total = len(candidates)
     for idx, item in enumerate(candidates, start=1):
@@ -638,16 +650,65 @@ def _upload_yadisk_stage(
                 remote_dir=remote_dir,
                 conflict_resolution=ConflictResolution.REPLACE_IF_DIFFERENT,
             )
+            uploaded_remote_path = str(uploaded_path or remote_path)
+            local_md5 = _calculate_local_md5(local_file)
+            remote_md5 = str(_remote_md5 or "").strip().lower()
+            if not remote_md5:
+                remote_meta = client.get_meta_or_none(uploaded_remote_path, fields=["md5"])
+                if isinstance(remote_meta, dict):
+                    remote_md5 = str(remote_meta.get("md5") or "").strip().lower()
+            if not remote_md5:
+                db.mark_shayan_manifest_yadisk_failed(
+                    entry_key,
+                    error_text="remote_md5_missing_after_upload",
+                )
+                failed += 1
+                print(
+                    "shayan upload_yadisk: failed "
+                    f"progress={idx}/{total} entry_key={entry_key} reason=remote_md5_missing",
+                    flush=True,
+                )
+                continue
+            if remote_md5 != local_md5:
+                db.mark_shayan_manifest_yadisk_failed(
+                    entry_key,
+                    error_text=f"hash_mismatch local_md5={local_md5} remote_md5={remote_md5}",
+                )
+                failed += 1
+                hash_mismatch += 1
+                print(
+                    "shayan upload_yadisk: failed "
+                    f"progress={idx}/{total} entry_key={entry_key} reason=hash_mismatch "
+                    f"local_md5={local_md5} remote_md5={remote_md5}",
+                    flush=True,
+                )
+                continue
+            try:
+                local_file.unlink()
+            except Exception as delete_exc:
+                db.mark_shayan_manifest_yadisk_failed(
+                    entry_key,
+                    error_text=f"local_delete_failed:{type(delete_exc).__name__}: {delete_exc}",
+                )
+                failed += 1
+                print(
+                    "shayan upload_yadisk: failed "
+                    f"progress={idx}/{total} entry_key={entry_key} reason=local_delete_failed "
+                    f"error={type(delete_exc).__name__}: {delete_exc}",
+                    flush=True,
+                )
+                continue
             db.mark_shayan_manifest_yadisk_uploaded(
                 entry_key,
-                remote_path=str(uploaded_path or remote_path),
+                remote_path=uploaded_remote_path,
                 payload_hash=payload_hash,
             )
             uploaded += 1
+            deleted_local += 1
             print(
                 "shayan upload_yadisk: uploaded "
                 f"progress={idx}/{total} entry_key={entry_key} category={category or 'unknown'} "
-                f"remote_path={uploaded_path or remote_path}",
+                f"remote_path={uploaded_remote_path} local_deleted=true",
                 flush=True,
             )
         except Exception as exc:
@@ -670,11 +731,14 @@ def _upload_yadisk_stage(
         "uploaded": uploaded,
         "failed": failed,
         "missing_local": missing_local,
+        "hash_mismatch": hash_mismatch,
+        "deleted_local": deleted_local,
     }
     _emit_artifacts(artifacts)
     print(
         "shayan upload_yadisk: completed "
-        f"considered={len(candidates)} uploaded={uploaded} failed={failed} missing_local={missing_local}",
+        f"considered={len(candidates)} uploaded={uploaded} failed={failed} "
+        f"missing_local={missing_local} hash_mismatch={hash_mismatch} deleted_local={deleted_local}",
         flush=True,
     )
     return 0

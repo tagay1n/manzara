@@ -160,10 +160,14 @@ def build_structured_run_summary(
             uploaded = int(upload_artifacts.get("uploaded") or 0)
             failed = int(upload_artifacts.get("failed") or 0)
             missing_local = int(upload_artifacts.get("missing_local") or 0)
+            deleted_local = int(upload_artifacts.get("deleted_local") or 0)
+            hash_mismatch = int(upload_artifacts.get("hash_mismatch") or 0)
             if upload_artifacts.get("kind") == "shayan.upload_yadisk_summary":
                 summary["highlights"].append({"label": "Uploaded", "value": str(uploaded)})
                 summary["highlights"].append({"label": "Failed", "value": str(failed)})
                 summary["highlights"].append({"label": "Missing local", "value": str(missing_local)})
+                summary["highlights"].append({"label": "Deleted local", "value": str(deleted_local)})
+                summary["highlights"].append({"label": "Hash mismatch", "value": str(hash_mismatch)})
                 summary["message"] = f"Upload completed: {uploaded} uploaded, {failed} failed."
             else:
                 summary["message"] = "Upload completed."

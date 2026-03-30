@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -387,7 +388,12 @@ def test_upload_yadisk_stage_uploads_available_files_and_marks_missing(
                     "conflict_resolution": conflict_resolution,
                 }
             )
-            return f"{remote_dir}/S01E01.mkv", "md5"
+            md5 = hashlib.md5(Path(local_file).read_bytes()).hexdigest()  # noqa: S324
+            return f"{remote_dir}/S01E01.mkv", md5
+
+        def get_meta_or_none(self, remote_path, **kwargs):  # noqa: ANN001
+            _ = remote_path, kwargs
+            return {"md5": "unused"}
 
     monkeypatch.setattr(run_stage, "_create_yadisk_client", lambda _token: _FakeYaDisk())
 
@@ -408,6 +414,7 @@ def test_upload_yadisk_stage_uploads_available_files_and_marks_missing(
     assert len(upload_calls) == 1
     assert upload_calls[0]["local_file"] == str(existing_file)
     assert upload_calls[0]["remote_dir"].endswith("/uploads/cartoons/Show/S01")
+    assert existing_file.exists() is False
     assert len(fake_db.uploaded_rows) == 1
     assert fake_db.uploaded_rows[0]["entry_key"] == "ep-1"
     assert len(fake_db.failed_rows) == 1
@@ -423,6 +430,8 @@ def test_upload_yadisk_stage_uploads_available_files_and_marks_missing(
     assert payload["kind"] == "shayan.upload_yadisk_summary"
     assert int(payload["uploaded"]) == 1
     assert int(payload["failed"]) == 1
+    assert int(payload["deleted_local"]) == 1
+    assert int(payload["hash_mismatch"]) == 0
 
 
 def test_load_yadisk_upload_settings_reads_new_shayan_targets(

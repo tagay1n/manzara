@@ -742,6 +742,8 @@ class TaskRunner:
             payload["uploaded"] = int(artifacts.get("uploaded") or 0)
             payload["failed"] = int(artifacts.get("failed") or 0)
             payload["missing_local"] = int(artifacts.get("missing_local") or 0)
+            payload["deleted_local"] = int(artifacts.get("deleted_local") or 0)
+            payload["hash_mismatch"] = int(artifacts.get("hash_mismatch") or 0)
             return payload
         if kind == "maintenance.sync_summary":
             payload["rows_added"] = int(artifacts.get("rows_added") or 0)
