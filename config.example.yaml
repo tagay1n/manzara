@@ -106,7 +106,9 @@ gemini_api_keys:
 yandex:
   disk:
     oauth_token: "<REDACTED>"
-    target_dir: /neurotatarlar/videos/shayan
+    shayan:
+      cartoons: /neurotatarlar/video/shayantv/cartoons
+      shows: /neurotatarlar/video/shayantv/shows
     entry_points: 
       tt: /neurotatarlar/kitaplar/monocorpus
       # crh: /НейроТатарлар/other_turkic_langs/Крымскотатарский
@@ -123,10 +125,6 @@ yandex:
       content_chunks: ttcontent-chunks
       image: ttimg
 encryption_key: "<REDACTED>"
-
-shayan:
-  yadisk:
-    target_dir: /neurotatarlar/videos/shayan
 
 database_url: "<REDACTED>"
 

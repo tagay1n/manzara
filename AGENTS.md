@@ -45,6 +45,10 @@ Notes:
 - Runtime loaders must not use `config.example.yaml` as an input source; it is reference-only.
 - Keep a single dependency file policy (`requirements.txt`) unless owner explicitly asks to split.
 - When copying/adjusting embedded runtime code, update dependencies in `requirements.txt` for any new external imports.
+- Do not preserve code-level backward compatibility by default:
+  - Prefer clean forward changes over compatibility branches/legacy config fallbacks.
+  - Backward compatibility is required by default only for persisted database data.
+  - For DB/data compatibility decisions, ask owner explicitly whether compatibility/migration is required.
 - For runtime-heavy tasks (for example Library `meta evaluate`), keep automated coverage where practical and record manual smoke-test expectations in README when full E2E is not in tests.
 - Frontend work should follow TDD where applicable:
   - Add/adjust tests first for frontend behavior that is testable and meaningful.

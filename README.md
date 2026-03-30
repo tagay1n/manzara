@@ -143,8 +143,9 @@ Environment variables:
 - `MANZARA_ARTIFACTS_ROOT` (default: `~/.manzara`; shared artifact root)
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
 - `SHAYAN_OUTPUT_PATH` (default: `~/.manzara/shayan`)
-- `SHAYAN_YADISK_OAUTH_TOKEN` (optional override; defaults to `shayan.yadisk.oauth_token` or `yandex.disk.oauth_token` in YAML)
-- `SHAYAN_YADISK_TARGET_DIR` (optional override; defaults to `shayan.yadisk.target_dir` or `yandex.disk.target_dir` in YAML)
+- `SHAYAN_YADISK_OAUTH_TOKEN` (optional override; defaults to `yandex.disk.oauth_token` in YAML)
+- `SHAYAN_YADISK_CARTOONS_TARGET_DIR` (optional override; defaults to `yandex.disk.shayan.cartoons` in YAML)
+- `SHAYAN_YADISK_SHOWS_TARGET_DIR` (optional override; defaults to `yandex.disk.shayan.shows` in YAML)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 - `PG_BACKREST_STANZA` (default: `monocorpus`)
 - `PG_BACKREST_S3_BUCKET` (default: `tt-monocorpus-postgres-backups`; used for S3 backup verification)
@@ -153,9 +154,12 @@ Environment variables:
 Optional YAML config for Shayan upload task:
 
 ```yaml
-shayan:
-  yadisk:
-    target_dir: "/neurotatarlar/videos/shayan"
+yandex:
+  disk:
+    oauth_token: "<token>"
+    shayan:
+      cartoons: "/neurotatarlar/video/shayantv/cartoons"
+      shows: "/neurotatarlar/video/shayantv/shows"
 ```
 
 Embedded runtimes read YAML config in this order:

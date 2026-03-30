@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -175,30 +176,45 @@ def _safe_value(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _load_yadisk_upload_settings() -> Tuple[str, str]:
+@dataclass(frozen=True)
+class YaDiskUploadSettings:
+    token: str
+    category_target_dirs: Dict[str, str]
+
+
+def _load_yadisk_upload_settings() -> YaDiskUploadSettings:
     payload = _load_runtime_config_payload()
     token = _safe_value(
         os.environ.get("SHAYAN_YADISK_OAUTH_TOKEN")
-        or _lookup_nested(payload, "shayan", "yadisk", "oauth_token")
         or _lookup_nested(payload, "yandex", "disk", "oauth_token")
     )
     if not token:
         raise RuntimeError(
             "Yandex Disk OAuth token is missing. Set SHAYAN_YADISK_OAUTH_TOKEN "
-            "or configure shayan.yadisk.oauth_token/yandex.disk.oauth_token."
+            "or configure yandex.disk.oauth_token."
         )
 
-    target_dir = _safe_value(
-        os.environ.get("SHAYAN_YADISK_TARGET_DIR")
-        or _lookup_nested(payload, "shayan", "yadisk", "target_dir")
-        or _lookup_nested(payload, "yandex", "disk", "target_dir")
-    )
-    if not target_dir:
+    cartoons_target = _safe_value(
+        os.environ.get("SHAYAN_YADISK_CARTOONS_TARGET_DIR")
+        or _lookup_nested(payload, "yandex", "disk", "shayan", "cartoons")
+    ).rstrip("/")
+    shows_target = _safe_value(
+        os.environ.get("SHAYAN_YADISK_SHOWS_TARGET_DIR")
+        or _lookup_nested(payload, "yandex", "disk", "shayan", "shows")
+    ).rstrip("/")
+    if not cartoons_target or not shows_target:
         raise RuntimeError(
-            "Yandex Disk target directory is missing. Set SHAYAN_YADISK_TARGET_DIR "
-            "or configure shayan.yadisk.target_dir/yandex.disk.target_dir."
+            "Yandex Disk Shayan target directories are missing. "
+            "Configure yandex.disk.shayan.cartoons and yandex.disk.shayan.shows "
+            "(or SHAYAN_YADISK_CARTOONS_TARGET_DIR / SHAYAN_YADISK_SHOWS_TARGET_DIR)."
         )
-    return token, target_dir.rstrip("/")
+    return YaDiskUploadSettings(
+        token=token,
+        category_target_dirs={
+            "cartoons": cartoons_target,
+            "shows": shows_target,
+        },
+    )
 
 
 def _create_yadisk_client(token: str) -> YaDisk:
@@ -478,18 +494,59 @@ def _build_remote_upload_path(local_file: Path, output_path: Path, target_dir: s
     return posixpath.normpath(posixpath.join(target_dir, rel))
 
 
+def _extract_category(payload: Dict[str, Any], local_file: Path, output_path: Path) -> str:
+    direct = str(payload.get("category") or "").strip().lower()
+    if direct:
+        return direct
+    rel = _relative_video_path(local_file, output_path)
+    parts = [item for item in rel.strip("/").split("/") if item]
+    if len(parts) >= 2 and parts[0] == "videos":
+        return parts[1].strip().lower()
+    if parts:
+        return parts[0].strip().lower()
+    return ""
+
+
+def _relative_path_within_category(
+    *,
+    local_file: Path,
+    output_path: Path,
+    category: str,
+) -> str:
+    rel = _relative_video_path(local_file, output_path).strip("/")
+    if not rel:
+        return local_file.name
+    prefixes = [
+        f"videos/{category}/",
+        f"{category}/",
+    ]
+    for prefix in prefixes:
+        if rel.startswith(prefix):
+            trimmed = rel[len(prefix):].strip("/")
+            if trimmed:
+                return trimmed
+    return rel
+
+
+def _resolve_target_dir_for_category(settings: YaDiskUploadSettings, category: str) -> str:
+    category_key = str(category or "").strip().lower()
+    if not category_key:
+        return ""
+    return str(settings.category_target_dirs.get(category_key) or "").strip()
+
+
 def _upload_yadisk_stage(
     *,
     db: Database,
     output_path: Path,
 ) -> int:
     try:
-        token, target_dir = _load_yadisk_upload_settings()
+        upload_settings = _load_yadisk_upload_settings()
     except Exception as exc:
         print(f"shayan upload_yadisk: failed settings: {exc}", flush=True)
         return 1
 
-    client = _create_yadisk_client(token)
+    client = _create_yadisk_client(upload_settings.token)
     try:
         valid = client.check_token()
     except Exception as exc:
@@ -529,7 +586,21 @@ def _upload_yadisk_stage(
             missing_local += 1
             continue
 
-        remote_path = _build_remote_upload_path(local_file, output_path, target_dir)
+        category = _extract_category(payload, local_file, output_path)
+        target_dir = _resolve_target_dir_for_category(upload_settings, category)
+        if not target_dir:
+            db.mark_shayan_manifest_yadisk_failed(
+                entry_key,
+                error_text=f"missing_target_dir_for_category:{category or 'unknown'}",
+            )
+            failed += 1
+            continue
+        rel_within_category = _relative_path_within_category(
+            local_file=local_file,
+            output_path=output_path,
+            category=category,
+        )
+        remote_path = posixpath.normpath(posixpath.join(target_dir, rel_within_category))
         remote_dir = posixpath.dirname(remote_path)
         try:
             uploaded_path, _remote_md5 = client.upload_or_replace(
@@ -552,7 +623,7 @@ def _upload_yadisk_stage(
 
     artifacts = {
         "kind": "shayan.upload_yadisk_summary",
-        "target_dir": target_dir,
+        "target_dirs": dict(upload_settings.category_target_dirs),
         "considered": len(candidates),
         "uploaded": uploaded,
         "failed": failed,

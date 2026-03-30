@@ -364,7 +364,13 @@ def test_upload_yadisk_stage_uploads_available_files_and_marks_missing(
     monkeypatch.setattr(
         run_stage,
         "_load_yadisk_upload_settings",
-        lambda: ("oauth-token", "/uploads/shayan"),
+        lambda: run_stage.YaDiskUploadSettings(
+            token="oauth-token",
+            category_target_dirs={
+                "cartoons": "/uploads/cartoons",
+                "shows": "/uploads/shows",
+            },
+        ),
     )
 
     upload_calls: list[dict] = []
@@ -401,7 +407,7 @@ def test_upload_yadisk_stage_uploads_available_files_and_marks_missing(
     assert code == 0
     assert len(upload_calls) == 1
     assert upload_calls[0]["local_file"] == str(existing_file)
-    assert upload_calls[0]["remote_dir"].endswith("/videos/cartoons/Show/S01")
+    assert upload_calls[0]["remote_dir"].endswith("/uploads/cartoons/Show/S01")
     assert len(fake_db.uploaded_rows) == 1
     assert fake_db.uploaded_rows[0]["entry_key"] == "ep-1"
     assert len(fake_db.failed_rows) == 1
@@ -413,3 +419,31 @@ def test_upload_yadisk_stage_uploads_available_files_and_marks_missing(
     assert payload["kind"] == "shayan.upload_yadisk_summary"
     assert int(payload["uploaded"]) == 1
     assert int(payload["failed"]) == 1
+
+
+def test_load_yadisk_upload_settings_reads_new_shayan_targets(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+yandex:
+  disk:
+    oauth_token: token-1
+    shayan:
+      cartoons: /neurotatarlar/video/shayantv/cartoons
+      shows: /neurotatarlar/video/shayantv/shows
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
+    monkeypatch.delenv("SHAYAN_YADISK_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("SHAYAN_YADISK_CARTOONS_TARGET_DIR", raising=False)
+    monkeypatch.delenv("SHAYAN_YADISK_SHOWS_TARGET_DIR", raising=False)
+
+    settings = run_stage._load_yadisk_upload_settings()
+    assert settings.token == "token-1"
+    assert settings.category_target_dirs["cartoons"] == "/neurotatarlar/video/shayantv/cartoons"
+    assert settings.category_target_dirs["shows"] == "/neurotatarlar/video/shayantv/shows"
