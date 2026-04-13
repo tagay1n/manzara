@@ -11,6 +11,7 @@ import posixpath
 import re
 import subprocess
 import tempfile
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
@@ -221,6 +222,116 @@ def _create_yadisk_client(token: str) -> YaDisk:
     return YaDisk(token)
 
 
+def _run_best_effort_snapshot(
+    *,
+    repo_path: Path,
+    snapshot_file: Path,
+    category: str,
+) -> Tuple[int, list[str]]:
+    runner_code = textwrap.dedent(
+        """
+        from __future__ import annotations
+
+        import argparse
+        from pathlib import Path
+
+        import typer
+
+        from app.main import (
+            apply_program_filters,
+            collect_programs,
+            parse_episodes,
+            save_status,
+            snapshot_to_dict,
+        )
+        from app.models import SnapshotEpisode
+
+
+        def parse_args() -> argparse.Namespace:
+            parser = argparse.ArgumentParser(description="Best-effort snapshot collector")
+            parser.add_argument("--category", default="all")
+            parser.add_argument("--output-file", required=True)
+            parser.add_argument("--program-filter", default="")
+            parser.add_argument("--limit-programs", type=int, default=0)
+            parser.add_argument("--limit-episodes", type=int, default=0)
+            return parser.parse_args()
+
+
+        def main() -> int:
+            args = parse_args()
+            programs = apply_program_filters(
+                collect_programs(args.category),
+                program_filter=args.program_filter,
+                limit_programs=args.limit_programs,
+            )
+            entries = []
+            skipped = []
+            for program in programs:
+                typer.secho(f"[snapshot] {program.title} ({program.url})", fg="cyan")
+                try:
+                    episodes = parse_episodes(program)
+                except Exception as exc:  # noqa: BLE001
+                    message = f"{type(exc).__name__}: {exc}"
+                    skipped.append(
+                        {
+                            "category": str(program.category),
+                            "program": str(program.title),
+                            "url": str(program.url),
+                            "error": message,
+                        }
+                    )
+                    typer.secho(
+                        f"[warning] skip program={program.url} reason={message}",
+                        fg="yellow",
+                    )
+                    continue
+                if args.limit_episodes:
+                    episodes = episodes[: int(args.limit_episodes)]
+                for ep in episodes:
+                    entries.append(
+                        SnapshotEpisode(
+                            category=ep.program.category,
+                            program=ep.program.title,
+                            season=ep.season,
+                            episode=ep.episode,
+                            title=ep.title,
+                            hls=ep.hls,
+                            program_url=ep.program.url,
+                        )
+                    )
+
+            output_path = Path(args.output_file).expanduser()
+            save_status(output_path, snapshot_to_dict(entries))
+            typer.secho(
+                f"Saved snapshot with {len(entries)} episodes to {output_path}",
+                fg="green",
+            )
+            print(
+                "manzara_best_effort_snapshot:"
+                f" programs_total={len(programs)}"
+                f" programs_skipped={len(skipped)}"
+                f" episodes_total={len(entries)}",
+                flush=True,
+            )
+            return 0
+
+
+        if __name__ == "__main__":
+            raise SystemExit(main())
+        """
+    ).strip()
+    command = [
+        _python_bin(repo_path),
+        "-c",
+        runner_code,
+        "--category",
+        str(category),
+        "--output-file",
+        str(snapshot_file),
+    ]
+    return _run_command_streaming(command, cwd=repo_path)
+
+
 def _scan_changes_stage(
     *,
     db: Database,
@@ -233,23 +344,29 @@ def _scan_changes_stage(
     with tempfile.TemporaryDirectory(prefix="manzara-shayan-scan-") as tmp_dir_raw:
         tmp_dir = Path(tmp_dir_raw)
         snapshot_file = tmp_dir / "latest.json"
-        command = [
-            _python_bin(repo_path),
-            "app/main.py",
-            "snapshot",
-            "--category",
-            "all",
-            "--output-file",
-            str(snapshot_file),
-        ]
-        print(f"shayan scan_changes: command={' '.join(command)}", flush=True)
-        code, _lines = _run_command_streaming(command, cwd=repo_path)
+        print(
+            "shayan scan_changes: command=best-effort snapshot collector "
+            f"category=all output_file={snapshot_file}",
+            flush=True,
+        )
+        code, _lines = _run_best_effort_snapshot(
+            repo_path=repo_path,
+            snapshot_file=snapshot_file,
+            category="all",
+        )
         if code != 0:
             print(f"shayan scan_changes: failed exit_code={code}", flush=True)
             return 1
 
         payload = _read_json(snapshot_file)
         entries = _normalize_entries(payload)
+        if not entries:
+            print(
+                "shayan scan_changes: failed empty snapshot (no episodes parsed); "
+                "previous snapshot preserved",
+                flush=True,
+            )
+            return 1
         after = _hash_map(entries)
 
     before_ids = set(previous.keys())
