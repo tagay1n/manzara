@@ -44,6 +44,7 @@ from app.modules.library.insights import (
     get_classification_detail,
     get_classification_insights,
     get_merge_candidates,
+    merge_classifications,
     get_normalization_preview,
     list_classifications,
 )
@@ -164,6 +165,7 @@ def _classification_operations() -> ClassificationOperations:
             "get_classification_insights": get_classification_insights,
             "get_normalization_preview": get_normalization_preview,
             "get_merge_candidates": get_merge_candidates,
+            "merge_classifications": merge_classifications,
         }
     )
 

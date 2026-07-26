@@ -255,7 +255,6 @@ def wait_for_pgbackrest_s3_change(
     timeout_seconds = max(0, int(wait_seconds))
     sleep_seconds = max(0.1, float(poll_interval_seconds))
     deadline = time.monotonic() + float(timeout_seconds)
-    latest_state: Optional[Dict[str, Any]] = None
     attempts = 0
 
     while True:
@@ -268,7 +267,6 @@ def wait_for_pgbackrest_s3_change(
             config_path=config_path,
             monocorpus_repo_path=monocorpus_repo_path,
         )
-        latest_state = current
         if not current.get("ok"):
             return current
 

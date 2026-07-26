@@ -1,0 +1,76 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const PAGE_FILES = [
+  "tasks.html",
+  "task.html",
+  "flow.html",
+  "schedules.html",
+  "database.html",
+  "library.html",
+  "library-classifications.html",
+  "library-classification.html",
+  "library-personalities.html",
+  "library-publishers.html",
+  "library-collections.html",
+  "library-normalization.html",
+  "gemini.html",
+];
+
+test("all application pages use the shared shell and omit permanent alert strips", () => {
+  for (const file of PAGE_FILES) {
+    const source = readFileSync(new URL(`../../static/${file}`, import.meta.url), "utf-8");
+    assert.match(source, /data-manzara-page=/, `${file} declares its active page`);
+    assert.match(source, /\/static\/shell\.js/, `${file} loads the shared shell`);
+    assert.match(source, /\/static\/shell-state\.js/, `${file} restores shell state before paint`);
+    assert.ok(
+      source.indexOf("/static/shell-state.js") < source.indexOf("/static/styles.css"),
+      `${file} restores shell state before loading styles`,
+    );
+    assert.doesNotMatch(source, /class="alert-strip"/, `${file} has no permanent alert strip`);
+    assert.doesNotMatch(
+      source,
+      /Task index is grouped by flow/,
+      `${file} has no oversized task-index guidance panel`,
+    );
+    assert.doesNotMatch(
+      source,
+      /class="(?:app-shell|side-rail|topbar|footer)"/,
+      `${file} does not duplicate shared shell markup`,
+    );
+  }
+});
+
+test("obsolete dashboard asset redirects to the task index without legacy UI", () => {
+  const source = readFileSync(
+    new URL("../../static/dashboard.html", import.meta.url),
+    "utf-8",
+  );
+
+  assert.match(source, /location\.replace\("\/tasks"\)/);
+  assert.doesNotMatch(source, /class="(?:app-shell|alert-strip|dashboard)"/);
+  assert.doesNotMatch(source, /\/static\/app\.js/);
+});
+
+test("frontend source does not use browser system dialogs", () => {
+  const sources = [
+    "app.js",
+    "database.js",
+    "flow.js",
+    "gemini.js",
+    "library-classification.js",
+    "library-classifications.js",
+    "library-collections.js",
+    "library-normalization.js",
+    "library-personalities.js",
+    "library-publishers.js",
+    "schedules.js",
+    "task.js",
+    "tasks.js",
+  ].map((file) => readFileSync(new URL(`../../static/${file}`, import.meta.url), "utf-8"));
+
+  const combined = sources.join("\n");
+  assert.doesNotMatch(combined, /\bwindow\.(?:alert|confirm|prompt)\s*\(/);
+  assert.doesNotMatch(combined, /(?:^|[^\w.])(?:alert|confirm|prompt)\s*\(/m);
+});

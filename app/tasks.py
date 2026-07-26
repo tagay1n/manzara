@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shlex
@@ -744,11 +743,6 @@ class TaskRunner:
             payload["missing_local"] = int(artifacts.get("missing_local") or 0)
             payload["deleted_local"] = int(artifacts.get("deleted_local") or 0)
             payload["hash_mismatch"] = int(artifacts.get("hash_mismatch") or 0)
-            return payload
-        if kind == "maintenance.sync_summary":
-            payload["rows_added"] = int(artifacts.get("rows_added") or 0)
-            payload["rows_moved"] = int(artifacts.get("rows_moved") or 0)
-            payload["rows_deleted"] = int(artifacts.get("rows_deleted") or 0)
             return payload
         return payload
 

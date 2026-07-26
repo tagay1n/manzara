@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict
 
-from fastapi import FastAPI
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from app.contracts import ClassificationOperations
@@ -95,6 +95,31 @@ def register_library_classification_routes(
             row_limit=row_limit,
         )
         return JSONResponse(payload)
+
+    @app.post("/api/library/classifications/merge")
+    def post_library_classification_merge(
+        payload: Dict[str, Any] = Body(...),
+    ) -> JSONResponse:
+        """Merge one source classification into a target classification."""
+        operations = operations_provider()
+        try:
+            source_classification_id = int(payload.get("source_classification_id"))
+            target_classification_id = int(payload.get("target_classification_id"))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="source_classification_id and target_classification_id must be integers",
+            )
+        reason = str(payload.get("reason") or "").strip()
+        try:
+            result = operations.merge_classifications(
+                source_classification_id=source_classification_id,
+                target_classification_id=target_classification_id,
+                reason=reason,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result)
 
     @app.get("/api/library/classifications/{classification_id}")
     def get_library_classification_detail(

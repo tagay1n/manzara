@@ -636,16 +636,10 @@ async function refreshAllWithState({ showLoading = false } = {}) {
 }
 
 function queueRefresh(delayMs = 250) {
-  if (state.refreshTimer) return;
-  state.refreshTimer = setTimeout(async () => {
-    state.refreshTimer = null;
-    try {
-      await refreshSummary();
-      await refreshTab(state.activeTab);
-      lucide.createIcons();
-    } catch (error) {
-      console.error(error);
-    }
+  window.ManzaraCore.scheduleRefresh(state, async () => {
+    await refreshSummary();
+    await refreshTab(state.activeTab);
+    lucide.createIcons();
   }, delayMs);
 }
 
@@ -676,7 +670,7 @@ function rowCanonicalSelection(rawName) {
 
 async function linkAlias(rawName, canonicalId, suggestionIds = []) {
   if (!canonicalId) {
-    alert("Select canonical first.");
+    window.ManzaraUI.toast("Select a canonical record first.", { tone: "warning" });
     return;
   }
   await api(`/api/library/normalization/${encodeURIComponent(state.entityType)}/decisions/link`, {
@@ -690,11 +684,17 @@ async function linkAlias(rawName, canonicalId, suggestionIds = []) {
 }
 
 async function createAndLinkAlias(rawName, suggestionIds = []) {
-  const displayName = window.prompt("Canonical display name:", rawName || "");
+  const displayName = await window.ManzaraUI.prompt({
+    title: "Create canonical record",
+    message: "Enter the normalized display name for this alias.",
+    inputLabel: "Display name",
+    value: rawName || "",
+    acceptLabel: "Create and link",
+  });
   if (displayName === null) return;
   const trimmed = displayName.trim();
   if (!trimmed) {
-    alert("Display name is required.");
+    window.ManzaraUI.toast("Display name is required.", { tone: "warning" });
     return;
   }
   await api(`/api/library/normalization/${encodeURIComponent(state.entityType)}/decisions/create-link`, {
@@ -799,7 +799,12 @@ async function refreshSuggestionsAction() {
 }
 
 async function applyMerge(sourceCanonicalId, targetCanonicalId) {
-  const confirmed = window.confirm(`Merge canonical #${sourceCanonicalId} into #${targetCanonicalId}?`);
+  const confirmed = await window.ManzaraUI.confirm({
+    title: "Merge canonical records",
+    message: `Merge canonical #${sourceCanonicalId} into #${targetCanonicalId}? This changes linked aliases.`,
+    acceptLabel: "Merge records",
+    destructive: true,
+  });
   if (!confirmed) return;
   await api(`/api/library/normalization/${encodeURIComponent(state.entityType)}/merge`, {
     method: "POST",
@@ -813,7 +818,11 @@ async function applyMerge(sourceCanonicalId, targetCanonicalId) {
 }
 
 async function undoHistoryEvent(eventId) {
-  const confirmed = window.confirm(`Undo event #${eventId}?`);
+  const confirmed = await window.ManzaraUI.confirm({
+    title: "Undo normalization event",
+    message: `Undo event #${eventId} and restore its previous mappings?`,
+    acceptLabel: "Undo event",
+  });
   if (!confirmed) return;
   await api(`/api/library/normalization/${encodeURIComponent(state.entityType)}/history/${encodeURIComponent(String(eventId))}/undo`, {
     method: "POST",
@@ -824,7 +833,12 @@ async function undoHistoryEvent(eventId) {
 async function stopAll() {
   const stopState = state.globalPayload?.global?.stop_all_state;
   if (stopState === "armed") {
-    const confirmed = window.confirm("Force stop all running tasks immediately?");
+    const confirmed = await window.ManzaraUI.confirm({
+      title: "Force stop all tasks",
+      message: "Running tasks will be terminated immediately without waiting for a safe boundary.",
+      acceptLabel: "Force stop",
+      destructive: true,
+    });
     if (!confirmed) return;
   }
   await api("/api/system/stop-all", { method: "POST" });
@@ -842,7 +856,15 @@ function setupEventStream() {
     onEvent: (payload, event) => {
       document.getElementById("last-event").textContent = window.ManzaraCore.formatEventBanner(payload);
       maybePlayTaskNotification(payload, event.lastEventId || "");
-      queueRefresh(150);
+      const eventType = String(payload?.type || "");
+      const taskFinished = ["task.artifact", "task.completed", "task.failed", "task.stopped"]
+        .includes(eventType);
+      if (
+        eventType.startsWith("library.")
+        || (String(payload?.panel_id || "") === "library" && taskFinished)
+      ) {
+        queueRefresh(150);
+      }
     },
   });
   state.eventStreamController.start();
@@ -892,19 +914,19 @@ function attachUiHandlers() {
     const rawName = decodeKey(target.dataset.raw || "");
     handleQueueAction(action, rawName).catch((error) => {
       console.error(error);
-      alert(error.message || String(error));
+      window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
     });
   });
 
   document.getElementById("queue-bulk-link").addEventListener("click", async () => {
     const canonicalId = Number(document.getElementById("queue-bulk-canonical").value || "0");
     if (!canonicalId) {
-      alert("Select canonical for bulk link.");
+      window.ManzaraUI.toast("Select a canonical record for bulk link.", { tone: "warning" });
       return;
     }
     const rawNames = queueSelectedRawNames();
     if (!rawNames.length) {
-      alert("Select at least one alias row.");
+      window.ManzaraUI.toast("Select at least one alias row.", { tone: "warning" });
       return;
     }
     await api(`/api/library/normalization/${encodeURIComponent(state.entityType)}/bulk/link`, {
@@ -920,7 +942,7 @@ function attachUiHandlers() {
   document.getElementById("queue-bulk-reject").addEventListener("click", async () => {
     const rawNames = queueSelectedRawNames();
     if (!rawNames.length) {
-      alert("Select at least one alias row.");
+      window.ManzaraUI.toast("Select at least one alias row.", { tone: "warning" });
       return;
     }
     await api(`/api/library/normalization/${encodeURIComponent(state.entityType)}/bulk/reject`, {
@@ -940,7 +962,7 @@ function attachUiHandlers() {
     const displayName = document.getElementById("canonical-create-name").value.trim();
     const notes = document.getElementById("canonical-create-notes").value.trim();
     if (!displayName) {
-      alert("Canonical display name is required.");
+      window.ManzaraUI.toast("Canonical display name is required.", { tone: "warning" });
       return;
     }
     await api(`/api/library/normalization/${encodeURIComponent(state.entityType)}/canonicals`, {
@@ -965,7 +987,7 @@ function attachUiHandlers() {
       })
       .catch((error) => {
         console.error(error);
-        alert(error.message || String(error));
+        window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
       });
   });
 
@@ -990,7 +1012,7 @@ function attachUiHandlers() {
       lucide.createIcons();
     })().catch((error) => {
       console.error(error);
-      alert(error.message || String(error));
+      window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
     });
   });
 
@@ -1005,7 +1027,7 @@ function attachUiHandlers() {
     if (!sourceId || !targetId) return;
     applyMerge(sourceId, targetId).catch((error) => {
       console.error(error);
-      alert(error.message || String(error));
+      window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
     });
   });
 
@@ -1016,7 +1038,7 @@ function attachUiHandlers() {
     if (!eventId) return;
     undoHistoryEvent(eventId).catch((error) => {
       console.error(error);
-      alert(error.message || String(error));
+      window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
     });
   });
 
@@ -1046,5 +1068,5 @@ async function bootstrap() {
 
 bootstrap().catch((error) => {
   console.error(error);
-  alert(error.message || String(error));
+  window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
 });

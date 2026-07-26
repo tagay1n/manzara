@@ -22,6 +22,12 @@ _DEFAULT_DROP_SEGMENTS = [
     "torkic literature",
     "turkic",
 ]
+_DDC_TERMSET = "DDC"
+_CATEGORY_PATH_TERMSET = "CategoryPath"
+_MANAGED_CLASSIFICATION_TERMSETS = {
+    _DDC_TERMSET.casefold(),
+    _CATEGORY_PATH_TERMSET.casefold(),
+}
 
 
 def _parse_json_path(path_value: Any) -> list[str]:
@@ -60,6 +66,75 @@ def _serialize_value(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     return value
+
+
+def _build_defined_term(term_code: str, termset: str) -> dict[str, str]:
+    return {
+        "@type": "DefinedTerm",
+        "termCode": term_code,
+        "inDefinedTermSet": termset,
+    }
+
+
+def _coerce_schema_object(schema_org: Any) -> dict[str, Any] | None:
+    if isinstance(schema_org, dict):
+        return dict(schema_org)
+    if isinstance(schema_org, str):
+        raw = schema_org.strip()
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            return dict(parsed)
+    return None
+
+
+def _rewrite_schema_org_classification_terms(
+    schema_org: Any,
+    *,
+    target_ddc: str,
+    target_path_parts: list[str],
+) -> tuple[Any, bool]:
+    schema = _coerce_schema_object(schema_org)
+    if schema is None:
+        return schema_org, False
+
+    about_raw = schema.get("about")
+    if isinstance(about_raw, list):
+        about_items = list(about_raw)
+    elif about_raw is None:
+        about_items = []
+    else:
+        about_items = [about_raw]
+
+    retained: list[Any] = []
+    for item in about_items:
+        if not isinstance(item, dict):
+            retained.append(item)
+            continue
+        termset = str(item.get("inDefinedTermSet") or "").strip().casefold()
+        if termset in _MANAGED_CLASSIFICATION_TERMSETS:
+            continue
+        retained.append(item)
+
+    retained.append(_build_defined_term(target_ddc, _DDC_TERMSET))
+    if target_path_parts:
+        retained.append(
+            _build_defined_term(" > ".join(target_path_parts), _CATEGORY_PATH_TERMSET)
+        )
+
+    updated = dict(schema)
+    if retained:
+        updated["about"] = retained
+    else:
+        updated.pop("about", None)
+
+    before = json.dumps(schema, ensure_ascii=False, sort_keys=True)
+    after = json.dumps(updated, ensure_ascii=False, sort_keys=True)
+    return updated, before != after
 
 
 def _normalize_sort(sort: str) -> str:
@@ -631,6 +706,130 @@ def get_merge_candidates(
         )
 
 
+def merge_classifications(
+    *,
+    source_classification_id: int,
+    target_classification_id: int,
+    reason: str = "",
+) -> Dict[str, Any]:
+    """Merge one classification into another and keep schema_org terms aligned."""
+    source_id = int(source_classification_id)
+    target_id = int(target_classification_id)
+    if source_id <= 0 or target_id <= 0:
+        raise ValueError("source_classification_id and target_classification_id must be positive")
+    if source_id == target_id:
+        raise ValueError("source_classification_id and target_classification_id must differ")
+
+    engine, config_source = create_runtime_engine()
+    try:
+        with engine.begin() as conn:
+            source = conn.execute(
+                text(
+                    """
+                    SELECT id, ddc, path_en
+                    FROM classification
+                    WHERE id = :classification_id
+                    FOR UPDATE
+                    """
+                ),
+                {"classification_id": source_id},
+            ).mappings().first()
+            if not source:
+                raise ValueError("Source classification not found")
+
+            target = conn.execute(
+                text(
+                    """
+                    SELECT id, ddc, path_en
+                    FROM classification
+                    WHERE id = :classification_id
+                    FOR UPDATE
+                    """
+                ),
+                {"classification_id": target_id},
+            ).mappings().first()
+            if not target:
+                raise ValueError("Target classification not found")
+
+            target_ddc = str(target.get("ddc") or "").strip()
+            target_path_parts = _parse_json_path(target.get("path_en"))
+            if not target_ddc or not target_path_parts:
+                raise ValueError("Target classification is incomplete (missing ddc/path)")
+
+            moved_rows = conn.execute(
+                text(
+                    """
+                    SELECT md5, schema_org
+                    FROM metadata
+                    WHERE classification_id = :source_id
+                    FOR UPDATE
+                    """
+                ),
+                {"source_id": source_id},
+            ).mappings().all()
+            moved_docs_count = len(moved_rows)
+
+            relinked = conn.execute(
+                text(
+                    """
+                    UPDATE metadata
+                    SET classification_id = :target_id
+                    WHERE classification_id = :source_id
+                    """
+                ),
+                {"source_id": source_id, "target_id": target_id},
+            )
+            relinked_count = int(relinked.rowcount or 0)
+
+            schema_org_updated_count = 0
+            for row in moved_rows:
+                md5 = str(row.get("md5") or "").strip()
+                if not md5:
+                    continue
+                updated_schema, changed = _rewrite_schema_org_classification_terms(
+                    row.get("schema_org"),
+                    target_ddc=target_ddc,
+                    target_path_parts=target_path_parts,
+                )
+                if not changed:
+                    continue
+                conn.execute(
+                    text(
+                        """
+                        UPDATE metadata
+                        SET schema_org = CAST(:schema_json AS JSON)
+                        WHERE md5 = :md5
+                        """
+                    ),
+                    {
+                        "md5": md5,
+                        "schema_json": json.dumps(updated_schema, ensure_ascii=False),
+                    },
+                )
+                schema_org_updated_count += 1
+
+            deleted = conn.execute(
+                text("DELETE FROM classification WHERE id = :source_id"),
+                {"source_id": source_id},
+            )
+            source_deleted = int(deleted.rowcount or 0) > 0
+            if not source_deleted:
+                raise ValueError("Source classification could not be deleted")
+
+        return available_payload(
+            config_source=config_source,
+            source_classification_id=source_id,
+            target_classification_id=target_id,
+            moved_docs_count=moved_docs_count,
+            relinked_count=relinked_count,
+            schema_org_updated_count=schema_org_updated_count,
+            source_deleted=True,
+            reason=str(reason or "").strip(),
+        )
+    finally:
+        engine.dispose()
+
+
 def get_classification_detail(
     classification_id: int,
     *,
@@ -795,5 +994,6 @@ __all__ = [
     "get_classification_insights",
     "get_normalization_preview",
     "get_merge_candidates",
+    "merge_classifications",
     "get_classification_detail",
 ]

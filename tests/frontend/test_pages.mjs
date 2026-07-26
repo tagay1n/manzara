@@ -107,6 +107,7 @@ const CLASSIFICATIONS_PAGE_IDS = [
   "classification-table-body",
   "classification-table-status",
   "distribution-root",
+  "duplicates-status",
   "duplicates-root",
   "filter-apply",
   "filter-ddc-prefix",
@@ -376,6 +377,27 @@ function createHarness({
       }
       return promptResult;
     },
+    ManzaraUI: {
+      async confirm() {
+        return confirmResult;
+      },
+      async prompt(options = {}) {
+        prompts.push({
+          message: String(options.message || ""),
+          defaultValue: String(options.value || ""),
+        });
+        if (typeof promptResult === "function") {
+          return promptResult(options);
+        }
+        return promptResult;
+      },
+      toast(message) {
+        alerts.push(String(message || ""));
+      },
+      reportTaskActionResult(result) {
+        if (result?.message) alerts.push(String(result.message));
+      },
+    },
     ManzaraSound: null,
     ManzaraCore: {
       DEFAULT_EVENT_TYPES: ["task.started", "task.completed", "task.failed"],
@@ -483,6 +505,20 @@ function createHarness({
       },
       applyStopAllButton(button, stopAllState) {
         button.dataset.stopState = String(stopAllState || "");
+      },
+      scheduleRefresh(state, worker, delayMs = 0) {
+        if (state.refreshTimer) return;
+        state.refreshTimer = timer.setTimeout(async () => {
+          state.refreshTimer = null;
+          await worker();
+        }, delayMs);
+      },
+      eventNeedsReconciliation(payload) {
+        const eventType = String(payload?.type || "");
+        return !["task.log", "task.progress"].includes(eventType);
+      },
+      applyTaskEventState() {
+        return false;
       },
       createTabController(options = {}) {
         const tabs = Array.isArray(options.tabs)
@@ -1285,7 +1321,12 @@ test("flow page bootstraps, renders tasks and summaries, and refreshes on SSE", 
   assert.match(harness.elements.get("flow-task-grid").innerHTML, /\/tasks\/quick/);
 
   const before = harness.apiCalls.filter((call) => call.path === "/api/flows/shayan?limit_per_task=20").length;
-  harness.sse.config.onEvent({ type: "task.completed" }, { lastEventId: "9" });
+  harness.sse.config.onEvent({
+    type: "task.completed",
+    task_id: "shayan.quick",
+    panel_id: "shayan",
+    run_id: 21,
+  }, { lastEventId: "9" });
   await harness.timer.runAllTimeouts();
   await harness.flush();
   const after = harness.apiCalls.filter((call) => call.path === "/api/flows/shayan?limit_per_task=20").length;
@@ -1554,7 +1595,20 @@ test("library classifications page renders API error state", async () => {
 });
 
 function createClassificationsResolver({ malicious = false } = {}) {
-  return (path) => {
+  return (path, options = {}) => {
+    if (
+      path === "/api/library/classifications/merge"
+      && String(options?.method || "GET").toUpperCase() === "POST"
+    ) {
+      return {
+        available: true,
+        source_classification_id: 11,
+        target_classification_id: 10,
+        moved_docs_count: 4,
+        schema_org_updated_count: 4,
+        source_deleted: true,
+      };
+    }
     if (path.startsWith("/api/library/classifications?")) {
       return {
         available: true,
@@ -1901,6 +1955,150 @@ test("library classifications page escapes dangerous strings in rendered html", 
   assert.equal(combined.includes("onclick="), false);
   assert.match(combined, /&lt;img/);
   assert.match(combined, /&lt;script/);
+});
+
+test("library classifications merge action posts merge request", async () => {
+  const harness = createHarness({
+    source: LIBRARY_CLASSIFICATIONS_SOURCE,
+    ids: CLASSIFICATIONS_PAGE_IDS,
+    selectors: [".classification-tabs"],
+    apiResolver: createClassificationsResolver(),
+  });
+  await harness.flush();
+
+  harness.elements.get("merge-root").dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== ".merge-execute-btn") return null;
+        return {
+          dataset: {
+            sourceId: "11",
+            targetId: "10",
+          },
+        };
+      },
+    },
+  });
+  await harness.flush();
+
+  const mergeCall = harness.apiCalls.find((entry) => entry.path === "/api/library/classifications/merge");
+  assert.ok(mergeCall);
+  assert.equal(String(mergeCall.options?.method || "").toUpperCase(), "POST");
+  const body = JSON.parse(String(mergeCall.options?.body || "{}"));
+  assert.equal(body.source_classification_id, 11);
+  assert.equal(body.target_classification_id, 10);
+});
+
+test("library classifications duplicates action posts merge request", async () => {
+  const harness = createHarness({
+    source: LIBRARY_CLASSIFICATIONS_SOURCE,
+    ids: CLASSIFICATIONS_PAGE_IDS,
+    selectors: [".classification-tabs"],
+    apiResolver(path, options = {}) {
+      if (
+        path === "/api/library/classifications/merge"
+        && String(options?.method || "GET").toUpperCase() === "POST"
+      ) {
+        return {
+          available: true,
+          source_classification_id: 2,
+          target_classification_id: 1,
+          moved_docs_count: 5,
+          schema_org_updated_count: 5,
+          source_deleted: true,
+        };
+      }
+      if (path.startsWith("/api/library/classifications?")) {
+        return {
+          available: true,
+          page: 1,
+          total_pages: 1,
+          total: 1,
+          items: [
+            {
+              classification_id: 1,
+              ddc: "891.7",
+              path: "Language / Tatar",
+              usage_count: 8,
+              status: "active",
+              created_by: "seed",
+              created_at: "2026-03-24T12:00:00Z",
+            },
+          ],
+        };
+      }
+      if (path === "/api/library/classifications/insights") {
+        return {
+          available: true,
+          tree: [],
+          distribution: [],
+          duplicates: [
+            {
+              path: "Language / Tatar",
+              issue: "duplicate_path",
+              total_usage: 12,
+              distinct_ddc_count: 1,
+              items: [
+                { classification_id: 1, ddc: "891.7", usage_count: 8 },
+                { classification_id: 2, ddc: "891.7", usage_count: 4 },
+              ],
+            },
+          ],
+          unclassified_queue: { total: 0, items: [] },
+        };
+      }
+      if (path.startsWith("/api/library/classifications/normalization-preview?")) {
+        return {
+          available: true,
+          rules: { drop_segments: ["Turkic literature"] },
+          summary: {
+            total_rows_scanned: 1,
+            affected_classifications: 0,
+            estimated_reassigned_documents: 0,
+            merge_group_candidates: 0,
+          },
+          merge_groups: [],
+          affected_preview: [],
+        };
+      }
+      if (path.startsWith("/api/library/classifications/merge-candidates?")) {
+        return {
+          available: true,
+          summary: { candidate_count: 0, rows_scanned: 2, min_score: 0.8 },
+          candidates: [],
+        };
+      }
+      if (path === "/api/library") {
+        return {
+          global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+        };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+
+  harness.elements.get("duplicates-root").dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== ".duplicate-merge-btn") return null;
+        return {
+          dataset: {
+            sourceId: "2",
+            targetId: "1",
+          },
+        };
+      },
+    },
+  });
+  await harness.flush();
+
+  const mergeCall = harness.apiCalls.find((entry) => entry.path === "/api/library/classifications/merge");
+  assert.ok(mergeCall);
+  assert.equal(String(mergeCall.options?.method || "").toUpperCase(), "POST");
+  const body = JSON.parse(String(mergeCall.options?.body || "{}"));
+  assert.equal(body.source_classification_id, 2);
+  assert.equal(body.target_classification_id, 1);
 });
 
 test("library personalities page renders API error state", async () => {

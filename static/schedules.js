@@ -53,16 +53,7 @@ function teardownSoundNotifier() {
 }
 
 function maybeShowTaskActionError(result) {
-  if (!result || typeof result !== "object") return;
-  const action = String(result.action || "");
-  const reason = String(result?.reason || "");
-  if (action === "noop" && result?.message) {
-    window.alert(String(result.message));
-    return;
-  }
-  if (reason.startsWith("sudo_") && result?.message) {
-    window.alert(String(result.message));
-  }
+  window.ManzaraUI?.reportTaskActionResult(result);
 }
 
 function workflowStatusModel(workflow) {
@@ -278,15 +269,7 @@ async function refreshSchedules({ showLoading = false } = {}) {
 }
 
 function queueRefresh(delayMs = 250) {
-  if (state.refreshTimer) return;
-  state.refreshTimer = setTimeout(async () => {
-    state.refreshTimer = null;
-    try {
-      await refreshSchedules();
-    } catch (error) {
-      console.error(error);
-    }
-  }, delayMs);
+  window.ManzaraCore.scheduleRefresh(state, refreshSchedules, delayMs);
 }
 
 async function runWorkflowNow(workflowId) {
@@ -309,7 +292,12 @@ async function patchSchedule(scheduleId, patch) {
 async function stopAll() {
   const stopState = state.payload?.global?.stop_all_state;
   if (stopState === "armed") {
-    const confirmed = window.confirm("Force stop all running tasks immediately?");
+    const confirmed = await window.ManzaraUI.confirm({
+      title: "Force stop all tasks",
+      message: "Running tasks will be terminated immediately without waiting for a safe boundary.",
+      acceptLabel: "Force stop",
+      destructive: true,
+    });
     if (!confirmed) return;
   }
   await api("/api/system/stop-all", { method: "POST" });
@@ -327,7 +315,10 @@ function setupEventStream() {
     onEvent: (payload, event) => {
       document.getElementById("last-event").textContent = window.ManzaraCore.formatEventBanner(payload);
       maybePlayTaskNotification(payload, event.lastEventId || "");
-      queueRefresh(100);
+      const eventType = String(payload?.type || "");
+      if (eventType.startsWith("workflow.") || eventType.startsWith("schedule.")) {
+        queueRefresh(100);
+      }
     },
   });
   state.eventStreamController.start();
@@ -367,7 +358,9 @@ function attachUiHandlers() {
       if (scheduleType === "interval") {
         const interval = Number(card.querySelector(".schedule-interval")?.value || "0");
         if (!Number.isFinite(interval) || interval < 1) {
-          window.alert("Interval must be an integer >= 1 minute");
+          window.ManzaraUI.toast("Interval must be an integer of at least 1 minute.", {
+            tone: "warning",
+          });
           return;
         }
         patchSchedule(scheduleId, {
@@ -380,7 +373,9 @@ function attachUiHandlers() {
       const day = Number(card.querySelector(".schedule-day")?.value || "1");
       const time = String(card.querySelector(".schedule-time")?.value || "03:00").trim();
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
-        window.alert("Time must be HH:MM");
+        window.ManzaraUI.toast("Time must use the 24-hour HH:MM format.", {
+          tone: "warning",
+        });
         return;
       }
 

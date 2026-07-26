@@ -185,6 +185,161 @@
     };
   }
 
+  function createRefreshCoordinator(worker) {
+    if (typeof worker !== "function") {
+      throw new TypeError("refresh worker must be a function");
+    }
+    let running = false;
+    let queued = false;
+    let waiters = [];
+
+    function settleWaiters(error = null) {
+      const current = waiters;
+      waiters = [];
+      current.forEach(({ resolve, reject }) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    }
+
+    async function run() {
+      running = true;
+      try {
+        do {
+          queued = false;
+          await worker();
+        } while (queued);
+        settleWaiters();
+      } catch (error) {
+        queued = false;
+        settleWaiters(error);
+      } finally {
+        running = false;
+      }
+    }
+
+    function request() {
+      const completion = new Promise((resolve, reject) => {
+        waiters.push({ resolve, reject });
+      });
+      if (running) {
+        queued = true;
+      } else {
+        void run();
+      }
+      return completion;
+    }
+
+    return {
+      request,
+      getState() {
+        return { running, queued };
+      },
+    };
+  }
+
+  function scheduleRefresh(state, worker, delayMs = 0) {
+    if (!state || typeof state !== "object") {
+      throw new TypeError("refresh state must be an object");
+    }
+    if (typeof worker !== "function") {
+      throw new TypeError("refresh worker must be a function");
+    }
+    if (!state.refreshCoordinator) {
+      state.refreshCoordinator = createRefreshCoordinator(worker);
+    }
+    if (state.refreshTimer) return;
+    state.refreshTimer = setTimeout(() => {
+      state.refreshTimer = null;
+      state.refreshCoordinator.request().catch((error) => {
+        console.error(error);
+      });
+    }, Math.max(0, Number(delayMs || 0)));
+  }
+
+  const RECONCILIATION_EVENTS = new Set([
+    "task.started",
+    "task.stop_requested",
+    "task.force_stop_requested",
+    "task.artifact",
+    "task.completed",
+    "task.failed",
+    "task.stopped",
+    "task.renamed",
+    "flow.renamed",
+    "workflow.started",
+    "workflow.completed",
+    "workflow.failed",
+    "workflow.stopped",
+    "schedule.updated",
+    "schedule.triggered",
+    "schedule.skipped",
+    "schedule.skipped_overlap",
+    "shayan.episode_redownload_requested",
+    "library.collection_updated",
+  ]);
+
+  function eventNeedsReconciliation(payload) {
+    const eventType = String(payload?.type || "");
+    if (RECONCILIATION_EVENTS.has(eventType)) return true;
+    return (
+      eventType.startsWith("gemini.")
+      || eventType.startsWith("workflow.")
+      || eventType.startsWith("library.")
+    );
+  }
+
+  function taskStatusFromEvent(payload) {
+    const eventType = String(payload?.type || "");
+    const explicitStatus = String(payload?.payload?.status || "");
+    if (explicitStatus) return explicitStatus;
+    const statuses = {
+      "task.started": "starting",
+      "task.progress": "running",
+      "task.stop_requested": "stopping_graceful",
+      "task.force_stop_requested": "stopping_force",
+      "task.completed": "completed",
+      "task.failed": "failed",
+      "task.stopped": "stopped",
+    };
+    return statuses[eventType] || "";
+  }
+
+  function applyTaskEventState(root, payload) {
+    const taskId = String(payload?.task_id || "");
+    const runId = Number(payload?.run_id || 0);
+    const status = taskStatusFromEvent(payload);
+    if (!root || typeof root !== "object" || !taskId || !status) return false;
+    let changed = false;
+    const seen = new WeakSet();
+
+    function visit(value) {
+      if (!value || typeof value !== "object" || seen.has(value)) return;
+      seen.add(value);
+      if (String(value.task_id || "") === taskId && Object.hasOwn(value, "run")) {
+        value.run = {
+          ...(value.run && typeof value.run === "object" ? value.run : {}),
+          task_id: taskId,
+          run_id: runId || value.run?.run_id || null,
+          status,
+        };
+        changed = true;
+      }
+      if (
+        runId > 0
+        && Number(value.run_id || 0) === runId
+        && Object.hasOwn(value, "status")
+      ) {
+        value.status = status;
+        changed = true;
+      }
+      Object.values(value).forEach(visit);
+    }
+
+    visit(root);
+    return changed;
+  }
+
   function isActiveStatus(status) {
     const value = String(status || "");
     return (
@@ -355,16 +510,19 @@
             return;
           }
           updateCursor(event, payload);
+          window.ManzaraShell?.handleEvent?.(payload, event);
           onEvent(payload, event);
         });
       });
 
       next.onopen = () => {
         clearReconnectTimer();
+        window.ManzaraShell?.setConnectionState?.("live");
         onOpen();
       };
 
       next.onerror = () => {
+        window.ManzaraShell?.setConnectionState?.("reconnecting");
         onError();
         if (stream === next) {
           next.close();
@@ -661,6 +819,8 @@
     createTabController,
     createSseController,
     createRunLogViewer,
+    createRefreshCoordinator,
+    scheduleRefresh,
     DEFAULT_EVENT_TYPES: [...DEFAULT_EVENT_TYPES],
     VIEW_STATES: { ...VIEW_STATES },
     escapeHtml,
@@ -668,6 +828,8 @@
     formatDateTime,
     formatGlobalStatus,
     formatTime,
+    eventNeedsReconciliation,
+    applyTaskEventState,
     isActiveStatus,
     renderLoadingTableRow,
     renderRunRowMessage,

@@ -39,10 +39,10 @@ def test_encrypt_decrypt_round_trip() -> None:
     assert shared_utils.decrypt(encrypted, config) == source
 
 
-def test_library_and_maintenance_utils_share_common_functions() -> None:
+def test_library_utils_export_shared_common_functions() -> None:
     from app.modules.library.runtime import utils as library_utils
-    from app.modules.maintenance.runtime import utils as maintenance_utils
 
-    assert library_utils.get_in_workdir is maintenance_utils.get_in_workdir
-    assert library_utils.read_config is maintenance_utils.read_config
-    assert library_utils.load_upstream_metadata is maintenance_utils.load_upstream_metadata
+    assert set(library_utils.__all__) == set(shared_utils.__all__)
+    assert callable(library_utils.get_in_workdir)
+    assert callable(library_utils.read_config)
+    assert callable(library_utils.load_upstream_metadata)

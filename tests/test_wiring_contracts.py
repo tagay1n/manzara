@@ -10,7 +10,21 @@ from app.dependencies import (
     build_normalization_operations,
     build_route_payload_builders,
 )
+from app.modules.maintenance.config import MaintenanceSettings
+from app.modules.maintenance.tasks import maintenance_task_definitions
 from app.registry import build_startup_seed_registry
+
+
+def test_maintenance_task_definitions_exclude_retired_sync_task(tmp_path) -> None:
+    tasks = maintenance_task_definitions(
+        MaintenanceSettings(
+            monocorpus_repo_path=tmp_path,
+            pgbackrest_stanza="monocorpus",
+        )
+    )
+
+    task_ids = {str(task["task_id"]) for task in tasks}
+    assert "maintenance.monocorpus_sync" not in task_ids
 
 
 def test_startup_seed_registry_uses_injected_factories() -> None:
@@ -47,6 +61,9 @@ def test_startup_seed_registry_uses_injected_factories() -> None:
 
 def test_route_payload_builders_bind_payload_builder_methods() -> None:
     class _FakeBuilder:
+        def build_system_state_payload(self):
+            return {"ok": "system"}
+
         def build_dashboard_payload(self):
             return {"ok": "dashboard"}
 
@@ -94,6 +111,7 @@ def test_route_payload_builders_bind_payload_builder_methods() -> None:
             return {"ok": "collections"}
 
     builders = build_route_payload_builders(_FakeBuilder())
+    assert builders.build_system_state_payload() == {"ok": "system"}
     assert builders.build_dashboard_payload() == {"ok": "dashboard"}
     assert builders.build_task_detail_payload("abc", limit=7) == {"task_key": "abc", "limit": 7}
     assert builders.build_flow_detail_payload("flow", limit_per_task=9) == {
@@ -134,6 +152,7 @@ def test_route_operation_services_expose_expected_attributes() -> None:
     assert callable(classification.get_classification_insights)
     assert callable(classification.get_normalization_preview)
     assert callable(classification.get_merge_candidates)
+    assert callable(classification.merge_classifications)
 
     assert callable(entities.list_personalities)
     assert callable(entities.get_personality_insights)

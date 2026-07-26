@@ -117,21 +117,18 @@ async function refreshTasks({ showLoading = false } = {}) {
 }
 
 function queueRefresh(delayMs = 250) {
-  if (state.refreshTimer) return;
-  state.refreshTimer = setTimeout(async () => {
-    state.refreshTimer = null;
-    try {
-      await refreshTasks();
-    } catch (error) {
-      console.error(error);
-    }
-  }, delayMs);
+  window.ManzaraCore.scheduleRefresh(state, refreshTasks, delayMs);
 }
 
 async function stopAll() {
   const stopState = state.payload?.global?.stop_all_state;
   if (stopState === "armed") {
-    const confirmed = window.confirm("Force stop all running tasks immediately?");
+    const confirmed = await window.ManzaraUI.confirm({
+      title: "Force stop all tasks",
+      message: "Running tasks will be terminated immediately without waiting for a safe boundary.",
+      acceptLabel: "Force stop",
+      destructive: true,
+    });
     if (!confirmed) return;
   }
   await api("/api/system/stop-all", { method: "POST" });
@@ -149,7 +146,12 @@ function setupEventStream() {
     onEvent: (payload, event) => {
       document.getElementById("last-event").textContent = window.ManzaraCore.formatEventBanner(payload);
       maybePlayTaskNotification(payload, event.lastEventId || "");
-      queueRefresh(100);
+      if (window.ManzaraCore.applyTaskEventState(state.payload, payload)) {
+        renderTasks(state.payload);
+      }
+      if (window.ManzaraCore.eventNeedsReconciliation(payload)) {
+        queueRefresh(100);
+      }
     },
   });
   state.eventStreamController.start();
@@ -179,5 +181,5 @@ async function bootstrap() {
 
 bootstrap().catch((error) => {
   console.error(error);
-  alert(error.message || String(error));
+  window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
 });

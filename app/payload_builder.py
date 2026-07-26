@@ -244,6 +244,13 @@ class PayloadBuilder:
             "library": library_panel,
         }
 
+    def build_system_state_payload(self) -> Dict[str, Any]:
+        """Compose the lightweight global operational state."""
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "global": self._build_global_payload(),
+        }
+
     def build_dashboard_payload(self) -> Dict[str, Any]:
         """Compose dashboard payload from DB and flow artifacts."""
         state = self._state()

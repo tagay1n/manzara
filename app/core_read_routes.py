@@ -17,6 +17,12 @@ def register_core_read_routes(
 ) -> None:
     """Register core read-only endpoints backed by payload builder functions."""
 
+    @app.get("/api/system/state")
+    def get_system_state() -> JSONResponse:
+        """Return lightweight global operational state."""
+        payloads = payload_provider()
+        return JSONResponse(payloads.build_system_state_payload())
+
     @app.get("/api/dashboard")
     def get_dashboard() -> JSONResponse:
         """Return current dashboard state."""

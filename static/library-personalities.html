@@ -5,71 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Manzara</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <script src="/static/shell-state.js"></script>
     <link rel="stylesheet" href="/static/styles.css" />
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="/static/lucide.js"></script>
   </head>
-  <body class="console-body">
-    <div class="app-shell">
-      <aside class="side-rail" aria-label="Primary">
-        <a class="rail-brand" href="/tasks" title="Manzara">
-          <i data-lucide="sparkles"></i>
-        </a>
-        <nav class="rail-nav">
-          <a href="/schedules" class="rail-link" title="Schedules">
-            <i data-lucide="calendar-range"></i>
-          </a>
-          <a href="/tasks" class="rail-link" title="Tasks">
-            <i data-lucide="list-checks"></i>
-          </a>
-          <a href="/database" class="rail-link" title="Database">
-            <i data-lucide="database"></i>
-          </a>
-          <a href="/library" class="rail-link active" aria-current="page" title="Library">
-            <i data-lucide="book-open"></i>
-          </a>
-          <a href="/gemini" class="rail-link" title="Gemini">
-            <i data-lucide="key-round"></i>
-          </a>
-        </nav>
-      </aside>
-
-      <div class="shell-main">
-        <header class="topbar">
-          <div class="topbar-left">
-            <div class="brand-wrap">
-              <div class="brand">Manzara</div>
-              <div class="subtitle">Bird-eye view of Tatar content pipelines</div>
-            </div>
-            <label class="jump-box" aria-label="Jump">
-              <i data-lucide="search"></i>
-              <input type="text" placeholder="Jump to page, task, flow..." />
-            </label>
-          </div>
-          <div class="top-controls">
-            <div id="global-status" class="status-pill">Tasks: 0 • Flows: 0</div>
-            <button
-              id="stop-all-btn"
-              class="icon-btn amber"
-              title="Graceful stop all running tasks; press again to force stop"
-              aria-label="Stop all tasks"
-              disabled
-            >
-              <i data-lucide="square"></i>
-            </button>
-          </div>
-        </header>
-
-        <div class="alert-strip">
-          <i data-lucide="user-round-search"></i>
-          <span>Personality page shows extracted author entities from schema.org metadata and normalization risks.</span>
-        </div>
-
-        <main class="dashboard">
+  <body class="console-body" data-manzara-page="library">
+    <main class="dashboard" data-page-content>
           <section class="runs-card">
             <div class="library-overview-head">
               <h2>Personalities</h2>
               <div class="library-head-actions">
-                <a href="/library" class="small-btn">Back to Library</a>
                 <a href="/library/normalization/personality" class="small-btn">Normalization</a>
               </div>
             </div>
@@ -156,15 +101,10 @@
           </section>
         </main>
 
-        <footer class="footer">
-          <span>manzara v0.1.0</span>
-          <span id="last-event">Last event: n/a</span>
-        </footer>
-      </div>
-    </div>
-
     <script src="/static/sound-notifier.js"></script>
     <script src="/static/core.js"></script>
+    <script src="/static/ui.js"></script>
+    <script src="/static/shell.js"></script>
     <script src="/static/library-personalities.js"></script>
   </body>
 </html>

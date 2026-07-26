@@ -28,6 +28,14 @@ Frontend visual direction is inspired by:
 
 Manzara is an independent implementation tailored to this repository's workflow model and APIs.
 
+Current UI foundations:
+- Shared responsive console shell with expandable navigation
+- Command palette for pages, flows, and tasks (`Ctrl/Cmd+K` or `/`)
+- API bootstrap followed by SSE-driven operational updates
+- Shared custom dialogs/toasts; browser system dialogs are not used
+- Shared tail/follow/backfill log viewer presented as a desktop drawer or mobile full-screen view
+- Pinned local Lucide icon runtime (no unversioned CDN dependency)
+
 ## Current Product Scope
 
 Pages:
@@ -54,7 +62,6 @@ Flow tasks (seeded at startup):
 - `shayan.scan_changes`
 - `shayan.download_new`
 - `shayan.upload_yadisk`
-- `maintenance.monocorpus_sync`
 - `maintenance.pgbackrest_backup_full`
 - `maintenance.pgbackrest_backup_incr`
 - `maintenance.monocorpus_meta_evaluate`
@@ -90,6 +97,7 @@ Runtime control behavior:
 - Task toggle: `start -> graceful stop -> force stop`
 - Header stop-all button: first press graceful, second press force
 - Run logs stream into DB and are visible in UI
+- High-frequency `task.log` SSE events do not reload page datasets; relevant lifecycle/artifact events use targeted, coalesced reconciliation.
 - Each run also writes a dedicated artifact log file under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...` when overridden)
 - Task and flow pages render run history with backend-provided structured summaries (`runs.summary_json`)
 - Shayan scan/download run summaries include structured task artifacts (for example scan added/changed/removed counts) in `runs.summary_json.artifacts`.
@@ -287,7 +295,7 @@ node --test tests/frontend/*.mjs
 Coverage notes:
 - API/scheduler/task-control behavior is covered by `pytest`.
 - Backend runtime logging tests include secret redaction regression checks (including `Authorization: Bearer ...` and secret query params) and stream error visibility checks.
-- Shared frontend helpers and page behavior are covered by `node:test` (`tests/frontend/*.mjs`, currently `dashboard`, `schedules`, `tasks`, `task`, `library`, `database`, `library/classifications`, `library/classifications/{id}`, `library/personalities`, `library/publishers`, and normalization pages).
+- Shared frontend helpers, shell contracts, and page behavior are covered by `node:test` (`tests/frontend/*.mjs`, including schedules, tasks, task/flow detail, library pages, database, Gemini, and normalization pages).
 - Normalization interaction coverage includes queue pagination, stop-all force-confirmation guard, suggestions refresh payload checks, bulk queue actions, suggestion accept/reject, merge, history undo calls, cross-tab queue-open transitions, and evidence dialog fetch/render checks.
 - Runtime-heavy external flows still require manual smoke checks, especially:
   - `maintenance.monocorpus_meta_evaluate`
@@ -297,6 +305,7 @@ Coverage notes:
 
 Core:
 - `GET /api/health`
+- `GET /api/system/state`
 - `GET /api/dashboard`
 - `GET /api/schedules`
 - `GET /api/tasks`

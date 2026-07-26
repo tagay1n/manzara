@@ -153,15 +153,7 @@ async function refreshGemini() {
 }
 
 function queueRefresh(delayMs = 150) {
-  if (state.refreshTimer) return;
-  state.refreshTimer = setTimeout(async () => {
-    state.refreshTimer = null;
-    try {
-      await refreshGemini();
-    } catch (error) {
-      console.error(error);
-    }
-  }, delayMs);
+  window.ManzaraCore.scheduleRefresh(state, refreshGemini, delayMs);
 }
 
 async function resetKey(keyId) {
@@ -173,7 +165,11 @@ async function resetKey(keyId) {
 }
 
 async function resetAll() {
-  const confirmed = window.confirm("Reset exhausted marker for all Gemini keys?");
+  const confirmed = await window.ManzaraUI.confirm({
+    title: "Reset all exhausted keys",
+    message: "Clear exhausted markers for every Gemini key and model?",
+    acceptLabel: "Reset keys",
+  });
   if (!confirmed) return;
   await api("/api/gemini/reset-all", {
     method: "POST",

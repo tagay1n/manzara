@@ -6,7 +6,7 @@ Owner: tans1q
 ## Purpose
 This repository is a **single monorepo** for Tatar-language content operations and data workflows.
 
-The immediate goal is to replace manual CLI-heavy operations with a maintainable operational system (and later a web UI).
+The immediate goal is to replace manual CLI-heavy operations with a maintainable operational system and web console.
 
 ## Product Intent
 Support end-to-end workflows for:
@@ -61,8 +61,19 @@ Notes:
 ## Frontend Standards
 - UI reference baseline: https://github.com/builderz-labs/mission-control
   - Treat it as visual/UX direction (console layout, density, hierarchy, panel style), while keeping Manzara-specific information architecture and behavior.
+- Keep default operational surfaces calm:
+  - Reserve saturated color, animation, and high-contrast treatment for active work, warnings, failures, and destructive actions.
+  - Do not keep healthy/idle controls visually highlighted when they do not require attention.
+- Keep the global shell shared across pages:
+  - Primary navigation, command palette, connection state, global task state, dialogs, toasts, and footer behavior belong in shared shell/UI modules.
+  - Page scripts own page-specific rendering and intent only; do not fork shell behavior per page.
+- Keep browser assets deterministic and locally served where practical; do not depend on unversioned CDN resources for core navigation/icons.
 - Treat backend API/event contracts as authoritative; align frontend types and adapters to backend schemas.
 - Bootstrap page state with API on initial load, then apply important runtime state transitions from SSE events.
+- Treat high-frequency SSE traffic carefully:
+  - `task.log` events must never trigger broad page API reloads or full DOM rerenders.
+  - Apply lightweight task lifecycle/progress changes directly from SSE payloads where possible.
+  - Reconcile only relevant terminal/artifact/configuration events, and coalesce overlapping refresh requests into one trailing refresh.
 - For task artifacts/counters, UI live updates must come from explicit SSE artifact events (not from parsing stdout/stderr logs).
 - Route all HTTP calls through a shared client layer (timeouts, retries, auth headers, error normalization).
 - Model view states explicitly: `loading`, `ready`, `empty`, `error`.
@@ -74,6 +85,8 @@ Notes:
 - Enforce accessibility baseline (keyboard navigation, visible focus, semantic structure, label/contrast checks).
 - Keep rendering safe by default; do not inject unsanitized HTML.
 - Reuse design tokens/components for consistency across pages; avoid one-off styling drift.
+- Do not use browser system dialogs (`window.alert`, `window.confirm`, `window.prompt`) for user-facing UX flows.
+  - Use custom in-app modal dialogs aligned with Manzara visual style and interaction patterns.
 - Add lightweight client observability for failures with route/task/run context where possible.
 - Task/run log viewing must use one shared behavior across the app (not per-page custom logic):
   - On open, load only the latest `N` lines (tail behavior), not full history.
@@ -125,7 +138,7 @@ Notes:
   - Emit structured artifact events explicitly (SSE event type such as `task.artifact`) with minimal JSON payload required for live UX.
   - Persist artifact payloads in PostgreSQL and use them when building run summaries/history cards.
   - For large detail payloads, persist normalized rows in dedicated tables and expose API endpoints for paginated drill-down.
-  - Shayan and Maintenance Sync must follow this event-first artifact pattern (live counters via SSE, details via DB/API).
+  - Shayan tasks must follow this event-first artifact pattern (live counters via SSE, details via DB/API).
 - Gemini usage must be centralized behind a shared runtime manager (no per-task ad-hoc key picking):
   - Treat Gemini keys as grouped by `account -> keys[]` from config.
   - Do not hardcode model names in task logic; resolve model aliases from config (`gemini.models`), while quota/runtime state stays per `(account, key, model)`.

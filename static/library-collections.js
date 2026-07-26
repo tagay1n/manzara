@@ -338,7 +338,7 @@ async function loadCollectionItems(collectionId) {
 async function patchSelectedCollection(patch) {
   const id = Number(state.selectedCollectionId || 0);
   if (!id) {
-    alert("Select a collection first.");
+    window.ManzaraUI.toast("Select a collection first.", { tone: "warning" });
     return;
   }
   const titleValue = document.getElementById("collection-title-input").value.trim();
@@ -357,16 +357,10 @@ async function patchSelectedCollection(patch) {
 }
 
 function queueRefresh(delayMs = 250) {
-  if (state.refreshTimer) return;
-  state.refreshTimer = setTimeout(async () => {
-    state.refreshTimer = null;
-    try {
-      await refreshAll();
-      if (state.selectedCollectionId) {
-        await loadCollectionItems(state.selectedCollectionId);
-      }
-    } catch (error) {
-      console.error(error);
+  window.ManzaraCore.scheduleRefresh(state, async () => {
+    await refreshAll();
+    if (state.selectedCollectionId) {
+      await loadCollectionItems(state.selectedCollectionId);
     }
   }, delayMs);
 }
@@ -374,7 +368,12 @@ function queueRefresh(delayMs = 250) {
 async function stopAll() {
   const stopState = state.globalPayload?.global?.stop_all_state;
   if (stopState === "armed") {
-    const confirmed = window.confirm("Force stop all running tasks immediately?");
+    const confirmed = await window.ManzaraUI.confirm({
+      title: "Force stop all tasks",
+      message: "Running tasks will be terminated immediately without waiting for a safe boundary.",
+      acceptLabel: "Force stop",
+      destructive: true,
+    });
     if (!confirmed) return;
   }
   await api("/api/system/stop-all", { method: "POST" });
@@ -392,7 +391,15 @@ function setupEventStream() {
     onEvent: (payload, event) => {
       document.getElementById("last-event").textContent = window.ManzaraCore.formatEventBanner(payload);
       maybePlayTaskNotification(payload, event.lastEventId || "");
-      queueRefresh(100);
+      const eventType = String(payload?.type || "");
+      const taskFinished = ["task.artifact", "task.completed", "task.failed", "task.stopped"]
+        .includes(eventType);
+      if (
+        eventType.startsWith("library.")
+        || (String(payload?.panel_id || "") === "library" && taskFinished)
+      ) {
+        queueRefresh(100);
+      }
     },
   });
   state.eventStreamController.start();
@@ -461,6 +468,5 @@ async function bootstrap() {
 
 bootstrap().catch((error) => {
   console.error(error);
-  alert(error.message || String(error));
+  window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
 });
-

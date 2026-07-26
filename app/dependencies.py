@@ -25,6 +25,7 @@ from app.modules.library.insights import (
     get_classification_detail,
     get_classification_insights,
     get_merge_candidates,
+    merge_classifications,
     get_normalization_preview,
     list_classifications,
 )
@@ -90,6 +91,7 @@ class PayloadBuilderOperationsService:
 
 @dataclass(frozen=True)
 class RoutePayloadBuildersService:
+    build_system_state_payload: Callable[[], JSONDict]
     build_dashboard_payload: Callable[[], JSONDict]
     build_schedules_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
@@ -106,6 +108,7 @@ class RoutePayloadBuildersService:
 
 @dataclass(frozen=True)
 class CoreReadPayloadBuildersService:
+    build_system_state_payload: Callable[[], JSONDict]
     build_dashboard_payload: Callable[[], JSONDict]
     build_schedules_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
@@ -141,6 +144,7 @@ class ClassificationOperationsService:
     get_classification_insights: Callable[..., Any]
     get_normalization_preview: Callable[..., Any]
     get_merge_candidates: Callable[..., Any]
+    merge_classifications: Callable[..., Any]
 
 
 @dataclass(frozen=True)
@@ -225,6 +229,7 @@ def build_classification_operations() -> ClassificationOperations:
         get_classification_insights=get_classification_insights,
         get_normalization_preview=get_normalization_preview,
         get_merge_candidates=get_merge_candidates,
+        merge_classifications=merge_classifications,
     )
 
 
@@ -259,6 +264,7 @@ def build_entities_operations_with_overrides(
 def build_route_payload_builders(payload_builder: PayloadBuilder) -> RoutePayloadBuilders:
     """Build payload callbacks exposed to API route modules."""
     return RoutePayloadBuildersService(
+        build_system_state_payload=payload_builder.build_system_state_payload,
         build_dashboard_payload=payload_builder.build_dashboard_payload,
         build_schedules_payload=payload_builder.build_schedules_payload,
         build_tasks_payload=payload_builder.build_tasks_payload,
@@ -277,6 +283,7 @@ def build_route_payload_builders(payload_builder: PayloadBuilder) -> RoutePayloa
 def build_core_read_payload_builders(payload_builders: RoutePayloadBuilders) -> CoreReadPayloadBuilders:
     """Select read payload callbacks required by core read routes."""
     return CoreReadPayloadBuildersService(
+        build_system_state_payload=payload_builders.build_system_state_payload,
         build_dashboard_payload=payload_builders.build_dashboard_payload,
         build_schedules_payload=payload_builders.build_schedules_payload,
         build_tasks_payload=payload_builders.build_tasks_payload,

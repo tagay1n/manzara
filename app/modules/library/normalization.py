@@ -957,7 +957,6 @@ def get_merge_candidates(
                 left_aliases = int(left.get("linked_aliases") or 0)
                 right_aliases = int(right.get("linked_aliases") or 0)
                 primary = left if left_aliases >= right_aliases else right
-                secondary = right if primary is left else left
                 candidates.append(
                     {
                         "score": round(score, 3),

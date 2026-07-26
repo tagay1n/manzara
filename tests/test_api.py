@@ -44,6 +44,39 @@ def test_dashboard_page_redirects_to_tasks_page(test_client) -> None:
     assert response.headers["location"] == "/tasks"
 
 
+def test_html_pages_disable_browser_caching(test_client) -> None:
+    client, _main_app = test_client
+
+    for path in ("/tasks", "/flows/shayan", "/tasks/shayan.scan_changes"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+
+
+def test_static_ui_assets_require_browser_revalidation(test_client) -> None:
+    client, _main_app = test_client
+
+    for path in ("/static/styles.css", "/static/shell.js", "/static/shell-state.js"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache"
+
+
+def test_system_state_returns_lightweight_global_payload(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.get("/api/system/state")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload.get("generated_at"), str)
+    assert set(payload["global"]) >= {
+        "active_tasks",
+        "active_workflows",
+        "stop_all_state",
+    }
+
+
 def test_dashboard_lists_shayan_tasks(test_client) -> None:
     client, _main_app = test_client
 
@@ -63,7 +96,7 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
 
     maintenance = panels["maintenance"]
     maintenance_task_ids = {task["task_id"] for task in maintenance["tasks"]}
-    assert "maintenance.monocorpus_sync" in maintenance_task_ids
+    assert "maintenance.monocorpus_sync" not in maintenance_task_ids
     assert "maintenance.pgbackrest_backup_full" in maintenance_task_ids
     assert "maintenance.pgbackrest_backup_incr" in maintenance_task_ids
     assert "maintenance.monocorpus_meta_evaluate" not in maintenance_task_ids
@@ -799,6 +832,63 @@ def test_library_classification_merge_candidates_endpoint(
     assert payload["candidates"][0]["recommended_primary_classification_id"] == 3
 
 
+def test_library_classification_merge_endpoint(
+    test_client,
+    monkeypatch,
+) -> None:
+    client, main_app = test_client
+    captured: dict[str, int | str] = {}
+
+    def _fake_merge_classifications(*, source_classification_id, target_classification_id, reason):  # noqa: ANN001
+        captured["source"] = int(source_classification_id)
+        captured["target"] = int(target_classification_id)
+        captured["reason"] = str(reason)
+        return {
+            "available": True,
+            "error": None,
+            "config_source": "config.yaml",
+            "source_classification_id": int(source_classification_id),
+            "target_classification_id": int(target_classification_id),
+            "moved_docs_count": 17,
+            "schema_org_updated_count": 17,
+            "source_deleted": True,
+        }
+
+    monkeypatch.setattr(main_app, "merge_classifications", _fake_merge_classifications)
+
+    response = client.post(
+        "/api/library/classifications/merge",
+        json={
+            "source_classification_id": 7,
+            "target_classification_id": 3,
+            "reason": "manual_merge",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["source_classification_id"] == 7
+    assert payload["target_classification_id"] == 3
+    assert payload["moved_docs_count"] == 17
+    assert payload["source_deleted"] is True
+    assert captured == {"source": 7, "target": 3, "reason": "manual_merge"}
+
+
+def test_library_classification_merge_endpoint_rejects_invalid_ids(
+    test_client,
+) -> None:
+    client, _main_app = test_client
+    response = client.post(
+        "/api/library/classifications/merge",
+        json={
+            "source_classification_id": "x",
+            "target_classification_id": 3,
+        },
+    )
+    assert response.status_code == 400
+    assert "must be integers" in response.json().get("detail", "")
+
+
 def test_library_personalities_overview_endpoint(test_client, monkeypatch) -> None:
     client, main_app = test_client
 
@@ -1459,7 +1549,7 @@ def test_task_artifact_event_and_summary_without_log_parsing(
                 "task_id": "maintenance.artifact_file_emit",
                 "panel_id": "maintenance",
                 "title": "artifact file emit",
-                "task_type": "sync",
+                "task_type": "test",
                 "icon_idle": "Play",
                 "icon_running": "Square",
                 "cwd": ".",
@@ -1470,7 +1560,7 @@ def test_task_artifact_event_and_summary_without_log_parsing(
                         "p=pathlib.Path(os.environ['MANZARA_RUN_ARTIFACT_PATH']); "
                         "p.parent.mkdir(parents=True,exist_ok=True); "
                         "tmp=p.with_suffix(p.suffix + '.tmp'); "
-                        "tmp.write_text(json.dumps({'kind':'maintenance.sync_summary','rows_added':3,'rows_moved':1,'rows_deleted':2}),encoding='utf-8'); "
+                        "tmp.write_text(json.dumps({'kind':'test.summary','items_processed':3}),encoding='utf-8'); "
                         "tmp.replace(p); "
                         "print('runtime done')\""
                     ),
@@ -1497,10 +1587,8 @@ def test_task_artifact_event_and_summary_without_log_parsing(
         time.sleep(0.05)
 
     assert isinstance(artifacts, dict)
-    assert artifacts.get("kind") == "maintenance.sync_summary"
-    assert int(artifacts.get("rows_added") or 0) == 3
-    assert int(artifacts.get("rows_moved") or 0) == 1
-    assert int(artifacts.get("rows_deleted") or 0) == 2
+    assert artifacts.get("kind") == "test.summary"
+    assert int(artifacts.get("items_processed") or 0) == 3
 
     events = main_app.state.db.get_events_after(0, limit=400)
     artifact_events = [event for event in events if str(event.get("type") or "") == "task.artifact"]
@@ -1508,8 +1596,7 @@ def test_task_artifact_event_and_summary_without_log_parsing(
     latest = artifact_events[-1]
     assert int(latest.get("run_id") or 0) == run_id
     payload = latest.get("payload") if isinstance(latest.get("payload"), dict) else {}
-    assert payload.get("kind") == "maintenance.sync_summary"
-    assert int(payload.get("rows_added") or 0) == 3
+    assert payload.get("kind") == "test.summary"
 
 
 def test_run_logs_support_tail_and_backfill_pagination(test_client) -> None:

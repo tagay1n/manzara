@@ -361,6 +361,40 @@ test("attachViewState normalizes and mutates shared state", () => {
   assert.equal(state.viewState, "ready");
 });
 
+test("createRefreshCoordinator coalesces overlap into one trailing refresh", async () => {
+  const core = loadCore();
+  const pending = [];
+  let calls = 0;
+  const coordinator = core.createRefreshCoordinator(async () => {
+    calls += 1;
+    await new Promise((resolve) => pending.push(resolve));
+  });
+
+  const first = coordinator.request();
+  const second = coordinator.request();
+  const third = coordinator.request();
+  assert.equal(calls, 1);
+
+  pending.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 2);
+
+  pending.shift()();
+  await Promise.all([first, second, third]);
+  assert.equal(calls, 2);
+  assert.equal(coordinator.getState().running, false);
+});
+
+test("event routing ignores log noise and identifies lifecycle reconciliation", () => {
+  const core = loadCore();
+
+  assert.equal(core.eventNeedsReconciliation({ type: "task.log" }), false);
+  assert.equal(core.eventNeedsReconciliation({ type: "task.progress" }), false);
+  assert.equal(core.eventNeedsReconciliation({ type: "task.completed" }), true);
+  assert.equal(core.eventNeedsReconciliation({ type: "task.artifact" }), true);
+  assert.equal(core.eventNeedsReconciliation({ type: "schedule.updated" }), true);
+});
+
 test("createRunLogViewer uses tail on open then follows and backfills with cursors", async () => {
   const calls = [];
   const responses = {

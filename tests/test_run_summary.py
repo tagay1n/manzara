@@ -55,29 +55,3 @@ def test_shayan_upload_summary_uses_artifact_counts() -> None:
     assert labels["Failed"] == "2"
     assert labels["Missing local"] == "1"
     assert summary["artifacts"]["kind"] == "shayan.upload_yadisk_summary"
-
-
-def test_maintenance_sync_summary_uses_artifact_counts() -> None:
-    summary = build_structured_run_summary(
-        task_id="maintenance.monocorpus_sync",
-        panel_id="maintenance",
-        status="completed",
-        exit_code=0,
-        error_text=None,
-        stop_mode=None,
-        started_at="2026-03-29T10:00:00+00:00",
-        finished_at="2026-03-29T10:00:05+00:00",
-        log_lines=[],
-        artifacts={
-            "kind": "maintenance.sync_summary",
-            "rows_added": 8,
-            "rows_moved": 3,
-            "rows_deleted": 1,
-        },
-    )
-    assert summary["message"] == "Sync completed: +8 moved=3 deleted=1."
-    labels = {item["label"]: item["value"] for item in summary["highlights"]}
-    assert labels["Added"] == "8"
-    assert labels["Moved"] == "3"
-    assert labels["Deleted"] == "1"
-    assert summary["artifacts"]["kind"] == "maintenance.sync_summary"

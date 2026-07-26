@@ -17,7 +17,6 @@ requests==2.32.5
 rich==14.3.3
 sqlalchemy==2.0.48
 typer==0.24.1
-yadisk==3.4.0
 yadisk_client @ git+https://github.com/tagay1n/yadisk-client@dd7e957bf56837cb82aa1042ca0deb52596bdd79
 
 # Testing tools (single-file dependency policy).

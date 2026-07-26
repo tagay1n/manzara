@@ -27,6 +27,7 @@ class PayloadBuilderOperations(Protocol):
 
 
 class RoutePayloadBuilders(Protocol):
+    build_system_state_payload: Callable[[], JSONDict]
     build_dashboard_payload: Callable[[], JSONDict]
     build_schedules_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
@@ -42,6 +43,7 @@ class RoutePayloadBuilders(Protocol):
 
 
 class CoreReadPayloadBuilders(Protocol):
+    build_system_state_payload: Callable[[], JSONDict]
     build_dashboard_payload: Callable[[], JSONDict]
     build_schedules_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
@@ -75,6 +77,7 @@ class ClassificationOperations(Protocol):
     get_classification_insights: Callable[..., Any]
     get_normalization_preview: Callable[..., Any]
     get_merge_candidates: Callable[..., Any]
+    merge_classifications: Callable[..., Any]
 
 
 class EntitiesOperations(Protocol):

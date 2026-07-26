@@ -766,7 +766,6 @@ def _normalize_metadata_patch(raw_patch: BookPatch | dict[str, Any] | None, doc:
         else:
             raw_patch = {}
 
-    schema = doc.schema_org if isinstance(doc.schema_org, dict) else {}
     patchable_fields = set(_collect_patch_fields(doc.schema_org))
     patch: dict[str, Any] = {}
 

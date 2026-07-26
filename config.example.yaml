@@ -109,11 +109,6 @@ yandex:
     shayan:
       cartoons: /neurotatarlar/video/shayantv/cartoons
       shows: /neurotatarlar/video/shayantv/shows
-    entry_points: 
-      tt: /neurotatarlar/kitaplar/monocorpus
-      # crh: /НейроТатарлар/other_turkic_langs/Крымскотатарский
-    filtered_out: /neurotatarlar/kitaplar/filtered_out
-    hidden: /neurotatarlar/kitaplar/monocorpus/__ТАРАТМАСКА_DONT_SHARE_НЕ_ДЕЛИТЬСЯ
   cloud:
     aws_access_key_id: "<REDACTED>"
     aws_secret_access_key: "<REDACTED>"
@@ -129,5 +124,5 @@ encryption_key: "<REDACTED>"
 database_url: "<REDACTED>"
 
 sup_langs:
-  tt: 
+  tt:
     codes: ['tt-Latn-x-zamanalif', 'tt-Cyrl', 'tt-Latn-x-yanalif', 'tt-Arab', 'tt-Latn']
