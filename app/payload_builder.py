@@ -37,6 +37,11 @@ class PayloadBuilder:
     def _ops(self) -> PayloadBuilderOperations:
         return self._ops_provider()
 
+    def _begin_snapshot(self) -> tuple[Any, int]:
+        """Capture the stream cursor before composing the corresponding DB snapshot."""
+        state = self._state()
+        return state, state.db.get_latest_event_id()
+
     def _slugify(self, value: Any) -> str:
         text = str(value or "").strip().lower()
         text = self._slug_separator_pattern.sub("-", text)
@@ -246,14 +251,16 @@ class PayloadBuilder:
 
     def build_system_state_payload(self) -> Dict[str, Any]:
         """Compose the lightweight global operational state."""
+        _state, event_cursor = self._begin_snapshot()
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(),
         }
 
     def build_dashboard_payload(self) -> Dict[str, Any]:
         """Compose dashboard payload from DB and flow artifacts."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         panel_titles = state.db.get_panel_title_map()
         task_slug_map, _ = self._task_slug_maps()
         flow_slug_map, _ = self._flow_slug_maps()
@@ -292,6 +299,7 @@ class PayloadBuilder:
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(
                 active_runs=active_runs,
                 active_workflows=active_workflow_runs,
@@ -306,7 +314,7 @@ class PayloadBuilder:
 
     def build_schedules_payload(self) -> Dict[str, Any]:
         """Compose schedules page payload from workflow/schedule state."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         workflows = state.db.list_workflows_with_latest_run()
         workflow_items: list[Dict[str, Any]] = []
         for workflow in workflows:
@@ -352,6 +360,7 @@ class PayloadBuilder:
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(
                 active_runs=active_runs,
                 active_workflows=active_workflows,
@@ -364,7 +373,7 @@ class PayloadBuilder:
 
     def build_tasks_payload(self) -> Dict[str, Any]:
         """Compose tasks page payload grouped by flow."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         panel_titles = state.db.get_panel_title_map()
         task_slug_map, _ = self._task_slug_maps()
         flow_slug_map, _ = self._flow_slug_maps()
@@ -387,13 +396,14 @@ class PayloadBuilder:
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "flows": sorted(task_groups.values(), key=lambda item: str(item.get("title", "")).lower()),
         }
 
     def build_task_detail_payload(self, task_key: str, limit: int = 20) -> Dict[str, Any]:
         """Compose one task detail payload with run history."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         task = self._resolve_task_identifier(task_key)
         task_slug_map, _ = self._task_slug_maps()
         task_id = str(task["task_id"])
@@ -414,6 +424,7 @@ class PayloadBuilder:
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "task": {
                 "task_id": task["task_id"],
@@ -440,7 +451,7 @@ class PayloadBuilder:
 
     def build_flow_detail_payload(self, flow_key: str, limit_per_task: int = 20) -> Dict[str, Any]:
         """Compose one flow payload with panel stats and per-task run history."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         panel = self._resolve_flow_identifier(flow_key)
         panel_id = str(panel["panel_id"])
         panel_titles = state.db.get_panel_title_map()
@@ -527,6 +538,7 @@ class PayloadBuilder:
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "flow": flow_payload,
             "tasks": sorted(task_items, key=lambda item: str(item.get("title", "")).lower()),
@@ -535,13 +547,14 @@ class PayloadBuilder:
 
     def build_library_payload(self) -> Dict[str, Any]:
         """Compose library page payload with external dataset stats."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         ops = self._ops()
         active_runs = state.db.list_active_runs()
 
         last_eval_run = state.db.get_latest_run_for_task(ops.monocorpus_meta_evaluate_task_id)
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "dataset": ops.get_library_dataset_stats(),
             "last_eval_run": last_eval_run,
@@ -549,12 +562,13 @@ class PayloadBuilder:
 
     def build_database_state_payload(self) -> Dict[str, Any]:
         """Compose database diagnostics payload with global state."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         ops = self._ops()
         active_runs = state.db.list_active_runs()
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "database_state": ops.build_database_state_snapshot(state.db),
         }
@@ -567,7 +581,7 @@ class PayloadBuilder:
         docs_page_size: int = 40,
     ) -> Dict[str, Any]:
         """Compose classification detail payload with local run context."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         ops = self._ops()
         detail = ops.get_classification_detail(
             classification_id,
@@ -585,6 +599,7 @@ class PayloadBuilder:
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "detail": detail,
             "recent_meta_evaluate_runs": recent_eval_runs,
@@ -592,24 +607,26 @@ class PayloadBuilder:
 
     def build_personality_payload(self) -> Dict[str, Any]:
         """Compose personality page payload with global state and overview metrics."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         ops = self._ops()
         active_runs = state.db.list_active_runs()
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "overview": ops.get_personality_overview(),
         }
 
     def build_publisher_payload(self) -> Dict[str, Any]:
         """Compose publisher page payload with global state and overview metrics."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         ops = self._ops()
         active_runs = state.db.list_active_runs()
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "overview": ops.get_publisher_overview(),
         }
@@ -619,13 +636,14 @@ class PayloadBuilder:
         if entity_type not in self._normalization_entity_types:
             raise HTTPException(status_code=404, detail="Normalization entity type not found")
 
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         ops = self._ops()
         active_runs = state.db.list_active_runs()
 
         label = "Personalities" if entity_type == "personality" else "Publishers"
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "entity_type": entity_type,
             "entity_label": label,
             "global": self._build_global_payload(active_runs=active_runs),
@@ -637,12 +655,13 @@ class PayloadBuilder:
 
     def build_collections_payload(self) -> Dict[str, Any]:
         """Compose collections page payload with overview metrics."""
-        state = self._state()
+        state, event_cursor = self._begin_snapshot()
         ops = self._ops()
         active_runs = state.db.list_active_runs()
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "overview": ops.get_collection_overview(),
         }

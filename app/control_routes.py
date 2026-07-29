@@ -266,12 +266,18 @@ def register_control_routes(
     def gemini_state() -> JSONResponse:
         """Return Gemini key/runtime snapshot."""
         state = state_provider()
+        event_cursor = state.db.get_latest_event_id()
         manager = GeminiRuntimeManager(
             state.db,
             task_id=None,
             panel_id="library",
         )
-        return JSONResponse({"gemini": manager.snapshot()})
+        return JSONResponse(
+            {
+                "event_cursor": event_cursor,
+                "gemini": manager.snapshot(),
+            }
+        )
 
     @app.post("/api/gemini/reset-key")
     def gemini_reset_key(payload: Dict[str, Any] = Body(...)) -> JSONResponse:

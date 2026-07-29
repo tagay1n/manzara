@@ -83,6 +83,11 @@
     return `Tasks: ${Number(activeTasks || 0)} • Flows: ${Number(activeWorkflows || 0)}`;
   }
 
+  function eventCursorFromSnapshot(payload) {
+    const cursor = Number(payload?.event_cursor || 0);
+    return Number.isFinite(cursor) && cursor > 0 ? Math.trunc(cursor) : 0;
+  }
+
   function escapeHtml(value) {
     return String(value)
       .replaceAll("&", "&amp;")
@@ -449,6 +454,7 @@
     const onOpen = typeof options.onOpen === "function" ? options.onOpen : () => {};
     const onError = typeof options.onError === "function" ? options.onError : () => {};
     const streamPath = String(options.streamPath || "/api/events/stream");
+    const initialCursor = Number(options.initialCursor || 0);
 
     let stopped = false;
     let stream = null;
@@ -534,6 +540,10 @@
 
     function start() {
       stopped = false;
+      const current = Number(getCursor() || 0);
+      if (Number.isFinite(initialCursor) && initialCursor > current) {
+        setCursor(initialCursor);
+      }
       connect();
     }
 
@@ -824,6 +834,7 @@
     DEFAULT_EVENT_TYPES: [...DEFAULT_EVENT_TYPES],
     VIEW_STATES: { ...VIEW_STATES },
     escapeHtml,
+    eventCursorFromSnapshot,
     formatEventBanner,
     formatDateTime,
     formatGlobalStatus,

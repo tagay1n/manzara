@@ -500,6 +500,10 @@ function createHarness({
       formatGlobalStatus(activeTasks, activeWorkflows) {
         return `Tasks: ${Number(activeTasks || 0)} • Flows: ${Number(activeWorkflows || 0)}`;
       },
+      eventCursorFromSnapshot(payload) {
+        const cursor = Number(payload?.event_cursor || 0);
+        return Number.isFinite(cursor) && cursor > 0 ? Math.trunc(cursor) : 0;
+      },
       formatEventBanner(payload) {
         return `BANNER:${String(payload?.type || "")}`;
       },
@@ -685,6 +689,7 @@ function createHarness({
 
 test("tasks page bootstraps, renders global state, and wires SSE refresh", async () => {
   const payload = {
+    event_cursor: 42,
     global: {
       active_tasks: 2,
       active_workflows: 1,
@@ -723,6 +728,7 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
   await harness.flush();
   assert.equal(Boolean(harness.sse.config), true);
   assert.equal(harness.sse.started, 1);
+  assert.equal(harness.sse.config.initialCursor, 42);
   assert.equal(harness.elements.get("global-status").textContent, "Tasks: 2 • Flows: 1");
   assert.equal(harness.elements.get("stop-all-btn").dataset.stopState, "normal");
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /\/tasks\/quick/);

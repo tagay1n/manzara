@@ -70,6 +70,7 @@ def test_system_state_returns_lightweight_global_payload(test_client) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert isinstance(payload.get("generated_at"), str)
+    assert isinstance(payload.get("event_cursor"), int)
     assert set(payload["global"]) >= {
         "active_tasks",
         "active_workflows",
@@ -270,11 +271,20 @@ def test_update_schedule_rejects_invalid_timezone(test_client) -> None:
 
 
 def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
-    client, _main_app = test_client
+    client, main_app = test_client
+
+    event = main_app.state.db.insert_event(
+        "task.started",
+        task_id="shayan.quick",
+        run_id=999,
+        panel_id="shayan",
+        payload={"status": "starting"},
+    )
 
     response = client.get("/api/tasks")
     assert response.status_code == 200
     payload = response.json()
+    assert payload["event_cursor"] == event["event_id"]
     flow_ids = {flow["panel_id"] for flow in payload["flows"]}
     assert {"shayan", "maintenance", "library"} <= flow_ids
 
@@ -570,7 +580,9 @@ def test_gemini_state_endpoint_returns_grouped_keys(test_client, monkeypatch) ->
 
     response = client.get("/api/gemini/state")
     assert response.status_code == 200
-    payload = response.json()["gemini"]
+    response_payload = response.json()
+    assert isinstance(response_payload["event_cursor"], int)
+    payload = response_payload["gemini"]
     assert payload["summary"]["accounts"] == 2
     assert payload["summary"]["keys"] == 2
     assert {item["account_id"] for item in payload["accounts"]} == {"acc-a", "acc-b"}

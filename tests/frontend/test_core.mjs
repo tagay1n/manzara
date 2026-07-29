@@ -216,6 +216,43 @@ test("createSseController updates cursor, dispatches events, and reconnects", ()
   assert.equal(created[1].closed, true);
 });
 
+test("API snapshot cursor prevents SSE from replaying historical events", async () => {
+  const created = [];
+  class FakeEventSource {
+    constructor(url) {
+      this.url = url;
+      this.listeners = new Map();
+      created.push(this);
+    }
+    addEventListener(type, handler) {
+      this.listeners.set(type, handler);
+    }
+    close() {}
+  }
+
+  let cursor = 0;
+  const core = loadCore({
+    EventSourceImpl: FakeEventSource,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ event_cursor: 42, flows: [] }),
+    }),
+  });
+
+  const snapshot = await core.api("/api/tasks");
+  const controller = core.createSseController({
+    initialCursor: core.eventCursorFromSnapshot(snapshot),
+    getCursor: () => cursor,
+    setCursor: (next) => {
+      cursor = Number(next);
+    },
+  });
+  controller.start();
+
+  assert.equal(cursor, 42);
+  assert.equal(created[0].url, "/api/events/stream?after_event_id=42");
+});
+
 test("DEFAULT_EVENT_TYPES includes task.artifact for live artifact updates", () => {
   const core = loadCore();
   assert.equal(Array.isArray(core.DEFAULT_EVENT_TYPES), true);

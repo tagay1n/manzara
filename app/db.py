@@ -1227,6 +1227,14 @@ class Database:
             )
         return events
 
+    def get_latest_event_id(self) -> int:
+        """Return the current end cursor for the operational event stream."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(event_id), 0) AS event_id FROM events"
+            ).fetchone()
+        return int(row["event_id"] or 0) if row else 0
+
     def get_run(self, run_id: int) -> Optional[Dict[str, Any]]:
         """Return one run by id."""
         with self._connect() as conn:

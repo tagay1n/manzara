@@ -70,6 +70,10 @@ Notes:
 - Keep browser assets deterministic and locally served where practical; do not depend on unversioned CDN resources for core navigation/icons.
 - Treat backend API/event contracts as authoritative; align frontend types and adapters to backend schemas.
 - Bootstrap page state with API on initial load, then apply important runtime state transitions from SSE events.
+- Seed each page's SSE connection from that page's own API snapshot cursor:
+  - Snapshot payloads must expose `event_cursor`, captured before composing snapshot state.
+  - Start SSE with `after_event_id=event_cursor`; do not replay from `0` after loading current state.
+  - Do not seed a page from another page or shell snapshot, because it can skip domain events not represented in the page state.
 - Treat high-frequency SSE traffic carefully:
   - `task.log` events must never trigger broad page API reloads or full DOM rerenders.
   - Apply lightweight task lifecycle/progress changes directly from SSE payloads where possible.

@@ -849,6 +849,7 @@ function setupEventStream() {
   state.eventStreamController?.stop();
   state.eventStreamController = window.ManzaraCore.createSseController({
     eventTypes: window.ManzaraCore.DEFAULT_EVENT_TYPES,
+    initialCursor: window.ManzaraCore.eventCursorFromSnapshot(state.globalPayload),
     getCursor: () => Number(state.eventCursor || 0),
     setCursor: (nextCursor) => {
       state.eventCursor = Number(nextCursor || 0);
