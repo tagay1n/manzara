@@ -62,6 +62,47 @@ function renderStatGrid(stats) {
   `;
 }
 
+function renderPreviewGrid(stats) {
+  const items = [
+    { label: "Eligible PDFs", value: Number(stats.eligible || 0) },
+    { label: "Ready", value: Number(stats.ready || 0) },
+    { label: "Pending", value: Number(stats.pending || 0) },
+    { label: "Partial", value: Number(stats.partial || 0) },
+    { label: "Failed", value: Number(stats.failed || 0) },
+    { label: "Preview Pages", value: Number(stats.generated_preview_pages || 0) },
+    { label: "Image Objects", value: Number(stats.generated_image_objects || 0) },
+  ];
+  return items
+    .map(
+      (item) => `
+        <div class="library-stat-card">
+          <span class="library-stat-label">${escapeHtml(item.label)}</span>
+          <span class="library-stat-value">${escapeHtml(String(item.value))}</span>
+        </div>
+      `
+    )
+    .join("");
+}
+
+function applyPreviewProgressEvent(payload) {
+  if (
+    String(payload?.type || "") !== "task.progress"
+    || String(payload?.task_id || "") !== "library.generate_book_previews"
+  ) {
+    return false;
+  }
+  const progress = payload?.payload?.progress;
+  if (!progress || typeof progress !== "object") return false;
+  const current = Number(progress.current || 0);
+  const total = Number(progress.total || 0);
+  const ready = Number(progress.ready || 0);
+  const partial = Number(progress.partial || 0);
+  const failed = Number(progress.failed || 0);
+  document.getElementById("library-preview-status").textContent =
+    `Generating ${current} / ${total} · ${ready} ready · ${partial} partial · ${failed} failed`;
+  return true;
+}
+
 function renderTopClassifications(items) {
   if (!items || !items.length) {
     return '<div class="run-row">No classifications yet.</div>';
@@ -122,6 +163,11 @@ function renderLibrary(payload) {
   }
 
   document.getElementById("library-stat-grid").innerHTML = renderStatGrid(stats);
+  const previewStats = dataset.preview_stats || {};
+  const recipeVersion = String(previewStats.recipe_version || "current recipe");
+  document.getElementById("library-preview-status").textContent =
+    `Coverage for ${recipeVersion}`;
+  document.getElementById("library-preview-grid").innerHTML = renderPreviewGrid(previewStats);
   document.getElementById("library-top-list").innerHTML = renderTopClassifications(
     dataset.top_classifications || []
   );
@@ -138,6 +184,8 @@ function renderLibraryLoading() {
   document.getElementById("library-stat-grid").innerHTML = '<div class="run-row">Loading stats...</div>';
   document.getElementById("library-top-list").innerHTML = '<div class="run-row">Loading classifications...</div>';
   document.getElementById("library-last-run").innerHTML = '<div class="run-row">Loading last run...</div>';
+  document.getElementById("library-preview-status").textContent = "Loading preview coverage...";
+  document.getElementById("library-preview-grid").innerHTML = '<div class="run-row">Loading previews...</div>';
 }
 
 function renderLibraryError(error) {
@@ -150,6 +198,8 @@ function renderLibraryError(error) {
   document.getElementById("library-stat-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
   document.getElementById("library-top-list").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
   document.getElementById("library-last-run").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  document.getElementById("library-preview-status").textContent = `Preview coverage unavailable: ${message}`;
+  document.getElementById("library-preview-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
 }
 
 async function refreshLibrary({ showLoading = false } = {}) {
@@ -196,6 +246,7 @@ function setupEventStream() {
     onEvent: (payload, event) => {
       document.getElementById("last-event").textContent = window.ManzaraCore.formatEventBanner(payload);
       maybePlayTaskNotification(payload, event.lastEventId || "");
+      applyPreviewProgressEvent(payload);
       const eventType = String(payload?.type || "");
       const taskFinished = ["task.artifact", "task.completed", "task.failed", "task.stopped"]
         .includes(eventType);

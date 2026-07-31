@@ -754,6 +754,21 @@ class TaskRunner:
             payload["bytes_moved"] = int(artifacts.get("bytes_moved") or 0)
             payload["stopped"] = bool(artifacts.get("stopped"))
             return payload
+        if kind == "library.book_preview_summary":
+            for key in (
+                "processed",
+                "total",
+                "ready",
+                "partial",
+                "failed",
+                "uploaded_objects",
+                "reused_objects",
+                "downloaded_sources",
+            ):
+                payload[key] = int(artifacts.get(key) or 0)
+            payload["stopped"] = bool(artifacts.get("stopped"))
+            payload["recipe_version"] = str(artifacts.get("recipe_version") or "")
+            return payload
         return payload
 
     def _write_run_log(

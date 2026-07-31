@@ -39,6 +39,7 @@ def test_startup_seed_registry_uses_injected_factories() -> None:
         panel_defs=panel_defs,
         shayan_task_definitions=lambda _cfg: [{"task_id": "a"}],
         maintenance_task_definitions=lambda _cfg: [{"task_id": "b"}],
+        library_task_definitions=lambda: [{"task_id": "c"}],
         shayan_workflow_bundle=lambda _cfg: {"workflow_id": "w1"},
         maintenance_backup_full_workflow_bundle=lambda: {"workflow_id": "w2"},
         maintenance_backup_incr_workflow_bundle=lambda: {"workflow_id": "w3"},
@@ -48,7 +49,7 @@ def test_startup_seed_registry_uses_injected_factories() -> None:
     )
 
     assert registry.panel_defs == panel_defs
-    assert [item["task_id"] for item in registry.task_defs] == ["a", "b"]
+    assert [item["task_id"] for item in registry.task_defs] == ["a", "b", "c"]
     assert [item["workflow_id"] for item in registry.workflow_bundles] == [
         "w1",
         "w2",

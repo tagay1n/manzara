@@ -79,6 +79,7 @@ from app.modules.library.publishers import (
     list_publishers,
 )
 from app.modules.library.stats import get_library_dataset_stats
+from app.modules.library.tasks import library_task_definitions
 from app.modules.maintenance.panel import (
     build_database_state_snapshot,
     build_library_panel,
@@ -218,6 +219,7 @@ def _build_startup_registry() -> Dict[str, list[Dict[str, Any]]]:
         panel_defs=_PANEL_DEFS,
         shayan_task_definitions=shayan_task_definitions,
         maintenance_task_definitions=maintenance_task_definitions,
+        library_task_definitions=library_task_definitions,
         shayan_workflow_bundle=shayan_workflow_bundle,
         maintenance_backup_full_workflow_bundle=maintenance_backup_full_workflow_bundle,
         maintenance_backup_incr_workflow_bundle=maintenance_backup_incr_workflow_bundle,

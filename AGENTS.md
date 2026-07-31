@@ -41,6 +41,7 @@ Notes:
 - Runtime state store is PostgreSQL only (`MANZARA_DATABASE_URL`) in schema `monocorpus` by default (`MANZARA_DB_SCHEMA`); do not reintroduce SQLite runtime paths.
 - Shayan state (download manifest + snapshot history) is PostgreSQL-backed. Do not use persistent `status.json` / `latest.json` as runtime source of truth.
 - Artifact location rule (all flows/tasks): write all task/flow artifacts (logs, temp files, exports, caches, run metadata) only under `~/.manzara` by default (or under `MANZARA_ARTIFACTS_ROOT` when explicitly overridden). Do not write artifacts into repository-root folders such as `_artifacts`.
+- The existing `~/.monocorpus/0_entry_point` directory is a shared persistent source-document cache, not a Manzara task-artifact location. Library tasks may verify, reuse, and populate that cache; generated outputs and temporary files still belong under `~/.manzara`.
 - Keep secrets out of git: treat `config.yaml` as local-only and maintain masked `config.example.yaml` in sync with config structure changes.
 - Runtime loaders must not use `config.example.yaml` as an input source; it is reference-only.
 - Keep a single dependency file policy (`requirements.txt`) unless owner explicitly asks to split.
@@ -143,6 +144,10 @@ Notes:
   - Persist artifact payloads in PostgreSQL and use them when building run summaries/history cards.
   - For large detail payloads, persist normalized rows in dedicated tables and expose API endpoints for paginated drill-down.
   - Shayan tasks must follow this event-first artifact pattern (live counters via SSE, details via DB/API).
+- Library PDF preview state is PostgreSQL-backed and variable by source length:
+  - One-page PDFs have first-page previews; two-page PDFs have first/last; longer PDFs have first/second/last.
+  - Missing semantic roles for short PDFs are intentional completeness, not partial failure; never create duplicate page previews.
+  - Frontend/API consumers use manifest roles and actual page numbers, never infer semantics from compact S3 filenames.
 - Gemini usage must be centralized behind a shared runtime manager (no per-task ad-hoc key picking):
   - Treat Gemini keys as grouped by `account -> keys[]` from config.
   - Do not hardcode model names in task logic; resolve model aliases from config (`gemini.models`), while quota/runtime state stays per `(account, key, model)`.

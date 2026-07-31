@@ -1534,6 +1534,8 @@ test("library page renders loading then API error state", async () => {
       "library-stat-grid",
       "library-top-list",
       "library-last-run",
+      "library-preview-status",
+      "library-preview-grid",
     ],
     apiResolver(path) {
       if (path === "/api/library") {
@@ -1546,6 +1548,77 @@ test("library page renders loading then API error state", async () => {
   assert.match(harness.elements.get("library-status").textContent, /Library unavailable/);
   assert.match(harness.elements.get("library-stat-grid").innerHTML, /Error: library unavailable/);
   assert.match(harness.elements.get("library-top-list").innerHTML, /Error: library unavailable/);
+  assert.match(harness.elements.get("library-preview-grid").innerHTML, /Error: library unavailable/);
+});
+
+test("library page renders preview coverage and applies live run progress without reload", async () => {
+  const payload = {
+    event_cursor: 71,
+    global: { active_tasks: 1, active_workflows: 0, stop_all_state: "normal" },
+    dataset: {
+      available: true,
+      config_source: "config.yaml",
+      stats: { applicable_docs: 25 },
+      top_classifications: [],
+      preview_stats: {
+        recipe_version: "pdf-three-page-webp-v1",
+        eligible: 19,
+        ready: 7,
+        pending: 10,
+        partial: 1,
+        failed: 1,
+        generated_preview_pages: 18,
+        generated_image_objects: 36,
+      },
+    },
+    last_eval_run: null,
+  };
+  const harness = createHarness({
+    source: LIBRARY_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "last-event",
+      "library-status",
+      "library-stat-grid",
+      "library-top-list",
+      "library-last-run",
+      "library-preview-status",
+      "library-preview-grid",
+    ],
+    apiResolver(path) {
+      if (path === "/api/library") return JSON.parse(JSON.stringify(payload));
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  await harness.flush();
+  assert.match(harness.elements.get("library-preview-grid").innerHTML, /Ready/);
+  assert.match(harness.elements.get("library-preview-grid").innerHTML, />7</);
+  const before = harness.apiCalls.filter((call) => call.path === "/api/library").length;
+
+  harness.sse.config.onEvent({
+    type: "task.progress",
+    task_id: "library.generate_book_previews",
+    panel_id: "library",
+    payload: {
+      progress: {
+        current: 3,
+        total: 10,
+        ready: 2,
+        partial: 1,
+        failed: 0,
+        uploaded_objects: 8,
+        reused_objects: 4,
+      },
+    },
+  }, { lastEventId: "72" });
+  await harness.flush();
+
+  const after = harness.apiCalls.filter((call) => call.path === "/api/library").length;
+  assert.equal(after, before);
+  assert.match(harness.elements.get("library-preview-status").textContent, /3 \/ 10/);
+  assert.match(harness.elements.get("library-preview-status").textContent, /2 ready/);
 });
 
 test("database page renders loading then API error state", async () => {

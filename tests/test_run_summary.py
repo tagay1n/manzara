@@ -55,3 +55,34 @@ def test_shayan_upload_summary_uses_artifact_counts() -> None:
     assert labels["Failed"] == "2"
     assert labels["Missing local"] == "1"
     assert summary["artifacts"]["kind"] == "shayan.upload_yadisk_summary"
+
+
+def test_library_preview_summary_uses_artifact_counts() -> None:
+    summary = build_structured_run_summary(
+        task_id="library.generate_book_previews",
+        panel_id="library",
+        status="completed",
+        exit_code=0,
+        error_text=None,
+        stop_mode=None,
+        started_at="2026-07-31T12:00:00+00:00",
+        finished_at="2026-07-31T12:01:00+00:00",
+        log_lines=[],
+        artifacts={
+            "kind": "library.book_preview_summary",
+            "ready": 7,
+            "partial": 1,
+            "failed": 2,
+            "uploaded_objects": 24,
+            "reused_objects": 6,
+        },
+    )
+
+    assert summary["message"] == "Book previews completed: 7 ready, 1 partial, 2 failed."
+    assert {item["label"]: item["value"] for item in summary["highlights"]} == {
+        "Ready": "7",
+        "Partial": "1",
+        "Failed": "2",
+        "Uploaded": "24",
+        "Reused": "6",
+    }

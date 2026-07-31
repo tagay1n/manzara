@@ -109,6 +109,10 @@ Runtime control behavior:
 Library data tooling currently includes:
 - Classification views and merge/normalization previews
 - Personality and publisher views
+- Resumable PDF preview generation for applicable Library books:
+  - WebP variants bounded to `400x600` (quality 80) and `1000x1500` (quality 85)
+  - First page for one-page PDFs, first/last for two-page PDFs, and first/second/last otherwise
+  - PostgreSQL manifests, per-object S3 verification, live progress, and per-run structured summaries
 - Normalization workbench:
   - Review queue
   - Canonical registry
@@ -135,6 +139,22 @@ python3 -m venv .venv
 Dependency policy:
 - Keep a single dependency file: `requirements.txt`.
 - If embedded runtime code adds a new external import, add it to `requirements.txt`.
+
+### Library preview storage
+
+Create the `ttbook-previews` bucket manually in Yandex Object Storage and configure anonymous read access. Manzara validates that authenticated access works but does not create the bucket or change its public policy.
+
+Keep these bucket entries in the local unmasked configuration:
+
+```yaml
+yandex:
+  cloud:
+    bucket:
+      document: ttdoc
+      book_previews: ttbook-previews
+```
+
+The `library.generate_book_previews` task reuses and populates the persistent source cache at `~/.monocorpus/0_entry_point`. Temporary render files stay under `~/.manzara/library/book-previews`. Stop requests finish the current PDF, and the next run resumes missing variants from PostgreSQL and verified S3 objects.
 
 ## Run
 
@@ -342,6 +362,7 @@ Core:
 
 Library:
 - `GET /api/library`
+- `GET /api/library/previews/{md5}`
 - `GET /api/library/classifications`
 - `GET /api/library/classifications/insights`
 - `GET /api/library/classifications/normalization-preview`

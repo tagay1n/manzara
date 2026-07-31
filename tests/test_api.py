@@ -532,6 +532,15 @@ def test_library_endpoint_returns_dataset_stats(test_client, monkeypatch) -> Non
             "top_classifications": [
                 {"ddc": "891.7", "path": "Language / Tatar", "usage_count": 7},
             ],
+            "preview_stats": {
+                "eligible": 19,
+                "ready": 7,
+                "pending": 10,
+                "partial": 1,
+                "failed": 1,
+                "generated_preview_pages": 18,
+                "generated_image_objects": 36,
+            },
         },
     )
 
@@ -541,6 +550,75 @@ def test_library_endpoint_returns_dataset_stats(test_client, monkeypatch) -> Non
     assert payload["dataset"]["available"] is True
     assert payload["dataset"]["stats"]["applicable_docs"] == 25
     assert payload["dataset"]["top_classifications"][0]["ddc"] == "891.7"
+    assert payload["dataset"]["preview_stats"]["ready"] == 7
+
+
+def test_library_preview_endpoint_returns_variable_manifest(test_client, monkeypatch) -> None:
+    client, _main_app = test_client
+    md5 = "abcdef0123456789abcdef0123456789"
+
+    class _Repository:
+        def __init__(self, _database_url, *, schema):
+            _ = schema
+
+        def is_eligible_pdf(self, requested_md5):
+            return requested_md5 == md5
+
+        def get(self, requested_md5):
+            assert requested_md5 == md5
+            return {
+                "md5": md5,
+                "status": "ready",
+                "recipe_version": "pdf-three-page-webp-v1",
+                "source_page_count": 2,
+                "manifest": {
+                    "first": {
+                        "page_number": 1,
+                        "variants": {"small": {"key": "prefix/1s.webp"}},
+                    },
+                    "last": {
+                        "page_number": 2,
+                        "variants": {"small": {"key": "prefix/ls.webp"}},
+                    },
+                },
+            }
+
+        def dispose(self):
+            return None
+
+    monkeypatch.setattr("app.library_preview_routes.LibraryPreviewRepository", _Repository)
+    monkeypatch.setattr(
+        "app.library_preview_routes.get_book_preview_bucket",
+        lambda: "ttbook-previews",
+    )
+
+    response = client.get(f"/api/library/previews/{md5}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["expected_preview_count"] == 2
+    assert [item["role"] for item in payload["previews"]] == ["first", "last"]
+    assert payload["previews"][1]["variants"]["small"]["url"].endswith("/prefix/ls.webp")
+
+
+def test_library_preview_endpoint_rejects_non_applicable_document(test_client, monkeypatch) -> None:
+    client, _main_app = test_client
+
+    class _Repository:
+        def __init__(self, _database_url, *, schema):
+            _ = schema
+
+        def is_eligible_pdf(self, _md5):
+            return False
+
+        def dispose(self):
+            return None
+
+    monkeypatch.setattr("app.library_preview_routes.LibraryPreviewRepository", _Repository)
+
+    response = client.get("/api/library/previews/abcdef0123456789abcdef0123456789")
+
+    assert response.status_code == 404
 
 
 def test_database_state_endpoint_returns_snapshot_shape(test_client) -> None:

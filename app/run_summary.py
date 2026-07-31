@@ -172,6 +172,30 @@ def build_structured_run_summary(
             summary["message"] = "Task completed."
         return summary
 
+    if task_id == "library.generate_book_previews" and status == "completed":
+        preview_artifacts = artifacts if isinstance(artifacts, dict) else {}
+        ready = int(preview_artifacts.get("ready") or 0)
+        partial = int(preview_artifacts.get("partial") or 0)
+        failed = int(preview_artifacts.get("failed") or 0)
+        uploaded = int(preview_artifacts.get("uploaded_objects") or 0)
+        reused = int(preview_artifacts.get("reused_objects") or 0)
+        if preview_artifacts.get("kind") == "library.book_preview_summary":
+            summary["highlights"].extend(
+                [
+                    {"label": "Ready", "value": str(ready)},
+                    {"label": "Partial", "value": str(partial)},
+                    {"label": "Failed", "value": str(failed)},
+                    {"label": "Uploaded", "value": str(uploaded)},
+                    {"label": "Reused", "value": str(reused)},
+                ]
+            )
+            summary["message"] = (
+                f"Book previews completed: {ready} ready, {partial} partial, {failed} failed."
+            )
+        else:
+            summary["message"] = "Book previews completed."
+        return summary
+
     if panel_id == "library" and status == "completed":
         summary["message"] = "Library task completed."
         return summary

@@ -119,6 +119,7 @@ yandex:
       upstream_metadata: upstream-metadata
       content_chunks: ttcontent-chunks
       image: ttimg
+      book_previews: ttbook-previews
 
 object_storage:
   shayan_archive:

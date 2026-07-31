@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
@@ -11,6 +12,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from app.modules.library.response_envelope import available_payload, unavailable_payload
+from app.modules.library.preview_repository import LibraryPreviewRepository
+from app.modules.library.previews import PREVIEW_RECIPE_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _REDACTED_SENTINEL = "<REDACTED>"
@@ -129,6 +132,18 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
             ).mappings().all()
         engine.dispose()
 
+        database_url, _ = get_runtime_database_url()
+        preview_repository = LibraryPreviewRepository(
+            database_url,
+            schema=str(os.environ.get("MANZARA_DB_SCHEMA") or "monocorpus"),
+        )
+        try:
+            preview_stats = preview_repository.get_stats(
+                recipe_version=PREVIEW_RECIPE_VERSION
+            )
+        finally:
+            preview_repository.dispose()
+
         evaluated_docs = applicable_docs + non_applicable_docs
         return available_payload(
             config_source=config_source,
@@ -152,6 +167,7 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
                 }
                 for row in top_rows
             ],
+            preview_stats=preview_stats,
         )
     except Exception as exc:  # noqa: BLE001
         return unavailable_payload(
@@ -168,6 +184,16 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
                 "classification_coverage": 0.0,
             },
             top_classifications=[],
+            preview_stats={
+                "recipe_version": PREVIEW_RECIPE_VERSION,
+                "eligible": 0,
+                "ready": 0,
+                "pending": 0,
+                "partial": 0,
+                "failed": 0,
+                "generated_preview_pages": 0,
+                "generated_image_objects": 0,
+            },
         )
 
 
