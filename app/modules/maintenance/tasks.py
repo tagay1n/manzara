@@ -16,6 +16,7 @@ LIBRARY_COLLECTION_DETECT_TASK_ID = "library.collection_detect"
 LIBRARY_COLLECTION_APPLY_TASK_ID = "library.collection_apply"
 MAINTENANCE_PGBACKREST_FULL_TASK_ID = "maintenance.pgbackrest_backup_full"
 MAINTENANCE_PGBACKREST_INCR_TASK_ID = "maintenance.pgbackrest_backup_incr"
+MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID = "maintenance.sync_documents_s3"
 
 
 def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str, Any]]:
@@ -48,8 +49,21 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
     )
     collection_detect_cmd = py_bootstrap + f'"$PY_BIN" "{collection_detect_runner}" --scan-limit 12000 --min-items 2'
     collection_apply_cmd = py_bootstrap + f'"$PY_BIN" "{collection_apply_runner}" --limit 500'
+    document_sync_cmd = (
+        py_bootstrap + '"$PY_BIN" -m app.modules.maintenance.runtime.sync_documents_s3'
+    )
 
     return [
+        {
+            "task_id": MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID,
+            "panel_id": "maintenance",
+            "title": "Sync documents to S3",
+            "task_type": "transfer",
+            "icon_idle": "CloudUpload",
+            "icon_running": "Square",
+            "cwd": str(app_root),
+            "command": {"mode": "shell", "value": document_sync_cmd},
+        },
         {
             "task_id": MAINTENANCE_PGBACKREST_FULL_TASK_ID,
             "panel_id": "maintenance",

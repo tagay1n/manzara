@@ -6,6 +6,8 @@ from pathlib import Path
 
 from app.modules.shayan.config import ShayanSettings
 from app.modules.shayan.tasks import shayan_task_definitions
+from app.modules.maintenance.config import MaintenanceSettings
+from app.modules.maintenance.tasks import maintenance_task_definitions
 
 
 def test_shayan_tasks_include_storage_transfer_stage() -> None:
@@ -25,4 +27,19 @@ def test_shayan_tasks_include_storage_transfer_stage() -> None:
     assert transfer["icon_idle"] == "CloudCog"
     assert "app.modules.shayan.runtime.transfer_yadisk_s3" in str(
         transfer["command"]["value"]
+    )
+
+
+def test_maintenance_tasks_include_document_s3_sync() -> None:
+    tasks = maintenance_task_definitions(
+        MaintenanceSettings(
+            monocorpus_repo_path=Path("/tmp/monocorpus"),
+            pgbackrest_stanza="monocorpus",
+        )
+    )
+    task = {item["task_id"]: item for item in tasks}["maintenance.sync_documents_s3"]
+    assert task["panel_id"] == "maintenance"
+    assert task["task_type"] == "transfer"
+    assert "app.modules.maintenance.runtime.sync_documents_s3" in str(
+        task["command"]["value"]
     )

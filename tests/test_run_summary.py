@@ -86,3 +86,49 @@ def test_library_preview_summary_uses_artifact_counts() -> None:
         "Uploaded": "24",
         "Reused": "6",
     }
+
+
+def test_document_sync_summary_uses_structured_artifact() -> None:
+    artifacts = {
+        "kind": "maintenance.document_s3_sync_summary",
+        "verified": 12,
+        "uploaded": 3,
+        "reuploaded": 1,
+        "failed": 2,
+        "private_cleaned": 4,
+    }
+    summary = build_structured_run_summary(
+        task_id="maintenance.sync_documents_s3",
+        panel_id="maintenance",
+        status="completed",
+        exit_code=0,
+        error_text=None,
+        stop_mode=None,
+        started_at=None,
+        finished_at=None,
+        log_lines=[],
+        artifacts=artifacts,
+    )
+    assert summary["message"] == "Document sync completed: 12 verified, 3 uploaded, 2 failed."
+    assert {item["label"]: item["value"] for item in summary["highlights"]} == {
+        "Verified": "12",
+        "Uploaded": "3",
+        "Re-uploaded": "1",
+        "Private cleaned": "4",
+        "Failed": "2",
+    }
+
+    failed = build_structured_run_summary(
+        task_id="maintenance.sync_documents_s3",
+        panel_id="maintenance",
+        status="failed",
+        exit_code=1,
+        error_text="2 files failed",
+        stop_mode=None,
+        started_at=None,
+        finished_at=None,
+        log_lines=[],
+        artifacts=artifacts,
+    )
+    assert failed["message"] == "Document sync failed: 12 verified, 3 uploaded, 2 failed."
+    assert failed["highlights"]

@@ -1,6 +1,6 @@
 """Document ORM model."""
 
-from sqlalchemy import Boolean, Column, String
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, String
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -25,6 +25,9 @@ class Document(Base):
     document_url = Column(String)
     content_url = Column(String)
     upstream_meta_url = Column(String)
+    primary_storage_size = Column(BigInteger)
+    primary_storage_etag = Column(String)
+    primary_storage_verified_at = Column(DateTime(timezone=True))
     metadata_row = relationship(
         "Metadata",
         uselist=False,

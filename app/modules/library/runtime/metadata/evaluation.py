@@ -26,6 +26,7 @@ from rich import print
 from sqlalchemy import func, select
 
 from app.db import Database
+from app.document_storage import DEFAULT_S3_ENDPOINT, resolve_document_download_url
 from app.gemini_config import DEFAULT_GEMINI_MODELS, load_gemini_models
 from app.gemini_runtime import (
     GeminiAllKeysExhaustedError,
@@ -47,7 +48,6 @@ from core.paths import get_in_workdir
 from core.config import read_config
 from core.db import get_session
 from core.upstream_meta import load_upstream_metadata
-from core.security import decrypt, prefix
 from .isbn_utils import canonicalize_isbn_values
 from .repository import count_docs_for_evaluation, fetch_docs_for_evaluation, mark_docs_as_non_applicable
 from .url_utils import normalize_url_list
@@ -521,7 +521,9 @@ class LibraryApplicabilityWorker:
         local_pdf = get_in_workdir(Dirs.ENTRY_POINT, file=f"{doc.md5}.pdf")
         try:
             if not os.path.exists(local_pdf):
-                source_url = _resolve_doc_source_url(doc, self.config)
+                source_url = _resolve_doc_source_url(
+                    doc, self.config, self._get_s3client()
+                )
                 if not source_url:
                     return None
                 _download_file(source_url, local_pdf)
@@ -1027,13 +1029,16 @@ def _download_file(url: str, local_path: str) -> None:
                     fh.write(chunk)
 
 
-def _resolve_doc_source_url(doc: EvaluationTask, config: dict) -> str | None:
-    source_url = doc.document_url or doc.ya_public_url
-    if not source_url:
-        return None
-    if source_url.startswith(prefix):
-        return decrypt(source_url, config)
-    return source_url
+def _resolve_doc_source_url(doc: EvaluationTask, config: dict, s3client: Any) -> str | None:
+    cloud = config["yandex"]["cloud"]
+    return resolve_document_download_url(
+        document_url=doc.document_url,
+        fallback_url=doc.ya_public_url,
+        encryption_key=config["encryption_key"],
+        endpoint_url=str(cloud.get("endpoint_url") or DEFAULT_S3_ENDPOINT),
+        private_bucket=cloud["bucket"]["document_private"],
+        s3=s3client,
+    )
 
 
 def _fallback_pdf_page_count(doc: EvaluationTask, config: dict) -> int | None:
@@ -1041,7 +1046,7 @@ def _fallback_pdf_page_count(doc: EvaluationTask, config: dict) -> int | None:
         return None
     local_pdf = get_in_workdir(Dirs.ENTRY_POINT, file=f"{doc.md5}.pdf")
     if not os.path.exists(local_pdf):
-        source_url = _resolve_doc_source_url(doc, config)
+        source_url = _resolve_doc_source_url(doc, config, create_session(config))
         if not source_url:
             return None
         _download_file(source_url, local_pdf)

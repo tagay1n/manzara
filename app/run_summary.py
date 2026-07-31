@@ -115,6 +115,36 @@ def build_structured_run_summary(
             summary["message"] = "Backup completed."
         return summary
 
+    if task_id == "maintenance.sync_documents_s3":
+        sync_artifacts = artifacts if isinstance(artifacts, dict) else {}
+        verified = int(sync_artifacts.get("verified") or 0)
+        uploaded = int(sync_artifacts.get("uploaded") or 0)
+        reuploaded = int(sync_artifacts.get("reuploaded") or 0)
+        private_cleaned = int(sync_artifacts.get("private_cleaned") or 0)
+        failed = int(sync_artifacts.get("failed") or 0)
+        if sync_artifacts.get("kind") == "maintenance.document_s3_sync_summary":
+            summary["highlights"].extend(
+                [
+                    {"label": "Verified", "value": str(verified)},
+                    {"label": "Uploaded", "value": str(uploaded)},
+                    {"label": "Re-uploaded", "value": str(reuploaded)},
+                    {"label": "Private cleaned", "value": str(private_cleaned)},
+                    {"label": "Failed", "value": str(failed)},
+                ]
+            )
+            outcome = {
+                "completed": "completed",
+                "failed": "failed",
+                "stopped": "stopped",
+            }.get(status, status)
+            summary["message"] = (
+                f"Document sync {outcome}: {verified} verified, "
+                f"{uploaded} uploaded, {failed} failed."
+            )
+        else:
+            summary["message"] = "Document sync completed."
+        return summary
+
     if panel_id == "shayan" and status == "completed":
         if task_id.endswith(".scan_changes"):
             scan_artifacts = artifacts if isinstance(artifacts, dict) else {}

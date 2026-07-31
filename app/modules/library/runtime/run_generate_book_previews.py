@@ -23,6 +23,7 @@ _bootstrap_repo_root()
 from boto3 import Session  # noqa: E402
 
 from app.db import Database  # noqa: E402
+from app.document_storage import DEFAULT_S3_ENDPOINT  # noqa: E402
 from app.modules.library.preview_generation import (  # noqa: E402
     PreviewGenerationSettings,
     process_book,
@@ -68,6 +69,7 @@ def _run_id() -> int:
 
 
 def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[PreviewGenerationSettings, dict[str, str]]:
+    documents = _mapping(payload.get("documents"))
     yandex = _mapping(payload.get("yandex"))
     cloud = _mapping(yandex.get("cloud"))
     buckets = _mapping(cloud.get("bucket"))
@@ -77,8 +79,13 @@ def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[Prev
     settings = PreviewGenerationSettings(
         source_bucket=_required(buckets, "document", "yandex.cloud.bucket"),
         target_bucket=_required(buckets, "book_previews", "yandex.cloud.bucket"),
-        cache_dir=Path("~/.monocorpus/0_entry_point").expanduser(),
+        cache_dir=Path(
+            _required(documents, "cache_path", "documents")
+        ).expanduser(),
         workspace=artifacts_root / "library" / "book-previews" / f"run-{run_id}",
+        source_endpoint_url=str(cloud.get("endpoint_url") or DEFAULT_S3_ENDPOINT),
+        source_region_name=str(cloud.get("region_name") or "ru-central1"),
+        encryption_key=_required(payload, "encryption_key", "config"),
     )
     credentials = {
         "access_key_id": _required(cloud, "aws_access_key_id", "yandex.cloud"),
@@ -197,8 +204,8 @@ def main() -> int:
         "s3",
         aws_access_key_id=credentials["access_key_id"],
         aws_secret_access_key=credentials["secret_access_key"],
-        endpoint_url="https://storage.yandexcloud.net",
-        region_name="ru-central1",
+        endpoint_url=preview_settings.source_endpoint_url,
+        region_name=preview_settings.source_region_name,
     )
     s3.head_bucket(Bucket=preview_settings.target_bucket)
 

@@ -16,6 +16,7 @@ Current architecture:
 - Schema management via Alembic migrations (no runtime DDL bootstrap)
 - Modular flows in one monorepo (`shayan`, `maintenance`, `library`)
 - Live updates via SSE (`/api/events/stream`)
+- S3-compatible primary storage for documents, with Yandex Disk retained as an auxiliary source
 
 Transitional note:
 - Shayan flow now keeps persistent state in PostgreSQL (`shayan_manifest_entries`, `shayan_snapshots`, `shayan_snapshot_entries`).
@@ -65,9 +66,11 @@ Flow tasks (seeded at startup):
 - `shayan.transfer_yadisk_s3`
 - `maintenance.pgbackrest_backup_full`
 - `maintenance.pgbackrest_backup_incr`
+- `maintenance.sync_documents_s3`
 - `maintenance.monocorpus_meta_evaluate`
 - `library.collection_detect`
 - `library.collection_apply`
+- `library.generate_book_previews`
 - `library.personality_suggestions_refresh`
 - `library.publisher_suggestions_refresh`
 
@@ -105,6 +108,7 @@ Runtime control behavior:
 - Shayan Yandex upload keeps resumable state in `shayan_manifest_entries` (`yadisk_status`, `yadisk_uploaded_payload_hash`, `yadisk_remote_path`, `yadisk_last_error`, timestamps).
 - Shayan Yandex-to-S3 transfer checkpoints each remote video in `shayan_s3_transfers`. It verifies S3 object size and source MD5 metadata before removing the Yandex Disk source, stops at file boundaries, and resumes unfinished rows.
 - Long-running tasks can persist `runs.progress_json`; `task.progress` SSE events update determinate progress bars without frontend-owned domain state.
+- Document synchronization keeps Yandex Disk as a non-destructive auxiliary source while S3 is primary. It verifies existing objects, copies missing/corrupt objects, checkpoints verification on `document`, and reports live progress and structured run artifacts.
 
 Library data tooling currently includes:
 - Classification views and merge/normalization previews
@@ -155,6 +159,43 @@ yandex:
 ```
 
 The `library.generate_book_previews` task reuses and populates the persistent source cache at `~/.monocorpus/0_entry_point`. Temporary render files stay under `~/.manzara/library/book-previews`. Stop requests finish the current PDF, and the next run resumes missing variants from PostgreSQL and verified S3 objects.
+
+### Primary document storage
+
+Create `ttdoc-private` manually before the first sync and keep it private. Manzara validates access but does not create buckets or change bucket policies. `ttdoc` remains the public primary bucket; restricted documents are copied to `ttdoc-private` and read through short-lived backend-signed URLs.
+
+```yaml
+documents:
+  cache_path: /home/tans1q/.monocorpus/0_entry_point
+
+encryption_key: "<secret>"
+
+yandex:
+  disk:
+    oauth_token: "<token>"
+    documents:
+      source_path: /neurotatarlar/kitaplar/monocorpus
+      restricted_path: /neurotatarlar/kitaplar/monocorpus/__ТАРАТМАСКА_DONT_SHARE_НЕ_ДЕЛИТЬСЯ
+  cloud:
+    endpoint_url: https://storage.yandexcloud.net
+    region_name: ru-central1
+    aws_access_key_id: "<access-key>"
+    aws_secret_access_key: "<secret-key>"
+    bucket:
+      document: ttdoc
+      document_private: ttdoc-private
+      upstream_metadata: upstream-metadata
+```
+
+`maintenance.sync_documents_s3` recursively discovers files only from the configured Yandex root. For required bytes it uses a hash-valid cache file first, an existing S3 location second, and Yandex Disk last. Cache-only files are ignored, and the document sync never writes into the cache.
+
+Legacy S3 objects are verified rather than blindly replaced. Plain ETags and reproducible boto3 multipart ETags are checked first; otherwise the object is downloaded once and hashed. Only missing or mismatched objects are uploaded. Verification size, ETag, and timestamp are persisted on `document`, so unchanged objects are cheap on later runs.
+
+Objects use flat content-addressed keys (`<md5>.<extension>`), independent of the Yandex folder hierarchy. Existing valid object keys are retained. Revision `20260731_0013` adds `primary_storage_size`, `primary_storage_etag`, and `primary_storage_verified_at` to the existing `document` table; normal application startup applies it automatically.
+
+The task never deletes Yandex files. After a restricted file is safely copied to the private bucket and PostgreSQL is committed, its legacy public `ttdoc` object is deleted and absence is verified. Stop requests finish the current document; per-file failures are logged and processing continues, with a failed final run when any item failed. The task has no default schedule: run it manually from the Maintenance flow or explicitly configure a schedule on `/schedules`.
+
+The first run can be I/O-intensive because unverifiable legacy S3 objects may need one download for a content hash. Later runs reuse PostgreSQL verification checkpoints when object size and ETag are unchanged.
 
 ## Run
 
@@ -335,6 +376,12 @@ Coverage notes:
 - Runtime-heavy external flows still require manual smoke checks, especially:
   - `maintenance.monocorpus_meta_evaluate`
   - normalization refresh with real config + Gemini keys
+  - `library.generate_book_previews` against a real PDF source and preview bucket
+  - `maintenance.sync_documents_s3` against real Yandex/S3 services:
+    - confirm a cached document uploads without a Yandex download
+    - confirm an unchanged verified object is skipped on the next run
+    - confirm a restricted document is private, its stored URL is encrypted, and any legacy public copy is absent
+    - request graceful stop and confirm the current document finishes before the run stops
 
 ## API Summary
 

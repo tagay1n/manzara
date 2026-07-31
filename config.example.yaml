@@ -103,17 +103,26 @@ gemini_api_keys:
   - "<REDACTED>"
   - "<REDACTED>"
 
+documents:
+  cache_path: /home/tans1q/.monocorpus/0_entry_point
+
 yandex:
   disk:
     oauth_token: "<REDACTED>"
+    documents:
+      source_path: /neurotatarlar/kitaplar/monocorpus
+      restricted_path: /neurotatarlar/kitaplar/monocorpus/__ТАРАТМАСКА_DONT_SHARE_НЕ_ДЕЛИТЬСЯ
     shayan:
       cartoons: /neurotatarlar/video/shayantv/cartoons
       shows: /neurotatarlar/video/shayantv/shows
   cloud:
+    endpoint_url: https://storage.yandexcloud.net
+    region_name: ru-central1
     aws_access_key_id: "<REDACTED>"
     aws_secret_access_key: "<REDACTED>"
     bucket:
       document: ttdoc
+      document_private: ttdoc-private
       metadata: ttmeta
       content: ttcontent
       upstream_metadata: upstream-metadata

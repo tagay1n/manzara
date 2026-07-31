@@ -1,6 +1,6 @@
 # Compliance Matrix
 
-Last audit: 2026-03-25  
+Last audit: 2026-07-31
 Scope: enforceable requirements from `AGENTS.md` (engineering constraints, frontend/backend standards, low-context scalability rules).
 
 ## Legend
@@ -10,25 +10,32 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 - `N/A`: policy/process requirement, not directly verifiable in code.
 
 ## Automated Baseline (current)
-- `pytest`: `107 passed` (`.venv/bin/python -m pytest -q`)
-- `frontend tests`: `node --test tests/frontend/*.mjs` passed (`core helpers` + `dashboard/schedules/tasks/task/library/database/classification-list/classification-detail/personality/publisher/normalization page behavior`)
+- `pytest`: `170 passed` (`PYTHONPATH=. .venv/bin/python -m pytest -q`)
+- `frontend tests`: `node --test tests/frontend/*.mjs` passed (shared shell/helpers and operational page behavior)
+- `ruff`: `PYTHONPATH=. .venv/bin/python -m ruff check app tests` passed
+- `alembic`: one head, `20260731_0013`
 - `requirements files`: only `requirements.txt` found (`rg --files -g 'requirements*.txt'`)
 
 ## Matrix
 | ID | Requirement | Status | Evidence | Notes / Gap |
 |---|---|---|---|---|
-| EC-01 | PostgreSQL-only runtime store | PASS | `app/db.py:1`, `app/settings.py:40-89`, `README.md:113-116` | Runtime DB layer is PostgreSQL/psycopg2 based. |
-| EC-02 | Default schema is `monocorpus` (`MANZARA_DB_SCHEMA`) | PASS | `app/settings.py:77`, `README.md:114-116` | Default applied at settings load. |
+| EC-01 | PostgreSQL-only runtime store | PASS | `app/db.py`, `app/settings.py`, `README.md` | Runtime DB layer is PostgreSQL/psycopg2 based. |
+| EC-02 | Default schema is `monocorpus` (`MANZARA_DB_SCHEMA`) | PASS | `app/settings.py`, `README.md` | Default applied at settings load. |
 | EC-03 | Do not reintroduce SQLite runtime paths | PASS | `app/db.py` (PostgreSQL implementation), repo search has no SQLite runtime URL usage | A compatibility comment exists, but runtime path is PostgreSQL. |
-| EC-04 | Keep secrets out of git (`config.yaml` local-only, masked `config.example.yaml`) | PASS | `.gitignore:9-11`, `README.md:123-131`, `config.example.yaml` redactions | `config.yaml` is not tracked by git. |
-| EC-05 | Single dependency file policy | PASS | `requirements.txt` only, `README.md:99-101` | No split requirement files present. |
-| EC-06 | Runtime-heavy flow coverage + manual smoke expectations documented | PASS | `README.md:214-218` | Manual checks documented for `meta_evaluate` and normalization refresh. |
+| EC-04 | Keep secrets out of git (`config.yaml` local-only, masked `config.example.yaml`) | PASS | `.gitignore`, `README.md`, `config.example.yaml` redactions | `config.yaml` is not tracked by git. |
+| EC-05 | Single dependency file policy | PASS | `requirements.txt`, `README.md` | No split requirement files present. |
+| EC-06 | Runtime-heavy flow coverage + manual smoke expectations documented | PASS | `README.md` test coverage notes | Manual checks cover Gemini-dependent flows and real document-storage services. |
+| EC-07 | All task artifacts stay under `~/.manzara` by default | PASS | `app/artifacts.py`, `app/tasks.py`, `README.md` | The shared Monocorpus source cache is explicitly documented as external persistent input, not a task-artifact path. |
+| EC-08 | S3 is primary document storage; Yandex remains auxiliary | PASS | `app/document_storage.py`, `app/modules/maintenance/runtime/sync_documents_s3.py`, `tests/test_document_s3_sync.py`, `README.md` | Sync is non-destructive toward Yandex and stores verification checkpoints in PostgreSQL. |
 | BE-01 | Every task run has artifact log under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...`) | PASS | `app/tasks.py:107-108`, `app/tasks.py:797`, `tests/test_api.py:831-849`, `README.md:85` | Covered by automated test and documented runtime path. |
 | BE-02 | Uniform artifact log line format | PASS | `app/tasks.py:740-756`, `tests/test_api.py:855-862`, `README.md:183-187` | Format is stable and documented. |
 | BE-03 | Persist stdout to DB logs and mirror to artifact logs | PASS | `app/tasks.py:665-681`, `app/tasks.py:530-545` | DB + SSE + artifact mirror present. |
 | BE-04 | Include explicit start/final status runtime lines | PASS | `app/tasks.py:279-286`, `app/tasks.py:364-374`, `tests/test_api.py:852-853` | Start and final outcome logged. |
 | BE-05 | Keep secrets out of runtime logs | PASS | Redaction layer in `app/tasks.py` (`_sanitize_log_line`) applied to DB logs, SSE payload lines, and artifact logs; regression in `tests/test_api.py` (`test_task_logs_are_redacted_in_db_and_artifact_files`) | Masks common secret/token/password/key patterns, authorization headers, secret query params, and credential-style URLs. |
 | BE-06 | Surface actionable errors in run state/logs/events | PASS | `app/tasks.py` stream error path now emits `log_stream_error=...` into DB logs + SSE + artifact log; regression in `tests/test_api.py` (`test_stream_stdout_failures_emit_actionable_log_line`) | Stream/log reader failures are no longer silently swallowed. |
+| BE-07 | Tasks support graceful stop and resumable progress | PASS | shared task controller plus flow checkpoints; document sync coverage in `tests/test_document_s3_sync.py` | Document sync stops at document boundaries and resumes from persisted object verification. |
+| BE-08 | Structured run artifacts come from explicit events, not log parsing | PASS | `app/run_artifact_channel.py`, `app/run_summary.py`, runtime task integrations, artifact tests | Compact summaries are persisted and delivered through the shared task artifact contract. |
+| BE-09 | Schema lifecycle is Alembic-only | PASS | `alembic/versions`, `scripts/alembic_upgrade.py`, `app/main.py` | Current head is `20260731_0013`; application startup upgrades before seeding. |
 | FE-01 | Bootstrap via API, then apply important updates from SSE | PASS | `static/app.js:17-27`, `static/app.js:633-685` and same pattern in page scripts | Implemented across pages. |
 | FE-02 | Backend API/SSE is source of truth; avoid frontend domain duplication | PASS | API/SSE-driven page flows + backend-provided insight summaries for personalities/publishers (`app/modules/library/personalities.py`, `app/modules/library/publishers.py`) consumed by frontend badges in `static/library-personalities.js` and `static/library-publishers.js`; regression checks in `tests/frontend/test_pages.mjs` (`prefers backend summary counters for badges`) | Badge/counter derivation is now backend-owned for these insights pages; frontend consumes server summaries rather than re-deriving domain totals. |
 | FE-03 | Route HTTP calls through shared client layer | PASS | Shared client in `static/core.js:40-50`; page scripts call it (`static/app.js:17-18`, `static/tasks.js:10-11`, etc.) | Transport/error handling now centralized in one module. |
@@ -43,10 +50,7 @@ Scope: enforceable requirements from `AGENTS.md` (engineering constraints, front
 | LC-BE-03 | Shared run/workflow state machine definitions | PASS | `app/runtime_states.py` (task/workflow statuses, transitions, terminal/event resolution) + adoption in `app/db.py`, `app/tasks.py`, `app/workflows.py`, and regression tests in `tests/test_runtime_states.py` | Runtime statuses and transition maps now have a single backend source. |
 | LC-FE-01 | Centralize data/event handling utilities to reduce page-level branching | PASS | Shared utilities in `static/core.js` (`api`, datetime/event banner, `applyStopAllButton`, `createSseController`, `createTabController`, `attachViewState`, `setStatusMessage`, `renderRunRowMessage`, `renderWorkflowFootnoteMessage`, `renderLoadingTableRow`, `applyPaginationControls`, `escapeHtml`, `cssName`, status helpers) and adoption in operational page scripts | Core transport/time/SSE/tab/view-state/render primitives are centralized and reused across pages, reducing per-page branching and duplication. |
 
-## Priority Remediation Batches
-1. Frontend foundation extraction (phase 3):
-   - Continue opportunistic extraction as new pages/features are added to keep frontend orchestration thin and server-driven.
-2. Frontend test baseline:
-   - Extend coverage when new UI actions land (for example canonical edit/retire flows and additional multi-step filter chains).
-3. Logging hardening:
-   - Continue expanding redaction allowlist/denylist as new integrations are added and keep fixture-based regression tests for newly observed secret formats.
+## Ongoing Checks
+- Extend shared frontend behavior coverage when new actions or pages are added.
+- Add redaction fixtures whenever a new integration introduces a credential format.
+- Keep external-service smoke checks explicit when full E2E automation would require real credentials or mutate remote storage.

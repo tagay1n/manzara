@@ -18,6 +18,8 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
+from app.document_storage import DEFAULT_S3_ENDPOINT, resolve_document_object_location
+
 from app.modules.library.previews import (
     PREVIEW_RECIPE_VERSION,
     derive_preview_status,
@@ -44,6 +46,9 @@ class PreviewGenerationSettings:
     target_bucket: str
     cache_dir: Path
     workspace: Path
+    source_endpoint_url: str = DEFAULT_S3_ENDPOINT
+    source_region_name: str = "ru-central1"
+    encryption_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -124,6 +129,7 @@ def ensure_cached_pdf(
     *,
     cache_dir: Path,
     source_bucket: str,
+    source_key: str | None = None,
     s3: Any,
 ) -> tuple[Path, bool]:
     """Return a hash-verified cached PDF, atomically downloading when absent."""
@@ -138,7 +144,9 @@ def ensure_cached_pdf(
     temporary = cache_dir / f"{digest}.pdf.part"
     temporary.unlink(missing_ok=True)
     try:
-        s3.download_file(str(source_bucket), f"{digest}.pdf", str(temporary))
+        s3.download_file(
+            str(source_bucket), str(source_key or f"{digest}.pdf"), str(temporary)
+        )
         actual = calculate_md5(temporary)
         if actual != digest:
             raise ValueError(
@@ -260,10 +268,20 @@ def process_book(
     book_workspace = settings.workspace / md5
     book_workspace.mkdir(parents=True, exist_ok=True)
     try:
+        source_bucket = settings.source_bucket
+        source_key = f"{md5}.pdf"
+        location = resolve_document_object_location(
+            document_url=str(candidate.get("document_url") or "") or None,
+            encryption_key=settings.encryption_key,
+            endpoint_url=settings.source_endpoint_url,
+        )
+        if location:
+            source_bucket, source_key = location
         pdf_path, downloaded = ensure_cached_pdf(
             md5,
             cache_dir=settings.cache_dir,
-            source_bucket=settings.source_bucket,
+            source_bucket=source_bucket,
+            source_key=source_key,
             s3=s3,
         )
         with fitz.open(pdf_path) as document:
