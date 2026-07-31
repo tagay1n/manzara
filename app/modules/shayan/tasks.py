@@ -37,6 +37,10 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
         + f" --repo-path {repo_path}"
         + f" --output-path {output_path}"
     )
+    transfer_cmd = (
+        py_bootstrap
+        + '"$PY_BIN" -m app.modules.shayan.runtime.transfer_yadisk_s3'
+    )
 
     return [
         {
@@ -68,5 +72,15 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": upload_cmd},
+        },
+        {
+            "task_id": "shayan.transfer_yadisk_s3",
+            "panel_id": "shayan",
+            "title": "Move Yandex Disk videos to S3",
+            "task_type": "transfer",
+            "icon_idle": "CloudCog",
+            "icon_running": "Square",
+            "cwd": str(app_root),
+            "command": {"mode": "shell", "value": transfer_cmd},
         },
     ]

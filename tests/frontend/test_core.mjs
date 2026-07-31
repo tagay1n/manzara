@@ -432,6 +432,60 @@ test("event routing ignores log noise and identifies lifecycle reconciliation", 
   assert.equal(core.eventNeedsReconciliation({ type: "schedule.updated" }), true);
 });
 
+test("task progress SSE updates the matching run without frontend shadow state", () => {
+  const core = loadCore();
+  const root = {
+    tasks: [
+      {
+        task_id: "shayan.transfer_yadisk_s3",
+        run: { run_id: 81, status: "running" },
+      },
+    ],
+  };
+
+  const changed = core.applyTaskEventState(root, {
+    type: "task.progress",
+    task_id: "shayan.transfer_yadisk_s3",
+    run_id: 81,
+    payload: {
+      status: "running",
+      progress: {
+        current: 3,
+        total: 12,
+        percent: 25,
+        bytes_completed: 1024,
+        bytes_total: 4096,
+      },
+    },
+  });
+
+  assert.equal(changed, true);
+  assert.equal(root.tasks[0].run.progress.percent, 25);
+  assert.equal(root.tasks[0].run.progress.current, 3);
+});
+
+test("late task progress does not revert a stopping task to running", () => {
+  const core = loadCore();
+  const root = {
+    tasks: [
+      {
+        task_id: "shayan.transfer_yadisk_s3",
+        run: { run_id: 82, status: "stopping_graceful" },
+      },
+    ],
+  };
+
+  core.applyTaskEventState(root, {
+    type: "task.progress",
+    task_id: "shayan.transfer_yadisk_s3",
+    run_id: 82,
+    payload: { status: "running", progress: { current: 4, total: 10, percent: 40 } },
+  });
+
+  assert.equal(root.tasks[0].run.status, "stopping_graceful");
+  assert.equal(root.tasks[0].run.progress.percent, 40);
+});
+
 test("createRunLogViewer uses tail on open then follows and backfills with cursors", async () => {
   const calls = [];
   const responses = {

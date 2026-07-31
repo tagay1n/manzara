@@ -394,7 +394,10 @@ class TaskRunner:
             exit_code = proc.wait()
             if log_thread is not None and log_thread.is_alive():
                 log_thread.join(timeout=1.5)
-            if proc.stdout is not None:
+            # An inherited stdout descriptor can outlive the task process. Closing
+            # the stream while the reader is blocked would wait for that unrelated
+            # descendant and delay the task's terminal state.
+            if proc.stdout is not None and (log_thread is None or not log_thread.is_alive()):
                 try:
                     proc.stdout.close()
                 except OSError:
@@ -743,6 +746,13 @@ class TaskRunner:
             payload["missing_local"] = int(artifacts.get("missing_local") or 0)
             payload["deleted_local"] = int(artifacts.get("deleted_local") or 0)
             payload["hash_mismatch"] = int(artifacts.get("hash_mismatch") or 0)
+            return payload
+        if kind == "shayan.yadisk_s3_transfer_summary":
+            payload["moved"] = int(artifacts.get("moved") or 0)
+            payload["reused"] = int(artifacts.get("reused") or 0)
+            payload["failed"] = int(artifacts.get("failed") or 0)
+            payload["bytes_moved"] = int(artifacts.get("bytes_moved") or 0)
+            payload["stopped"] = bool(artifacts.get("stopped"))
             return payload
         return payload
 

@@ -62,6 +62,7 @@ Flow tasks (seeded at startup):
 - `shayan.scan_changes`
 - `shayan.download_new`
 - `shayan.upload_yadisk`
+- `shayan.transfer_yadisk_s3`
 - `maintenance.pgbackrest_backup_full`
 - `maintenance.pgbackrest_backup_incr`
 - `maintenance.monocorpus_meta_evaluate`
@@ -102,6 +103,8 @@ Runtime control behavior:
 - Task and flow pages render run history with backend-provided structured summaries (`runs.summary_json`)
 - Shayan scan/download run summaries include structured task artifacts (for example scan added/changed/removed counts) in `runs.summary_json.artifacts`.
 - Shayan Yandex upload keeps resumable state in `shayan_manifest_entries` (`yadisk_status`, `yadisk_uploaded_payload_hash`, `yadisk_remote_path`, `yadisk_last_error`, timestamps).
+- Shayan Yandex-to-S3 transfer checkpoints each remote video in `shayan_s3_transfers`. It verifies S3 object size and source MD5 metadata before removing the Yandex Disk source, stops at file boundaries, and resumes unfinished rows.
+- Long-running tasks can persist `runs.progress_json`; `task.progress` SSE events update determinate progress bars without frontend-owned domain state.
 
 Library data tooling currently includes:
 - Classification views and merge/normalization previews
@@ -168,7 +171,19 @@ yandex:
     shayan:
       cartoons: "/neurotatarlar/video/shayantv/cartoons"
       shows: "/neurotatarlar/video/shayantv/shows"
+
+object_storage:
+  shayan_archive:
+    endpoint_url: "https://storage.yandexcloud.net"
+    region_name: "ru-central1"
+    bucket: "<video-bucket>"
+    prefix: "shayan"
+    access_key_id: "<access-key>"
+    secret_access_key: "<secret-key>"
 ```
+
+The Yandex-to-S3 task preserves paths as `<prefix>/<category>/<program>/<season>/<file>`.
+It does not fall back to credentials or buckets from other configuration sections.
 
 Embedded runtimes read YAML config in this order:
 1. `MANZARA_CONFIG_PATH` (if set)

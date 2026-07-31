@@ -91,6 +91,56 @@ def test_recover_active_runs_marks_running_as_failed(tmp_path: Path) -> None:
         assert "Recovered after Manzara restart" in (run["error_text"] or "")
 
 
+def test_run_progress_and_shayan_s3_transfer_checkpoints_round_trip(tmp_path: Path) -> None:
+    with _isolated_database() as db:
+        db.seed_tasks(
+            [
+                {
+                    "task_id": "shayan.transfer_yadisk_s3",
+                    "panel_id": "shayan",
+                    "title": "Move videos",
+                    "task_type": "transfer",
+                    "icon_idle": "CloudCog",
+                    "icon_running": "Square",
+                    "command": {"mode": "shell", "value": "echo hi"},
+                    "cwd": str(tmp_path),
+                }
+            ]
+        )
+        run_id = db.create_run(db.get_task("shayan.transfer_yadisk_s3"))
+        progress = {"current": 2, "total": 8, "percent": 25}
+        db.update_run_progress(run_id, progress)
+        assert db.get_run(run_id)["progress"] == progress
+        assert db.list_recent_runs_for_task("shayan.transfer_yadisk_s3")[0]["progress"] == progress
+
+        db.upsert_shayan_s3_transfer(
+            source_path="/videos/a.mkv",
+            category="cartoons",
+            source_md5="abc",
+            source_size=123,
+            target_bucket="videos",
+            target_key="shayan/cartoons/a.mkv",
+        )
+        rows = db.list_shayan_s3_transfer_candidates()
+        assert len(rows) == 1
+        assert rows[0]["status"] == "pending"
+
+        db.mark_shayan_s3_transfer_state("/videos/a.mkv", status="moved")
+        assert db.list_shayan_s3_transfer_candidates() == []
+
+        db.upsert_shayan_s3_transfer(
+            source_path="/videos/a.mkv",
+            category="cartoons",
+            source_md5="changed",
+            source_size=124,
+            target_bucket="videos",
+            target_key="shayan/cartoons/a.mkv",
+        )
+        refreshed = db.list_shayan_s3_transfer_candidates()
+        assert len(refreshed) == 1
+        assert refreshed[0]["status"] == "pending"
+
+
 def test_recover_active_workflow_runs_marks_running_as_failed(tmp_path: Path) -> None:
     with _isolated_database() as db:
 

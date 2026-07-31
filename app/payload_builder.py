@@ -158,6 +158,7 @@ class PayloadBuilder:
             "exit_code": task.get("exit_code"),
             "error_text": task.get("error_text"),
             "summary": summary if isinstance(summary, dict) and summary else None,
+            "progress": task.get("run_progress") if isinstance(task.get("run_progress"), dict) else {},
         }
 
     def _task_with_latest_run_payload(
@@ -503,6 +504,7 @@ class PayloadBuilder:
                 "pid": None,
                 "exit_code": None,
                 "error_text": None,
+                "progress": {},
                 "summary": ops.build_default_run_summary({"status": "idle"}),
             }
             task_items.append(

@@ -204,6 +204,7 @@ class Database:
     def _row_to_run(self, row: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(row)
         payload["summary"] = self._decode_summary(payload.pop("summary_json", "{}"))
+        payload["progress"] = self._decode_summary(payload.pop("progress_json", "{}"))
         return payload
 
     @staticmethod
@@ -1041,7 +1042,7 @@ class Database:
                 """,
                 (task_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return self._row_to_run(row) if row else None
 
     def create_run(self, task: Dict[str, Any]) -> int:
         """Create a new run in starting state and return run id."""
@@ -1091,6 +1092,22 @@ class Database:
                 conn.execute(
                     "UPDATE runs SET heartbeat_at = ?, updated_at = ? WHERE run_id = ?",
                     (now, now, run_id),
+                )
+
+    def update_run_progress(self, run_id: int, progress: Dict[str, Any]) -> None:
+        """Persist the latest authoritative progress snapshot for a run."""
+        if not isinstance(progress, dict):
+            raise ValueError("progress must be an object")
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET progress_json = ?, heartbeat_at = ?, updated_at = ?
+                    WHERE run_id = ?
+                    """,
+                    (json.dumps(progress, ensure_ascii=False), now, now, int(run_id)),
                 )
 
     def set_stop_mode(self, run_id: int, mode: str) -> bool:
@@ -1687,7 +1704,8 @@ class Database:
                     r.heartbeat_at,
                     r.exit_code,
                     r.error_text,
-                    r.summary_json
+                    r.summary_json,
+                    r.progress_json
                 FROM task_definitions t
                 LEFT JOIN runs r
                     ON r.run_id = (
@@ -1706,6 +1724,7 @@ class Database:
             payload = dict(row)
             payload["command"] = json.loads(payload.pop("command_json"))
             payload["run_summary"] = self._decode_summary(payload.pop("summary_json", "{}"))
+            payload["run_progress"] = self._decode_summary(payload.pop("progress_json", "{}"))
             items.append(payload)
         return items
 
@@ -1716,7 +1735,7 @@ class Database:
                 """
                 SELECT run_id, task_id, panel_id, status, stop_mode,
                        started_at, finished_at, heartbeat_at,
-                       pid, exit_code, error_text, summary_json
+                       pid, exit_code, error_text, summary_json, progress_json
                 FROM runs
                 ORDER BY run_id DESC
                 LIMIT ?
@@ -1732,7 +1751,7 @@ class Database:
                 """
                 SELECT run_id, task_id, panel_id, status, stop_mode,
                        started_at, finished_at, heartbeat_at,
-                       pid, exit_code, error_text, summary_json
+                       pid, exit_code, error_text, summary_json, progress_json
                 FROM runs
                 WHERE task_id = ?
                 ORDER BY run_id DESC
@@ -2101,6 +2120,123 @@ class Database:
                     ),
                 )
         return int(cur.rowcount)
+
+    def upsert_shayan_s3_transfer(
+        self,
+        *,
+        source_path: str,
+        category: str,
+        source_md5: str,
+        source_size: int,
+        target_bucket: str,
+        target_key: str,
+    ) -> None:
+        """Discover or refresh one Yandex Disk video transfer checkpoint."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO shayan_s3_transfers (
+                        source_path, category, source_md5, source_size,
+                        target_bucket, target_key, status, error_text,
+                        discovered_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, ?)
+                    ON CONFLICT(source_path) DO UPDATE SET
+                        category = excluded.category,
+                        source_md5 = excluded.source_md5,
+                        source_size = excluded.source_size,
+                        target_bucket = excluded.target_bucket,
+                        target_key = excluded.target_key,
+                        status = CASE
+                            WHEN shayan_s3_transfers.source_md5 = excluded.source_md5
+                             AND shayan_s3_transfers.source_size = excluded.source_size
+                             AND shayan_s3_transfers.target_bucket = excluded.target_bucket
+                             AND shayan_s3_transfers.target_key = excluded.target_key
+                            THEN shayan_s3_transfers.status
+                            ELSE 'pending'
+                        END,
+                        error_text = CASE
+                            WHEN shayan_s3_transfers.source_md5 = excluded.source_md5
+                             AND shayan_s3_transfers.source_size = excluded.source_size
+                             AND shayan_s3_transfers.target_bucket = excluded.target_bucket
+                             AND shayan_s3_transfers.target_key = excluded.target_key
+                            THEN shayan_s3_transfers.error_text
+                            ELSE NULL
+                        END,
+                        discovered_at = excluded.discovered_at,
+                        moved_at = CASE
+                            WHEN shayan_s3_transfers.source_md5 = excluded.source_md5
+                             AND shayan_s3_transfers.source_size = excluded.source_size
+                             AND shayan_s3_transfers.target_bucket = excluded.target_bucket
+                             AND shayan_s3_transfers.target_key = excluded.target_key
+                            THEN shayan_s3_transfers.moved_at
+                            ELSE NULL
+                        END,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        str(source_path),
+                        str(category),
+                        str(source_md5).lower(),
+                        int(source_size),
+                        str(target_bucket),
+                        str(target_key),
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+
+    def list_shayan_s3_transfer_candidates(self) -> List[Dict[str, Any]]:
+        """Return unfinished Yandex Disk to S3 checkpoints in stable order."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source_path, category, source_md5, source_size,
+                       target_bucket, target_key, status, error_text,
+                       discovered_at, last_attempt_at, moved_at, updated_at
+                FROM shayan_s3_transfers
+                WHERE status <> 'moved'
+                ORDER BY discovered_at ASC, source_path ASC
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_shayan_s3_transfer_state(
+        self,
+        source_path: str,
+        *,
+        status: str,
+        error_text: Optional[str] = None,
+    ) -> int:
+        """Persist one validated transfer state transition."""
+        allowed = {"pending", "transferring", "uploaded", "moved", "failed"}
+        normalized_status = str(status or "").strip()
+        if normalized_status not in allowed:
+            raise ValueError(f"Invalid Shayan S3 transfer status: {normalized_status}")
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE shayan_s3_transfers
+                    SET status = ?, error_text = ?, last_attempt_at = ?,
+                        moved_at = CASE WHEN ? = 'moved' THEN ? ELSE moved_at END,
+                        updated_at = ?
+                    WHERE source_path = ?
+                    """,
+                    (
+                        normalized_status,
+                        str(error_text or "").strip()[:4000] or None,
+                        now,
+                        normalized_status,
+                        now,
+                        now,
+                        str(source_path),
+                    ),
+                )
+        return int(cur.rowcount or 0)
 
     def get_latest_shayan_snapshot(self) -> Optional[Dict[str, Any]]:
         """Return latest Shayan snapshot header row."""

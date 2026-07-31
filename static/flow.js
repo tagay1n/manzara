@@ -278,8 +278,22 @@ function renderTaskCard(task) {
   const logsDisabled = !runId;
   const summaryText = runSummaryMessage(task.run || {});
   const taskPathKey = encodeURIComponent(task.slug || task.task_id);
+  const progress = task.run?.progress && typeof task.run.progress === "object"
+    ? task.run.progress
+    : {};
+  const progressPercent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  const hasDeterminateProgress = model.showProgress && Number(progress.total || 0) > 0;
   const progressHtml = model.showProgress
-    ? `<div class="progress-wrap"><div class="progress-indeterminate ${model.progressClass}"></div></div>`
+    ? hasDeterminateProgress
+      ? `
+        <div class="progress-meta">
+          <span>${escapeHtml(String(progress.current || 0))} / ${escapeHtml(String(progress.total || 0))}</span>
+          <span>${escapeHtml(String(Math.round(progressPercent)))}%</span>
+        </div>
+        <div class="progress-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(String(Math.round(progressPercent)))}">
+          <div class="progress-determinate ${model.progressClass}" style="width: ${progressPercent}%"></div>
+        </div>`
+      : `<div class="progress-wrap"><div class="progress-indeterminate ${model.progressClass}"></div></div>`
     : "";
 
   return `

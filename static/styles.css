@@ -680,7 +680,27 @@ button {
   animation: pulse-x 1.2s linear infinite;
 }
 
+.progress-determinate {
+  height: 100%;
+  background: linear-gradient(90deg, #3d8dff, #12bfd8);
+  transition: width 180ms ease-out;
+}
+
+.progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .progress-force {
+  background: linear-gradient(90deg, #ffb347, #ff6b7a);
+}
+
+.progress-determinate.progress-force {
   background: linear-gradient(90deg, #ffb347, #ff6b7a);
 }
 

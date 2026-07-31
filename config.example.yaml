@@ -119,6 +119,15 @@ yandex:
       upstream_metadata: upstream-metadata
       content_chunks: ttcontent-chunks
       image: ttimg
+
+object_storage:
+  shayan_archive:
+    endpoint_url: https://storage.yandexcloud.net
+    region_name: ru-central1
+    bucket: ""
+    prefix: shayan
+    access_key_id: "<REDACTED>"
+    secret_access_key: "<REDACTED>"
 encryption_key: "<REDACTED>"
 
 database_url: "<REDACTED>"

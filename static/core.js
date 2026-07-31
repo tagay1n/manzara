@@ -311,6 +311,7 @@
   }
 
   function applyTaskEventState(root, payload) {
+    const eventType = String(payload?.type || "");
     const taskId = String(payload?.task_id || "");
     const runId = Number(payload?.run_id || 0);
     const status = taskStatusFromEvent(payload);
@@ -322,11 +323,20 @@
       if (!value || typeof value !== "object" || seen.has(value)) return;
       seen.add(value);
       if (String(value.task_id || "") === taskId && Object.hasOwn(value, "run")) {
+        const eventProgress = payload?.payload?.progress;
+        const currentStatus = String(value.run?.status || "");
+        const nextStatus = (
+          eventType === "task.progress"
+          && (currentStatus === "stopping_graceful" || currentStatus === "stopping_force")
+        ) ? currentStatus : status;
         value.run = {
           ...(value.run && typeof value.run === "object" ? value.run : {}),
           task_id: taskId,
           run_id: runId || value.run?.run_id || null,
-          status,
+          status: nextStatus,
+          ...(eventProgress && typeof eventProgress === "object"
+            ? { progress: { ...eventProgress } }
+            : {}),
         };
         changed = true;
       }
@@ -335,7 +345,11 @@
         && Number(value.run_id || 0) === runId
         && Object.hasOwn(value, "status")
       ) {
-        value.status = status;
+        const currentStatus = String(value.status || "");
+        value.status = (
+          eventType === "task.progress"
+          && (currentStatus === "stopping_graceful" || currentStatus === "stopping_force")
+        ) ? currentStatus : status;
         changed = true;
       }
       Object.values(value).forEach(visit);
