@@ -135,7 +135,9 @@ nextcloud:
   username: Admin
   password: "<REDACTED>"
   shayan:
-    target_dir: /Manzara/Shayan
+    cartoons:
+      source_dir: /neurotatarlar/video/shayantv
+      target_dir: /Безнең тәҗрибә/Мультфильмнар
 encryption_key: "<REDACTED>"
 
 database_url: "<REDACTED>"

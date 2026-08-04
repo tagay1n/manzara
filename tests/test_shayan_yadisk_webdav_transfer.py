@@ -42,6 +42,7 @@ class _HttpResponse:
 class _HttpSession:
     def __init__(self) -> None:
         self.auth = None
+        self.closed = False
         self.request_responses: list[_HttpResponse] = []
         self.put_responses: list[_HttpResponse] = []
         self.get_responses: list[_HttpResponse] = []
@@ -62,6 +63,9 @@ class _HttpSession:
     def delete(self, url: str, **kwargs):  # noqa: ANN003
         self.calls.append(("DELETE", url, kwargs))
         return self.request_responses.pop(0)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _propfind_response(*, size: int, md5: str | None, etag: str = "etag-1") -> bytes:
@@ -137,6 +141,10 @@ class _FakeWebDav:
         self.uploaded: list[str] = []
         self.moves: list[tuple[str, str]] = []
         self.stat_error: Exception | None = None
+        self.transport_resets = 0
+
+    def reset_transport(self) -> None:
+        self.transport_resets += 1
 
     def ensure_directory(self, _path: str) -> None:
         return None
@@ -251,7 +259,10 @@ def _settings() -> TransferSettings:
             webdav_url="https://cloud.example.test/remote.php/dav/files/Admin",
             username="Admin",
             password="password",
-            target_dir="/Manzara/Shayan",
+            target_dirs={
+                "cartoons": "/Manzara/Shayan/cartoons",
+                "shows": "/Manzara/Shayan/shows",
+            },
         ),
     )
 
@@ -268,26 +279,36 @@ def test_load_transfer_settings_requires_nextcloud_contract() -> None:
             "webdav_url": "https://cloud.example.test/remote.php/dav/files/Admin",
             "username": "Admin",
             "password": "password",
-            "shayan": {"target_dir": "/Manzara/Shayan"},
+            "shayan": {
+                "cartoons": {
+                    "source_dir": "/source/root",
+                    "target_dir": "/Безнең тәҗрибә/Мультфильмнар",
+                }
+            },
         },
     }
 
     settings = load_transfer_settings(payload)
-    assert settings.source_dirs["cartoons"] == "/cartoons"
+    assert settings.source_dirs["cartoons"] == "/source/root"
+    assert "shows" not in settings.source_dirs
     assert settings.nextcloud.username == "Admin"
-    assert settings.nextcloud.target_dir == "/Manzara/Shayan"
+    assert settings.nextcloud.target_dirs == {
+        "cartoons": "/Безнең тәҗрибә/Мультфильмнар"
+    }
 
     del payload["nextcloud"]["password"]
     with pytest.raises(RuntimeError, match="nextcloud.password"):
         load_transfer_settings(payload)
 
     payload["nextcloud"]["password"] = "password"
-    payload["nextcloud"]["shayan"]["target_dir"] = "/Manzara/../Elsewhere"
+    payload["nextcloud"]["shayan"]["cartoons"]["target_dir"] = (
+        "/Manzara/../Elsewhere"
+    )
     with pytest.raises(ValueError, match="Invalid WebDAV path"):
         load_transfer_settings(payload)
 
 
-def test_webdav_stat_parses_size_etag_checksum_and_encodes_path() -> None:
+def test_webdav_stat_uses_standard_properties_and_encodes_path() -> None:
     session = _HttpSession()
     session.request_responses.append(
         _HttpResponse(
@@ -309,6 +330,11 @@ def test_webdav_stat_parses_size_etag_checksum_and_encodes_path() -> None:
     assert "%D0%A2%D0%B5%D1%81%D1%82%20%D0%B2%D0%B8%D0%B4%D0%B5%D0%BE.mkv" in (
         session.calls[0][1]
     )
+    request_body = session.calls[0][2]["data"]
+    assert b"getcontentlength" in request_body
+    assert b"getetag" in request_body
+    assert b"resourcetype" in request_body
+    assert b"checksums" not in request_body
 
 
 def test_webdav_upload_uses_nextcloud_chunking_and_verifies_assembled_file(
@@ -383,29 +409,116 @@ def test_webdav_chunk_upload_splits_large_files_in_order(
 
 def test_webdav_operational_error_is_not_treated_as_missing() -> None:
     session = _HttpSession()
-    session.request_responses.append(_HttpResponse(503, content=b"unavailable"))
+    session.request_responses.append(_HttpResponse(400, content=b"invalid request"))
     client = NextcloudWebDavClient(_settings().nextcloud, session=session)
 
-    with pytest.raises(WebDavError, match="status=503"):
+    with pytest.raises(WebDavError, match="status=400"):
         client.stat("/target/video.mkv")
+
+
+def test_webdav_propfind_retries_transient_server_error() -> None:
+    session = _HttpSession()
+    session.request_responses.extend(
+        [
+            _HttpResponse(500, content=b"transient type error"),
+            _HttpResponse(404),
+        ]
+    )
+    sleeps: list[float] = []
+    client = NextcloudWebDavClient(
+        _settings().nextcloud,
+        session=session,
+        sleep=sleeps.append,
+    )
+
+    remote = client.stat("/target/missing-video.mkv")
+
+    assert remote is None
+    assert sleeps == [1.0] * 5
+    assert [call[0] for call in session.calls] == ["PROPFIND", "PROPFIND"]
+
+
+def test_webdav_propfind_reopens_owned_session_after_server_error() -> None:
+    failed_session = _HttpSession()
+    failed_session.request_responses.append(_HttpResponse(500))
+    recovered_session = _HttpSession()
+    recovered_session.request_responses.append(_HttpResponse(404))
+    sessions = iter([failed_session, recovered_session])
+    sleeps: list[float] = []
+    client = NextcloudWebDavClient(
+        _settings().nextcloud,
+        session_factory=lambda: next(sessions),
+        sleep=sleeps.append,
+    )
+
+    remote = client.stat("/target/missing-video.mkv")
+
+    assert remote is None
+    assert failed_session.closed is True
+    assert recovered_session.auth == ("Admin", "password")
+    assert sleeps == [1.0] * 5
+
+
+def test_webdav_rate_limit_waits_and_retries_same_request() -> None:
+    session = _HttpSession()
+    session.request_responses.extend(
+        [
+            _HttpResponse(429, headers={"Retry-After": "7"}),
+            _HttpResponse(207, content=_propfind_response(size=10, md5=None)),
+        ]
+    )
+    sleeps: list[float] = []
+    client = NextcloudWebDavClient(
+        _settings().nextcloud,
+        session=session,
+        sleep=sleeps.append,
+    )
+
+    remote = client.stat("/target/video.mkv")
+
+    assert remote is not None
+    assert sleeps == [1.0] * 7
+    assert [call[0] for call in session.calls] == ["PROPFIND", "PROPFIND"]
+
+
+def test_webdav_authentication_failure_does_not_retry() -> None:
+    session = _HttpSession()
+    session.request_responses.append(_HttpResponse(401))
+    sleeps: list[float] = []
+    client = NextcloudWebDavClient(
+        _settings().nextcloud,
+        session=session,
+        sleep=sleeps.append,
+    )
+
+    with pytest.raises(WebDavError, match="authentication failed"):
+        client.stat("/target/video.mkv")
+
+    assert sleeps == []
+    assert len(session.calls) == 1
 
 
 def test_remote_paths_preserve_category_hierarchy_and_temp_is_stable() -> None:
     target = remote_path(
-        source_root="/source/cartoons",
+        source_root="/source",
         source_path="/source/cartoons/Program/S01/S01E01.mkv",
-        category="cartoons",
-        target_dir="/Manzara/Shayan",
+        target_dir="/Безнең тәҗрибә/Мультфильмнар",
     )
-    assert target == "/Manzara/Shayan/cartoons/Program/S01/S01E01.mkv"
+    assert target == (
+        "/Безнең тәҗрибә/Мультфильмнар/cartoons/Program/S01/S01E01.mkv"
+    )
     assert temporary_remote_path(target, "a" * 32) == (
-        "/Manzara/Shayan/cartoons/Program/S01/.S01E01.mkv.manzara-"
+        "/Безнең тәҗрибә/Мультфильмнар/cartoons/Program/S01/"
+        ".manzara-"
         + "a" * 32
-        + ".part"
+        + ".uploading"
     )
 
 
-def test_transfer_verifies_webdav_and_keeps_yadisk_source(tmp_path: Path) -> None:
+def test_transfer_verifies_webdav_and_keeps_yadisk_source(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     source = "/source/cartoons/Program/S01/S01E01.mkv"
     content = b"video-data"
     target = "/Manzara/Shayan/cartoons/Program/S01/S01E01.mkv"
@@ -431,6 +544,9 @@ def test_transfer_verifies_webdav_and_keeps_yadisk_source(tmp_path: Path) -> Non
     assert source in yadisk.files
     assert db.rows[source]["status"] == "uploaded"
     assert db.progress[-1]["percent"] == 100
+    output = capsys.readouterr().out
+    assert "connection_check success category=cartoons" in output
+    assert "discovery start category=cartoons" in output
 
 
 def test_transfer_reuses_verified_final_without_uploading(tmp_path: Path) -> None:
@@ -548,19 +664,18 @@ def test_transfer_fails_closed_when_webdav_stat_is_unavailable(tmp_path: Path) -
     webdav.stat_error = RuntimeError("service unavailable")
     db = _FakeDb()
 
-    result = run_transfer(
-        db=db,
-        yadisk=yadisk,
-        webdav=webdav,
-        settings=_settings(),
-        workspace=tmp_path,
-        run_id=45,
-        should_stop=lambda: False,
-    )
+    with pytest.raises(RuntimeError, match="service unavailable"):
+        run_transfer(
+            db=db,
+            yadisk=yadisk,
+            webdav=webdav,
+            settings=_settings(),
+            workspace=tmp_path,
+            run_id=45,
+            should_stop=lambda: False,
+        )
 
-    assert result["failed"] == 1
-    assert result["bytes_copied"] == 0
-    assert db.progress[-1]["percent"] == 100
+    assert db.rows == {}
     assert webdav.uploaded == []
     assert yadisk.removed == []
 

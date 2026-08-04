@@ -44,8 +44,10 @@ Notes:
   - Nextcloud WebDAV is the target archive for `shayan.transfer_yadisk_webdav`; Yandex Disk remains a retained source after each exact video version is verified remotely.
   - The copy task is non-destructive: never delete, trash, or move source videos on Yandex Disk after copying them to Nextcloud.
   - Use Nextcloud chunked upload v2 for video-sized files, assemble into a deterministic temporary DAV path, independently stream-hash the uploaded bytes, then move to the final path.
+  - Keep Nextcloud staging components short and MD5-based (`.manzara-<md5>.uploading`). Do not use a `.part` suffix: Hetzner Storage Share returns a server-side `500 TypeError` when probing those paths.
   - Emit bounded chunk-level byte progress through the shared `task.progress` SSE contract; do not derive transfer progress from logs.
   - Persist WebDAV ETag/checksum checkpoints in PostgreSQL and reuse verified final or temporary uploads after restart.
+  - Run one logged WebDAV preflight before source discovery. Authentication errors fail once with actionable context; rate limits retry the same request with interruptible backoff rather than failing successive files. Read-only WebDAV probes retry transient server errors at the same safe boundary.
 - Document storage policy:
   - S3 is the primary document store; Yandex Disk is an auxiliary ingest/provenance source and is not deleted by document sync.
   - `maintenance.sync_documents_s3` discovers from the configured Yandex root and uses bytes in this order: hash-valid local cache, existing S3 object, Yandex Disk.

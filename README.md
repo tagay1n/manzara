@@ -238,12 +238,14 @@ nextcloud:
   username: "Admin"
   password: "<password-or-app-password>"
   shayan:
-    target_dir: "/Manzara/Shayan"
+    cartoons:
+      source_dir: "/neurotatarlar/video/shayantv"
+      target_dir: "/Безнең тәҗрибә/Мультфильмнар"
 ```
 
-The existing account password works in `nextcloud.password`. A revocable app password created under Nextcloud Personal settings -> Security is preferable when available. Never commit either credential. The archival task preserves paths as `/Manzara/Shayan/<category>/<program>/<season>/<file>`.
+Use a revocable app password created under Nextcloud Personal settings -> Security in `nextcloud.password`; providers may reject the regular account password for WebDAV. Never commit either credential. Each configured route preserves its source-relative hierarchy. For example, `/neurotatarlar/video/shayantv/cartoons/Program/S01/Episode.mkv` becomes `/Безнең тәҗрибә/Мультфильмнар/cartoons/Program/S01/Episode.mkv`. Categories without an explicit `source_dir`/`target_dir` route are not discovered or copied. These copy routes are separate from `yandex.disk.shayan`, which remains the destination configuration for uploads to Yandex Disk.
 
-The task sends 64 MiB chunks through Nextcloud's v2 upload endpoint, asks Nextcloud to assemble them into a deterministic staging path, and then streams the staged file back to verify its MD5 before the final WebDAV `MOVE`. A stored `OC-Checksum` value alone is never accepted as upload proof. The Yandex source is retained unchanged after successful verification.
+The task runs a logged WebDAV preflight before Yandex discovery. A `401` fails once with an actionable credential error; a `429` waits and retries the same request, honoring `Retry-After` or using an interruptible 60-300 second backoff. Read-only `PROPFIND` probes retry transient `500`/`502`/`503`/`504` responses with an interruptible 5-60 second backoff. Discovery logs its route immediately and reports every 25 directories. Uploads use 64 MiB chunks through Nextcloud's v2 endpoint, assemble into a short deterministic `.manzara-<md5>.uploading` staging path, and stream the staged file back to verify its MD5 before the final WebDAV `MOVE`. Do not change the staging suffix to `.part`: Hetzner Storage Share returns a server-side `500 TypeError` for those probes. A stored `OC-Checksum` value alone is never accepted as upload proof. The Yandex source is retained unchanged after successful verification.
 
 Embedded runtimes read YAML config in this order:
 1. `MANZARA_CONFIG_PATH` (if set)
