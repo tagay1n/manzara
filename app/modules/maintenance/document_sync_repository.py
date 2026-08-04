@@ -27,7 +27,7 @@ class PostgresDocumentSyncRepository:
                 text(
                     """
                     SELECT md5, mime_type, ya_path, ya_public_url, ya_public_key,
-                           ya_resource_id, language, full, sharing_restricted,
+                           ya_resource_id, language, "full", sharing_restricted,
                            document_url, content_url, upstream_meta_url,
                            primary_storage_size, primary_storage_etag,
                            primary_storage_verified_at
@@ -59,7 +59,7 @@ class PostgresDocumentSyncRepository:
                     """
                     INSERT INTO document (
                         md5, mime_type, ya_path, ya_public_url, ya_public_key,
-                        ya_resource_id, language, full, sharing_restricted,
+                        ya_resource_id, language, "full", sharing_restricted,
                         document_url, upstream_meta_url, primary_storage_size,
                         primary_storage_etag, primary_storage_verified_at
                     ) VALUES (
@@ -74,7 +74,7 @@ class PostgresDocumentSyncRepository:
                         ya_public_url = EXCLUDED.ya_public_url,
                         ya_public_key = EXCLUDED.ya_public_key,
                         ya_resource_id = EXCLUDED.ya_resource_id,
-                        full = EXCLUDED.full,
+                        "full" = EXCLUDED."full",
                         sharing_restricted = EXCLUDED.sharing_restricted,
                         document_url = EXCLUDED.document_url,
                         upstream_meta_url = COALESCE(
