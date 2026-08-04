@@ -26,7 +26,10 @@ from rich import print
 from sqlalchemy import func, select
 
 from app.db import Database
-from app.document_storage import DEFAULT_S3_ENDPOINT, resolve_document_download_url
+from app.document_storage import (
+    load_document_storage_settings,
+    resolve_document_download_url,
+)
 from app.gemini_config import DEFAULT_GEMINI_MODELS, load_gemini_models
 from app.gemini_runtime import (
     GeminiAllKeysExhaustedError,
@@ -39,7 +42,7 @@ from app.gemini_runtime import (
 from app.settings import load_settings
 from app.artifacts import flow_artifacts_dir
 from integrations.gemini import create_client, gemini_api, stream_text
-from integrations.s3 import create_session
+from integrations.s3 import create_document_session, create_session
 from dirs import Dirs
 from .fields import extract_flat_fields
 from .schema import BookPatch
@@ -346,7 +349,8 @@ class LibraryApplicabilityWorker:
         self.excerpt_chars = excerpt_chars
         self.known_classifications = known_classifications or []
         self.stop_event = stop_event or threading.Event()
-        self._s3client = None
+        self._document_s3client = None
+        self._yandex_s3client = None
         if gemini_manager is None:
             raise ValueError("gemini_manager is required")
         self.gemini_manager = gemini_manager
@@ -490,7 +494,7 @@ class LibraryApplicabilityWorker:
             content_bucket = self.config["yandex"]["cloud"]["bucket"]["content"]
             local_zip = get_in_workdir(Dirs.CONTENT, file=f"{doc.md5}.zip")
             if not os.path.exists(local_zip):
-                s3client = self._get_s3client()
+                s3client = self._get_yandex_s3client()
                 local_zip, _, _ = _ensure_local_zip(doc.md5, doc.content_url, s3client, content_bucket)
             markdown = _read_markdown_from_zip(local_zip, doc.md5)
             return _build_content_excerpt(markdown, self.excerpt_chars)
@@ -522,7 +526,7 @@ class LibraryApplicabilityWorker:
         try:
             if not os.path.exists(local_pdf):
                 source_url = _resolve_doc_source_url(
-                    doc, self.config, self._get_s3client()
+                    doc, self.config, self._get_document_s3client()
                 )
                 if not source_url:
                     return None
@@ -539,10 +543,15 @@ class LibraryApplicabilityWorker:
             self.log(f"Could not prepare PDF slice for {doc.md5}: {exc}")
             return None
 
-    def _get_s3client(self):
-        if self._s3client is None:
-            self._s3client = create_session(self.config)
-        return self._s3client
+    def _get_document_s3client(self):
+        if self._document_s3client is None:
+            self._document_s3client = create_document_session(self.config)
+        return self._document_s3client
+
+    def _get_yandex_s3client(self):
+        if self._yandex_s3client is None:
+            self._yandex_s3client = create_session(self.config)
+        return self._yandex_s3client
 
     def _save_result(self, md5: str, evaluation: Evaluation) -> None:
         if self.dry_run:
@@ -1030,13 +1039,13 @@ def _download_file(url: str, local_path: str) -> None:
 
 
 def _resolve_doc_source_url(doc: EvaluationTask, config: dict, s3client: Any) -> str | None:
-    cloud = config["yandex"]["cloud"]
+    storage = load_document_storage_settings(config)
     return resolve_document_download_url(
         document_url=doc.document_url,
         fallback_url=doc.ya_public_url,
         encryption_key=config["encryption_key"],
-        endpoint_url=str(cloud.get("endpoint_url") or DEFAULT_S3_ENDPOINT),
-        private_bucket=cloud["bucket"]["document_private"],
+        endpoint_url=storage.primary.endpoint_url,
+        private_bucket=storage.private_bucket,
         s3=s3client,
     )
 
@@ -1046,7 +1055,11 @@ def _fallback_pdf_page_count(doc: EvaluationTask, config: dict) -> int | None:
         return None
     local_pdf = get_in_workdir(Dirs.ENTRY_POINT, file=f"{doc.md5}.pdf")
     if not os.path.exists(local_pdf):
-        source_url = _resolve_doc_source_url(doc, config, create_session(config))
+        source_url = _resolve_doc_source_url(
+            doc,
+            config,
+            create_document_session(config),
+        )
         if not source_url:
             return None
         _download_file(source_url, local_pdf)

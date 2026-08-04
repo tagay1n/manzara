@@ -105,6 +105,14 @@ gemini_api_keys:
 
 documents:
   cache_path: /home/tans1q/.monocorpus/0_entry_point
+  primary_storage:
+    endpoint_url: https://s3.eu-central-003.backblazeb2.com
+    region_name: eu-central-003
+    access_key_id: "<REDACTED>"
+    secret_access_key: "<REDACTED>"
+    bucket:
+      public: manzara-documents
+      private: manzara-documents-private
 
 yandex:
   disk:

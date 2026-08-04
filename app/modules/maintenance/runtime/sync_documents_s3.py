@@ -6,11 +6,13 @@ import json
 import os
 import signal
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from boto3 import Session
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from yadisk_client import YaDisk
 
@@ -53,10 +55,13 @@ def _walk_files(
     root: str,
     *,
     should_stop: Callable[[], bool],
+    on_directory: Callable[[str], None] | None = None,
 ) -> Iterable[dict[str, Any]]:
     stack = [str(root).rstrip("/")]
     while stack and not should_stop():
         current = stack.pop()
+        if on_directory is not None:
+            on_directory(current)
         children = list(
             yadisk.listdir(
                 current,
@@ -111,19 +116,26 @@ def _etag(value: Any) -> str:
     return str(value or "").strip().strip('"')
 
 
-def _inventory(s3: Any, bucket: str) -> dict[str, dict[str, Any]]:
+def _inventory(
+    s3: Any,
+    bucket: str,
+    *,
+    should_stop: Callable[[], bool],
+) -> dict[str, dict[str, Any]]:
     if hasattr(s3, "inventory"):
         return dict(s3.inventory(bucket))
     paginator = s3.get_paginator("list_objects_v2")
-    return {
-        str(item["Key"]): {
-            "ContentLength": int(item.get("Size") or 0),
-            "ETag": _etag(item.get("ETag")),
-        }
-        for page in paginator.paginate(Bucket=bucket)
-        for item in page.get("Contents", [])
-        if item.get("Key")
-    }
+    result: dict[str, dict[str, Any]] = {}
+    for page in paginator.paginate(Bucket=bucket):
+        if should_stop():
+            break
+        for item in page.get("Contents", []):
+            if item.get("Key"):
+                result[str(item["Key"])] = {
+                    "ContentLength": int(item.get("Size") or 0),
+                    "ETag": _etag(item.get("ETag")),
+                }
+    return result
 
 
 def _progress_payload(
@@ -136,12 +148,17 @@ def _progress_payload(
     counters: Mapping[str, int],
     current_path: str = "",
 ) -> dict[str, Any]:
-    percent = round((current / total) * 100, 2) if total else (100 if stage == "completed" else 0)
+    if bytes_total > 0:
+        percent = round((bytes_completed / bytes_total) * 100, 2)
+    elif total:
+        percent = round((current / total) * 100, 2)
+    else:
+        percent = 100 if stage == "completed" else 0
     return {
         "stage": stage,
         "current": int(current),
         "total": int(total),
-        "percent": percent,
+        "percent": max(0, min(percent, 100)),
         "bytes_completed": int(bytes_completed),
         "bytes_total": int(bytes_total),
         "current_path": current_path,
@@ -259,12 +276,18 @@ def _is_limited(path: str) -> bool:
 def _existing_object_location(
     existing: Mapping[str, Any] | None,
     settings: DocumentStorageSettings,
-) -> tuple[str, str] | None:
+) -> tuple[str, str, str] | None:
     if not existing or not existing.get("document_url"):
         return None
-    return parse_object_url(
-        _decrypt_url(str(existing["document_url"]), settings), settings.endpoint_url
-    )
+    url = _decrypt_url(str(existing["document_url"]), settings)
+    for storage_name, endpoint_url in (
+        ("primary", settings.primary.endpoint_url),
+        ("legacy", settings.legacy.endpoint_url),
+    ):
+        location = parse_object_url(url, endpoint_url)
+        if location:
+            return storage_name, location[0], location[1]
+    return None
 
 
 def _target_key(
@@ -275,8 +298,8 @@ def _target_key(
 ) -> str:
     location = _existing_object_location(existing, settings)
     if location:
-        existing_name = Path(location[1]).name
-        if "/" not in location[1] and existing_name.lower().startswith(md5.lower() + "."):
+        existing_name = Path(location[2]).name
+        if "/" not in location[2] and existing_name.lower().startswith(md5.lower() + "."):
             return existing_name
     return document_object_key(md5, str(resource["source_path"]), resource.get("mime_type"))
 
@@ -304,23 +327,30 @@ def _acquire_source(
     target_location: tuple[str, str],
     cache_file: Path | None,
     yadisk: Any,
-    s3: Any,
+    primary_s3: Any,
+    legacy_s3: Any,
     settings: DocumentStorageSettings,
     workspace: Path,
 ) -> tuple[Path, str]:
     if cache_file:
         return cache_file, "cache"
-    if existing and existing.get("document_url"):
-        location = parse_object_url(
-            _decrypt_url(str(existing["document_url"]), settings), settings.endpoint_url
-        )
-        if location and location != target_location:
+    location = _existing_object_location(existing, settings)
+    if location:
+        storage_name, bucket, key = location
+        if storage_name != "primary" or (bucket, key) != target_location:
+            source_s3 = primary_s3 if storage_name == "primary" else legacy_s3
             candidate = workspace / f"source-{resource['source_md5']}.bin"
             try:
-                _download_s3(s3, location[0], location[1], candidate)
+                _download_s3(source_s3, bucket, key, candidate)
                 if calculate_md5(candidate) == resource["source_md5"]:
-                    return candidate, "s3"
-            except Exception:
+                    return candidate, f"{storage_name}_s3"
+            except Exception as exc:
+                print(
+                    f"document sync: legacy source unavailable "
+                    f"storage={storage_name} bucket={bucket} key={key} "
+                    f"error={type(exc).__name__}: {exc}; falling back to Yandex Disk",
+                    flush=True,
+                )
                 candidate.unlink(missing_ok=True)
     candidate = workspace / f"source-{resource['source_md5']}.bin"
     candidate.unlink(missing_ok=True)
@@ -331,26 +361,30 @@ def _acquire_source(
     return candidate, "yandex"
 
 
-def _publish_yandex_metadata(yadisk: Any, resource: dict[str, Any]) -> None:
-    if resource.get("public_key") and resource.get("public_url"):
-        return
-    if not hasattr(yadisk, "publish"):
-        return
-    yadisk.publish(resource["source_path"])
-    meta = yadisk.get_meta(
-        resource["source_path"], fields=["public_key", "public_url"]
-    )
-    resource["public_key"] = str(_resource_value(meta, "public_key", "") or "")
-    resource["public_url"] = str(_resource_value(meta, "public_url", "") or "")
-
-
-def _verify_upload(s3: Any, bucket: str, key: str, md5: str, size: int) -> dict[str, Any]:
+def _verify_upload(
+    s3: Any,
+    bucket: str,
+    key: str,
+    md5: str,
+    size: int,
+    workspace: Path,
+) -> dict[str, Any]:
     head = dict(s3.head_object(Bucket=bucket, Key=key))
     metadata = head.get("Metadata") if isinstance(head.get("Metadata"), Mapping) else {}
     if int(head.get("ContentLength") or -1) != int(size):
         raise RuntimeError("S3 size verification failed")
     if str(metadata.get("source-md5") or "").lower() != md5:
         raise RuntimeError("S3 MD5 metadata verification failed")
+    verified_path = _verify_by_download(
+        s3=s3,
+        bucket=bucket,
+        key=key,
+        md5=md5,
+        workspace=workspace,
+    )
+    if verified_path is None:
+        raise RuntimeError("S3 read-back MD5 verification failed")
+    verified_path.unlink(missing_ok=True)
     return head
 
 
@@ -368,12 +402,52 @@ def _public_object_removed(s3: Any, bucket: str, key: str) -> bool:
     return False
 
 
+def _abort_incomplete_uploads(s3: Any, bucket: str, key: str) -> int:
+    """Remove unfinished multipart uploads for one content-addressed key."""
+    aborted = 0
+    key_marker: str | None = None
+    upload_id_marker: str | None = None
+    while True:
+        request: dict[str, Any] = {"Bucket": bucket, "Prefix": key}
+        if key_marker:
+            request["KeyMarker"] = key_marker
+        if upload_id_marker:
+            request["UploadIdMarker"] = upload_id_marker
+        response = s3.list_multipart_uploads(**request)
+        for upload in response.get("Uploads", []):
+            upload_key = str(upload.get("Key") or "")
+            upload_id = str(upload.get("UploadId") or "")
+            if upload_key != key or not upload_id:
+                continue
+            s3.abort_multipart_upload(
+                Bucket=bucket,
+                Key=key,
+                UploadId=upload_id,
+            )
+            aborted += 1
+            print(
+                f"document sync: aborted incomplete multipart upload "
+                f"bucket={bucket} key={key} upload_id={upload_id}",
+                flush=True,
+            )
+        if not response.get("IsTruncated"):
+            break
+        key_marker = str(response.get("NextKeyMarker") or "") or None
+        upload_id_marker = (
+            str(response.get("NextUploadIdMarker") or "") or None
+        )
+        if not key_marker:
+            break
+    return aborted
+
+
 def run_document_sync(
     *,
     repository: Any,
     state_db: Any,
     yadisk: Any,
-    s3: Any,
+    primary_s3: Any,
+    legacy_s3: Any,
     settings: DocumentStorageSettings,
     workspace: Path,
     run_id: int,
@@ -392,7 +466,8 @@ def run_document_sync(
         "private_cleaned": 0,
         "failed": 0,
         "source_cache": 0,
-        "source_s3": 0,
+        "source_primary_s3": 0,
+        "source_legacy_s3": 0,
         "source_yandex": 0,
     }
     _publish_progress(
@@ -403,7 +478,35 @@ def run_document_sync(
             bytes_total=0, counters=counters,
         ),
     )
-    resources = list(_walk_files(yadisk, settings.source_path, should_stop=should_stop))
+    directories_scanned = 0
+
+    def report_directory(path: str) -> None:
+        nonlocal directories_scanned
+        directories_scanned += 1
+        if directories_scanned == 1 or directories_scanned % 25 == 0:
+            print(
+                f"document sync: discovery progress directories={directories_scanned} "
+                f"current_path={path}",
+                flush=True,
+            )
+
+    print(
+        f"document sync: discovery start source_path={settings.source_path}",
+        flush=True,
+    )
+    resources = list(
+        _walk_files(
+            yadisk,
+            settings.source_path,
+            should_stop=should_stop,
+            on_directory=report_directory,
+        )
+    )
+    print(
+        f"document sync: discovery complete files={len(resources)} "
+        f"directories={directories_scanned}",
+        flush=True,
+    )
     cache_index = build_cache_index(settings.cache_path)
     existing_documents = repository.list_documents()
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -418,14 +521,43 @@ def run_document_sync(
         _canonical_resource(items, existing_documents.get(md5))
         for md5, items in sorted(grouped.items())
     ] + missing_md5
-    public_inventory = _inventory(s3, settings.public_bucket)
-    private_inventory = _inventory(s3, settings.private_bucket)
-    try:
-        upstream_metadata = repository.list_upstream_metadata(
-            s3, settings.upstream_bucket, settings.endpoint_url
+    public_inventory: dict[str, dict[str, Any]] = {}
+    private_inventory: dict[str, dict[str, Any]] = {}
+    upstream_metadata: dict[str, str] = {}
+    if not should_stop():
+        print(
+            f"document sync: inventory start bucket={settings.public_bucket}",
+            flush=True,
         )
-    except AttributeError:
-        upstream_metadata = {}
+        public_inventory = _inventory(
+            primary_s3,
+            settings.public_bucket,
+            should_stop=should_stop,
+        )
+    if not should_stop():
+        print(
+            f"document sync: inventory start bucket={settings.private_bucket}",
+            flush=True,
+        )
+        private_inventory = _inventory(
+            primary_s3,
+            settings.private_bucket,
+            should_stop=should_stop,
+        )
+    if not should_stop():
+        try:
+            upstream_metadata = repository.list_upstream_metadata(
+                legacy_s3,
+                settings.upstream_bucket,
+                settings.legacy.endpoint_url,
+            )
+        except AttributeError:
+            upstream_metadata = {}
+    print(
+        f"document sync: inventory complete public={len(public_inventory)} "
+        f"private={len(private_inventory)} upstream={len(upstream_metadata)}",
+        flush=True,
+    )
     total = len(canonical)
     bytes_total = sum(int(item.get("source_size") or 0) for item in canonical)
     bytes_completed = processed = 0
@@ -465,7 +597,7 @@ def run_document_sync(
                 and _etag(existing.get("primary_storage_etag")) == _etag(remote.get("ETag"))
                 and parse_object_url(
                     _decrypt_url(str(existing.get("document_url") or ""), settings),
-                    settings.endpoint_url,
+                    settings.primary.endpoint_url,
                 ) == target_location
             )
             plain_etag_matches = bool(
@@ -490,7 +622,11 @@ def run_document_sync(
                     counters["verified"] += 1
                 else:
                     verified_path = _verify_by_download(
-                        s3=s3, bucket=bucket, key=key, md5=md5, workspace=workspace
+                        s3=primary_s3,
+                        bucket=bucket,
+                        key=key,
+                        md5=md5,
+                        workspace=workspace,
                     )
                     if verified_path:
                         temporary_paths.append(verified_path)
@@ -508,7 +644,8 @@ def run_document_sync(
                     target_location=target_location,
                     cache_file=cache_file,
                     yadisk=yadisk,
-                    s3=s3,
+                    primary_s3=primary_s3,
+                    legacy_s3=legacy_s3,
                     settings=settings,
                     workspace=workspace,
                 )
@@ -516,7 +653,35 @@ def run_document_sync(
                     temporary_paths.append(source_file)
                 counters[f"source_{source_kind}"] += 1
                 was_present = remote is not None
-                s3.upload_file(
+                _abort_incomplete_uploads(primary_s3, bucket, key)
+                uploaded_bytes = 0
+                progress_lock = threading.Lock()
+
+                def publish_upload_progress(delta: int) -> None:
+                    nonlocal uploaded_bytes
+                    with progress_lock:
+                        uploaded_bytes += max(0, int(delta))
+                        _publish_progress(
+                            state_db,
+                            run_id,
+                            _progress_payload(
+                                stage="transferring",
+                                current=processed,
+                                total=total,
+                                bytes_completed=(
+                                    bytes_completed
+                                    + min(
+                                        uploaded_bytes,
+                                        int(resource["source_size"]),
+                                    )
+                                ),
+                                bytes_total=bytes_total,
+                                counters=counters,
+                                current_path=source_path,
+                            ),
+                        )
+
+                primary_s3.upload_file(
                     str(source_file),
                     bucket,
                     key,
@@ -524,15 +689,20 @@ def run_document_sync(
                         "Metadata": {"source-md5": md5},
                         "ContentType": str(resource.get("mime_type") or "application/octet-stream"),
                     },
+                    Callback=publish_upload_progress,
                 )
                 verified_head = _verify_upload(
-                    s3, bucket, key, md5, int(resource["source_size"])
+                    primary_s3,
+                    bucket,
+                    key,
+                    md5,
+                    int(resource["source_size"]),
+                    workspace,
                 )
                 inventory[key] = dict(verified_head)
                 counters["reuploaded" if was_present else "uploaded"] += 1
 
-            _publish_yandex_metadata(yadisk, resource)
-            canonical_url = object_url(settings.endpoint_url, bucket, key)
+            canonical_url = object_url(settings.primary.endpoint_url, bucket, key)
             stored_document_url = _store_url(
                 canonical_url,
                 restricted=restricted,
@@ -588,17 +758,32 @@ def run_document_sync(
                 counters["unchanged"] += 1
 
             legacy_location = _existing_object_location(existing, settings)
-            public_key = (
-                legacy_location[1]
-                if legacy_location and legacy_location[0] == settings.public_bucket
-                else key
-            )
-            if restricted and public_key in public_inventory:
-                s3.delete_object(Bucket=settings.public_bucket, Key=public_key)
-                if not _public_object_removed(s3, settings.public_bucket, public_key):
-                    raise RuntimeError("Legacy public object still exists after deletion")
-                public_inventory.pop(public_key, None)
-                counters["private_cleaned"] += 1
+            if restricted:
+                cleanup_targets: list[tuple[Any, str, str]] = []
+                if key in public_inventory:
+                    cleanup_targets.append((primary_s3, settings.public_bucket, key))
+                if legacy_location:
+                    storage_name, legacy_bucket, legacy_key = legacy_location
+                    if storage_name == "primary" and legacy_bucket == settings.public_bucket:
+                        target = (primary_s3, legacy_bucket, legacy_key)
+                        if target not in cleanup_targets:
+                            cleanup_targets.append(target)
+                    elif (
+                        storage_name == "legacy"
+                        and legacy_bucket == settings.legacy_public_bucket
+                    ):
+                        cleanup_targets.append((legacy_s3, legacy_bucket, legacy_key))
+                for cleanup_s3, cleanup_bucket, cleanup_key in cleanup_targets:
+                    cleanup_s3.delete_object(Bucket=cleanup_bucket, Key=cleanup_key)
+                    if not _public_object_removed(
+                        cleanup_s3, cleanup_bucket, cleanup_key
+                    ):
+                        raise RuntimeError(
+                            "Legacy public object still exists after deletion"
+                        )
+                    if cleanup_s3 is primary_s3:
+                        public_inventory.pop(cleanup_key, None)
+                    counters["private_cleaned"] += 1
             bytes_completed += int(resource.get("source_size") or 0)
             print(
                 f"document sync: success md5={md5} source_path={source_path} "
@@ -654,6 +839,51 @@ def _run_id() -> int:
     return int(value)
 
 
+def _create_s3_client(connection: Any) -> Any:
+    return Session().client(
+        "s3",
+        aws_access_key_id=connection.access_key_id,
+        aws_secret_access_key=connection.secret_access_key,
+        endpoint_url=connection.endpoint_url,
+        region_name=connection.region_name,
+        config=Config(
+            signature_version="s3v4",
+            s3={"addressing_style": "path"},
+        ),
+    )
+
+
+def _allows_public_read(acl: Mapping[str, Any]) -> bool:
+    for grant in acl.get("Grants", []):
+        if not isinstance(grant, Mapping):
+            continue
+        grantee = grant.get("Grantee")
+        if not isinstance(grantee, Mapping):
+            continue
+        if (
+            str(grantee.get("URI") or "").endswith("/AllUsers")
+            and str(grant.get("Permission") or "") in {"READ", "FULL_CONTROL"}
+        ):
+            return True
+    return False
+
+
+def _validate_primary_buckets(s3: Any, public_bucket: str, private_bucket: str) -> None:
+    """Fail before discovery when primary bucket visibility is unsafe."""
+    if public_bucket == private_bucket:
+        raise RuntimeError("Document public and private buckets must be different")
+    s3.head_bucket(Bucket=public_bucket)
+    s3.head_bucket(Bucket=private_bucket)
+    if not _allows_public_read(s3.get_bucket_acl(Bucket=public_bucket)):
+        raise RuntimeError(
+            f"Document public bucket must allow public read: {public_bucket}"
+        )
+    if _allows_public_read(s3.get_bucket_acl(Bucket=private_bucket)):
+        raise RuntimeError(
+            f"Document private bucket must not allow public read: {private_bucket}"
+        )
+
+
 def main() -> int:
     run_id = _run_id()
     app_settings = load_settings()
@@ -665,15 +895,14 @@ def main() -> int:
     yadisk = YaDisk(settings.yadisk_token)
     if yadisk.check_token() is False:
         raise RuntimeError("Yandex Disk token validation failed")
-    s3 = Session().client(
-        "s3",
-        aws_access_key_id=settings.access_key_id,
-        aws_secret_access_key=settings.secret_access_key,
-        endpoint_url=settings.endpoint_url,
-        region_name=settings.region_name,
+    primary_s3 = _create_s3_client(settings.primary)
+    legacy_s3 = _create_s3_client(settings.legacy)
+    _validate_primary_buckets(
+        primary_s3,
+        settings.public_bucket,
+        settings.private_bucket,
     )
-    s3.head_bucket(Bucket=settings.public_bucket)
-    s3.head_bucket(Bucket=settings.private_bucket)
+    legacy_s3.head_bucket(Bucket=settings.upstream_bucket)
     stop_state = {"requested": False}
 
     def request_stop(_signum: int, _frame: Any) -> None:
@@ -689,7 +918,8 @@ def main() -> int:
                 repository=repository,
                 state_db=state_db,
                 yadisk=yadisk,
-                s3=s3,
+                primary_s3=primary_s3,
+                legacy_s3=legacy_s3,
                 settings=settings,
                 workspace=Path(temp_dir),
                 run_id=run_id,

@@ -49,8 +49,12 @@ Notes:
   - Persist WebDAV ETag/checksum checkpoints in PostgreSQL and reuse verified final or temporary uploads after restart.
   - Run one logged WebDAV preflight before source discovery. Authentication errors fail once with actionable context; rate limits retry the same request with interruptible backoff rather than failing successive files. Read-only WebDAV probes retry transient server errors at the same safe boundary.
 - Document storage policy:
-  - S3 is the primary document store; Yandex Disk is an auxiliary ingest/provenance source and is not deleted by document sync.
-  - `maintenance.sync_documents_s3` discovers from the configured Yandex root and uses bytes in this order: hash-valid local cache, existing S3 object, Yandex Disk.
+  - Backblaze B2 through its S3-compatible API is the primary document store; configure it only under `documents.primary_storage`. Keep `yandex.cloud` as legacy document/upstream/preview storage rather than repointing unrelated Yandex consumers.
+  - Yandex Disk is an auxiliary ingest/provenance source. Document sync must never publish, delete, trash, or move Yandex Disk documents.
+  - `maintenance.sync_documents_s3` discovers from the configured Yandex root and uses bytes in this order: hash-valid local cache, verified Backblaze object, verified legacy Yandex S3 object, Yandex Disk.
+  - Every newly uploaded Backblaze object must be downloaded and content-hashed before its PostgreSQL verification checkpoint is committed; size or client-written metadata alone is not sufficient proof.
+  - Upload progress must use boto3 callbacks and the shared `task.progress` SSE contract. Graceful stop finishes the current document and exits at the next document boundary.
+  - Before retrying an interrupted object, abort unfinished multipart uploads for that exact content-addressed key; never treat an incomplete multipart upload as resumable state.
   - Document sync treats the legacy document cache as read-only input and never treats cache-only files as discovered documents. Other Library cache behavior remains governed by the shared-cache rule below.
   - Restricted documents belong in the configured private bucket and must be accessed through backend-generated short-lived signed URLs.
   - Persist S3 size/ETag/verification timestamps in PostgreSQL; do not re-download or re-hash verified unchanged objects on every run.

@@ -249,7 +249,8 @@ def process_book(
     *,
     repository: Any,
     settings: PreviewGenerationSettings,
-    s3: Any,
+    source_s3: Any,
+    target_s3: Any,
     run_id: int | None,
     log: Any,
 ) -> BookPreviewResult:
@@ -282,7 +283,7 @@ def process_book(
             cache_dir=settings.cache_dir,
             source_bucket=source_bucket,
             source_key=source_key,
-            s3=s3,
+            s3=source_s3,
         )
         with fitz.open(pdf_path) as document:
             page_count = int(document.page_count)
@@ -313,7 +314,7 @@ def process_book(
                     variant=variant,
                 )
                 head = _matching_remote(
-                    s3,
+                    target_s3,
                     bucket=settings.target_bucket,
                     key=key,
                     metadata=expected_metadata,
@@ -340,7 +341,7 @@ def process_book(
                         "height": str(output.height),
                         "quality": str(output.quality),
                     }
-                    s3.upload_file(
+                    target_s3.upload_file(
                         str(output.path),
                         settings.target_bucket,
                         key,
@@ -351,7 +352,7 @@ def process_book(
                         },
                     )
                     head = _matching_remote(
-                        s3,
+                        target_s3,
                         bucket=settings.target_bucket,
                         key=key,
                         metadata=expected_metadata,

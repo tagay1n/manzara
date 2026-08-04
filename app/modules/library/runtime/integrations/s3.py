@@ -1,9 +1,11 @@
-"""S3 helper functions for Yandex Cloud storage."""
+"""S3 client helpers for Library runtime storage boundaries."""
 
 from boto3 import Session
+from botocore.config import Config
 import os
 from rich import print
 
+from app.document_storage import load_document_storage_settings
 from core.config import read_config
 
 
@@ -18,7 +20,22 @@ def create_session(config=None):
         service_name='s3',
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
-        endpoint_url='https://storage.yandexcloud.net',
+        endpoint_url=str(cfg['yandex']['cloud'].get('endpoint_url') or 'https://storage.yandexcloud.net'),
+        region_name=str(cfg['yandex']['cloud'].get('region_name') or 'ru-central1'),
+    )
+
+
+def create_document_session(config=None):
+    """Create the configured primary document-storage S3 client."""
+    cfg = config or read_config()
+    settings = load_document_storage_settings(cfg)
+    return Session().client(
+        service_name='s3',
+        aws_access_key_id=settings.primary.access_key_id,
+        aws_secret_access_key=settings.primary.secret_access_key,
+        endpoint_url=settings.primary.endpoint_url,
+        region_name=settings.primary.region_name,
+        config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
     )
 
 

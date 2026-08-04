@@ -8,6 +8,7 @@ import shutil
 
 import fitz
 from PIL import Image
+import pytest
 
 from app.modules.library.preview_generation import (
     PreviewGenerationSettings,
@@ -16,6 +17,7 @@ from app.modules.library.preview_generation import (
     render_page_variants,
 )
 from app.modules.library.previews import PREVIEW_RECIPE_VERSION
+from app.modules.library.runtime.run_generate_book_previews import _resolved_settings
 
 
 def _make_pdf(path: Path, *, width: float = 300, height: float = 500) -> str:
@@ -160,7 +162,8 @@ class _PreviewRepository:
 def test_process_book_uploads_only_expected_short_document_objects_and_resumes(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     digest = _make_pdf(source)
-    s3 = _PreviewS3(source)
+    source_s3 = _DownloadS3(source)
+    target_s3 = _PreviewS3(source)
     repository = _PreviewRepository()
     settings = PreviewGenerationSettings(
         source_bucket="ttdoc",
@@ -173,7 +176,8 @@ def test_process_book_uploads_only_expected_short_document_objects_and_resumes(t
         {"md5": digest},
         repository=repository,
         settings=settings,
-        s3=s3,
+        source_s3=source_s3,
+        target_s3=target_s3,
         run_id=7,
         log=lambda _message: None,
     )
@@ -181,7 +185,8 @@ def test_process_book_uploads_only_expected_short_document_objects_and_resumes(t
         {"md5": digest},
         repository=repository,
         settings=settings,
-        s3=s3,
+        source_s3=source_s3,
+        target_s3=target_s3,
         run_id=8,
         log=lambda _message: None,
     )
@@ -190,8 +195,64 @@ def test_process_book_uploads_only_expected_short_document_objects_and_resumes(t
     assert first.uploaded_objects == 2
     assert second.status == "ready"
     assert second.reused_objects == 2
-    assert len(s3.upload_calls) == 2
-    assert {key.rsplit("/", 1)[-1] for key in s3.objects} == {"1s.webp", "1l.webp"}
+    assert source_s3.calls == [("ttdoc", f"{digest}.pdf")]
+    assert len(target_s3.upload_calls) == 2
+    assert {key.rsplit("/", 1)[-1] for key in target_s3.objects} == {
+        "1s.webp",
+        "1l.webp",
+    }
     assert repository.row is not None
     assert repository.row["recipe_version"] == PREVIEW_RECIPE_VERSION
     assert repository.checkpoints[-1] == "ready"
+
+
+def test_preview_settings_use_backblaze_source_and_yandex_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MANZARA_ARTIFACTS_ROOT", str(tmp_path / "artifacts"))
+    payload = {
+        "documents": {
+            "cache_path": str(tmp_path / "cache"),
+            "primary_storage": {
+                "endpoint_url": "https://s3.eu-central-003.backblazeb2.com",
+                "region_name": "eu-central-003",
+                "access_key_id": "b2-id",
+                "secret_access_key": "b2-secret",
+                "bucket": {"public": "b2-docs", "private": "b2-private"},
+            },
+        },
+        "yandex": {
+            "disk": {
+                "oauth_token": "disk-token",
+                "documents": {
+                    "source_path": "/documents",
+                    "restricted_path": "/documents/private",
+                },
+            },
+            "cloud": {
+                "endpoint_url": "https://storage.yandexcloud.net",
+                "region_name": "ru-central1",
+                "aws_access_key_id": "yc-id",
+                "aws_secret_access_key": "yc-secret",
+                "bucket": {
+                    "document": "legacy-docs",
+                    "document_private": "legacy-private",
+                    "upstream_metadata": "upstream",
+                    "book_previews": "previews",
+                },
+            },
+        },
+        "encryption_key": "encryption-key",
+    }
+
+    settings, credentials = _resolved_settings(payload, run_id=77)
+
+    assert settings.source_bucket == "b2-docs"
+    assert settings.source_endpoint_url == (
+        "https://s3.eu-central-003.backblazeb2.com"
+    )
+    assert settings.target_bucket == "previews"
+    assert credentials["source_access_key_id"] == "b2-id"
+    assert credentials["target_access_key_id"] == "yc-id"
+    assert credentials["target_endpoint_url"] == "https://storage.yandexcloud.net"

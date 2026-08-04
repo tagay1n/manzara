@@ -108,7 +108,7 @@ Runtime control behavior:
 - Shayan Yandex upload keeps resumable state in `shayan_manifest_entries` (`yadisk_status`, `yadisk_uploaded_payload_hash`, `yadisk_remote_path`, `yadisk_last_error`, timestamps).
 - Shayan Yandex-to-Nextcloud transfer checkpoints each video in `shayan_webdav_transfers`. It uses Nextcloud chunked upload v2, assembles into deterministic temporary DAV paths, and independently verifies content before the final DAV move. Verified rows remain `uploaded`, making subsequent runs skip them without uploading again. The task emits chunk-level byte progress over SSE, stops gracefully at file boundaries, and restarts only an interrupted current chunk upload. It never deletes, trashes, or moves source videos on Yandex Disk.
 - Long-running tasks can persist `runs.progress_json`; `task.progress` SSE events update determinate progress bars without frontend-owned domain state.
-- Document synchronization keeps Yandex Disk as a non-destructive auxiliary source while S3 is primary. It verifies existing objects, copies missing/corrupt objects, checkpoints verification on `document`, and reports live progress and structured run artifacts.
+- Document synchronization keeps Yandex Disk as a non-destructive, non-publishing auxiliary source while Backblaze B2 S3 is primary. It verifies existing objects, copies missing/corrupt objects, independently reads back new uploads, checkpoints verification on `document`, and reports live byte progress and structured run artifacts.
 
 Library data tooling currently includes:
 - Classification views and merge/normalization previews
@@ -162,11 +162,19 @@ The `library.generate_book_previews` task reuses and populates the persistent so
 
 ### Primary document storage
 
-Create `ttdoc-private` manually before the first sync and keep it private. Manzara validates access but does not create buckets or change bucket policies. `ttdoc` remains the public primary bucket; restricted documents are copied to `ttdoc-private` and read through short-lived backend-signed URLs.
+Backblaze B2 is the primary document store. Create one public bucket and one private bucket in the same Backblaze region before the first sync; Manzara validates access but does not create buckets or change bucket policies. Create a dedicated application key, not the master key, with `listAllBucketNames`, `readFiles`, `writeFiles`, and `deleteFiles` capabilities and access to both buckets. `deleteFiles` is required only to remove obsolete public copies of restricted documents. Copy the exact S3 endpoint and region shown by Backblaze.
 
 ```yaml
 documents:
   cache_path: /home/tans1q/.monocorpus/0_entry_point
+  primary_storage:
+    endpoint_url: https://s3.eu-central-003.backblazeb2.com
+    region_name: eu-central-003
+    access_key_id: "<backblaze-application-key-id>"
+    secret_access_key: "<backblaze-application-key>"
+    bucket:
+      public: manzara-documents
+      private: manzara-documents-private
 
 encryption_key: "<secret>"
 
@@ -187,15 +195,19 @@ yandex:
       upstream_metadata: upstream-metadata
 ```
 
-`maintenance.sync_documents_s3` recursively discovers files only from the configured Yandex root. For required bytes it uses a hash-valid cache file first, an existing S3 location second, and Yandex Disk last. Cache-only files are ignored, and the document sync never writes into the cache.
+`documents.primary_storage` is isolated from `yandex.cloud`: changing the document primary does not repoint upstream metadata, preview images, backups, or unrelated Yandex Object Storage consumers. Backblaze clients use SigV4 and path-style addressing. Library metadata evaluation reads signed private documents from Backblaze; preview generation reads source PDFs from Backblaze while keeping generated preview images in the configured Yandex preview bucket.
 
-Legacy S3 objects are verified rather than blindly replaced. Plain ETags and reproducible boto3 multipart ETags are checked first; otherwise the object is downloaded once and hashed. Only missing or mismatched objects are uploaded. Verification size, ETag, and timestamp are persisted on `document`, so unchanged objects are cheap on later runs.
+`maintenance.sync_documents_s3` recursively discovers files only from the configured Yandex Disk root. For required bytes it uses a hash-valid cache file first, a verified Backblaze object second, a verified legacy Yandex S3 object third, and Yandex Disk last. Cache-only files are ignored, and document sync never writes into the shared cache.
+
+Legacy S3 objects are verified rather than blindly replaced. Plain ETags and reproducible boto3 multipart ETags are checked first; otherwise the object is downloaded once and hashed. Every newly uploaded Backblaze object is independently downloaded and MD5-verified before PostgreSQL is updated. Size and client-written metadata alone are not accepted as proof. Verification size, ETag, and timestamp are persisted on `document`, so unchanged objects are cheap on later runs.
 
 Objects use flat content-addressed keys (`<md5>.<extension>`), independent of the Yandex folder hierarchy. Existing valid object keys are retained. Revision `20260731_0013` adds `primary_storage_size`, `primary_storage_etag`, and `primary_storage_verified_at` to the existing `document` table; normal application startup applies it automatically.
 
-The task never deletes Yandex files. After a restricted file is safely copied to the private bucket and PostgreSQL is committed, its legacy public `ttdoc` object is deleted and absence is verified. Stop requests finish the current document; per-file failures are logged and processing continues, with a failed final run when any item failed. The task has no default schedule: run it manually from the Maintenance flow or explicitly configure a schedule on `/schedules`.
+The task never publishes, deletes, trashes, or moves Yandex Disk files. After a restricted file is safely copied to the Backblaze private bucket and PostgreSQL is committed, an obsolete public S3 copy is deleted and absence is verified. Boto3 upload callbacks emit byte-level SSE progress. Stop requests finish the current document; the next run reuses verified objects, aborts unfinished multipart uploads for the current content-addressed key, and restarts only that interrupted document. Per-file failures are logged and processing continues, with a failed final run when any item failed. The task has no default schedule: run it manually from the Maintenance flow or explicitly configure a schedule on `/schedules`.
 
 The first run can be I/O-intensive because unverifiable legacy S3 objects may need one download for a content hash. Later runs reuse PostgreSQL verification checkpoints when object size and ETag are unchanged.
+
+Backblaze references: [S3-compatible endpoint and supported calls](https://www.backblaze.com/docs/en/cloud-storage-call-the-s3-compatible-api), [application key capabilities](https://www.backblaze.com/docs/cloud-storage-s3-compatible-app-keys).
 
 ## Run
 
@@ -383,11 +395,15 @@ Coverage notes:
     - confirm chunk-level byte progress reaches the task card through SSE
     - confirm a video reaches the expected hierarchy, is hash-verified, and remains on Yandex Disk
     - stop after one file and confirm the next run resumes without uploading the verified file again
-  - `maintenance.sync_documents_s3` against real Yandex/S3 services:
+  - `maintenance.sync_documents_s3` against real Yandex/Backblaze services:
     - confirm a cached document uploads without a Yandex download
+    - confirm the uploaded Backblaze object is downloaded and MD5-verified before PostgreSQL is updated
     - confirm an unchanged verified object is skipped on the next run
     - confirm a restricted document is private, its stored URL is encrypted, and any legacy public copy is absent
+    - confirm migration does not create a Yandex Disk public link
+    - confirm byte-level upload progress reaches the task card through SSE
     - request graceful stop and confirm the current document finishes before the run stops
+    - force-stop one multipart upload and confirm the next run aborts its unfinished parts before retrying that document
 
 ## API Summary
 

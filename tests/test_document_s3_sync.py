@@ -6,14 +6,24 @@ import hashlib
 import base64
 from pathlib import Path
 
-from app.document_storage import DocumentStorageSettings
-from app.modules.maintenance.runtime.sync_documents_s3 import run_document_sync
+from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
+from app.modules.maintenance.runtime.sync_documents_s3 import (
+    _validate_primary_buckets,
+    run_document_sync,
+)
 
 
 class FakeYaDisk:
-    def __init__(self, files: dict[str, bytes]) -> None:
+    def __init__(
+        self,
+        files: dict[str, bytes],
+        *,
+        include_public_metadata: bool = True,
+    ) -> None:
         self.files = dict(files)
         self.downloaded: list[str] = []
+        self.include_public_metadata = include_public_metadata
+        self.published: list[str] = []
 
     def listdir(self, path, **_kwargs):  # noqa: ANN001
         prefix = str(path).rstrip("/") + "/"
@@ -35,8 +45,12 @@ class FakeYaDisk:
                     "md5": hashlib.md5(content).hexdigest(),  # noqa: S324
                     "mime_type": "application/pdf",
                     "resource_id": "resource:" + first,
-                    "public_key": "key:" + first,
-                    "public_url": "https://disk.example/" + first,
+                    "public_key": "key:" + first if self.include_public_metadata else "",
+                    "public_url": (
+                        "https://disk.example/" + first
+                        if self.include_public_metadata
+                        else ""
+                    ),
                 }
         return iter(direct.values())
 
@@ -44,13 +58,27 @@ class FakeYaDisk:
         self.downloaded.append(str(source_path))
         Path(target_path).write_bytes(self.files[str(source_path)])
 
+    def publish(self, source_path):  # noqa: ANN001
+        self.published.append(str(source_path))
+
+    def get_meta(self, source_path, **_kwargs):  # noqa: ANN001
+        name = Path(str(source_path)).name
+        return {
+            "public_key": "published:" + name,
+            "public_url": "https://disk.example/published/" + name,
+        }
+
 
 class FakeS3:
-    def __init__(self) -> None:
+    def __init__(self, *, corrupt_upload: bool = False) -> None:
         self.objects: dict[tuple[str, str], dict] = {}
         self.uploads: list[tuple[str, str]] = []
         self.downloads: list[tuple[str, str]] = []
         self.deletes: list[tuple[str, str]] = []
+        self.incomplete_uploads: dict[tuple[str, str], list[str]] = {}
+        self.aborted_uploads: list[tuple[str, str, str]] = []
+        self.corrupt_upload = corrupt_upload
+        self.bucket_acls: dict[str, dict] = {}
 
     def inventory(self, bucket: str) -> dict[str, dict]:
         return {
@@ -59,18 +87,39 @@ class FakeS3:
             if item_bucket == bucket
         }
 
+    def head_bucket(self, *, Bucket):  # noqa: N803, ANN001
+        return {"ResponseMetadata": {"HTTPStatusCode": 200}}
+
+    def get_bucket_acl(self, *, Bucket):  # noqa: N803, ANN001
+        return self.bucket_acls[str(Bucket)]
+
     def head_object(self, *, Bucket, Key):  # noqa: N803, ANN001
         return dict(self.objects[(str(Bucket), str(Key))])
 
-    def upload_file(self, filename, bucket, key, ExtraArgs):  # noqa: N803, ANN001
+    def upload_file(
+        self,
+        filename,
+        bucket,
+        key,
+        ExtraArgs,
+        Callback=None,  # noqa: N803, ANN001
+    ):
         content = Path(filename).read_bytes()
+        stored_content = (
+            bytes([content[0] ^ 1]) + content[1:]
+            if self.corrupt_upload and content
+            else content
+        )
         etag = hashlib.md5(content).hexdigest()  # noqa: S324
         self.objects[(str(bucket), str(key))] = {
-            "ContentLength": len(content),
+            "ContentLength": len(stored_content),
             "ETag": etag,
             "Metadata": dict(ExtraArgs.get("Metadata") or {}),
+            "Body": stored_content,
         }
         self.uploads.append((str(bucket), str(key)))
+        if Callback is not None:
+            Callback(len(content))
 
     def download_file(self, bucket, key, filename):  # noqa: ANN001
         self.downloads.append((str(bucket), str(key)))
@@ -80,11 +129,26 @@ class FakeS3:
         self.deletes.append((str(Bucket), str(Key)))
         self.objects.pop((str(Bucket), str(Key)), None)
 
+    def list_multipart_uploads(self, *, Bucket, Prefix, **_kwargs):  # noqa: N803, ANN001
+        uploads = [
+            {"Key": key, "UploadId": upload_id}
+            for (bucket, key), upload_ids in self.incomplete_uploads.items()
+            if bucket == str(Bucket) and key.startswith(str(Prefix))
+            for upload_id in upload_ids
+        ]
+        return {"Uploads": uploads, "IsTruncated": False}
+
+    def abort_multipart_upload(self, *, Bucket, Key, UploadId):  # noqa: N803, ANN001
+        identity = (str(Bucket), str(Key))
+        self.aborted_uploads.append((*identity, str(UploadId)))
+        self.incomplete_uploads[identity].remove(str(UploadId))
+
 
 class FakeRepository:
     def __init__(self, documents: dict[str, dict] | None = None) -> None:
         self.documents = documents or {}
         self.saved: list[dict] = []
+        self.upstream_calls: list[tuple[object, str, str]] = []
 
     def list_documents(self):
         return {key: dict(value) for key, value in self.documents.items()}
@@ -94,6 +158,10 @@ class FakeRepository:
         self.documents[item["md5"]] = item
         self.saved.append(item)
         return bool(item.get("created"))
+
+    def list_upstream_metadata(self, s3, bucket, endpoint_url):  # noqa: ANN001
+        self.upstream_calls.append((s3, str(bucket), str(endpoint_url)))
+        return {}
 
 
 class FakeStateDb:
@@ -113,15 +181,71 @@ def settings(cache: Path) -> DocumentStorageSettings:
         cache_path=cache,
         source_path="/documents",
         restricted_path="/documents/private",
-        endpoint_url="https://s3.example.test",
-        region_name="region",
+        primary=S3ConnectionSettings(
+            endpoint_url="https://s3.primary.example.test",
+            region_name="primary-region",
+            access_key_id="primary-access",
+            secret_access_key="primary-secret",
+        ),
+        legacy=S3ConnectionSettings(
+            endpoint_url="https://s3.legacy.example.test",
+            region_name="legacy-region",
+            access_key_id="legacy-access",
+            secret_access_key="legacy-secret",
+        ),
         public_bucket="public-docs",
         private_bucket="private-docs",
+        legacy_public_bucket="legacy-public-docs",
+        legacy_private_bucket="legacy-private-docs",
         upstream_bucket="upstream",
-        access_key_id="access",
-        secret_access_key="secret",
         encryption_key=base64.urlsafe_b64encode(b"0" * 32).decode(),
     )
+
+
+def test_primary_bucket_preflight_requires_public_and_private_policies() -> None:
+    s3 = FakeS3()
+    s3.bucket_acls = {
+        "public-docs": {
+            "Grants": [
+                {
+                    "Grantee": {
+                        "Type": "Group",
+                        "URI": "http://acs.amazonaws.com/groups/global/AllUsers",
+                    },
+                    "Permission": "READ",
+                }
+            ]
+        },
+        "private-docs": {"Grants": []},
+    }
+
+    _validate_primary_buckets(s3, "public-docs", "private-docs")
+
+
+def test_primary_bucket_preflight_rejects_public_private_bucket() -> None:
+    s3 = FakeS3()
+    public_read = {
+        "Grants": [
+            {
+                "Grantee": {
+                    "Type": "Group",
+                    "URI": "http://acs.amazonaws.com/groups/global/AllUsers",
+                },
+                "Permission": "READ",
+            }
+        ]
+    }
+    s3.bucket_acls = {
+        "public-docs": public_read,
+        "private-docs": public_read,
+    }
+
+    try:
+        _validate_primary_buckets(s3, "public-docs", "private-docs")
+    except RuntimeError as exc:
+        assert "private bucket must not allow public read" in str(exc)
+    else:
+        raise AssertionError("public private bucket should fail validation")
 
 
 def test_sync_prefers_valid_cache_and_uploads_missing_object(tmp_path: Path) -> None:
@@ -129,7 +253,11 @@ def test_sync_prefers_valid_cache_and_uploads_missing_object(tmp_path: Path) -> 
     digest = hashlib.md5(content).hexdigest()  # noqa: S324
     (tmp_path / f"{digest}.pdf").write_bytes(content)
     yadisk = FakeYaDisk({"/documents/book.pdf": content})
-    s3 = FakeS3()
+    primary_s3 = FakeS3()
+    primary_s3.incomplete_uploads[("public-docs", f"{digest}.pdf")] = [
+        "interrupted-upload"
+    ]
+    legacy_s3 = FakeS3()
     repository = FakeRepository()
     state_db = FakeStateDb()
 
@@ -137,7 +265,8 @@ def test_sync_prefers_valid_cache_and_uploads_missing_object(tmp_path: Path) -> 
         repository=repository,
         state_db=state_db,
         yadisk=yadisk,
-        s3=s3,
+        primary_s3=primary_s3,
+        legacy_s3=legacy_s3,
         settings=settings(tmp_path),
         workspace=tmp_path / "work",
         run_id=7,
@@ -147,16 +276,36 @@ def test_sync_prefers_valid_cache_and_uploads_missing_object(tmp_path: Path) -> 
     assert result["uploaded"] == 1
     assert result["source_cache"] == 1
     assert yadisk.downloaded == []
-    assert s3.uploads == [("public-docs", f"{digest}.pdf")]
+    assert primary_s3.uploads == [("public-docs", f"{digest}.pdf")]
+    assert primary_s3.aborted_uploads == [
+        ("public-docs", f"{digest}.pdf", "interrupted-upload")
+    ]
+    assert primary_s3.downloads == [("public-docs", f"{digest}.pdf")]
     assert repository.saved[-1]["primary_storage_verified_at"]
     assert state_db.events[-1]["type"] == "task.progress"
+    assert any(
+        event["payload"]["progress"]["bytes_completed"] > 0
+        for event in state_db.events
+        if event["type"] == "task.progress"
+    )
+    assert any(
+        event["payload"]["progress"]["current"] == 0
+        and event["payload"]["progress"]["bytes_completed"] > 0
+        and event["payload"]["progress"]["percent"] > 0
+        for event in state_db.events
+        if event["type"] == "task.progress"
+    )
+    assert repository.upstream_calls == [
+        (legacy_s3, "upstream", "https://s3.legacy.example.test")
+    ]
 
     saved_count = len(repository.saved)
     second = run_document_sync(
         repository=repository,
         state_db=state_db,
         yadisk=yadisk,
-        s3=s3,
+        primary_s3=primary_s3,
+        legacy_s3=legacy_s3,
         settings=settings(tmp_path),
         workspace=tmp_path / "work-2",
         run_id=11,
@@ -171,8 +320,8 @@ def test_sync_reuses_plain_md5_etag_without_downloading(tmp_path: Path) -> None:
     digest = hashlib.md5(content).hexdigest()  # noqa: S324
     key = f"{digest}.pdf"
     yadisk = FakeYaDisk({"/documents/book.pdf": content})
-    s3 = FakeS3()
-    s3.objects[("public-docs", key)] = {
+    primary_s3 = FakeS3()
+    primary_s3.objects[("public-docs", key)] = {
         "ContentLength": len(content),
         "ETag": digest,
         "Metadata": {},
@@ -182,7 +331,8 @@ def test_sync_reuses_plain_md5_etag_without_downloading(tmp_path: Path) -> None:
         repository=FakeRepository(),
         state_db=FakeStateDb(),
         yadisk=yadisk,
-        s3=s3,
+        primary_s3=primary_s3,
+        legacy_s3=FakeS3(),
         settings=settings(tmp_path),
         workspace=tmp_path / "work",
         run_id=8,
@@ -191,7 +341,7 @@ def test_sync_reuses_plain_md5_etag_without_downloading(tmp_path: Path) -> None:
 
     assert result["verified"] == 1
     assert result["uploaded"] == 0
-    assert s3.downloads == []
+    assert primary_s3.downloads == []
     assert yadisk.downloaded == []
 
 
@@ -202,8 +352,8 @@ def test_restricted_sync_copies_to_private_then_removes_public(tmp_path: Path) -
     cache = tmp_path / f"{digest}.pdf"
     cache.write_bytes(content)
     yadisk = FakeYaDisk({"/documents/private/book.pdf": content})
-    s3 = FakeS3()
-    s3.objects[("public-docs", key)] = {
+    primary_s3 = FakeS3()
+    primary_s3.objects[("public-docs", key)] = {
         "ContentLength": len(content),
         "ETag": digest,
         "Metadata": {},
@@ -213,7 +363,9 @@ def test_restricted_sync_copies_to_private_then_removes_public(tmp_path: Path) -
         {
             digest: {
                 "md5": digest,
-                "document_url": f"https://s3.example.test/public-docs/{key}",
+                "document_url": (
+                    f"https://s3.primary.example.test/public-docs/{key}"
+                ),
                 "sharing_restricted": True,
             }
         }
@@ -223,26 +375,28 @@ def test_restricted_sync_copies_to_private_then_removes_public(tmp_path: Path) -
         repository=repository,
         state_db=FakeStateDb(),
         yadisk=yadisk,
-        s3=s3,
+        primary_s3=primary_s3,
+        legacy_s3=FakeS3(),
         settings=settings(tmp_path),
         workspace=tmp_path / "work",
         run_id=9,
         should_stop=lambda: False,
     )
 
-    assert s3.uploads == [("private-docs", key)]
-    assert s3.deletes == [("public-docs", key)]
+    assert primary_s3.uploads == [("private-docs", key)]
+    assert primary_s3.deletes == [("public-docs", key)]
     assert result["private_cleaned"] == 1
     assert str(repository.saved[-1]["document_url"]).startswith("enc:")
 
 
-def test_restricted_sync_uses_existing_public_s3_before_yandex(tmp_path: Path) -> None:
+def test_restricted_sync_uses_legacy_s3_before_yandex(tmp_path: Path) -> None:
     content = b"restricted-from-s3"
     digest = hashlib.md5(content).hexdigest()  # noqa: S324
     key = f"{digest}.pdf"
     yadisk = FakeYaDisk({"/documents/private/book.pdf": content})
-    s3 = FakeS3()
-    s3.objects[("public-docs", key)] = {
+    primary_s3 = FakeS3()
+    legacy_s3 = FakeS3()
+    legacy_s3.objects[("legacy-public-docs", key)] = {
         "ContentLength": len(content),
         "ETag": digest,
         "Metadata": {},
@@ -252,7 +406,9 @@ def test_restricted_sync_uses_existing_public_s3_before_yandex(tmp_path: Path) -
         {
             digest: {
                 "md5": digest,
-                "document_url": f"https://s3.example.test/public-docs/{key}",
+                "document_url": (
+                    f"https://s3.legacy.example.test/legacy-public-docs/{key}"
+                ),
                 "sharing_restricted": True,
             }
         }
@@ -262,14 +418,90 @@ def test_restricted_sync_uses_existing_public_s3_before_yandex(tmp_path: Path) -
         repository=repository,
         state_db=FakeStateDb(),
         yadisk=yadisk,
-        s3=s3,
+        primary_s3=primary_s3,
+        legacy_s3=legacy_s3,
         settings=settings(tmp_path),
         workspace=tmp_path / "work",
         run_id=10,
         should_stop=lambda: False,
     )
 
-    assert result["source_s3"] == 1
+    assert result["source_legacy_s3"] == 1
     assert result["source_yandex"] == 0
-    assert s3.downloads == [("public-docs", key)]
+    assert legacy_s3.downloads == [("legacy-public-docs", key)]
+    assert primary_s3.uploads == [("private-docs", key)]
+    assert legacy_s3.deletes == [("legacy-public-docs", key)]
     assert yadisk.downloaded == []
+
+
+def test_sync_rejects_corrupt_remote_readback(tmp_path: Path) -> None:
+    content = b"correct-document"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    (tmp_path / f"{digest}.pdf").write_bytes(content)
+    repository = FakeRepository()
+
+    result = run_document_sync(
+        repository=repository,
+        state_db=FakeStateDb(),
+        yadisk=FakeYaDisk({"/documents/book.pdf": content}),
+        primary_s3=FakeS3(corrupt_upload=True),
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=12,
+        should_stop=lambda: False,
+    )
+
+    assert result["failed"] == 1
+    assert repository.saved == []
+
+
+def test_sync_never_publishes_restricted_yandex_document(tmp_path: Path) -> None:
+    content = b"restricted-without-public-link"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    (tmp_path / f"{digest}.pdf").write_bytes(content)
+    yadisk = FakeYaDisk(
+        {"/documents/private/book.pdf": content},
+        include_public_metadata=False,
+    )
+    repository = FakeRepository()
+
+    result = run_document_sync(
+        repository=repository,
+        state_db=FakeStateDb(),
+        yadisk=yadisk,
+        primary_s3=FakeS3(),
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=13,
+        should_stop=lambda: False,
+    )
+
+    assert result["failed"] == 0
+    assert yadisk.published == []
+    assert repository.saved[-1]["ya_public_url"] is None
+
+
+def test_sync_graceful_stop_finishes_current_document(tmp_path: Path) -> None:
+    files = {
+        "/documents/one.pdf": b"one",
+        "/documents/two.pdf": b"two",
+    }
+    primary_s3 = FakeS3()
+
+    result = run_document_sync(
+        repository=FakeRepository(),
+        state_db=FakeStateDb(),
+        yadisk=FakeYaDisk(files),
+        primary_s3=primary_s3,
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=14,
+        should_stop=lambda: len(primary_s3.uploads) >= 1,
+    )
+
+    assert result["stopped"] is True
+    assert result["processed"] == 1
+    assert len(primary_s3.uploads) == 1

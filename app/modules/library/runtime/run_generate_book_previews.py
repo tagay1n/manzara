@@ -21,9 +21,13 @@ def _bootstrap_repo_root() -> None:
 _bootstrap_repo_root()
 
 from boto3 import Session  # noqa: E402
+from botocore.config import Config  # noqa: E402
 
 from app.db import Database  # noqa: E402
-from app.document_storage import DEFAULT_S3_ENDPOINT  # noqa: E402
+from app.document_storage import (  # noqa: E402
+    DEFAULT_S3_ENDPOINT,
+    load_document_storage_settings,
+)
 from app.modules.library.preview_generation import (  # noqa: E402
     PreviewGenerationSettings,
     process_book,
@@ -70,6 +74,7 @@ def _run_id() -> int:
 
 def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[PreviewGenerationSettings, dict[str, str]]:
     documents = _mapping(payload.get("documents"))
+    document_storage = load_document_storage_settings(payload)
     yandex = _mapping(payload.get("yandex"))
     cloud = _mapping(yandex.get("cloud"))
     buckets = _mapping(cloud.get("bucket"))
@@ -77,19 +82,29 @@ def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[Prev
         os.environ.get("MANZARA_ARTIFACTS_ROOT", "~/.manzara")
     ).expanduser()
     settings = PreviewGenerationSettings(
-        source_bucket=_required(buckets, "document", "yandex.cloud.bucket"),
+        source_bucket=document_storage.public_bucket,
         target_bucket=_required(buckets, "book_previews", "yandex.cloud.bucket"),
         cache_dir=Path(
             _required(documents, "cache_path", "documents")
         ).expanduser(),
         workspace=artifacts_root / "library" / "book-previews" / f"run-{run_id}",
-        source_endpoint_url=str(cloud.get("endpoint_url") or DEFAULT_S3_ENDPOINT),
-        source_region_name=str(cloud.get("region_name") or "ru-central1"),
+        source_endpoint_url=document_storage.primary.endpoint_url,
+        source_region_name=document_storage.primary.region_name,
         encryption_key=_required(payload, "encryption_key", "config"),
     )
     credentials = {
-        "access_key_id": _required(cloud, "aws_access_key_id", "yandex.cloud"),
-        "secret_access_key": _required(cloud, "aws_secret_access_key", "yandex.cloud"),
+        "source_access_key_id": document_storage.primary.access_key_id,
+        "source_secret_access_key": document_storage.primary.secret_access_key,
+        "target_access_key_id": _required(
+            cloud, "aws_access_key_id", "yandex.cloud"
+        ),
+        "target_secret_access_key": _required(
+            cloud, "aws_secret_access_key", "yandex.cloud"
+        ),
+        "target_endpoint_url": str(
+            cloud.get("endpoint_url") or DEFAULT_S3_ENDPOINT
+        ),
+        "target_region_name": str(cloud.get("region_name") or "ru-central1"),
     }
     return settings, credentials
 
@@ -124,7 +139,8 @@ def run_generation(
     *,
     repository: LibraryPreviewRepository,
     db: Database,
-    s3: Any,
+    source_s3: Any,
+    target_s3: Any,
     settings: PreviewGenerationSettings,
     run_id: int,
     should_stop: Any,
@@ -157,7 +173,8 @@ def run_generation(
             candidate,
             repository=repository,
             settings=settings,
-            s3=s3,
+            source_s3=source_s3,
+            target_s3=target_s3,
             run_id=run_id,
             log=lambda message: print(message, flush=True),
         )
@@ -200,14 +217,23 @@ def main() -> int:
         schema=app_settings.database_schema,
     )
     db = Database(app_settings.database_url, schema=app_settings.database_schema)
-    s3 = Session().client(
+    source_s3 = Session().client(
         "s3",
-        aws_access_key_id=credentials["access_key_id"],
-        aws_secret_access_key=credentials["secret_access_key"],
+        aws_access_key_id=credentials["source_access_key_id"],
+        aws_secret_access_key=credentials["source_secret_access_key"],
         endpoint_url=preview_settings.source_endpoint_url,
         region_name=preview_settings.source_region_name,
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
     )
-    s3.head_bucket(Bucket=preview_settings.target_bucket)
+    target_s3 = Session().client(
+        "s3",
+        aws_access_key_id=credentials["target_access_key_id"],
+        aws_secret_access_key=credentials["target_secret_access_key"],
+        endpoint_url=credentials["target_endpoint_url"],
+        region_name=credentials["target_region_name"],
+    )
+    source_s3.head_bucket(Bucket=preview_settings.source_bucket)
+    target_s3.head_bucket(Bucket=preview_settings.target_bucket)
 
     stop_state = {"requested": False}
 
@@ -223,7 +249,8 @@ def main() -> int:
         summary = run_generation(
             repository=repository,
             db=db,
-            s3=s3,
+            source_s3=source_s3,
+            target_s3=target_s3,
             settings=preview_settings,
             run_id=run_id,
             should_stop=lambda: bool(stop_state["requested"]),

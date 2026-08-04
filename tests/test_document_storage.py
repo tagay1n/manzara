@@ -22,7 +22,19 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
     tmp_path: Path,
 ) -> None:
     payload = {
-        "documents": {"cache_path": str(tmp_path / "cache")},
+        "documents": {
+            "cache_path": str(tmp_path / "cache"),
+            "primary_storage": {
+                "endpoint_url": "https://s3.eu-central-003.backblazeb2.com",
+                "region_name": "eu-central-003",
+                "access_key_id": "b2-key-id",
+                "secret_access_key": "b2-app-key",
+                "bucket": {
+                    "public": "manzara-documents",
+                    "private": "manzara-documents-private",
+                },
+            },
+        },
         "yandex": {
             "disk": {
                 "oauth_token": "disk-token",
@@ -49,11 +61,17 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
     assert settings.cache_path == tmp_path / "cache"
     assert settings.source_path == "/documents"
     assert settings.restricted_path == "/documents/private"
-    assert settings.public_bucket == "public-docs"
-    assert settings.private_bucket == "private-docs"
+    assert settings.primary.endpoint_url == "https://s3.eu-central-003.backblazeb2.com"
+    assert settings.primary.region_name == "eu-central-003"
+    assert settings.primary.access_key_id == "b2-key-id"
+    assert settings.public_bucket == "manzara-documents"
+    assert settings.private_bucket == "manzara-documents-private"
+    assert settings.legacy.endpoint_url == "https://storage.yandexcloud.net"
+    assert settings.legacy_public_bucket == "public-docs"
+    assert settings.upstream_bucket == "upstream"
 
-    del payload["yandex"]["cloud"]["bucket"]["document_private"]
-    with pytest.raises(RuntimeError, match="document_private"):
+    del payload["documents"]["primary_storage"]["bucket"]["private"]
+    with pytest.raises(RuntimeError, match="documents.primary_storage.bucket.private"):
         load_document_storage_settings(payload)
 
 

@@ -33,19 +33,29 @@ _MIME_EXTENSIONS = {
 
 
 @dataclass(frozen=True)
+class S3ConnectionSettings:
+    """Credentials and endpoint for one S3-compatible service."""
+
+    endpoint_url: str
+    region_name: str
+    access_key_id: str
+    secret_access_key: str
+
+
+@dataclass(frozen=True)
 class DocumentStorageSettings:
-    """Resolved source and target settings for document synchronization."""
+    """Resolved source, primary, and legacy document storage settings."""
 
     cache_path: Path
     source_path: str
     restricted_path: str
-    endpoint_url: str
-    region_name: str
+    primary: S3ConnectionSettings
+    legacy: S3ConnectionSettings
     public_bucket: str
     private_bucket: str
+    legacy_public_bucket: str
+    legacy_private_bucket: str
     upstream_bucket: str
-    access_key_id: str
-    secret_access_key: str
     encryption_key: str
     yadisk_token: str = ""
 
@@ -67,26 +77,58 @@ def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorag
     yandex = _mapping(payload.get("yandex"))
     disk = _mapping(yandex.get("disk"))
     disk_documents = _mapping(disk.get("documents"))
-    cloud = _mapping(yandex.get("cloud"))
-    buckets = _mapping(cloud.get("bucket"))
+    legacy_cloud = _mapping(yandex.get("cloud"))
+    legacy_buckets = _mapping(legacy_cloud.get("bucket"))
+    primary_storage = _mapping(documents.get("primary_storage"))
+    primary_buckets = _mapping(primary_storage.get("bucket"))
     return DocumentStorageSettings(
         cache_path=Path(_required(documents, "cache_path", "documents")).expanduser(),
         source_path=_required(disk_documents, "source_path", "yandex.disk.documents"),
         restricted_path=_required(
             disk_documents, "restricted_path", "yandex.disk.documents"
         ),
-        endpoint_url=str(cloud.get("endpoint_url") or DEFAULT_S3_ENDPOINT).rstrip("/"),
-        region_name=str(cloud.get("region_name") or DEFAULT_S3_REGION).strip(),
-        public_bucket=_required(buckets, "document", "yandex.cloud.bucket"),
+        primary=S3ConnectionSettings(
+            endpoint_url=_required(
+                primary_storage, "endpoint_url", "documents.primary_storage"
+            ).rstrip("/"),
+            region_name=_required(
+                primary_storage, "region_name", "documents.primary_storage"
+            ),
+            access_key_id=_required(
+                primary_storage, "access_key_id", "documents.primary_storage"
+            ),
+            secret_access_key=_required(
+                primary_storage, "secret_access_key", "documents.primary_storage"
+            ),
+        ),
+        legacy=S3ConnectionSettings(
+            endpoint_url=str(
+                legacy_cloud.get("endpoint_url") or DEFAULT_S3_ENDPOINT
+            ).rstrip("/"),
+            region_name=str(
+                legacy_cloud.get("region_name") or DEFAULT_S3_REGION
+            ).strip(),
+            access_key_id=_required(
+                legacy_cloud, "aws_access_key_id", "yandex.cloud"
+            ),
+            secret_access_key=_required(
+                legacy_cloud, "aws_secret_access_key", "yandex.cloud"
+            ),
+        ),
+        public_bucket=_required(
+            primary_buckets, "public", "documents.primary_storage.bucket"
+        ),
         private_bucket=_required(
-            buckets, "document_private", "yandex.cloud.bucket"
+            primary_buckets, "private", "documents.primary_storage.bucket"
+        ),
+        legacy_public_bucket=_required(
+            legacy_buckets, "document", "yandex.cloud.bucket"
+        ),
+        legacy_private_bucket=_required(
+            legacy_buckets, "document_private", "yandex.cloud.bucket"
         ),
         upstream_bucket=_required(
-            buckets, "upstream_metadata", "yandex.cloud.bucket"
-        ),
-        access_key_id=_required(cloud, "aws_access_key_id", "yandex.cloud"),
-        secret_access_key=_required(
-            cloud, "aws_secret_access_key", "yandex.cloud"
+            legacy_buckets, "upstream_metadata", "yandex.cloud.bucket"
         ),
         encryption_key=_required(payload, "encryption_key", "config"),
         yadisk_token=_required(disk, "oauth_token", "yandex.disk"),
@@ -270,6 +312,7 @@ def resolve_document_object_location(
 __all__ = [
     "DEFAULT_MULTIPART_CHUNK_SIZE",
     "DocumentStorageSettings",
+    "S3ConnectionSettings",
     "build_cache_index",
     "calculate_md5",
     "calculate_multipart_etag",
