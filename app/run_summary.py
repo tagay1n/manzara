@@ -117,30 +117,71 @@ def build_structured_run_summary(
 
     if task_id == "maintenance.sync_documents_s3":
         sync_artifacts = artifacts if isinstance(artifacts, dict) else {}
-        verified = int(sync_artifacts.get("verified") or 0)
+        source_files = int(sync_artifacts.get("source_files") or 0)
+        source_documents = int(sync_artifacts.get("source_documents") or 0)
+        database_rows = int(sync_artifacts.get("database_rows_after") or 0)
+        synced = int(sync_artifacts.get("synced_source_documents") or 0)
+        unsynced = int(sync_artifacts.get("unsynced_source_documents") or 0)
+        discovery_complete = bool(sync_artifacts.get("discovery_complete", True))
+        database_only_value = sync_artifacts.get("database_only_rows")
+        database_only = (
+            int(database_only_value or 0) if discovery_complete else None
+        )
+        duplicate_paths = int(sync_artifacts.get("duplicates") or 0)
         uploaded = int(sync_artifacts.get("uploaded") or 0)
-        reuploaded = int(sync_artifacts.get("reuploaded") or 0)
-        private_cleaned = int(sync_artifacts.get("private_cleaned") or 0)
+        updated = int(sync_artifacts.get("updated") or 0)
         failed = int(sync_artifacts.get("failed") or 0)
         if sync_artifacts.get("kind") == "maintenance.document_s3_sync_summary":
+            fully_synced = bool(sync_artifacts.get("fully_synced"))
             summary["highlights"].extend(
                 [
-                    {"label": "Verified", "value": str(verified)},
+                    {"label": "Source files", "value": str(source_files)},
+                    {"label": "Source documents", "value": str(source_documents)},
+                    {"label": "Database rows", "value": str(database_rows)},
+                    {"label": "Synced", "value": str(synced)},
+                    {"label": "Unsynced", "value": str(unsynced)},
+                    {
+                        "label": "Database-only",
+                        "value": (
+                            str(database_only)
+                            if database_only is not None
+                            else "Not evaluated"
+                        ),
+                    },
+                    {"label": "Duplicate paths", "value": str(duplicate_paths)},
                     {"label": "Uploaded", "value": str(uploaded)},
-                    {"label": "Re-uploaded", "value": str(reuploaded)},
-                    {"label": "Private cleaned", "value": str(private_cleaned)},
+                    {"label": "DB updated", "value": str(updated)},
                     {"label": "Failed", "value": str(failed)},
+                    {
+                        "label": "Result",
+                        "value": (
+                            "Fully synced"
+                            if fully_synced
+                            else "Differences"
+                            if discovery_complete
+                            else "Discovery incomplete"
+                        ),
+                    },
                 ]
             )
-            outcome = {
-                "completed": "completed",
-                "failed": "failed",
-                "stopped": "stopped",
-            }.get(status, status)
-            summary["message"] = (
-                f"Document sync {outcome}: {verified} verified, "
-                f"{uploaded} uploaded, {failed} failed."
-            )
+            if status == "failed":
+                summary["message"] = "Document sync failed before reconciliation completed."
+            elif not discovery_complete:
+                summary["message"] = (
+                    f"Document sync stopped after {source_files} discovered files; "
+                    "full reconciliation was not evaluated."
+                )
+            elif fully_synced:
+                summary["message"] = (
+                    f"Document reconciliation complete: {synced} source documents "
+                    f"and {database_rows} database rows synchronized."
+                )
+            else:
+                summary["message"] = (
+                    "Document reconciliation completed with differences: "
+                    f"{synced}/{source_documents} source documents synced, "
+                    f"{database_only} database-only, {failed} failed."
+                )
         else:
             summary["message"] = "Document sync completed."
         return summary

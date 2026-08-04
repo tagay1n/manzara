@@ -116,28 +116,6 @@ def _etag(value: Any) -> str:
     return str(value or "").strip().strip('"')
 
 
-def _inventory(
-    s3: Any,
-    bucket: str,
-    *,
-    should_stop: Callable[[], bool],
-) -> dict[str, dict[str, Any]]:
-    if hasattr(s3, "inventory"):
-        return dict(s3.inventory(bucket))
-    paginator = s3.get_paginator("list_objects_v2")
-    result: dict[str, dict[str, Any]] = {}
-    for page in paginator.paginate(Bucket=bucket):
-        if should_stop():
-            break
-        for item in page.get("Contents", []):
-            if item.get("Key"):
-                result[str(item["Key"])] = {
-                    "ContentLength": int(item.get("Size") or 0),
-                    "ETag": _etag(item.get("ETag")),
-                }
-    return result
-
-
 def _progress_payload(
     *,
     stage: str,
@@ -148,7 +126,9 @@ def _progress_payload(
     counters: Mapping[str, int],
     current_path: str = "",
 ) -> dict[str, Any]:
-    if bytes_total > 0:
+    if stage == "streaming":
+        percent = 0
+    elif bytes_total > 0:
         percent = round((bytes_completed / bytes_total) * 100, 2)
     elif total:
         percent = round((current / total) * 100, 2)
@@ -245,19 +225,6 @@ def _document_needs_save(
     return bool(
         not existing.get("upstream_meta_url") and payload.get("upstream_meta_url")
     )
-
-
-def _canonical_resource(resources: list[dict[str, Any]], existing: Mapping[str, Any] | None) -> dict[str, Any]:
-    if existing:
-        resource_id = str(existing.get("ya_resource_id") or "")
-        source_path = str(existing.get("ya_path") or "")
-        for resource in resources:
-            if resource_id and resource["resource_id"] == resource_id:
-                return resource
-        for resource in resources:
-            if source_path and resource["source_path"].removeprefix("disk:") == source_path:
-                return resource
-    return sorted(resources, key=lambda item: item["source_path"])[0]
 
 
 def _is_restricted(path: str, settings: DocumentStorageSettings) -> bool:
@@ -402,6 +369,18 @@ def _public_object_removed(s3: Any, bucket: str, key: str) -> bool:
     return False
 
 
+def _head_object_or_none(s3: Any, bucket: str, key: str) -> dict[str, Any] | None:
+    try:
+        return dict(s3.head_object(Bucket=bucket, Key=key))
+    except KeyError:
+        return None
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            return None
+        raise
+
+
 def _abort_incomplete_uploads(s3: Any, bucket: str, key: str) -> int:
     """Remove unfinished multipart uploads for one content-addressed key."""
     aborted = 0
@@ -474,9 +453,26 @@ def run_document_sync(
         state_db,
         run_id,
         _progress_payload(
-            stage="discovering", current=0, total=0, bytes_completed=0,
+            stage="streaming", current=0, total=0, bytes_completed=0,
             bytes_total=0, counters=counters,
         ),
+    )
+    cache_index = build_cache_index(settings.cache_path)
+    existing_documents = repository.list_documents()
+    database_md5s_before = set(existing_documents)
+    upstream_metadata: dict[str, str] = {}
+    try:
+        upstream_metadata = repository.list_upstream_metadata(
+            legacy_s3,
+            settings.upstream_bucket,
+            settings.legacy.endpoint_url,
+        )
+    except AttributeError:
+        pass
+    print(
+        f"document sync: prepared database_rows={len(existing_documents)} "
+        f"cache_entries={len(cache_index)} upstream={len(upstream_metadata)}",
+        flush=True,
     )
     directories_scanned = 0
 
@@ -494,81 +490,29 @@ def run_document_sync(
         f"document sync: discovery start source_path={settings.source_path}",
         flush=True,
     )
-    resources = list(
-        _walk_files(
-            yadisk,
-            settings.source_path,
-            should_stop=should_stop,
-            on_directory=report_directory,
-        )
-    )
-    print(
-        f"document sync: discovery complete files={len(resources)} "
-        f"directories={directories_scanned}",
-        flush=True,
-    )
-    cache_index = build_cache_index(settings.cache_path)
-    existing_documents = repository.list_documents()
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    missing_md5: list[dict[str, Any]] = []
-    for resource in resources:
-        if resource["source_md5"]:
-            grouped.setdefault(resource["source_md5"], []).append(resource)
-        else:
-            missing_md5.append(resource)
-    counters["duplicates"] = sum(max(0, len(items) - 1) for items in grouped.values())
-    canonical = [
-        _canonical_resource(items, existing_documents.get(md5))
-        for md5, items in sorted(grouped.items())
-    ] + missing_md5
-    public_inventory: dict[str, dict[str, Any]] = {}
-    private_inventory: dict[str, dict[str, Any]] = {}
-    upstream_metadata: dict[str, str] = {}
-    if not should_stop():
-        print(
-            f"document sync: inventory start bucket={settings.public_bucket}",
-            flush=True,
-        )
-        public_inventory = _inventory(
-            primary_s3,
-            settings.public_bucket,
-            should_stop=should_stop,
-        )
-    if not should_stop():
-        print(
-            f"document sync: inventory start bucket={settings.private_bucket}",
-            flush=True,
-        )
-        private_inventory = _inventory(
-            primary_s3,
-            settings.private_bucket,
-            should_stop=should_stop,
-        )
-    if not should_stop():
-        try:
-            upstream_metadata = repository.list_upstream_metadata(
-                legacy_s3,
-                settings.upstream_bucket,
-                settings.legacy.endpoint_url,
-            )
-        except AttributeError:
-            upstream_metadata = {}
-    print(
-        f"document sync: inventory complete public={len(public_inventory)} "
-        f"private={len(private_inventory)} upstream={len(upstream_metadata)}",
-        flush=True,
-    )
-    total = len(canonical)
-    bytes_total = sum(int(item.get("source_size") or 0) for item in canonical)
+    source_md5s: set[str] = set()
+    synced_source_documents = 0
+    source_files = total = 0
+    bytes_total = 0
     bytes_completed = processed = 0
     stopped = bool(should_stop())
 
-    for resource in canonical:
+    resources = _walk_files(
+        yadisk,
+        settings.source_path,
+        should_stop=should_stop,
+        on_directory=report_directory,
+    )
+    for resource in resources:
         if stopped or should_stop():
             stopped = True
             break
+        source_files += 1
+        total += 1
+        bytes_total += int(resource.get("source_size") or 0)
         source_path = str(resource["source_path"])
         temporary_paths: list[Path] = []
+        cache_file: Path | None = None
         try:
             if not resource["source_md5"]:
                 candidate = workspace / f"discover-{processed}.bin"
@@ -576,15 +520,26 @@ def run_document_sync(
                 temporary_paths.append(candidate)
                 resource["source_md5"] = calculate_md5(candidate)
                 resource["source_size"] = candidate.stat().st_size
+                cache_file = candidate
             md5 = str(resource["source_md5"])
+            if md5 in source_md5s:
+                counters["duplicates"] += 1
+                total -= 1
+                bytes_total -= int(resource.get("source_size") or 0)
+                continue
+            source_md5s.add(md5)
             existing = existing_documents.get(md5)
             restricted = _is_restricted(source_path, settings)
             bucket = settings.private_bucket if restricted else settings.public_bucket
             key = _target_key(md5, resource, existing, settings)
             target_location = (bucket, key)
-            inventory = private_inventory if restricted else public_inventory
-            remote = inventory.get(key)
-            cache_file: Path | None = None
+            print(
+                f"document sync: process discovered={source_files} md5={md5} "
+                f"size={int(resource['source_size'])} source_path={source_path} "
+                f"target=s3://{bucket}/{key}",
+                flush=True,
+            )
+            remote = _head_object_or_none(primary_s3, bucket, key)
             cache_multipart_etag: str | None = None
             verified_head: Mapping[str, Any] | None = None
 
@@ -652,6 +607,10 @@ def run_document_sync(
                 if source_file.parent == workspace:
                     temporary_paths.append(source_file)
                 counters[f"source_{source_kind}"] += 1
+                print(
+                    f"document sync: source selected md5={md5} source={source_kind}",
+                    flush=True,
+                )
                 was_present = remote is not None
                 _abort_incomplete_uploads(primary_s3, bucket, key)
                 uploaded_bytes = 0
@@ -665,9 +624,9 @@ def run_document_sync(
                             state_db,
                             run_id,
                             _progress_payload(
-                                stage="transferring",
+                                stage="streaming",
                                 current=processed,
-                                total=total,
+                                total=0,
                                 bytes_completed=(
                                     bytes_completed
                                     + min(
@@ -699,7 +658,6 @@ def run_document_sync(
                     int(resource["source_size"]),
                     workspace,
                 )
-                inventory[key] = dict(verified_head)
                 counters["reuploaded" if was_present else "uploaded"] += 1
 
             canonical_url = object_url(settings.primary.endpoint_url, bucket, key)
@@ -756,11 +714,12 @@ def run_document_sync(
                 existing_documents[md5] = dict(document_payload)
             else:
                 counters["unchanged"] += 1
+            synced_source_documents += 1
 
             legacy_location = _existing_object_location(existing, settings)
             if restricted:
                 cleanup_targets: list[tuple[Any, str, str]] = []
-                if key in public_inventory:
+                if _head_object_or_none(primary_s3, settings.public_bucket, key):
                     cleanup_targets.append((primary_s3, settings.public_bucket, key))
                 if legacy_location:
                     storage_name, legacy_bucket, legacy_key = legacy_location
@@ -781,8 +740,6 @@ def run_document_sync(
                         raise RuntimeError(
                             "Legacy public object still exists after deletion"
                         )
-                    if cleanup_s3 is primary_s3:
-                        public_inventory.pop(cleanup_key, None)
                     counters["private_cleaned"] += 1
             bytes_completed += int(resource.get("source_size") or 0)
             print(
@@ -805,12 +762,22 @@ def run_document_sync(
             state_db,
             run_id,
             _progress_payload(
-                stage="transferring", current=processed, total=total,
+                stage="streaming", current=processed, total=0,
                 bytes_completed=bytes_completed, bytes_total=bytes_total,
                 counters=counters, current_path=source_path,
             ),
         )
+        if should_stop():
+            stopped = True
+            break
 
+    discovery_complete = not stopped and not should_stop()
+    if discovery_complete:
+        print(
+            f"document sync: discovery complete files={source_files} "
+            f"documents={total} directories={directories_scanned}",
+            flush=True,
+        )
     stage = "stopped" if stopped else "completed"
     _publish_progress(
         state_db,
@@ -821,10 +788,30 @@ def run_document_sync(
             counters=counters,
         ),
     )
+    database_only_rows = (
+        len(database_md5s_before - source_md5s) if discovery_complete else None
+    )
+    unsynced_source_documents = max(0, total - synced_source_documents)
+    fully_synced = bool(
+        not stopped
+        and counters["failed"] == 0
+        and unsynced_source_documents == 0
+        and discovery_complete
+        and database_only_rows == 0
+    )
     return {
         "kind": "maintenance.document_s3_sync_summary",
-        "discovered": len(resources),
+        "discovered": source_files,
         "considered": total,
+        "source_files": source_files,
+        "source_documents": total,
+        "discovery_complete": discovery_complete,
+        "database_rows_before": len(database_md5s_before),
+        "database_rows_after": len(existing_documents),
+        "synced_source_documents": synced_source_documents,
+        "unsynced_source_documents": unsynced_source_documents,
+        "database_only_rows": database_only_rows,
+        "fully_synced": fully_synced,
         "processed": processed,
         "bytes_processed": bytes_completed,
         "stopped": stopped,
@@ -837,6 +824,11 @@ def _run_id() -> int:
     if not value.isdigit() or int(value) <= 0:
         raise RuntimeError("MANZARA_TASK_RUN_ID is required")
     return int(value)
+
+
+def _result_exit_code(_summary: Mapping[str, Any]) -> int:
+    """Reconciliation differences belong in the report, not process status."""
+    return 0
 
 
 def _create_s3_client(connection: Any) -> Any:
@@ -927,7 +919,7 @@ def main() -> int:
             )
         print(f"document sync: final {json.dumps(summary, sort_keys=True)}", flush=True)
         emit_run_artifact(summary)
-        return 1 if int(summary.get("failed") or 0) > 0 else 0
+        return _result_exit_code(summary)
     finally:
         repository.dispose()
 

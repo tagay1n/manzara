@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
 from app.modules.maintenance.runtime.sync_documents_s3 import (
+    _result_exit_code,
     _validate_primary_buckets,
     run_document_sync,
 )
@@ -67,6 +68,22 @@ class FakeYaDisk:
             "public_key": "published:" + name,
             "public_url": "https://disk.example/published/" + name,
         }
+
+
+class StreamingYaDisk(FakeYaDisk):
+    def __init__(self, primary_s3: "FakeS3") -> None:
+        super().__init__(
+            {
+                "/documents/first.pdf": b"first",
+                "/documents/later/second.pdf": b"second",
+            }
+        )
+        self.primary_s3 = primary_s3
+
+    def listdir(self, path, **kwargs):  # noqa: ANN001
+        if str(path) == "/documents/later":
+            assert self.primary_s3.uploads, "first file must upload before later discovery"
+        return super().listdir(path, **kwargs)
 
 
 class FakeS3:
@@ -291,7 +308,8 @@ def test_sync_prefers_valid_cache_and_uploads_missing_object(tmp_path: Path) -> 
     assert any(
         event["payload"]["progress"]["current"] == 0
         and event["payload"]["progress"]["bytes_completed"] > 0
-        and event["payload"]["progress"]["percent"] > 0
+        and event["payload"]["progress"]["percent"] == 0
+        and event["payload"]["progress"]["stage"] == "streaming"
         for event in state_db.events
         if event["type"] == "task.progress"
     )
@@ -505,3 +523,122 @@ def test_sync_graceful_stop_finishes_current_document(tmp_path: Path) -> None:
     assert result["stopped"] is True
     assert result["processed"] == 1
     assert len(primary_s3.uploads) == 1
+
+
+def test_sync_reports_source_database_reconciliation_without_failing(
+    tmp_path: Path,
+) -> None:
+    source_content = b"source-document"
+    source_md5 = hashlib.md5(source_content).hexdigest()  # noqa: S324
+    database_only_md5 = hashlib.md5(b"database-only").hexdigest()  # noqa: S324
+    (tmp_path / f"{source_md5}.pdf").write_bytes(source_content)
+    repository = FakeRepository(
+        {
+            database_only_md5: {
+                "md5": database_only_md5,
+                "document_url": (
+                    "https://s3.legacy.example.test/legacy-public-docs/"
+                    f"{database_only_md5}.pdf"
+                ),
+            }
+        }
+    )
+
+    result = run_document_sync(
+        repository=repository,
+        state_db=FakeStateDb(),
+        yadisk=FakeYaDisk({"/documents/book.pdf": source_content}),
+        primary_s3=FakeS3(corrupt_upload=True),
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=15,
+        should_stop=lambda: False,
+    )
+
+    assert result["source_files"] == 1
+    assert result["source_documents"] == 1
+    assert result["database_rows_before"] == 1
+    assert result["database_rows_after"] == 1
+    assert result["synced_source_documents"] == 0
+    assert result["unsynced_source_documents"] == 1
+    assert result["database_only_rows"] == 1
+    assert result["fully_synced"] is False
+    assert result["failed"] == 1
+    assert _result_exit_code(result) == 0
+
+
+def test_sync_reports_complete_reconciliation(tmp_path: Path) -> None:
+    content = b"complete-document"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    (tmp_path / f"{digest}.pdf").write_bytes(content)
+
+    result = run_document_sync(
+        repository=FakeRepository(),
+        state_db=FakeStateDb(),
+        yadisk=FakeYaDisk({"/documents/book.pdf": content}),
+        primary_s3=FakeS3(),
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=16,
+        should_stop=lambda: False,
+    )
+
+    assert result["source_files"] == 1
+    assert result["source_documents"] == 1
+    assert result["database_rows_before"] == 0
+    assert result["database_rows_after"] == 1
+    assert result["synced_source_documents"] == 1
+    assert result["unsynced_source_documents"] == 0
+    assert result["database_only_rows"] == 0
+    assert result["fully_synced"] is True
+    assert _result_exit_code(result) == 0
+
+
+def test_sync_uploads_each_document_before_discovering_later_directories(
+    tmp_path: Path,
+) -> None:
+    primary_s3 = FakeS3()
+
+    result = run_document_sync(
+        repository=FakeRepository(),
+        state_db=FakeStateDb(),
+        yadisk=StreamingYaDisk(primary_s3),
+        primary_s3=primary_s3,
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=17,
+        should_stop=lambda: False,
+    )
+
+    assert result["discovery_complete"] is True
+    assert result["source_files"] == 2
+    assert result["source_documents"] == 2
+    assert result["synced_source_documents"] == 2
+
+
+def test_stopped_streaming_discovery_does_not_report_database_only_rows(
+    tmp_path: Path,
+) -> None:
+    primary_s3 = FakeS3()
+    orphan_md5 = hashlib.md5(b"orphan").hexdigest()  # noqa: S324
+
+    result = run_document_sync(
+        repository=FakeRepository({orphan_md5: {"md5": orphan_md5}}),
+        state_db=FakeStateDb(),
+        yadisk=StreamingYaDisk(primary_s3),
+        primary_s3=primary_s3,
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=18,
+        should_stop=lambda: bool(primary_s3.uploads),
+    )
+
+    assert result["stopped"] is True
+    assert result["discovery_complete"] is False
+    assert result["source_files"] == 1
+    assert result["database_only_rows"] is None
+    assert result["fully_synced"] is False

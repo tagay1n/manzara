@@ -52,12 +52,16 @@ Notes:
   - Backblaze B2 through its S3-compatible API is the primary document store; configure it only under `documents.primary_storage`. Keep `yandex.cloud` as legacy document/upstream/preview storage rather than repointing unrelated Yandex consumers.
   - Yandex Disk is an auxiliary ingest/provenance source. Document sync must never publish, delete, trash, or move Yandex Disk documents.
   - `maintenance.sync_documents_s3` discovers from the configured Yandex root and uses bytes in this order: hash-valid local cache, verified Backblaze object, verified legacy Yandex S3 object, Yandex Disk.
+  - Document discovery and transfer form one sequential streaming pipeline: process each first-seen MD5 immediately, use per-object Backblaze checks, and never wait for a complete Yandex or bucket inventory before useful work begins.
   - Every newly uploaded Backblaze object must be downloaded and content-hashed before its PostgreSQL verification checkpoint is committed; size or client-written metadata alone is not sufficient proof.
   - Upload progress must use boto3 callbacks and the shared `task.progress` SSE contract. Graceful stop finishes the current document and exits at the next document boundary.
   - Before retrying an interrupted object, abort unfinished multipart uploads for that exact content-addressed key; never treat an incomplete multipart upload as resumable state.
   - Document sync treats the legacy document cache as read-only input and never treats cache-only files as discovered documents. Other Library cache behavior remains governed by the shared-cache rule below.
   - Restricted documents belong in the configured private bucket and must be accessed through backend-generated short-lived signed URLs.
   - Persist S3 size/ETag/verification timestamps in PostgreSQL; do not re-download or re-hash verified unchanged objects on every run.
+  - Every completed document sync must emit a structured source/database reconciliation report: source file count, canonical source document count, database rows before/after, synced/unsynced source documents, database-only rows, duplicate source paths, item failures, and a `fully_synced` result.
+  - Exact reconciliation is valid only after Yandex traversal finishes. A stopped partial traversal must report `discovery_complete=false`, leave database-only counts unevaluated, and never claim `fully_synced`.
+  - Reconciliation differences are reportable outcomes, not process failures. Complete the task with differences so the web UI can show final statistics; still fail normally when discovery or another task-level error prevents producing a trustworthy final report.
 - Artifact location rule (all flows/tasks): write all task/flow artifacts (logs, temp files, exports, caches, run metadata) only under `~/.manzara` by default (or under `MANZARA_ARTIFACTS_ROOT` when explicitly overridden). Do not write artifacts into repository-root folders such as `_artifacts`.
 - The existing `~/.monocorpus/0_entry_point` directory is a shared persistent source-document cache, not a Manzara task-artifact location. Library tasks may verify, reuse, and populate that cache; generated outputs and temporary files still belong under `~/.manzara`.
 - Keep secrets out of git: treat `config.yaml` as local-only and maintain masked `config.example.yaml` in sync with config structure changes.
