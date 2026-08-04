@@ -35,7 +35,17 @@ class PostgresDocumentSyncRepository:
                     """
                 )
             ).mappings().all()
-        return {str(row["md5"]).lower(): dict(row) for row in rows}
+        documents: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            md5 = str(row.get("md5") or "").strip().lower()
+            if not md5:
+                raise RuntimeError("Document row has no MD5; refusing synchronization")
+            if md5 in documents:
+                raise RuntimeError(
+                    f"Duplicate document MD5 {md5}; refusing synchronization"
+                )
+            documents[md5] = dict(row)
+        return documents
 
     def list_upstream_metadata(
         self,
@@ -52,9 +62,39 @@ class PostgresDocumentSyncRepository:
         }
 
     def save_verified_document(self, payload: Mapping[str, Any]) -> bool:
-        created = bool(payload.get("created"))
         with self.engine.begin() as conn:
-            conn.execute(
+            updated = conn.execute(
+                text(
+                    """
+                    UPDATE document SET
+                        mime_type = :mime_type,
+                        ya_path = :ya_path,
+                        ya_public_url = :ya_public_url,
+                        ya_public_key = :ya_public_key,
+                        ya_resource_id = :ya_resource_id,
+                        "full" = :full,
+                        sharing_restricted = :sharing_restricted,
+                        document_url = :document_url,
+                        upstream_meta_url = COALESCE(
+                            document.upstream_meta_url,
+                            :upstream_meta_url
+                        ),
+                        primary_storage_size = :primary_storage_size,
+                        primary_storage_etag = :primary_storage_etag,
+                        primary_storage_verified_at = :primary_storage_verified_at
+                    WHERE md5 = :md5
+                    """
+                ),
+                dict(payload),
+            )
+            if updated.rowcount > 1:
+                raise RuntimeError(
+                    f"Document MD5 {payload['md5']} matched {updated.rowcount} rows; "
+                    "refusing ambiguous update"
+                )
+            if updated.rowcount == 1:
+                return False
+            inserted = conn.execute(
                 text(
                     """
                     INSERT INTO document (
@@ -68,27 +108,16 @@ class PostgresDocumentSyncRepository:
                         :document_url, :upstream_meta_url, :primary_storage_size,
                         :primary_storage_etag, :primary_storage_verified_at
                     )
-                    ON CONFLICT (md5) DO UPDATE SET
-                        mime_type = EXCLUDED.mime_type,
-                        ya_path = EXCLUDED.ya_path,
-                        ya_public_url = EXCLUDED.ya_public_url,
-                        ya_public_key = EXCLUDED.ya_public_key,
-                        ya_resource_id = EXCLUDED.ya_resource_id,
-                        "full" = EXCLUDED."full",
-                        sharing_restricted = EXCLUDED.sharing_restricted,
-                        document_url = EXCLUDED.document_url,
-                        upstream_meta_url = COALESCE(
-                            document.upstream_meta_url,
-                            EXCLUDED.upstream_meta_url
-                        ),
-                        primary_storage_size = EXCLUDED.primary_storage_size,
-                        primary_storage_etag = EXCLUDED.primary_storage_etag,
-                        primary_storage_verified_at = EXCLUDED.primary_storage_verified_at
                     """
                 ),
                 dict(payload),
             )
-        return created
+            if inserted.rowcount != 1:
+                raise RuntimeError(
+                    f"Document MD5 {payload['md5']} insert affected "
+                    f"{inserted.rowcount} rows"
+                )
+        return True
 
 
 __all__ = ["PostgresDocumentSyncRepository"]
