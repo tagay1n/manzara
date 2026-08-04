@@ -39,7 +39,7 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
     )
     transfer_cmd = (
         py_bootstrap
-        + '"$PY_BIN" -m app.modules.shayan.runtime.transfer_yadisk_s3'
+        + '"$PY_BIN" -m app.modules.shayan.runtime.transfer_yadisk_webdav'
     )
 
     return [
@@ -74,9 +74,9 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "command": {"mode": "shell", "value": upload_cmd},
         },
         {
-            "task_id": "shayan.transfer_yadisk_s3",
+            "task_id": "shayan.transfer_yadisk_webdav",
             "panel_id": "shayan",
-            "title": "Move Yandex Disk videos to S3",
+            "title": "Copy Yandex Disk videos to Nextcloud",
             "task_type": "transfer",
             "icon_idle": "CloudCog",
             "icon_running": "Square",

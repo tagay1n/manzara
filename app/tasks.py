@@ -747,11 +747,11 @@ class TaskRunner:
             payload["deleted_local"] = int(artifacts.get("deleted_local") or 0)
             payload["hash_mismatch"] = int(artifacts.get("hash_mismatch") or 0)
             return payload
-        if kind == "shayan.yadisk_s3_transfer_summary":
-            payload["moved"] = int(artifacts.get("moved") or 0)
+        if kind == "shayan.yadisk_webdav_transfer_summary":
+            payload["copied"] = int(artifacts.get("copied") or 0)
             payload["reused"] = int(artifacts.get("reused") or 0)
             payload["failed"] = int(artifacts.get("failed") or 0)
-            payload["bytes_moved"] = int(artifacts.get("bytes_moved") or 0)
+            payload["bytes_copied"] = int(artifacts.get("bytes_copied") or 0)
             payload["stopped"] = bool(artifacts.get("stopped"))
             return payload
         if kind == "library.book_preview_summary":

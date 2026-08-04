@@ -1,6 +1,6 @@
 # PostgreSQL Runtime and Migration Reference
 
-Last updated: 2026-07-31
+Last updated: 2026-08-04
 
 ## Current State
 
@@ -9,7 +9,7 @@ Last updated: 2026-07-31
 - `MANZARA_DATABASE_URL` selects the database.
 - `MANZARA_DB_SCHEMA` selects the Manzara operational schema and defaults to `monocorpus`.
 - Schema changes are Alembic-only. Application startup runs `upgrade head` before task and workflow definitions are seeded.
-- Current Alembic head: `20260731_0013`.
+- Current Alembic head: `20260804_0014`.
 
 The repository still contains the historical one-time import script, but it is not part of normal setup or startup. Do not run `scripts/migrate_sqlite_to_postgres.py` against an active database unless performing an explicitly planned legacy recovery.
 
@@ -26,6 +26,8 @@ Revision `20260731_0013` extends `document` with primary-storage verification ch
 - `primary_storage_verified_at`
 
 These fields let document synchronization avoid repeated downloads and hashing when an S3 object is unchanged.
+
+Revision `20260804_0014` performs the approved direct replacement of the empty `shayan_s3_transfers` table with `shayan_webdav_transfers`. WebDAV checkpoints persist the stable target path, ETag, verified checksum, lifecycle status, and timestamps used for resumable Nextcloud archival. New non-destructive copies finish in `uploaded`; historical `moved` rows remain terminal for persisted-data compatibility.
 
 ## Normal Operation
 

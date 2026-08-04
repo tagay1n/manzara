@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Last updated: 2026-07-31
+Last updated: 2026-08-04
 Owner: tans1q
 
 ## Purpose
@@ -40,6 +40,12 @@ Notes:
 - Prioritize operational visibility (run state, logs, artifacts, failures).
 - Runtime state store is PostgreSQL only (`MANZARA_DATABASE_URL`) in schema `monocorpus` by default (`MANZARA_DB_SCHEMA`); do not reintroduce SQLite runtime paths.
 - Shayan state (download manifest + snapshot history) is PostgreSQL-backed. Do not use persistent `status.json` / `latest.json` as runtime source of truth.
+- Shayan video archive policy:
+  - Nextcloud WebDAV is the target archive for `shayan.transfer_yadisk_webdav`; Yandex Disk remains a retained source after each exact video version is verified remotely.
+  - The copy task is non-destructive: never delete, trash, or move source videos on Yandex Disk after copying them to Nextcloud.
+  - Use Nextcloud chunked upload v2 for video-sized files, assemble into a deterministic temporary DAV path, independently stream-hash the uploaded bytes, then move to the final path.
+  - Emit bounded chunk-level byte progress through the shared `task.progress` SSE contract; do not derive transfer progress from logs.
+  - Persist WebDAV ETag/checksum checkpoints in PostgreSQL and reuse verified final or temporary uploads after restart.
 - Document storage policy:
   - S3 is the primary document store; Yandex Disk is an auxiliary ingest/provenance source and is not deleted by document sync.
   - `maintenance.sync_documents_s3` discovers from the configured Yandex root and uses bytes in this order: hash-valid local cache, existing S3 object, Yandex Disk.

@@ -130,14 +130,12 @@ yandex:
       image: ttimg
       book_previews: ttbook-previews
 
-object_storage:
-  shayan_archive:
-    endpoint_url: https://storage.yandexcloud.net
-    region_name: ru-central1
-    bucket: ""
-    prefix: shayan
-    access_key_id: "<REDACTED>"
-    secret_access_key: "<REDACTED>"
+nextcloud:
+  webdav_url: https://nx104082.your-storageshare.de/remote.php/dav/files/Admin
+  username: Admin
+  password: "<REDACTED>"
+  shayan:
+    target_dir: /Manzara/Shayan
 encryption_key: "<REDACTED>"
 
 database_url: "<REDACTED>"

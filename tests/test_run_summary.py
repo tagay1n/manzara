@@ -88,6 +88,35 @@ def test_library_preview_summary_uses_artifact_counts() -> None:
     }
 
 
+def test_shayan_webdav_summary_uses_artifact_counts() -> None:
+    summary = build_structured_run_summary(
+        task_id="shayan.transfer_yadisk_webdav",
+        panel_id="shayan",
+        status="completed",
+        exit_code=0,
+        error_text=None,
+        stop_mode=None,
+        started_at=None,
+        finished_at=None,
+        log_lines=[],
+        artifacts={
+            "kind": "shayan.yadisk_webdav_transfer_summary",
+            "copied": 7,
+            "reused": 3,
+            "failed": 1,
+        },
+    )
+
+    assert summary["message"] == (
+        "Nextcloud copy completed: 7 copied, 3 reused, 1 failed."
+    )
+    assert {item["label"]: item["value"] for item in summary["highlights"]} == {
+        "Copied": "7",
+        "Reused": "3",
+        "Failed": "1",
+    }
+
+
 def test_document_sync_summary_uses_structured_artifact() -> None:
     artifacts = {
         "kind": "maintenance.document_s3_sync_summary",

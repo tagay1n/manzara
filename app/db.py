@@ -2121,56 +2121,65 @@ class Database:
                 )
         return int(cur.rowcount)
 
-    def upsert_shayan_s3_transfer(
+    def upsert_shayan_webdav_transfer(
         self,
         *,
         source_path: str,
         category: str,
         source_md5: str,
         source_size: int,
-        target_bucket: str,
-        target_key: str,
+        target_path: str,
     ) -> None:
-        """Discover or refresh one Yandex Disk video transfer checkpoint."""
+        """Discover or refresh one Yandex-to-Nextcloud transfer checkpoint."""
         now = utc_now()
         with self._lock:
             with self._connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO shayan_s3_transfers (
+                    INSERT INTO shayan_webdav_transfers (
                         source_path, category, source_md5, source_size,
-                        target_bucket, target_key, status, error_text,
+                        target_path, status, error_text,
                         discovered_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?, ?, ?)
                     ON CONFLICT(source_path) DO UPDATE SET
                         category = excluded.category,
                         source_md5 = excluded.source_md5,
                         source_size = excluded.source_size,
-                        target_bucket = excluded.target_bucket,
-                        target_key = excluded.target_key,
+                        target_path = excluded.target_path,
                         status = CASE
-                            WHEN shayan_s3_transfers.source_md5 = excluded.source_md5
-                             AND shayan_s3_transfers.source_size = excluded.source_size
-                             AND shayan_s3_transfers.target_bucket = excluded.target_bucket
-                             AND shayan_s3_transfers.target_key = excluded.target_key
-                            THEN shayan_s3_transfers.status
+                            WHEN shayan_webdav_transfers.source_md5 = excluded.source_md5
+                             AND shayan_webdav_transfers.source_size = excluded.source_size
+                             AND shayan_webdav_transfers.target_path = excluded.target_path
+                            THEN shayan_webdav_transfers.status
                             ELSE 'pending'
                         END,
                         error_text = CASE
-                            WHEN shayan_s3_transfers.source_md5 = excluded.source_md5
-                             AND shayan_s3_transfers.source_size = excluded.source_size
-                             AND shayan_s3_transfers.target_bucket = excluded.target_bucket
-                             AND shayan_s3_transfers.target_key = excluded.target_key
-                            THEN shayan_s3_transfers.error_text
+                            WHEN shayan_webdav_transfers.source_md5 = excluded.source_md5
+                             AND shayan_webdav_transfers.source_size = excluded.source_size
+                             AND shayan_webdav_transfers.target_path = excluded.target_path
+                            THEN shayan_webdav_transfers.error_text
+                            ELSE NULL
+                        END,
+                        target_etag = CASE
+                            WHEN shayan_webdav_transfers.source_md5 = excluded.source_md5
+                             AND shayan_webdav_transfers.source_size = excluded.source_size
+                             AND shayan_webdav_transfers.target_path = excluded.target_path
+                            THEN shayan_webdav_transfers.target_etag
+                            ELSE NULL
+                        END,
+                        target_checksum = CASE
+                            WHEN shayan_webdav_transfers.source_md5 = excluded.source_md5
+                             AND shayan_webdav_transfers.source_size = excluded.source_size
+                             AND shayan_webdav_transfers.target_path = excluded.target_path
+                            THEN shayan_webdav_transfers.target_checksum
                             ELSE NULL
                         END,
                         discovered_at = excluded.discovered_at,
                         moved_at = CASE
-                            WHEN shayan_s3_transfers.source_md5 = excluded.source_md5
-                             AND shayan_s3_transfers.source_size = excluded.source_size
-                             AND shayan_s3_transfers.target_bucket = excluded.target_bucket
-                             AND shayan_s3_transfers.target_key = excluded.target_key
-                            THEN shayan_s3_transfers.moved_at
+                            WHEN shayan_webdav_transfers.source_md5 = excluded.source_md5
+                             AND shayan_webdav_transfers.source_size = excluded.source_size
+                             AND shayan_webdav_transfers.target_path = excluded.target_path
+                            THEN shayan_webdav_transfers.moved_at
                             ELSE NULL
                         END,
                         updated_at = excluded.updated_at
@@ -2180,48 +2189,54 @@ class Database:
                         str(category),
                         str(source_md5).lower(),
                         int(source_size),
-                        str(target_bucket),
-                        str(target_key),
+                        str(target_path),
                         now,
                         now,
                         now,
                     ),
                 )
 
-    def list_shayan_s3_transfer_candidates(self) -> List[Dict[str, Any]]:
-        """Return unfinished Yandex Disk to S3 checkpoints in stable order."""
+    def list_shayan_webdav_transfer_candidates(self) -> List[Dict[str, Any]]:
+        """Return unfinished Yandex-to-Nextcloud checkpoints in stable order."""
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT source_path, category, source_md5, source_size,
-                       target_bucket, target_key, status, error_text,
+                       target_path, target_etag, target_checksum,
+                       status, error_text,
                        discovered_at, last_attempt_at, moved_at, updated_at
-                FROM shayan_s3_transfers
-                WHERE status <> 'moved'
+                FROM shayan_webdav_transfers
+                WHERE status NOT IN ('uploaded', 'moved')
                 ORDER BY discovered_at ASC, source_path ASC
                 """
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def mark_shayan_s3_transfer_state(
+    def mark_shayan_webdav_transfer_state(
         self,
         source_path: str,
         *,
         status: str,
         error_text: Optional[str] = None,
+        target_etag: Optional[str] = None,
+        target_checksum: Optional[str] = None,
     ) -> int:
-        """Persist one validated transfer state transition."""
+        """Persist one validated Nextcloud transfer state transition."""
         allowed = {"pending", "transferring", "uploaded", "moved", "failed"}
         normalized_status = str(status or "").strip()
         if normalized_status not in allowed:
-            raise ValueError(f"Invalid Shayan S3 transfer status: {normalized_status}")
+            raise ValueError(
+                f"Invalid Shayan WebDAV transfer status: {normalized_status}"
+            )
         now = utc_now()
         with self._lock:
             with self._connect() as conn:
                 cur = conn.execute(
                     """
-                    UPDATE shayan_s3_transfers
+                    UPDATE shayan_webdav_transfers
                     SET status = ?, error_text = ?, last_attempt_at = ?,
+                        target_etag = COALESCE(?, target_etag),
+                        target_checksum = COALESCE(?, target_checksum),
                         moved_at = CASE WHEN ? = 'moved' THEN ? ELSE moved_at END,
                         updated_at = ?
                     WHERE source_path = ?
@@ -2230,6 +2245,8 @@ class Database:
                         normalized_status,
                         str(error_text or "").strip()[:4000] or None,
                         now,
+                        str(target_etag or "").strip() or None,
+                        str(target_checksum or "").strip().lower() or None,
                         normalized_status,
                         now,
                         now,

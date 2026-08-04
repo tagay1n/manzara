@@ -63,7 +63,7 @@ Flow tasks (seeded at startup):
 - `shayan.scan_changes`
 - `shayan.download_new`
 - `shayan.upload_yadisk`
-- `shayan.transfer_yadisk_s3`
+- `shayan.transfer_yadisk_webdav`
 - `maintenance.pgbackrest_backup_full`
 - `maintenance.pgbackrest_backup_incr`
 - `maintenance.sync_documents_s3`
@@ -106,7 +106,7 @@ Runtime control behavior:
 - Task and flow pages render run history with backend-provided structured summaries (`runs.summary_json`)
 - Shayan scan/download run summaries include structured task artifacts (for example scan added/changed/removed counts) in `runs.summary_json.artifacts`.
 - Shayan Yandex upload keeps resumable state in `shayan_manifest_entries` (`yadisk_status`, `yadisk_uploaded_payload_hash`, `yadisk_remote_path`, `yadisk_last_error`, timestamps).
-- Shayan Yandex-to-S3 transfer checkpoints each remote video in `shayan_s3_transfers`. It verifies S3 object size and source MD5 metadata before removing the Yandex Disk source, stops at file boundaries, and resumes unfinished rows.
+- Shayan Yandex-to-Nextcloud transfer checkpoints each video in `shayan_webdav_transfers`. It uses Nextcloud chunked upload v2, assembles into deterministic temporary DAV paths, and independently verifies content before the final DAV move. Verified rows remain `uploaded`, making subsequent runs skip them without uploading again. The task emits chunk-level byte progress over SSE, stops gracefully at file boundaries, and restarts only an interrupted current chunk upload. It never deletes, trashes, or moves source videos on Yandex Disk.
 - Long-running tasks can persist `runs.progress_json`; `task.progress` SSE events update determinate progress bars without frontend-owned domain state.
 - Document synchronization keeps Yandex Disk as a non-destructive auxiliary source while S3 is primary. It verifies existing objects, copies missing/corrupt objects, checkpoints verification on `document`, and reports live progress and structured run artifacts.
 
@@ -223,7 +223,7 @@ Environment variables:
 - `PG_BACKREST_S3_BUCKET` (default: `tt-monocorpus-postgres-backups`; used for S3 backup verification)
 - `PG_BACKREST_S3_ENDPOINT` (default: `https://storage.yandexcloud.net`)
 
-Optional YAML config for Shayan upload task:
+YAML configuration for Shayan Yandex upload and Nextcloud archival tasks:
 
 ```yaml
 yandex:
@@ -233,18 +233,17 @@ yandex:
       cartoons: "/neurotatarlar/video/shayantv/cartoons"
       shows: "/neurotatarlar/video/shayantv/shows"
 
-object_storage:
-  shayan_archive:
-    endpoint_url: "https://storage.yandexcloud.net"
-    region_name: "ru-central1"
-    bucket: "<video-bucket>"
-    prefix: "shayan"
-    access_key_id: "<access-key>"
-    secret_access_key: "<secret-key>"
+nextcloud:
+  webdav_url: "https://nx104082.your-storageshare.de/remote.php/dav/files/Admin"
+  username: "Admin"
+  password: "<password-or-app-password>"
+  shayan:
+    target_dir: "/Manzara/Shayan"
 ```
 
-The Yandex-to-S3 task preserves paths as `<prefix>/<category>/<program>/<season>/<file>`.
-It does not fall back to credentials or buckets from other configuration sections.
+The existing account password works in `nextcloud.password`. A revocable app password created under Nextcloud Personal settings -> Security is preferable when available. Never commit either credential. The archival task preserves paths as `/Manzara/Shayan/<category>/<program>/<season>/<file>`.
+
+The task sends 64 MiB chunks through Nextcloud's v2 upload endpoint, asks Nextcloud to assemble them into a deterministic staging path, and then streams the staged file back to verify its MD5 before the final WebDAV `MOVE`. A stored `OC-Checksum` value alone is never accepted as upload proof. The Yandex source is retained unchanged after successful verification.
 
 Embedded runtimes read YAML config in this order:
 1. `MANZARA_CONFIG_PATH` (if set)
@@ -377,6 +376,11 @@ Coverage notes:
   - `maintenance.monocorpus_meta_evaluate`
   - normalization refresh with real config + Gemini keys
   - `library.generate_book_previews` against a real PDF source and preview bucket
+  - `shayan.transfer_yadisk_webdav` against the real Nextcloud account:
+    - confirm password authentication and target quota before transfer
+    - confirm chunk-level byte progress reaches the task card through SSE
+    - confirm a video reaches the expected hierarchy, is hash-verified, and remains on Yandex Disk
+    - stop after one file and confirm the next run resumes without uploading the verified file again
   - `maintenance.sync_documents_s3` against real Yandex/S3 services:
     - confirm a cached document uploads without a Yandex download
     - confirm an unchanged verified object is skipped on the next run

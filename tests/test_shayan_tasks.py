@@ -22,10 +22,11 @@ def test_shayan_tasks_include_storage_transfer_stage() -> None:
     command = str(by_id["shayan.upload_yadisk"]["command"]["value"])
     assert "--stage upload_yadisk" in command
 
-    transfer = by_id["shayan.transfer_yadisk_s3"]
+    transfer = by_id["shayan.transfer_yadisk_webdav"]
     assert transfer["task_type"] == "transfer"
+    assert transfer["title"] == "Copy Yandex Disk videos to Nextcloud"
     assert transfer["icon_idle"] == "CloudCog"
-    assert "app.modules.shayan.runtime.transfer_yadisk_s3" in str(
+    assert "app.modules.shayan.runtime.transfer_yadisk_webdav" in str(
         transfer["command"]["value"]
     )
 
