@@ -17,6 +17,7 @@ from app.contracts import (
 from app.modules.library.collections import (
     get_collection_insights,
     get_collection_overview,
+    get_collection_review,
     list_collection_items,
     list_collections as list_library_collections,
     update_collection,
@@ -155,6 +156,7 @@ class EntitiesOperationsService:
     get_publisher_insights: Callable[..., Any]
     list_library_collections: Callable[..., Any]
     get_collection_insights: Callable[..., Any]
+    get_collection_review: Callable[..., Any]
     list_collection_items: Callable[..., Any]
     update_collection: Callable[..., Any]
 
@@ -249,6 +251,7 @@ def build_entities_operations() -> EntitiesOperations:
         get_publisher_insights=get_publisher_insights,
         list_library_collections=list_library_collections,
         get_collection_insights=get_collection_insights,
+        get_collection_review=get_collection_review,
         list_collection_items=list_collection_items,
         update_collection=update_collection,
     )

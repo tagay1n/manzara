@@ -195,28 +195,15 @@ const COLLECTIONS_PAGE_IDS = [
   "last-event",
   "collections-status",
   "collections-stat-grid",
-  "collections-top-list",
-  "collections-table-status",
-  "collections-table-body",
-  "clusters-root",
-  "queue-root",
-  "tab-badge-clusters",
-  "tab-badge-queue",
+  "collections-list-status",
+  "collections-list-root",
   "page-label",
   "page-prev",
   "page-next",
   "filter-search",
   "filter-status",
-  "filter-include",
   "filter-sort",
   "filter-apply",
-  "collection-items-status",
-  "collection-items-body",
-  "collection-title-input",
-  "collection-notes-input",
-  "collection-approve-btn",
-  "collection-reject-btn",
-  "collection-include-btn",
 ];
 
 class FakeClassList {
@@ -1927,7 +1914,7 @@ function createPublishersResolver({
 function createCollectionsResolver({
   summary = null,
 } = {}) {
-  return (path) => {
+  return (path, options = {}) => {
     if (path === "/api/library/collections") {
       return {
         global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
@@ -2008,6 +1995,75 @@ function createCollectionsResolver({
           },
         ],
       };
+    }
+    if (path.startsWith("/api/library/collections/11/review")) {
+      return {
+        available: true,
+        collection_id: 11,
+        collection: {
+          collection_id: 11,
+          title: "Collection One",
+          status: "suggested",
+          item_count: 3,
+          confidence: 0.81,
+        },
+        safety: {
+          approval_mutates_documents: false,
+          approval_effect: "Records the review decision only",
+          apply_task_id: "library.collection_apply",
+        },
+        summary: {
+          item_count: 3,
+          included_count: 2,
+          excluded_count: 1,
+          date_coverage: { count: 2, total: 3, percent: 66.7 },
+          issue_number_coverage: { count: 3, total: 3, percent: 100 },
+          date_range: { earliest: "1955-01-01", latest: "1955-03-01" },
+        },
+        grouping_evidence: [
+          { key: "shared_parent", label: "Shared source folder", value: "/press/collection" },
+          { key: "issue_markers", label: "Issue marker detection", value: "100%" },
+        ],
+        consistency: {
+          title: { dominant: "Collection One", count: 3, distinct: 1, percent: 100 },
+          publisher: { dominant: "Publisher", count: 2, distinct: 2, percent: 66.7 },
+        },
+        outliers_total: 1,
+        outliers: [
+          {
+            md5: "def456",
+            title: "Different issue",
+            file_name: "different.pdf",
+            path: "/press/collection/different.pdf",
+            publication_date: "",
+            issue_number: "3",
+            publisher: "Other Publisher",
+            genre: "Newspaper",
+            work_type: "NewsArticle",
+            included: false,
+            reasons: ["publisher_mismatch", "missing_date"],
+          },
+        ],
+        samples: [
+          {
+            md5: "abc123",
+            title: "Issue #1",
+            file_name: "issue-1.pdf",
+            path: "/path/issue-1.pdf",
+            publication_date: "1955-01-01",
+            issue_number: "1",
+            publisher: "Publisher",
+            genre: "Newspaper",
+            work_type: "NewsArticle",
+            number_of_pages: 4,
+            included: true,
+            reasons: [],
+          },
+        ],
+      };
+    }
+    if (path === "/api/library/collections/11" && options.method === "PATCH") {
+      return { ok: true, collection: { collection_id: 11, status: "approved" } };
     }
     if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
     throw new Error(`unexpected path: ${path}`);
@@ -2287,27 +2343,100 @@ test("library collections page renders API error state", async () => {
     /Collections unavailable/,
   );
   assert.match(
-    harness.elements.get("collections-table-status").textContent,
+    harness.elements.get("collections-list-status").textContent,
     /collections unavailable/,
   );
-  assert.match(harness.elements.get("clusters-root").innerHTML, /collections unavailable/);
+  assert.match(harness.elements.get("collections-list-root").innerHTML, /collections unavailable/);
 });
 
-test("library collections page prefers backend summary counters for badges", async () => {
+test("library collections page renders each candidate once without duplicate insight views", async () => {
   const harness = createHarness({
     source: LIBRARY_COLLECTIONS_SOURCE,
     ids: COLLECTIONS_PAGE_IDS,
-    selectors: [".classification-tabs"],
-    apiResolver: createCollectionsResolver({
-      summary: {
-        cluster_count: 37,
-        queue_total: 27,
-      },
-    }),
+    apiResolver: createCollectionsResolver(),
   });
   await harness.flush();
-  assert.equal(harness.elements.get("tab-badge-clusters").textContent, "37");
-  assert.equal(harness.elements.get("tab-badge-queue").textContent, "27");
+
+  const html = harness.elements.get("collections-list-root").innerHTML;
+  assert.equal((html.match(/Collection One/g) || []).length, 1);
+  assert.equal(
+    harness.apiCalls.some((call) => call.path === "/api/library/collections/insights"),
+    false,
+  );
+});
+
+test("library collections list expands evidence workspace", async () => {
+  const harness = createHarness({
+    source: LIBRARY_COLLECTIONS_SOURCE,
+    ids: COLLECTIONS_PAGE_IDS,
+    apiResolver: createCollectionsResolver(),
+  });
+  await harness.flush();
+
+  const listRoot = harness.elements.get("collections-list-root");
+  assert.match(listRoot.innerHTML, /collection-queue-trigger/);
+  assert.match(listRoot.innerHTML, /aria-expanded="false"/);
+
+  listRoot.dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== "[data-queue-collection-id]") return null;
+        return { dataset: { queueCollectionId: "11" } };
+      },
+    },
+  });
+  await harness.flush();
+
+  assert.equal(
+    harness.apiCalls.some(
+      (call) => call.path === "/api/library/collections/11/review",
+    ),
+    true,
+  );
+  assert.match(listRoot.innerHTML, /aria-expanded="true"/);
+  assert.match(listRoot.innerHTML, /Issue #1/);
+  assert.match(listRoot.innerHTML, /issue-1\.pdf/);
+  assert.match(listRoot.innerHTML, /Records the review decision only/);
+  assert.match(listRoot.innerHTML, /Issue marker detection/);
+  assert.match(listRoot.innerHTML, /Different issue/);
+  assert.match(listRoot.innerHTML, /Publisher differs/);
+  assert.match(listRoot.innerHTML, /Approve candidate/);
+  assert.match(listRoot.innerHTML, /Reject candidate/);
+  assert.match(listRoot.innerHTML, /Leave for later/);
+});
+
+test("library collections review approval records decision without apply task", async () => {
+  const harness = createHarness({
+    source: LIBRARY_COLLECTIONS_SOURCE,
+    ids: COLLECTIONS_PAGE_IDS,
+    apiResolver: createCollectionsResolver(),
+  });
+  await harness.flush();
+
+  harness.elements.get("collections-list-root").dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== "[data-queue-decision]") return null;
+        return {
+          dataset: {
+            queueDecisionId: "11",
+            queueDecision: "approve",
+          },
+        };
+      },
+    },
+  });
+  await harness.flush();
+
+  const patchCall = harness.apiCalls.find(
+    (call) => call.path === "/api/library/collections/11" && call.options.method === "PATCH",
+  );
+  assert.ok(patchCall);
+  assert.deepEqual(JSON.parse(patchCall.options.body), { status: "approved" });
+  assert.equal(
+    harness.apiCalls.some((call) => call.path.includes("collection_apply")),
+    false,
+  );
 });
 
 test("library classification detail page renders API error state", async () => {

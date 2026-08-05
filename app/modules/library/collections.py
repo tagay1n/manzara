@@ -279,6 +279,250 @@ def _serialize_collection_row(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _schema_names(value: Any) -> List[str]:
+    values = value if isinstance(value, list) else [value]
+    names: List[str] = []
+    for item in values:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _schema_issue_number(schema_obj: Dict[str, Any]) -> str:
+    about = schema_obj.get("about")
+    terms = about if isinstance(about, list) else [about]
+    for term in terms:
+        if not isinstance(term, dict):
+            continue
+        term_set = _normalize_text(term.get("inDefinedTermSet"))
+        if term_set not in {"issuenumber", "issue number"}:
+            continue
+        value = str(term.get("termCode") or term.get("name") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _review_item(row: Dict[str, Any]) -> Dict[str, Any]:
+    schema_obj = _safe_json(row.get("schema_org"), {})
+    if not isinstance(schema_obj, dict):
+        schema_obj = {}
+    signal = _safe_json(row.get("signal_json"), {})
+    if not isinstance(signal, dict):
+        signal = {}
+    path = str(row.get("item_hint") or "").strip()
+    title = str(
+        row.get("item_title")
+        or schema_obj.get("name")
+        or schema_obj.get("headline")
+        or _filename_stem(path)
+        or ""
+    ).strip()
+    work_type = str(schema_obj.get("@type") or "").strip()
+    genres = _schema_names(schema_obj.get("genre"))
+    publishers = _schema_names(schema_obj.get("publisher"))
+    published = str(schema_obj.get("datePublished") or "").strip()
+    pages_value = schema_obj.get("numberOfPages")
+    try:
+        pages = int(pages_value) if pages_value is not None else None
+    except (TypeError, ValueError):
+        pages = None
+    parent = str(signal.get("parent") or _path_parent(path) or "").strip()
+    return {
+        "md5": str(row.get("md5") or ""),
+        "title": title,
+        "file_name": PurePosixPath(_path_hint(path)).name if path else "",
+        "path": path,
+        "included": _as_bool(row.get("lib")),
+        "publication_date": published,
+        "issue_number": _schema_issue_number(schema_obj),
+        "publisher": publishers[0] if publishers else "",
+        "publishers": publishers,
+        "genre": genres[0] if genres else "",
+        "genres": genres,
+        "work_type": work_type,
+        "number_of_pages": pages,
+        "parent": parent,
+        "has_issue_marker": _as_bool(signal.get("has_issue_marker")),
+        "reasons": [],
+    }
+
+
+def _dominant_value(items: List[Dict[str, Any]], key: str) -> Dict[str, Any]:
+    values: Dict[str, Dict[str, Any]] = {}
+    for item in items:
+        display = str(item.get(key) or "").strip()
+        normalized = _normalize_text(display)
+        if not normalized:
+            continue
+        entry = values.setdefault(normalized, {"display": display, "count": 0})
+        entry["count"] += 1
+    if not values:
+        return {"dominant": None, "count": 0, "distinct": 0, "percent": 0.0}
+    dominant = sorted(
+        values.values(),
+        key=lambda entry: (-int(entry["count"]), str(entry["display"]).lower()),
+    )[0]
+    total = len(items)
+    count = int(dominant["count"])
+    return {
+        "dominant": str(dominant["display"]),
+        "count": count,
+        "distinct": len(values),
+        "percent": round((count / total) * 100, 1) if total else 0.0,
+    }
+
+
+def _coverage(items: List[Dict[str, Any]], key: str) -> Dict[str, Any]:
+    count = sum(
+        1
+        for item in items
+        if item.get(key) is not None and item.get(key) != "" and item.get(key) != []
+    )
+    total = len(items)
+    return {
+        "count": count,
+        "total": total,
+        "percent": round((count / total) * 100, 1) if total else 0.0,
+    }
+
+
+def _sample_items(items: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    if len(items) <= limit:
+        return [dict(item) for item in items]
+    ordered = sorted(
+        items,
+        key=lambda item: (
+            str(item.get("publication_date") or "9999"),
+            str(item.get("file_name") or ""),
+            str(item.get("md5") or ""),
+        ),
+    )
+    indexes = {
+        round(index * (len(ordered) - 1) / (limit - 1))
+        for index in range(limit)
+    }
+    return [dict(ordered[index]) for index in sorted(indexes)]
+
+
+def _build_collection_review_payload(
+    collection: Dict[str, Any],
+    rows: Iterable[Dict[str, Any]],
+    *,
+    sample_limit: int = 8,
+    outlier_limit: int = 20,
+) -> Dict[str, Any]:
+    """Build bounded review evidence from all linked collection items."""
+    sample_limit = max(3, min(int(sample_limit), 20))
+    outlier_limit = max(1, min(int(outlier_limit), 100))
+    items = [_review_item(dict(row)) for row in rows]
+    consistency = {
+        "title": _dominant_value(items, "title"),
+        "publisher": _dominant_value(items, "publisher"),
+        "genre": _dominant_value(items, "genre"),
+        "work_type": _dominant_value(items, "work_type"),
+        "parent": _dominant_value(items, "parent"),
+    }
+    heuristics = _safe_json(collection.get("heuristics_json"), {})
+    if not isinstance(heuristics, dict):
+        heuristics = {}
+    marker_ratio = float(heuristics.get("marker_ratio") or 0.0)
+    date_coverage = _coverage(items, "publication_date")
+    issue_coverage = _coverage(items, "issue_number")
+    mismatch_fields = {
+        "title": "title_mismatch",
+        "publisher": "publisher_mismatch",
+        "genre": "genre_mismatch",
+        "work_type": "type_mismatch",
+        "parent": "parent_mismatch",
+    }
+    for item in items:
+        reasons: List[str] = []
+        for key, reason in mismatch_fields.items():
+            dominant = consistency[key].get("dominant")
+            current = item.get(key)
+            pattern_is_stable = key in {"title", "parent"} or float(
+                consistency[key].get("percent") or 0.0
+            ) >= 90.0
+            if (
+                pattern_is_stable
+                and dominant
+                and current
+                and _normalize_text(current) != _normalize_text(dominant)
+            ):
+                reasons.append(reason)
+        if float(date_coverage["percent"]) >= 90.0 and not item.get("publication_date"):
+            reasons.append("missing_date")
+        if (
+            marker_ratio >= 0.5
+            and float(issue_coverage["percent"]) >= 90.0
+            and not item.get("issue_number")
+        ):
+            reasons.append("missing_issue_number")
+        item["reasons"] = reasons
+
+    outliers = [dict(item) for item in items if item["reasons"]]
+    outliers.sort(
+        key=lambda item: (
+            -len(item["reasons"]),
+            str(item.get("publication_date") or "9999"),
+            str(item.get("md5") or ""),
+        )
+    )
+    dates = sorted(
+        str(item["publication_date"])
+        for item in items
+        if str(item.get("publication_date") or "").strip()
+    )
+    summary = {
+        "item_count": len(items),
+        "included_count": sum(1 for item in items if item["included"]),
+        "excluded_count": sum(1 for item in items if not item["included"]),
+        "date_coverage": date_coverage,
+        "issue_number_coverage": issue_coverage,
+        "date_range": {
+            "earliest": dates[0] if dates else None,
+            "latest": dates[-1] if dates else None,
+        },
+    }
+    evidence = [
+        {
+            "key": "shared_parent",
+            "label": "Shared source folder",
+            "value": str(heuristics.get("parent") or consistency["parent"].get("dominant") or "-"),
+        },
+        {
+            "key": "normalized_stem",
+            "label": "Normalized title stem",
+            "value": str(heuristics.get("stem") or "-"),
+        },
+        {
+            "key": "issue_markers",
+            "label": "Issue marker detection",
+            "value": f"{round(marker_ratio * 100)}%",
+        },
+    ]
+    return {
+        "collection_id": int(collection.get("collection_id") or 0),
+        "collection": _serialize_collection_row(collection),
+        "safety": {
+            "approval_mutates_documents": False,
+            "approval_effect": "Records the review decision only",
+            "apply_task_id": "library.collection_apply",
+        },
+        "summary": summary,
+        "grouping_evidence": evidence,
+        "consistency": consistency,
+        "outliers_total": len(outliers),
+        "outliers": outliers[:outlier_limit],
+        "samples": _sample_items(items, sample_limit),
+    }
+
+
 def detect_collections(
     *,
     scan_limit: int = _DEFAULT_DETECT_SCAN_LIMIT,
@@ -1052,6 +1296,82 @@ def list_collection_items(
         }
 
 
+def get_collection_review(
+    collection_id: int,
+    *,
+    sample_limit: int = 8,
+    outlier_limit: int = 20,
+) -> Dict[str, Any]:
+    """Return bounded evidence for reviewing one collection candidate."""
+    collection_id = int(collection_id)
+    if collection_id <= 0:
+        return {
+            "available": False,
+            "error": "collection_id must be positive",
+            "config_source": None,
+            "collection_id": collection_id,
+        }
+    try:
+        engine, config_source = create_runtime_engine()
+        with engine.connect() as conn:
+            _set_search_path(conn)
+            collection = conn.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM library_collections
+                    WHERE collection_id = :collection_id
+                    """
+                ),
+                {"collection_id": collection_id},
+            ).mappings().first()
+            if not collection:
+                engine.dispose()
+                return {
+                    "available": False,
+                    "error": "Collection not found",
+                    "config_source": config_source,
+                    "collection_id": collection_id,
+                }
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT
+                        i.md5,
+                        i.item_title,
+                        i.item_hint,
+                        i.signal_json,
+                        m.lib,
+                        m.schema_org
+                    FROM library_collection_items i
+                    LEFT JOIN metadata m ON m.md5 = i.md5
+                    WHERE i.collection_id = :collection_id
+                    ORDER BY i.md5 ASC
+                    """
+                ),
+                {"collection_id": collection_id},
+            ).mappings().all()
+        engine.dispose()
+        return {
+            "available": True,
+            "error": None,
+            "config_source": config_source,
+            **_build_collection_review_payload(
+                dict(collection),
+                [dict(row) for row in rows],
+                sample_limit=sample_limit,
+                outlier_limit=outlier_limit,
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "available": False,
+            "error": str(exc),
+            "config_source": None,
+            "collection_id": collection_id,
+        }
+
+
 def update_collection(
     db: Database,
     collection_id: int,
@@ -1182,6 +1502,7 @@ __all__ = [
     "detect_collections",
     "get_collection_insights",
     "get_collection_overview",
+    "get_collection_review",
     "list_collection_items",
     "list_collections",
     "update_collection",

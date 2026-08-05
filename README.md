@@ -449,6 +449,7 @@ Library:
 - `GET /api/library/collections`
 - `GET /api/library/collections/table`
 - `GET /api/library/collections/insights`
+- `GET /api/library/collections/{collection_id}/review`
 - `GET /api/library/collections/{collection_id}/items`
 - `PATCH /api/library/collections/{collection_id}`
 

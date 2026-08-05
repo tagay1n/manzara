@@ -87,6 +87,7 @@ class EntitiesOperations(Protocol):
     get_publisher_insights: Callable[..., Any]
     list_library_collections: Callable[..., Any]
     get_collection_insights: Callable[..., Any]
+    get_collection_review: Callable[..., Any]
     list_collection_items: Callable[..., Any]
     update_collection: Callable[..., Any]
 

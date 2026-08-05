@@ -36,6 +36,7 @@ from app.factory import create_manzara_app
 from app.modules.library.collections import (
     get_collection_insights,
     get_collection_overview,
+    get_collection_review,
     list_collection_items,
     list_collections as list_library_collections,
     update_collection,
@@ -181,6 +182,7 @@ def _entities_operations() -> EntitiesOperations:
             "get_publisher_insights": get_publisher_insights,
             "list_library_collections": list_library_collections,
             "get_collection_insights": get_collection_insights,
+            "get_collection_review": get_collection_review,
             "list_collection_items": list_collection_items,
             "update_collection": update_collection,
         }

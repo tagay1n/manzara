@@ -161,5 +161,6 @@ def test_route_operation_services_expose_expected_attributes() -> None:
     assert callable(entities.get_publisher_insights)
     assert callable(entities.list_library_collections)
     assert callable(entities.get_collection_insights)
+    assert callable(entities.get_collection_review)
     assert callable(entities.list_collection_items)
     assert callable(entities.update_collection)

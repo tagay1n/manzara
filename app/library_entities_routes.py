@@ -149,6 +149,21 @@ def register_library_entities_routes(
         payload = operations.list_collection_items(collection_id, limit=limit)
         return JSONResponse(payload)
 
+    @app.get("/api/library/collections/{collection_id}/review")
+    def get_library_collection_review(
+        collection_id: int,
+        sample_limit: int = q_limit(default=8, minimum=3, maximum=20),
+        outlier_limit: int = q_limit(default=20, minimum=1, maximum=100),
+    ) -> JSONResponse:
+        """Return aggregate evidence and bounded examples for review."""
+        operations = operations_provider()
+        payload = operations.get_collection_review(
+            collection_id,
+            sample_limit=sample_limit,
+            outlier_limit=outlier_limit,
+        )
+        return JSONResponse(payload)
+
     @app.patch("/api/library/collections/{collection_id}")
     def patch_library_collection(
         collection_id: int,

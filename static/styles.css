@@ -1103,6 +1103,367 @@ button {
   gap: 6px;
 }
 
+.collections-review-page {
+  display: grid;
+  gap: 14px;
+}
+
+.collections-review-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.collections-review-head h2,
+.collections-review-head p {
+  margin: 0;
+}
+
+.collections-review-head p {
+  max-width: 680px;
+  margin-top: 4px;
+  color: #7897c0;
+  font-size: 12px;
+}
+
+.collections-stat-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.collections-review-toolbar {
+  margin: 0;
+  grid-template-columns: minmax(220px, 1fr) minmax(130px, 180px) minmax(150px, 200px) auto;
+}
+
+.collections-review-list {
+  display: grid;
+  gap: 7px;
+}
+
+.collections-review-empty {
+  border: 1px dashed #29466f;
+  border-radius: 9px;
+  padding: 28px 16px;
+  color: #7897c0;
+  text-align: center;
+  font-size: 12px;
+}
+
+.collection-queue-card {
+  border: 1px solid #223a62;
+  border-radius: 9px;
+  background: rgba(14, 28, 52, 0.54);
+  overflow: hidden;
+}
+
+.collection-queue-card.is-expanded {
+  border-color: #345b8d;
+  background: rgba(14, 28, 52, 0.76);
+}
+
+.collection-queue-trigger {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.collection-queue-trigger:hover {
+  background: rgba(61, 141, 255, 0.07);
+}
+
+.collection-queue-trigger:focus-visible {
+  outline: 2px solid #69a8ff;
+  outline-offset: -2px;
+}
+
+.collection-queue-copy,
+.collection-queue-item-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.collection-queue-title,
+.collection-queue-item-title {
+  color: #d7e9ff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.collection-queue-meta,
+.collection-queue-item-path {
+  color: #829fc5;
+  font-size: 11px;
+}
+
+.collection-queue-item-path {
+  overflow-wrap: anywhere;
+}
+
+.collection-queue-tail {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.collection-queue-tail svg {
+  width: 15px;
+  height: 15px;
+  color: #7897c0;
+  transition: transform 150ms ease;
+}
+
+.collection-queue-card.is-expanded .collection-queue-tail svg {
+  transform: rotate(180deg);
+}
+
+.collection-queue-details {
+  border-top: 1px solid #223a62;
+  padding: 10px 12px 12px;
+}
+
+.collection-queue-items {
+  display: grid;
+  gap: 6px;
+}
+
+.collection-queue-item {
+  border-bottom: 1px solid rgba(34, 58, 98, 0.7);
+  padding: 6px 0 9px;
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+}
+
+.collection-queue-item:last-child {
+  border-bottom: 0;
+}
+
+.collection-queue-actions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.collection-review-safety {
+  border: 1px solid #315b54;
+  border-radius: 8px;
+  background: rgba(20, 73, 60, 0.22);
+  padding: 9px 10px;
+  display: flex;
+  align-items: start;
+  gap: 9px;
+}
+
+.collection-review-safety svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  color: #70c7a4;
+}
+
+.collection-review-safety div {
+  display: grid;
+  gap: 2px;
+}
+
+.collection-review-safety strong {
+  color: #c9eee0;
+  font-size: 12px;
+}
+
+.collection-review-safety span {
+  color: #91baa9;
+  font-size: 11px;
+}
+
+.collection-review-summary {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 7px;
+}
+
+.collection-review-stat,
+.collection-review-metric {
+  border: 1px solid #243e67;
+  border-radius: 8px;
+  background: rgba(10, 22, 43, 0.54);
+  padding: 8px;
+  display: grid;
+  gap: 3px;
+}
+
+.collection-review-stat span,
+.collection-review-metric span {
+  color: #7897c0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.collection-review-stat strong,
+.collection-review-metric strong {
+  color: #d7e9ff;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+}
+
+.collection-review-metric small {
+  min-width: 0;
+  color: #8da8ca;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.collection-review-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.collection-review-section {
+  margin-top: 10px;
+  border: 1px solid #223a62;
+  border-radius: 8px;
+  background: rgba(10, 22, 43, 0.38);
+  padding: 9px;
+}
+
+.collection-review-grid .collection-review-section {
+  margin-top: 0;
+}
+
+.collection-review-section h3 {
+  margin: 0 0 8px;
+  color: #bcd5f5;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.collection-review-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.collection-review-evidence,
+.collection-review-metrics {
+  display: grid;
+  gap: 6px;
+}
+
+.collection-review-evidence-row {
+  border-bottom: 1px solid rgba(34, 58, 98, 0.65);
+  padding-bottom: 6px;
+  display: grid;
+  gap: 3px;
+}
+
+.collection-review-evidence-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.collection-review-evidence-row span {
+  color: #7897c0;
+  font-size: 10px;
+}
+
+.collection-review-evidence-row strong {
+  color: #c6dcf8;
+  font-size: 11px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.collection-review-outliers {
+  border-color: #4e4732;
+  background: rgba(76, 60, 23, 0.12);
+}
+
+.collection-queue-item.has-outlier {
+  border-left: 2px solid #b99b51;
+  padding-left: 8px;
+}
+
+.collection-review-item-facts {
+  color: #9db6d4;
+  font-size: 11px;
+}
+
+.collection-review-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.collection-review-reason {
+  border: 1px solid #64562f;
+  border-radius: 999px;
+  background: rgba(118, 91, 25, 0.16);
+  color: #d9c486;
+  padding: 2px 6px;
+  font-size: 9px;
+}
+
+.collection-review-decision-note {
+  margin-top: 10px;
+  color: #8fa9ca;
+  font-size: 11px;
+  text-align: right;
+}
+
+.collection-review-approve {
+  border-color: #39775f;
+  color: #bce8d6;
+}
+
+.collection-review-approve:hover {
+  background: rgba(36, 112, 82, 0.22);
+}
+
+@media (max-width: 760px) {
+  .collections-review-head {
+    display: grid;
+    align-items: start;
+  }
+
+  .collections-stat-grid,
+  .collections-review-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .collection-review-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .collection-queue-item {
+    display: grid;
+  }
+
+  .collection-review-actions .small-btn {
+    flex: 1 1 calc(50% - 7px);
+  }
+}
+
 .duplicate-head {
   display: flex;
   justify-content: space-between;

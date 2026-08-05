@@ -1266,6 +1266,30 @@ def test_library_collection_items_endpoint(test_client, monkeypatch) -> None:
     assert payload["items"][0]["md5"] == "abc123"
 
 
+def test_library_collection_review_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "get_collection_review",
+        lambda collection_id, **_kwargs: {
+            "available": True,
+            "error": None,
+            "collection_id": collection_id,
+            "summary": {"item_count": 24, "outliers": 2},
+            "samples": [],
+            "outliers": [],
+        },
+    )
+
+    response = client.get("/api/library/collections/9/review")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["collection_id"] == 9
+    assert payload["summary"]["item_count"] == 24
+
+
 def test_library_collection_update_endpoint(test_client, monkeypatch) -> None:
     client, main_app = test_client
 
