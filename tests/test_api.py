@@ -16,6 +16,7 @@ from app.modules.maintenance.workflow import (
     MAINTENANCE_BACKUP_FULL_WORKFLOW_ID,
     MAINTENANCE_BACKUP_INCR_SCHEDULE_ID,
     MAINTENANCE_BACKUP_INCR_WORKFLOW_ID,
+    maintenance_backup_incr_workflow_bundle,
 )
 from app.modules.shayan.workflow import SHAYAN_WEEKLY_SCHEDULE_ID, SHAYAN_WEEKLY_WORKFLOW_ID
 
@@ -184,6 +185,13 @@ def test_update_interval_schedule_minutes(test_client) -> None:
     assert int(schedule["interval_minutes"]) == 180
     assert schedule["enabled"] is True
     assert schedule["next_run_at"] is not None
+
+
+def test_incremental_backup_schedule_defaults_to_twelve_hours() -> None:
+    bundle = maintenance_backup_incr_workflow_bundle()
+
+    assert bundle["workflow"]["title"] == "Postgres incremental backup (every 12h)"
+    assert bundle["schedule"]["interval_minutes"] == 720
 
 
 def test_update_schedule_rejects_invalid_enabled_string(test_client) -> None:

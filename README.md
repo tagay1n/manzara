@@ -77,7 +77,7 @@ Flow tasks (seeded at startup):
 Workflows (seeded at startup):
 - `shayan.weekly_sync` (scan -> conditional download)
 - `maintenance.pgbackrest_full_weekly`
-- `maintenance.pgbackrest_incr_3h`
+- `maintenance.pgbackrest_incr_3h` (stable historical ID; runs every 12 hours)
 - `library.meta_evaluate`
 - `library.personality_normalization_refresh`
 - `library.publisher_normalization_refresh`
@@ -295,6 +295,7 @@ Model policy:
 
 Backup task note:
 - Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.
+- Incremental backups run every 12 hours; full backups run weekly on Sunday at `02:00 UTC`.
 - Manual and scheduled runs are non-interactive. If sudo access is not configured, backup tasks fail.
 - Success validation is S3-based:
   - capture S3 backup-label snapshot before run

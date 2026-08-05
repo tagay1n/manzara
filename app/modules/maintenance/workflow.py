@@ -103,12 +103,12 @@ def maintenance_backup_full_workflow_bundle() -> Dict[str, Any]:
 
 
 def maintenance_backup_incr_workflow_bundle() -> Dict[str, Any]:
-    """Return workflow bundle for 3-hour incremental pgBackRest backup."""
+    """Return workflow bundle for 12-hour incremental pgBackRest backup."""
     workflow = {
         "workflow_id": MAINTENANCE_BACKUP_INCR_WORKFLOW_ID,
         "panel_id": "maintenance",
-        "title": "Postgres incremental backup (every 3h)",
-        "description": "Run pgBackRest incremental backup every 3 hours.",
+        "title": "Postgres incremental backup (every 12h)",
+        "description": "Run pgBackRest incremental backup every 12 hours.",
         "enabled": 1,
     }
 
@@ -128,7 +128,7 @@ def maintenance_backup_incr_workflow_bundle() -> Dict[str, Any]:
         "day_of_week": 1,
         "time_of_day": "00:00",
         "timezone": "UTC",
-        "interval_minutes": 180,
+        "interval_minutes": 720,
         "enabled": 1,
         "overlap_policy": "skip",
         "catchup_policy": "once",
