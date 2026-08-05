@@ -452,6 +452,7 @@ Library:
 - `GET /api/library/collections/{collection_id}/review`
 - `GET /api/library/collections/{collection_id}/items`
 - `PATCH /api/library/collections/{collection_id}`
+- `POST /api/library/collections/{collection_id}/merge`
 
 Normalization API (`{entity_type}` = `personality|publisher`):
 - `GET /api/library/normalization/{entity_type}`

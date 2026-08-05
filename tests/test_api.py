@@ -1326,6 +1326,30 @@ def test_library_collection_update_endpoint(test_client, monkeypatch) -> None:
     assert payload["collection"]["include_in_library"] is True
 
 
+def test_library_collection_merge_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+
+    monkeypatch.setattr(
+        main_app,
+        "merge_collections",
+        lambda _db, source_collection_id, target_collection_id: {
+            "ok": True,
+            "source_collection_id": source_collection_id,
+            "target_collection_id": target_collection_id,
+            "moved_items": 6,
+        },
+    )
+
+    response = client.post(
+        "/api/library/collections/41/merge",
+        json={"target_collection_id": 38},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source_collection_id"] == 41
+    assert response.json()["target_collection_id"] == 38
+
+
 def test_library_normalization_overview_endpoint(test_client, monkeypatch) -> None:
     client, main_app = test_client
 

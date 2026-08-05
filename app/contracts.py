@@ -90,6 +90,7 @@ class EntitiesOperations(Protocol):
     get_collection_review: Callable[..., Any]
     list_collection_items: Callable[..., Any]
     update_collection: Callable[..., Any]
+    merge_collections: Callable[..., Any]
 
 
 class StreamRouteHandlers(TypedDict):

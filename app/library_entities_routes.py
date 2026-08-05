@@ -177,3 +177,24 @@ def register_library_entities_routes(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result)
+
+    @app.post("/api/library/collections/{collection_id}/merge")
+    def merge_library_collection(
+        collection_id: int,
+        payload: Dict[str, Any] = Body(...),
+    ) -> JSONResponse:
+        """Merge one detected collection into a canonical collection."""
+        target_id = payload.get("target_collection_id")
+        if isinstance(target_id, bool) or not isinstance(target_id, int):
+            raise HTTPException(status_code=400, detail="target_collection_id must be an integer")
+        state = state_provider()
+        operations = operations_provider()
+        try:
+            result = operations.merge_collections(
+                state.db,
+                source_collection_id=collection_id,
+                target_collection_id=target_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result)

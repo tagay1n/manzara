@@ -2060,10 +2060,29 @@ function createCollectionsResolver({
             reasons: [],
           },
         ],
+        merge_candidates: [
+          {
+            collection_id: 38,
+            title: "Canonical Collection",
+            status: "approved",
+            item_count: 7,
+            confidence: 0.99,
+            same_parent: true,
+            title_similarity: 0.88,
+          },
+        ],
       };
     }
     if (path === "/api/library/collections/11" && options.method === "PATCH") {
       return { ok: true, collection: { collection_id: 11, status: "approved" } };
+    }
+    if (path === "/api/library/collections/11/merge" && options.method === "POST") {
+      return {
+        ok: true,
+        source_collection_id: 11,
+        target_collection_id: 38,
+        moved_items: 3,
+      };
     }
     if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
     throw new Error(`unexpected path: ${path}`);
@@ -2376,6 +2395,8 @@ test("library collections list expands evidence workspace", async () => {
   const listRoot = harness.elements.get("collections-list-root");
   assert.match(listRoot.innerHTML, /collection-queue-trigger/);
   assert.match(listRoot.innerHTML, /aria-expanded="false"/);
+  assert.equal((listRoot.innerHTML.match(/>Reject</g) || []).length, 1);
+  assert.doesNotMatch(listRoot.innerHTML, />Approve</);
 
   listRoot.dispatch("click", {
     target: {
@@ -2400,9 +2421,17 @@ test("library collections list expands evidence workspace", async () => {
   assert.match(listRoot.innerHTML, /Issue marker detection/);
   assert.match(listRoot.innerHTML, /Different issue/);
   assert.match(listRoot.innerHTML, /Publisher differs/);
-  assert.match(listRoot.innerHTML, /Approve candidate/);
-  assert.match(listRoot.innerHTML, /Reject candidate/);
-  assert.match(listRoot.innerHTML, /Leave for later/);
+  assert.match(listRoot.innerHTML, />Approve</);
+  assert.equal((listRoot.innerHTML.match(/>Reject</g) || []).length, 1);
+  assert.ok(
+    listRoot.innerHTML.indexOf(">Reject<")
+      < listRoot.innerHTML.indexOf('<div id="collection-queue-details'),
+  );
+  assert.doesNotMatch(listRoot.innerHTML, /Leave for later|Approve candidate|Reject candidate/);
+  assert.ok(
+    listRoot.innerHTML.indexOf("collection-review-actions")
+      < listRoot.innerHTML.indexOf("collection-review-safety"),
+  );
 });
 
 test("library collections review approval records decision without apply task", async () => {
@@ -2437,6 +2466,61 @@ test("library collections review approval records decision without apply task", 
     harness.apiCalls.some((call) => call.path.includes("collection_apply")),
     false,
   );
+});
+
+test("library collections merge confirms and posts selected canonical target", async () => {
+  const harness = createHarness({
+    source: LIBRARY_COLLECTIONS_SOURCE,
+    ids: COLLECTIONS_PAGE_IDS,
+    apiResolver: createCollectionsResolver(),
+    confirmResult: true,
+  });
+  await harness.flush();
+  const root = harness.elements.get("collections-list-root");
+
+  root.dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== "[data-queue-collection-id]") return null;
+        return { dataset: { queueCollectionId: "11" } };
+      },
+    },
+  });
+  await harness.flush();
+
+  root.dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== "[data-queue-merge]") return null;
+        return { dataset: { queueMerge: "11" } };
+      },
+    },
+  });
+  await harness.flush();
+  assert.match(root.innerHTML, /Canonical Collection/);
+
+  root.dispatch("click", {
+    target: {
+      closest(selector) {
+        if (selector !== "[data-merge-target-id]") return null;
+        return {
+          dataset: {
+            mergeSourceId: "11",
+            mergeTargetId: "38",
+            mergeTargetTitle: "Canonical Collection",
+          },
+        };
+      },
+    },
+  });
+  await harness.flush();
+
+  const mergeCall = harness.apiCalls.find(
+    (call) => call.path === "/api/library/collections/11/merge",
+  );
+  assert.ok(mergeCall);
+  assert.equal(mergeCall.options.method, "POST");
+  assert.deepEqual(JSON.parse(mergeCall.options.body), { target_collection_id: 38 });
 });
 
 test("library classification detail page renders API error state", async () => {

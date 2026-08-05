@@ -13,6 +13,7 @@ const state = {
   reviewPayloads: {},
   reviewErrors: {},
   reviewLoading: {},
+  mergeSourceId: null,
 };
 
 const viewState = window.ManzaraCore.attachViewState(state, "loading");
@@ -123,22 +124,30 @@ function renderCollectionCard(item) {
   const expanded = collectionId > 0 && state.expandedCollectionId === collectionId;
   return `
     <article class="collection-queue-card${expanded ? " is-expanded" : ""}">
-      <button
-        type="button"
-        class="collection-queue-trigger"
-        data-queue-collection-id="${collectionId}"
-        aria-expanded="${expanded ? "true" : "false"}"
-        aria-controls="collection-queue-details-${collectionId}"
-      >
-        <span class="collection-queue-copy">
-          <span class="collection-queue-title">${escapeHtml(item.title || "-")}</span>
-          <span class="collection-queue-meta">${Number(item.item_count || 0)} items · ${Math.round(Number(item.confidence || 0) * 100)}% confidence</span>
-        </span>
-        <span class="collection-queue-tail">
-          <span class="panel-pill">${escapeHtml(item.status || "-")}</span>
-          <i data-lucide="chevron-down" aria-hidden="true"></i>
-        </span>
-      </button>
+      <div class="collection-queue-head">
+        <button
+          type="button"
+          class="collection-queue-trigger"
+          data-queue-collection-id="${collectionId}"
+          aria-expanded="${expanded ? "true" : "false"}"
+          aria-controls="collection-queue-details-${collectionId}"
+        >
+          <span class="collection-queue-copy">
+            <span class="collection-queue-title">${escapeHtml(item.title || "-")}</span>
+            <span class="collection-queue-meta">${Number(item.item_count || 0)} items · ${Math.round(Number(item.confidence || 0) * 100)}% confidence</span>
+          </span>
+          <span class="collection-queue-tail">
+            <span class="panel-pill">${escapeHtml(item.status || "-")}</span>
+            <i data-lucide="chevron-down" aria-hidden="true"></i>
+          </span>
+        </button>
+        <button
+          type="button"
+          class="small-btn collection-quick-reject"
+          data-queue-decision="reject"
+          data-queue-decision-id="${collectionId}"
+        >Reject</button>
+      </div>
       ${expanded ? renderReviewDetails(collectionId) : ""}
     </article>
   `;
@@ -183,9 +192,15 @@ function renderReviewDetails(collectionId) {
     .join("");
   const outliers = (payload.outliers || []).map(renderReviewItem).join("");
   const samples = (payload.samples || []).map(renderReviewItem).join("");
+  const mergeTargets = renderMergeTargets(collectionId, payload.merge_candidates || []);
 
   return `
     <div id="collection-queue-details-${collectionId}" class="collection-queue-details">
+      <div class="collection-queue-actions collection-review-actions">
+        <button type="button" class="small-btn" data-queue-merge="${collectionId}">Merge</button>
+        <button type="button" class="small-btn collection-review-approve" data-queue-decision="approve" data-queue-decision-id="${collectionId}">Approve</button>
+      </div>
+      ${state.mergeSourceId === collectionId ? mergeTargets : ""}
       <div class="collection-review-safety">
         <i data-lucide="shield-check" aria-hidden="true"></i>
         <div>
@@ -218,13 +233,36 @@ function renderReviewDetails(collectionId) {
         <h3>Representative documents</h3>
         <div class="collection-queue-items">${samples || '<div class="workflow-footnote">No linked items.</div>'}</div>
       </section>
-      <div class="collection-queue-actions collection-review-actions">
-        <button type="button" class="small-btn" data-queue-decision="defer" data-queue-decision-id="${collectionId}">Leave for later</button>
-        <button type="button" class="small-btn" data-queue-decision="reject" data-queue-decision-id="${collectionId}">Reject candidate</button>
-        <button type="button" class="small-btn collection-review-approve" data-queue-decision="approve" data-queue-decision-id="${collectionId}">Approve candidate</button>
-      </div>
     </div>
   `;
+}
+
+function renderMergeTargets(sourceId, candidates) {
+  const rows = candidates
+    .map(
+      (item) => `
+        <button
+          type="button"
+          class="collection-merge-target"
+          data-merge-source-id="${sourceId}"
+          data-merge-target-id="${Number(item.collection_id || 0)}"
+        >
+          <span>
+            <strong>${escapeHtml(item.title || "-")}</strong>
+            <small>${Number(item.item_count || 0)} items · ${escapeHtml(item.status || "-")}</small>
+          </span>
+          <span class="panel-pill">${item.same_parent ? "same folder" : `${Math.round(Number(item.title_similarity || 0) * 100)}% title match`}</span>
+        </button>`,
+    )
+    .join("");
+  return `
+    <section class="collection-merge-picker">
+      <div class="collection-merge-picker-head">
+        <div><strong>Merge into</strong><span>The selected collection remains canonical.</span></div>
+        <button type="button" class="icon-btn quiet" data-queue-merge="${sourceId}" aria-label="Close merge choices" title="Close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="collection-merge-targets">${rows || '<div class="workflow-footnote">No likely matches found.</div>'}</div>
+    </section>`;
 }
 
 function renderReviewStat(label, value) {
@@ -358,13 +396,6 @@ async function toggleCollection(collectionId) {
 async function decideCollection(collectionId, decision) {
   const id = Number(collectionId || 0);
   if (!id) return;
-  if (decision === "defer") {
-    state.expandedCollectionId = null;
-    renderCollectionList(state.tablePayload);
-    lucide.createIcons();
-    return;
-  }
-
   const status = decision === "approve" ? "approved" : "rejected";
   await api(`/api/library/collections/${encodeURIComponent(String(id))}`, {
     method: "PATCH",
@@ -376,6 +407,41 @@ async function decideCollection(collectionId, decision) {
   window.ManzaraUI.toast(
     status === "approved" ? "Collection approved." : "Collection rejected.",
   );
+}
+
+function toggleMergeTargets(collectionId) {
+  const id = Number(collectionId || 0);
+  state.mergeSourceId = state.mergeSourceId === id ? null : id;
+  renderCollectionList(state.tablePayload);
+  lucide.createIcons();
+}
+
+async function mergeCollection(sourceCollectionId, targetCollectionId) {
+  const sourceId = Number(sourceCollectionId || 0);
+  const targetId = Number(targetCollectionId || 0);
+  const review = state.reviewPayloads[String(sourceId)] || {};
+  const source = review.collection || {};
+  const target = (review.merge_candidates || []).find(
+    (item) => Number(item.collection_id || 0) === targetId,
+  );
+  if (!sourceId || !targetId || !target) return;
+  const confirmed = await window.ManzaraUI.confirm({
+    title: "Merge collections",
+    message: `${source.title || "This collection"} (${Number(source.item_count || 0)} items) will be merged into ${target.title || "the selected collection"} (${Number(target.item_count || 0)} items). The selected collection keeps its verdict and metadata.`,
+    acceptLabel: "Merge",
+    destructive: true,
+  });
+  if (!confirmed) return;
+
+  const result = await api(`/api/library/collections/${encodeURIComponent(String(sourceId))}/merge`, {
+    method: "POST",
+    body: JSON.stringify({ target_collection_id: targetId }),
+  });
+  delete state.reviewPayloads[String(sourceId)];
+  state.expandedCollectionId = null;
+  state.mergeSourceId = null;
+  await refreshAll();
+  window.ManzaraUI.toast(`Merged ${Number(result.moved_items || 0)} items.`);
 }
 
 function queueRefresh(delayMs = 250) {
@@ -440,6 +506,19 @@ function attachUiHandlers() {
     stopAll().catch((error) => console.error(error));
   });
   document.getElementById("collections-list-root").addEventListener("click", (event) => {
+    const mergeTarget = event.target?.closest?.("[data-merge-target-id]");
+    if (mergeTarget) {
+      mergeCollection(
+        mergeTarget.dataset.mergeSourceId,
+        mergeTarget.dataset.mergeTargetId,
+      ).catch((error) => console.error(error));
+      return;
+    }
+    const mergeToggle = event.target?.closest?.("[data-queue-merge]");
+    if (mergeToggle) {
+      toggleMergeTargets(mergeToggle.dataset.queueMerge);
+      return;
+    }
     const decisionTarget = event.target?.closest?.("[data-queue-decision]");
     if (decisionTarget) {
       decideCollection(

@@ -20,6 +20,7 @@ from app.modules.library.collections import (
     get_collection_review,
     list_collection_items,
     list_collections as list_library_collections,
+    merge_collections,
     update_collection,
 )
 from app.modules.library.insights import (
@@ -159,6 +160,7 @@ class EntitiesOperationsService:
     get_collection_review: Callable[..., Any]
     list_collection_items: Callable[..., Any]
     update_collection: Callable[..., Any]
+    merge_collections: Callable[..., Any]
 
 
 def _apply_overrides(service: Any, overrides: dict[str, Any] | None) -> Any:
@@ -254,6 +256,7 @@ def build_entities_operations() -> EntitiesOperations:
         get_collection_review=get_collection_review,
         list_collection_items=list_collection_items,
         update_collection=update_collection,
+        merge_collections=merge_collections,
     )
 
 

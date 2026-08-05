@@ -39,6 +39,7 @@ from app.modules.library.collections import (
     get_collection_review,
     list_collection_items,
     list_collections as list_library_collections,
+    merge_collections,
     update_collection,
 )
 from app.modules.library.insights import (
@@ -185,6 +186,7 @@ def _entities_operations() -> EntitiesOperations:
             "get_collection_review": get_collection_review,
             "list_collection_items": list_collection_items,
             "update_collection": update_collection,
+            "merge_collections": merge_collections,
         }
     )
 

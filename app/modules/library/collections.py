@@ -8,6 +8,7 @@ import re
 from collections import Counter, defaultdict
 from copy import deepcopy
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import PurePosixPath
 from typing import Any, Dict, Iterable, List
 from urllib.parse import unquote, urlparse
@@ -243,6 +244,65 @@ def _candidate_groups(rows: Iterable[Dict[str, Any]], min_items: int) -> List[Di
         key=lambda item: (-int(item["item_count"]), -float(item["confidence"]), str(item["title"]).lower())
     )
     return candidates
+
+
+def _combine_detected_candidates(
+    candidates: Iterable[Dict[str, Any]],
+    *,
+    primary_source_keys: Dict[int, str],
+    source_owners: Dict[str, int],
+) -> List[Dict[str, Any]]:
+    """Combine detected source variants already assigned to one canonical collection."""
+    buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for candidate in candidates:
+        source_key = str(candidate.get("source_key") or "")
+        owner_id = int(source_owners.get(source_key) or 0)
+        bucket_key = f"collection:{owner_id}" if owner_id else f"source:{source_key}"
+        buckets[bucket_key].append(candidate)
+
+    combined: List[Dict[str, Any]] = []
+    for bucket_key, grouped_candidates in buckets.items():
+        owner_id = int(bucket_key.split(":", 1)[1]) if bucket_key.startswith("collection:") else 0
+        primary_source_key = primary_source_keys.get(owner_id, "")
+        representative = next(
+            (
+                candidate
+                for candidate in grouped_candidates
+                if str(candidate.get("source_key") or "") == primary_source_key
+            ),
+            grouped_candidates[0],
+        )
+        item_by_md5: Dict[str, Dict[str, Any]] = {}
+        for candidate in grouped_candidates:
+            for item in candidate.get("items") or []:
+                md5 = str(item.get("md5") or "")
+                if md5:
+                    item_by_md5[md5] = item
+
+        source_keys = sorted(
+            {
+                str(candidate.get("source_key") or "")
+                for candidate in grouped_candidates
+                if candidate.get("source_key")
+            }
+        )
+        heuristics = deepcopy(representative.get("heuristics") or {})
+        heuristics["source_keys"] = source_keys
+        items = sorted(item_by_md5.values(), key=lambda item: (item.get("path") or "", item["md5"]))
+        merged = {
+            **representative,
+            "source_key": primary_source_key or str(representative.get("source_key") or ""),
+            "confidence": max(float(item.get("confidence") or 0.0) for item in grouped_candidates),
+            "item_count": len(items),
+            "items": items,
+            "heuristics": heuristics,
+        }
+        combined.append(merged)
+
+    combined.sort(
+        key=lambda item: (-int(item["item_count"]), -float(item["confidence"]), str(item["title"]).lower())
+    )
+    return combined
 
 
 def _collection_sort_sql(sort: str) -> str:
@@ -523,6 +583,57 @@ def _build_collection_review_payload(
     }
 
 
+def _find_collection_merge_candidates(
+    conn: Any,
+    collection: Dict[str, Any],
+    *,
+    limit: int = 8,
+) -> List[Dict[str, Any]]:
+    """Rank likely canonical targets without making the merge decision."""
+    source_id = int(collection.get("collection_id") or 0)
+    source_title = str(collection.get("normalized_title") or collection.get("title") or "")
+    source_parent = str(_safe_json(collection.get("heuristics_json"), {}).get("parent") or "")
+    rows = conn.execute(
+        text(
+            """
+            SELECT *
+            FROM library_collections
+            WHERE collection_id <> :collection_id
+            ORDER BY item_count DESC, confidence DESC, collection_id ASC
+            LIMIT 500
+            """
+        ),
+        {"collection_id": source_id},
+    ).mappings().all()
+
+    matches: List[Dict[str, Any]] = []
+    for row in rows:
+        candidate = dict(row)
+        candidate_parent = str(
+            _safe_json(candidate.get("heuristics_json"), {}).get("parent") or ""
+        )
+        same_parent = bool(source_parent and candidate_parent == source_parent)
+        candidate_title = str(candidate.get("normalized_title") or candidate.get("title") or "")
+        similarity = SequenceMatcher(None, source_title, candidate_title).ratio()
+        if not same_parent and similarity < 0.45:
+            continue
+        serialized = _serialize_collection_row(candidate)
+        serialized["same_parent"] = same_parent
+        serialized["title_similarity"] = round(similarity, 4)
+        matches.append(serialized)
+
+    matches.sort(
+        key=lambda item: (
+            -int(bool(item["same_parent"])),
+            -float(item["title_similarity"]),
+            -int(item["status"] == "approved"),
+            -int(item["item_count"]),
+            int(item["collection_id"]),
+        )
+    )
+    return matches[: max(1, min(int(limit), 20))]
+
+
 def detect_collections(
     *,
     scan_limit: int = _DEFAULT_DETECT_SCAN_LIMIT,
@@ -557,6 +668,25 @@ def detect_collections(
             ).mappings().all()
 
             candidates = _candidate_groups(rows, min_items)
+            collection_sources = conn.execute(
+                text("SELECT collection_id, source_key FROM library_collections")
+            ).mappings().all()
+            alias_sources = conn.execute(
+                text("SELECT collection_id, source_key FROM library_collection_source_aliases")
+            ).mappings().all()
+            primary_source_keys = {
+                int(row["collection_id"]): str(row["source_key"])
+                for row in collection_sources
+            }
+            source_owners = {
+                str(row["source_key"]): int(row["collection_id"])
+                for row in [*collection_sources, *alias_sources]
+            }
+            candidates = _combine_detected_candidates(
+                candidates,
+                primary_source_keys=primary_source_keys,
+                source_owners=source_owners,
+            )
             persisted = 0
             linked_items = 0
 
@@ -596,8 +726,16 @@ def detect_collections(
                             :updated_at
                         )
                         ON CONFLICT(source_key) DO UPDATE SET
-                            title = EXCLUDED.title,
-                            normalized_title = EXCLUDED.normalized_title,
+                            title = CASE
+                                WHEN library_collections.status = 'approved'
+                                    THEN library_collections.title
+                                ELSE EXCLUDED.title
+                            END,
+                            normalized_title = CASE
+                                WHEN library_collections.status = 'approved'
+                                    THEN library_collections.normalized_title
+                                ELSE EXCLUDED.normalized_title
+                            END,
                             confidence = EXCLUDED.confidence,
                             item_count = EXCLUDED.item_count,
                             heuristics_json = EXCLUDED.heuristics_json,
@@ -1351,6 +1489,7 @@ def get_collection_review(
                 ),
                 {"collection_id": collection_id},
             ).mappings().all()
+            merge_candidates = _find_collection_merge_candidates(conn, dict(collection))
         engine.dispose()
         return {
             "available": True,
@@ -1362,6 +1501,7 @@ def get_collection_review(
                 sample_limit=sample_limit,
                 outlier_limit=outlier_limit,
             ),
+            "merge_candidates": merge_candidates,
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -1370,6 +1510,152 @@ def get_collection_review(
             "config_source": None,
             "collection_id": collection_id,
         }
+
+
+def merge_collections(
+    db: Database,
+    *,
+    source_collection_id: int,
+    target_collection_id: int,
+) -> Dict[str, Any]:
+    """Merge one collection into a canonical target and retain source aliases."""
+    source_id = int(source_collection_id)
+    target_id = int(target_collection_id)
+    if source_id <= 0 or target_id <= 0:
+        raise ValueError("collection ids must be positive")
+    if source_id == target_id:
+        raise ValueError("source and target collections must be different")
+
+    now = _utc_now()
+    engine, _config_source = create_runtime_engine()
+    try:
+        with engine.begin() as conn:
+            _set_search_path(conn)
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM library_collections
+                    WHERE collection_id IN (:source_id, :target_id)
+                    FOR UPDATE
+                    """
+                ),
+                {"source_id": source_id, "target_id": target_id},
+            ).mappings().all()
+            by_id = {int(row["collection_id"]): dict(row) for row in rows}
+            source = by_id.get(source_id)
+            target = by_id.get(target_id)
+            if not source:
+                raise ValueError("Source collection not found")
+            if not target:
+                raise ValueError("Target collection not found")
+
+            moved_items = conn.execute(
+                text(
+                    """
+                    UPDATE library_collection_items
+                    SET collection_id = :target_id,
+                        updated_at = :updated_at
+                    WHERE collection_id = :source_id
+                    """
+                ),
+                {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "updated_at": now,
+                },
+            ).rowcount
+            conn.execute(
+                text(
+                    """
+                    UPDATE library_collection_source_aliases
+                    SET collection_id = :target_id,
+                        updated_at = :updated_at
+                    WHERE collection_id = :source_id
+                    """
+                ),
+                {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "updated_at": now,
+                },
+            )
+            conn.execute(
+                text("DELETE FROM library_collections WHERE collection_id = :source_id"),
+                {"source_id": source_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO library_collection_source_aliases (
+                        source_key, collection_id, created_at, updated_at
+                    ) VALUES (
+                        :source_key, :target_id, :created_at, :updated_at
+                    )
+                    ON CONFLICT (source_key) DO UPDATE SET
+                        collection_id = EXCLUDED.collection_id,
+                        updated_at = EXCLUDED.updated_at
+                    """
+                ),
+                {
+                    "source_key": source["source_key"],
+                    "target_id": target_id,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            target_row = conn.execute(
+                text(
+                    """
+                    UPDATE library_collections
+                    SET item_count = (
+                            SELECT COUNT(*)
+                            FROM library_collection_items
+                            WHERE collection_id = :target_id
+                        ),
+                        updated_at = :updated_at
+                    WHERE collection_id = :target_id
+                    RETURNING *
+                    """
+                ),
+                {"target_id": target_id, "updated_at": now},
+            ).mappings().one()
+            event_payload = {
+                "source_collection_id": source_id,
+                "source_title": source["title"],
+                "source_key": source["source_key"],
+                "target_collection_id": target_id,
+                "target_title": target["title"],
+                "moved_items": int(moved_items or 0),
+            }
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO library_collection_events (action, payload_json, created_at)
+                    VALUES ('collection.merged', :payload_json, :created_at)
+                    """
+                ),
+                {
+                    "payload_json": json.dumps(event_payload, ensure_ascii=False),
+                    "created_at": now,
+                },
+            )
+    finally:
+        engine.dispose()
+
+    db.insert_event(
+        "library.collections.merged",
+        task_id=None,
+        run_id=None,
+        panel_id="library",
+        payload=event_payload,
+    )
+    return {
+        "ok": True,
+        "error": None,
+        **event_payload,
+        "target": _serialize_collection_row(dict(target_row)),
+    }
 
 
 def update_collection(
