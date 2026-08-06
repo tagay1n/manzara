@@ -15,7 +15,6 @@ from app.modules.library.previews import (
     select_preview_pages,
 )
 from app.modules.library.tasks import (
-    LIBRARY_COLLECTION_TRIAGE_BENCHMARK_TASK_ID,
     LIBRARY_GENERATE_BOOK_PREVIEWS_TASK_ID,
     library_task_definitions,
 )
@@ -130,17 +129,12 @@ def test_library_preview_task_is_registered_from_library_module(tmp_path: Path) 
     assert "run_generate_book_previews.py" in task["command"]["value"]
 
 
-def test_library_collection_triage_task_is_registered(tmp_path: Path) -> None:
+def test_library_tasks_exclude_local_llm_tasks(tmp_path: Path) -> None:
     tasks = library_task_definitions(app_root=tmp_path)
-    task = next(
-        item
-        for item in tasks
-        if item["task_id"] == LIBRARY_COLLECTION_TRIAGE_BENCHMARK_TASK_ID
-    )
+    task_ids = {str(task["task_id"]) for task in tasks}
 
-    assert task["panel_id"] == "library"
-    assert task["task_type"] == "metadata"
-    assert "run_collection_triage_benchmark.py" in task["command"]["value"]
+    assert "library.collection_triage_benchmark" not in task_ids
+    assert "library.collection_triage_smoke" not in task_ids
 
 
 def test_preview_repository_checkpoints_and_aggregates_coverage(
