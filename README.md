@@ -71,6 +71,7 @@ Flow tasks (seeded at startup):
 - `library.collection_detect`
 - `library.collection_apply`
 - `library.generate_book_previews`
+- `library.collection_triage_benchmark`
 - `library.personality_suggestions_refresh`
 - `library.publisher_suggestions_refresh`
 
@@ -125,6 +126,11 @@ Library data tooling currently includes:
   - Merge candidates and merge action
   - Audit history with undo
   - Evidence samples
+- Read-only local collection-triage benchmarking:
+  - Compares configured Ollama models against existing approved/rejected collection decisions
+  - Keeps human verdicts out of prompts and never changes collection data
+  - Persists resumable per-model evaluations in PostgreSQL
+  - Emits live progress and structured quality/latency summaries through the standard task contracts
 
 ## Requirements
 
@@ -293,14 +299,48 @@ Model policy:
   - `library_meta_evaluate`
   - `library_normalization`
 
+Local collection-triage config:
+
+```yaml
+local_llm:
+  endpoint: "http://127.0.0.1:11434"
+  collection_triage:
+    models:
+      - "qwen3:4b"
+      - "qwen3:8b"
+    timeout_seconds: 300
+```
+
+Install and start Ollama separately, then download the configured models before running `library.collection_triage_benchmark`:
+
+```bash
+ollama pull qwen3:4b
+ollama pull qwen3:8b
+ollama list
+```
+
+The task performs one preflight before evaluation and fails with an actionable message when Ollama or a configured model is unavailable. It uses reviewed collection verdicts as a read-only gold set, checkpoints each completed `(collection, model, prompt, input)` evaluation in PostgreSQL, and writes the detailed report under `~/.manzara/library/local_llm/collection-triage/`. Stop requests finish the current model call and resume from completed checkpoints on the next run.
+
+The current development machine runs Ollama as a user service so it reuses `~/.ollama/models`:
+
+```bash
+systemctl --user status ollama
+systemctl --user restart ollama
+```
+
+The older system-wide unit has an unwritable `/usr/share/ollama` home and should be disabled once with `sudo systemctl disable --now ollama`; this does not affect the user service.
+
+For GPU smoke verification, check `nvidia-smi`, start a model, and inspect `ollama ps` while it is loaded. On the current development machine the matching NVIDIA 595 module is installed for kernel `7.0.0-28-generic`; boot that kernel before expecting GPU offload.
+
 Backup task note:
 - Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.
 - Incremental backups run every 12 hours; full backups run weekly on Sunday at `02:00 UTC`.
 - Manual and scheduled runs are non-interactive. If sudo access is not configured, backup tasks fail.
 - Success validation is S3-based:
   - capture S3 backup-label snapshot before run
-  - wait for a new label after run (default poll window: up to 120 seconds)
-  - verify required files for the new label exist in S3
+  - snapshot bounded `backup.info` repository markers before run
+  - wait for either a new label or changed repository markers after run (default poll window: up to 120 seconds)
+  - verify required files for the new or resumed label exist in S3
 - Configure passwordless sudo for backup commands:
 
 ```bash
@@ -392,6 +432,7 @@ Coverage notes:
 - Runtime-heavy external flows still require manual smoke checks, especially:
   - `maintenance.monocorpus_meta_evaluate`
   - normalization refresh with real config + Gemini keys
+  - collection-triage benchmark with both configured Qwen3 models and GPU offload verified through `ollama ps`
   - `library.generate_book_previews` against a real PDF source and preview bucket
   - `shayan.transfer_yadisk_webdav` against the real Nextcloud account:
     - confirm password authentication and target quota before transfer
@@ -435,6 +476,7 @@ Core:
 Library:
 - `GET /api/library`
 - `GET /api/library/previews/{md5}`
+- `GET /api/library/documents/{md5}/open`
 - `GET /api/library/classifications`
 - `GET /api/library/classifications/insights`
 - `GET /api/library/classifications/normalization-preview`

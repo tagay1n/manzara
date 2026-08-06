@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import yaml
 from boto3 import Session
+from botocore.exceptions import ClientError
 
 REDACTED_SENTINEL = "<REDACTED>"
 DEFAULT_ENDPOINT = "https://storage.yandexcloud.net"
@@ -19,6 +20,7 @@ _LABEL_RE = re.compile(r"new backup label\s*=\s*([A-Za-z0-9._-]+)", re.IGNORECAS
 _BUCKET_RE = re.compile(r"--repo1-s3-bucket=([^\s]+)")
 _ENDPOINT_RE = re.compile(r"--repo1-s3-endpoint=([^\s]+)")
 _STANZA_RE = re.compile(r"--stanza=([^\s]+)")
+_BACKUP_LABEL_RE = re.compile(r"^\d{8}-\d{6}F(?:_\d{8}-\d{6}[DI])?$")
 
 DEFAULT_PGBACKREST_S3_BUCKET = "tt-monocorpus-postgres-backups"
 DEFAULT_PGBACKREST_STANZA = "monocorpus"
@@ -209,11 +211,17 @@ def capture_pgbackrest_s3_state(
         listed = list_child_prefixes(s3, resolved_bucket, root, limit=max_scan_labels)
         for label in listed.get("labels", []):
             safe_label = str(label).strip()
-            if not safe_label:
+            if not _BACKUP_LABEL_RE.fullmatch(safe_label):
                 continue
             labels.add(safe_label)
             label_prefixes.setdefault(safe_label, [])
             label_prefixes[safe_label].append(f"{root}{safe_label}/")
+
+    repository_markers = capture_repository_markers(
+        s3,
+        resolved_bucket,
+        resolved_stanza,
+    )
 
     return {
         "ok": True,
@@ -224,6 +232,7 @@ def capture_pgbackrest_s3_state(
         "label_count": len(labels),
         "roots": scanned_roots,
         "label_prefixes": label_prefixes,
+        "repository_markers": repository_markers,
         "credentials_source": credentials.get("source"),
     }
 
@@ -288,6 +297,33 @@ def wait_for_pgbackrest_s3_change(
                 validated["poll_attempts"] = attempts
                 return validated
             return validated
+
+        markers_before = before_state.get("repository_markers") or {}
+        markers_after = current.get("repository_markers") or {}
+        if markers_after and markers_after != markers_before:
+            existing_candidates = sorted(
+                (
+                    label
+                    for label in labels_after & labels_before
+                    if _BACKUP_LABEL_RE.fullmatch(label)
+                ),
+                reverse=True,
+            )
+            if existing_candidates:
+                validated = _validate_new_labels_have_required_files(
+                    current,
+                    existing_candidates,
+                    config_path=config_path,
+                    monocorpus_repo_path=monocorpus_repo_path,
+                )
+                if validated.get("ok"):
+                    resumed_label = str(validated.get("label") or "").strip()
+                    validated["labels_added"] = []
+                    validated["labels_updated"] = [resumed_label] if resumed_label else []
+                    validated["verification_mode"] = "resumed_label_completed"
+                    validated["poll_attempts"] = attempts
+                    return validated
+                return validated
 
         now = time.monotonic()
         if now >= deadline:
@@ -397,6 +433,38 @@ def object_exists(s3: Any, bucket: str, key: str) -> bool:
         return False
 
 
+def capture_repository_markers(
+    s3: Any,
+    bucket: str,
+    stanza: str,
+) -> Dict[str, Dict[str, Any]]:
+    """Capture bounded S3 fingerprints changed when pgBackRest finalizes a backup."""
+    markers: Dict[str, Dict[str, Any]] = {}
+    for root_template in PGBACKREST_BACKUP_ROOTS:
+        root = root_template.format(stanza=stanza)
+        for name in ("backup.info", "backup.info.copy"):
+            key = f"{root}{name}"
+            try:
+                item = s3.head_object(Bucket=bucket, Key=key)
+            except ClientError as exc:
+                error = exc.response.get("Error") or {}
+                code = str(error.get("Code") or "")
+                status = int((exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0)
+                if status == 404 or code in {"404", "NoSuchKey", "NotFound"}:
+                    continue
+                raise
+            modified = item.get("LastModified")
+            if hasattr(modified, "isoformat"):
+                modified = modified.isoformat()
+            markers[key] = {
+                "etag": str(item.get("ETag") or "").strip('"'),
+                "size": int(item.get("ContentLength") or 0),
+                "last_modified": str(modified or ""),
+                "version_id": str(item.get("VersionId") or ""),
+            }
+    return markers
+
+
 def _validate_new_labels_have_required_files(
     state: Dict[str, Any],
     labels_added: list[str],
@@ -454,7 +522,7 @@ def _validate_new_labels_have_required_files(
 
     return {
         "ok": False,
-        "error": "New backup label detected, but required files are missing in S3.",
+        "error": "Backup repository changed, but required backup files are missing in S3.",
         "bucket": bucket,
         "stanza": stanza,
         "labels_added": labels_added,

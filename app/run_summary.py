@@ -130,6 +130,7 @@ def build_structured_run_summary(
         duplicate_paths = int(sync_artifacts.get("duplicates") or 0)
         uploaded = int(sync_artifacts.get("uploaded") or 0)
         updated = int(sync_artifacts.get("updated") or 0)
+        discovery_failed = int(sync_artifacts.get("discovery_failed") or 0)
         failed = int(sync_artifacts.get("failed") or 0)
         if sync_artifacts.get("kind") == "maintenance.document_s3_sync_summary":
             fully_synced = bool(sync_artifacts.get("fully_synced"))
@@ -164,13 +165,25 @@ def build_structured_run_summary(
                     },
                 ]
             )
+            if discovery_failed:
+                summary["highlights"].insert(
+                    -1,
+                    {"label": "Discovery failures", "value": str(discovery_failed)},
+                )
             if status == "failed":
                 summary["message"] = "Document sync failed before reconciliation completed."
             elif not discovery_complete:
-                summary["message"] = (
-                    f"Document sync stopped after {source_files} discovered files; "
-                    "full reconciliation was not evaluated."
-                )
+                if discovery_failed:
+                    summary["message"] = (
+                        "Document discovery completed with "
+                        f"{discovery_failed} unavailable Yandex paths; "
+                        "full reconciliation was not evaluated."
+                    )
+                else:
+                    summary["message"] = (
+                        f"Document sync stopped after {source_files} discovered files; "
+                        "full reconciliation was not evaluated."
+                    )
             elif fully_synced:
                 summary["message"] = (
                     f"Document reconciliation complete: {synced} source documents "

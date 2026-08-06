@@ -26,11 +26,34 @@ def test_capture_pgbackrest_s3_state_collects_labels(monkeypatch) -> None:
     def _fake_list_child_prefixes(_s3: Any, _bucket: str, prefix: str, *, limit: int = 5000) -> Dict[str, Any]:
         _ = limit
         if prefix.startswith("var/lib/pgbackrest/backup/"):
-            return {"labels": ["a1", "a2"], "count": 2, "prefix": prefix}
-        return {"labels": ["a2", "a3"], "count": 2, "prefix": prefix}
+            return {
+                "labels": [
+                    "20260801-010000F",
+                    "20260801-010000F_20260802-010000I",
+                    "backup.info",
+                ],
+                "count": 3,
+                "prefix": prefix,
+            }
+        return {
+            "labels": [
+                "20260801-010000F_20260802-010000I",
+                "20260803-010000F",
+                "backup.history",
+            ],
+            "count": 3,
+            "prefix": prefix,
+        }
 
     monkeypatch.setattr(verify, "Session", _Session)
     monkeypatch.setattr(verify, "list_child_prefixes", _fake_list_child_prefixes)
+    monkeypatch.setattr(
+        verify,
+        "capture_repository_markers",
+        lambda _s3, _bucket, _stanza: {
+            "backup/mono/backup.info": {"etag": "before", "size": 42}
+        },
+    )
 
     state = verify.capture_pgbackrest_s3_state(
         command_value="sudo -n -u postgres pgbackrest --stanza=mono --type=incr backup",
@@ -39,10 +62,18 @@ def test_capture_pgbackrest_s3_state_collects_labels(monkeypatch) -> None:
     assert state["ok"] is True
     assert state["stanza"] == "mono"
     assert state["bucket"] == "bucket"
-    assert state["labels"] == ["a1", "a2", "a3"]
+    assert state["labels"] == [
+        "20260801-010000F",
+        "20260801-010000F_20260802-010000I",
+        "20260803-010000F",
+    ]
     assert state["label_count"] == 3
-    assert "a2" in state["label_prefixes"]
-    assert len(state["label_prefixes"]["a2"]) == 2
+    assert "backup.info" not in state["label_prefixes"]
+    assert "20260801-010000F_20260802-010000I" in state["label_prefixes"]
+    assert len(state["label_prefixes"]["20260801-010000F_20260802-010000I"]) == 2
+    assert state["repository_markers"] == {
+        "backup/mono/backup.info": {"etag": "before", "size": 42}
+    }
 
 
 def test_wait_for_pgbackrest_s3_change_detects_new_label(monkeypatch) -> None:
@@ -118,3 +149,62 @@ def test_wait_for_pgbackrest_s3_change_fails_when_no_new_labels(monkeypatch) -> 
     )
     assert result["ok"] is False
     assert "No new backup label appeared in S3" in str(result["error"])
+
+
+def test_wait_for_pgbackrest_s3_change_accepts_completed_resumed_label(
+    monkeypatch,
+) -> None:
+    before = {
+        "ok": True,
+        "bucket": "bucket",
+        "stanza": "mono",
+        "endpoint": "https://s3.example.local",
+        "labels": ["20260801-010000F", "20260805-184249F"],
+        "repository_markers": {
+            "backup/mono/backup.info": {"etag": "before", "size": 100}
+        },
+    }
+    monkeypatch.setattr(
+        verify,
+        "capture_pgbackrest_s3_state",
+        lambda **_: {
+            "ok": True,
+            "bucket": "bucket",
+            "stanza": "mono",
+            "endpoint": "https://s3.example.local",
+            "labels": ["20260801-010000F", "20260805-184249F"],
+            "label_prefixes": {
+                "20260805-184249F": ["backup/mono/20260805-184249F/"]
+            },
+            "repository_markers": {
+                "backup/mono/backup.info": {"etag": "after", "size": 120}
+            },
+        },
+    )
+
+    validated_candidates: list[str] = []
+
+    def validate(_state, labels, **_kwargs):  # noqa: ANN001
+        validated_candidates.extend(labels)
+        return {
+            "ok": True,
+            "bucket": "bucket",
+            "stanza": "mono",
+            "label": labels[0],
+            "prefix": f"backup/mono/{labels[0]}/",
+            "object_count": 20,
+        }
+
+    monkeypatch.setattr(verify, "_validate_new_labels_have_required_files", validate)
+
+    result = verify.wait_for_pgbackrest_s3_change(
+        before_state=before,
+        wait_seconds=0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result["ok"] is True
+    assert validated_candidates[0] == "20260805-184249F"
+    assert result["labels_added"] == []
+    assert result["labels_updated"] == ["20260805-184249F"]
+    assert result["verification_mode"] == "resumed_label_completed"

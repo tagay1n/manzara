@@ -568,6 +568,7 @@ class TaskRunner:
 
         labels_before = backup_s3_state_before.get("labels") or []
         labels_added = s3_result.get("labels_added") or []
+        labels_updated = s3_result.get("labels_updated") or []
 
         self._emit_task_log(
             run_id=run_id,
@@ -577,6 +578,8 @@ class TaskRunner:
                 "S3 backup verification passed: "
                 f"labels_before={len(labels_before)}, "
                 f"labels_added={labels_added if labels_added else '[]'}, "
+                f"labels_updated={labels_updated if labels_updated else '[]'}, "
+                f"mode={s3_result.get('verification_mode') or 'new_label'}, "
                 f"bucket={s3_result.get('bucket')}, "
                 f"prefix={s3_result.get('prefix')}, "
                 f"objects={s3_result.get('object_count')}"

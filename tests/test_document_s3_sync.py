@@ -6,6 +6,8 @@ import hashlib
 import base64
 from pathlib import Path
 
+from yadisk.exceptions import PathNotFoundError
+
 from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
 from app.modules.maintenance.runtime.sync_documents_s3 import (
     _result_exit_code,
@@ -83,6 +85,16 @@ class StreamingYaDisk(FakeYaDisk):
     def listdir(self, path, **kwargs):  # noqa: ANN001
         if str(path) == "/documents/later":
             assert self.primary_s3.uploads, "first file must upload before later discovery"
+        return super().listdir(path, **kwargs)
+
+
+class VanishingDirectoryYaDisk(FakeYaDisk):
+    def listdir(self, path, **kwargs):  # noqa: ANN001
+        if str(path) == "/documents/vanished":
+            raise PathNotFoundError(
+                error_type="DiskNotFoundError",
+                msg="Resource not found",
+            )
         return super().listdir(path, **kwargs)
 
 
@@ -642,3 +654,39 @@ def test_stopped_streaming_discovery_does_not_report_database_only_rows(
     assert result["source_files"] == 1
     assert result["database_only_rows"] is None
     assert result["fully_synced"] is False
+
+
+def test_sync_skips_vanished_yandex_directory_and_reports_discovery_failure(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    available = b"available-document"
+    result = run_document_sync(
+        repository=FakeRepository(),
+        state_db=FakeStateDb(),
+        yadisk=VanishingDirectoryYaDisk(
+            {
+                "/documents/vanished/gone.pdf": b"gone",
+                "/documents/available.pdf": available,
+            }
+        ),
+        primary_s3=FakeS3(),
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=19,
+        should_stop=lambda: False,
+    )
+
+    assert result["source_files"] == 1
+    assert result["synced_source_documents"] == 1
+    assert result["discovery_failed"] == 1
+    assert result["failed"] == 1
+    assert result["discovery_complete"] is False
+    assert result["database_only_rows"] is None
+    assert result["fully_synced"] is False
+    assert _result_exit_code(result) == 0
+    assert (
+        "document sync: warning skipped unavailable Yandex path="
+        "/documents/vanished error=PathNotFoundError"
+    ) in capsys.readouterr().out

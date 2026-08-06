@@ -186,6 +186,14 @@ Notes:
     - No new Gemini calls from 1 hour before to 1 hour after reset.
     - In-flight requests may finish gracefully.
   - At daily reset rollover, clear exhausted markers for all keys.
+- Local LLM usage must be centralized behind the shared local-inference adapter:
+  - Resolve Ollama endpoint, model names, and timeouts from `local_llm` config; do not hardcode models in task logic.
+  - Keep local inference separate from the Gemini key/quota manager.
+  - Benchmark a model against owner-reviewed data before showing its suggestions in operational review UI.
+  - Treat local-model output as advisory by default. Never mutate collection decisions, metadata, or memberships without an explicit owner-approved action.
+  - Persist per-item evaluation checkpoints in PostgreSQL using model, prompt version, and input hash so tasks are resumable and stale evidence is not silently reused.
+  - Keep prompts label-safe during evaluation: human verdicts and target labels must not be included in model evidence.
+  - Record abstentions, malformed responses, request failures, quality metrics, and latency; do not report only successful model calls.
 
 ## Low-Context Scalability Rules
 These rules apply to both backend and frontend to keep implementation understandable as flows/tasks/pages grow.

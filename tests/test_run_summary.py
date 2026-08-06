@@ -213,3 +213,39 @@ def test_document_sync_summary_marks_incomplete_discovery_as_not_evaluated() -> 
     highlights = {item["label"]: item["value"] for item in summary["highlights"]}
     assert highlights["Database-only"] == "Not evaluated"
     assert highlights["Result"] == "Discovery incomplete"
+
+
+def test_document_sync_summary_reports_unavailable_yandex_paths() -> None:
+    summary = build_structured_run_summary(
+        task_id="maintenance.sync_documents_s3",
+        panel_id="maintenance",
+        status="completed",
+        exit_code=0,
+        error_text=None,
+        stop_mode=None,
+        started_at=None,
+        finished_at=None,
+        log_lines=[],
+        artifacts={
+            "kind": "maintenance.document_s3_sync_summary",
+            "discovery_complete": False,
+            "source_files": 10,
+            "source_documents": 9,
+            "database_rows_after": 100,
+            "synced_source_documents": 9,
+            "unsynced_source_documents": 0,
+            "database_only_rows": None,
+            "duplicates": 0,
+            "discovery_failed": 2,
+            "failed": 2,
+            "fully_synced": False,
+        },
+    )
+
+    assert summary["message"] == (
+        "Document discovery completed with 2 unavailable Yandex paths; "
+        "full reconciliation was not evaluated."
+    )
+    highlights = {item["label"]: item["value"] for item in summary["highlights"]}
+    assert highlights["Discovery failures"] == "2"
+    assert highlights["Database-only"] == "Not evaluated"

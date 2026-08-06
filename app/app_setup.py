@@ -19,6 +19,7 @@ from app.dependencies import build_core_read_payload_builders
 from app.control_routes import register_control_routes
 from app.core_read_routes import register_core_read_routes
 from app.library_classification_routes import register_library_classification_routes
+from app.library_document_routes import register_library_document_routes
 from app.library_entities_routes import register_library_entities_routes
 from app.library_normalization_routes import register_library_normalization_routes
 from app.library_preview_routes import register_library_preview_routes
@@ -57,6 +58,7 @@ def register_app_routes(
         state_provider=state_provider,
     )
     register_library_preview_routes(app, state_provider=state_provider)
+    register_library_document_routes(app, state_provider=state_provider)
     stream_route_handlers = register_stream_routes(
         app,
         state_provider=state_provider,

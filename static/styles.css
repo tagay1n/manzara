@@ -1421,6 +1421,17 @@ button {
   font-size: 11px;
 }
 
+.collection-review-item-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.collection-document-link {
+  text-decoration: none;
+}
+
 .collection-review-reasons {
   display: flex;
   flex-wrap: wrap;

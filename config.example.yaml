@@ -1,3 +1,11 @@
+local_llm:
+  endpoint: "http://127.0.0.1:11434"
+  collection_triage:
+    models:
+      - "qwen3:4b"
+      - "qwen3:8b"
+    timeout_seconds: 300
+
 gemini:
   models:
     library_meta_evaluate: "gemini-3-flash-preview"

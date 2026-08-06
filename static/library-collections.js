@@ -313,6 +313,10 @@ function renderReviewItem(item) {
     item.genre || item.work_type || null,
     item.number_of_pages ? `${item.number_of_pages} pages` : null,
   ].filter(Boolean);
+  const digest = String(item.md5 || "").toLowerCase();
+  const openLink = /^[0-9a-f]{32}$/.test(digest)
+    ? `<a class="small-btn collection-document-link" href="/api/library/documents/${encodeURIComponent(digest)}/open" target="_blank" rel="noopener noreferrer">Open</a>`
+    : "";
   return `
     <div class="collection-queue-item${reasons ? " has-outlier" : ""}">
       <div class="collection-queue-item-main">
@@ -321,7 +325,10 @@ function renderReviewItem(item) {
         <span class="collection-queue-item-path">${escapeHtml(item.file_name || item.path || "-")}</span>
         ${reasons ? `<span class="collection-review-reasons">${reasons}</span>` : ""}
       </div>
-      <span class="panel-pill">${item.included ? "included" : "not included"}</span>
+      <span class="collection-review-item-actions">
+        ${openLink}
+        <span class="panel-pill">${item.included ? "included" : "not included"}</span>
+      </span>
     </div>`;
 }
 

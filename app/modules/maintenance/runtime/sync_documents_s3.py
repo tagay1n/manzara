@@ -15,6 +15,7 @@ from boto3 import Session
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from yadisk_client import YaDisk
+from yadisk.exceptions import PathNotFoundError
 
 from app.artifacts import flow_artifacts_dir
 from app.db import Database
@@ -56,28 +57,34 @@ def _walk_files(
     *,
     should_stop: Callable[[], bool],
     on_directory: Callable[[str], None] | None = None,
+    on_missing_path: Callable[[str, Exception], None] | None = None,
 ) -> Iterable[dict[str, Any]]:
     stack = [str(root).rstrip("/")]
     while stack and not should_stop():
         current = stack.pop()
         if on_directory is not None:
             on_directory(current)
-        children = list(
-            yadisk.listdir(
-                current,
-                fields=[
-                    "name",
-                    "path",
-                    "type",
-                    "size",
-                    "md5",
-                    "mime_type",
-                    "resource_id",
-                    "public_key",
-                    "public_url",
-                ],
+        try:
+            children = list(
+                yadisk.listdir(
+                    current,
+                    fields=[
+                        "name",
+                        "path",
+                        "type",
+                        "size",
+                        "md5",
+                        "mime_type",
+                        "resource_id",
+                        "public_key",
+                        "public_url",
+                    ],
+                )
             )
-        )
+        except PathNotFoundError as exc:
+            if on_missing_path is not None:
+                on_missing_path(current, exc)
+            continue
         for resource in reversed(children):
             resource_type = str(_resource_value(resource, "type", "") or "")
             path = str(_resource_value(resource, "path", "") or "").strip()
@@ -443,6 +450,7 @@ def run_document_sync(
         "unchanged": 0,
         "duplicates": 0,
         "private_cleaned": 0,
+        "discovery_failed": 0,
         "failed": 0,
         "source_cache": 0,
         "source_primary_s3": 0,
@@ -486,6 +494,16 @@ def run_document_sync(
                 flush=True,
             )
 
+    def report_missing_path(path: str, exc: Exception) -> None:
+        counters["discovery_failed"] += 1
+        counters["failed"] += 1
+        error_text = str(exc).replace("\n", " ").strip()
+        print(
+            "document sync: warning skipped unavailable Yandex "
+            f"path={path} error={type(exc).__name__}: {error_text}",
+            flush=True,
+        )
+
     print(
         f"document sync: discovery start source_path={settings.source_path}",
         flush=True,
@@ -502,6 +520,7 @@ def run_document_sync(
         settings.source_path,
         should_stop=should_stop,
         on_directory=report_directory,
+        on_missing_path=report_missing_path,
     )
     for resource in resources:
         if stopped or should_stop():
@@ -771,11 +790,22 @@ def run_document_sync(
             stopped = True
             break
 
-    discovery_complete = not stopped and not should_stop()
+    discovery_complete = (
+        not stopped
+        and not should_stop()
+        and counters["discovery_failed"] == 0
+    )
     if discovery_complete:
         print(
             f"document sync: discovery complete files={source_files} "
             f"documents={total} directories={directories_scanned}",
+            flush=True,
+        )
+    elif not stopped and counters["discovery_failed"]:
+        print(
+            "document sync: discovery incomplete "
+            f"unavailable_paths={counters['discovery_failed']} "
+            f"files={source_files} documents={total} directories={directories_scanned}",
             flush=True,
         )
     stage = "stopped" if stopped else "completed"

@@ -2031,7 +2031,7 @@ function createCollectionsResolver({
         outliers_total: 1,
         outliers: [
           {
-            md5: "def456",
+            md5: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             title: "Different issue",
             file_name: "different.pdf",
             path: "/press/collection/different.pdf",
@@ -2046,7 +2046,7 @@ function createCollectionsResolver({
         ],
         samples: [
           {
-            md5: "abc123",
+            md5: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             title: "Issue #1",
             file_name: "issue-1.pdf",
             path: "/path/issue-1.pdf",
@@ -2417,6 +2417,11 @@ test("library collections list expands evidence workspace", async () => {
   assert.match(listRoot.innerHTML, /aria-expanded="true"/);
   assert.match(listRoot.innerHTML, /Issue #1/);
   assert.match(listRoot.innerHTML, /issue-1\.pdf/);
+  assert.match(
+    listRoot.innerHTML,
+    /\/api\/library\/documents\/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\/open/,
+  );
+  assert.match(listRoot.innerHTML, /target="_blank"/);
   assert.match(listRoot.innerHTML, /Records the review decision only/);
   assert.match(listRoot.innerHTML, /Issue marker detection/);
   assert.match(listRoot.innerHTML, /Different issue/);
