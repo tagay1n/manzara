@@ -15,10 +15,13 @@ from app.contracts import (
     RoutePayloadBuilders,
 )
 from app.modules.library.collections import (
+    decide_collection_proposal,
     get_collection_insights,
     get_collection_overview,
+    get_collection_proposal_review,
     get_collection_review,
     list_collection_items,
+    list_collection_proposals,
     list_collections as list_library_collections,
     merge_collections,
     update_collection,
@@ -159,6 +162,9 @@ class EntitiesOperationsService:
     get_collection_insights: Callable[..., Any]
     get_collection_review: Callable[..., Any]
     list_collection_items: Callable[..., Any]
+    list_collection_proposals: Callable[..., Any]
+    get_collection_proposal_review: Callable[..., Any]
+    decide_collection_proposal: Callable[..., Any]
     update_collection: Callable[..., Any]
     merge_collections: Callable[..., Any]
 
@@ -255,6 +261,9 @@ def build_entities_operations() -> EntitiesOperations:
         get_collection_insights=get_collection_insights,
         get_collection_review=get_collection_review,
         list_collection_items=list_collection_items,
+        list_collection_proposals=list_collection_proposals,
+        get_collection_proposal_review=get_collection_proposal_review,
+        decide_collection_proposal=decide_collection_proposal,
         update_collection=update_collection,
         merge_collections=merge_collections,
     )

@@ -36,4 +36,33 @@ def test_load_gemini_models_merges_overrides(monkeypatch, tmp_path: Path) -> Non
     models = gemini_config.load_gemini_models()
 
     assert models["library_normalization"] == "gemini-2.5-flash-lite"
-    assert models["library_meta_evaluate"] == gemini_config.DEFAULT_GEMINI_MODELS["library_meta_evaluate"]
+    assert (
+        models["library_meta_evaluate"]
+        == gemini_config.DEFAULT_GEMINI_MODELS["library_meta_evaluate"]
+    )
+
+
+def test_load_collection_validation_model_pool(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.local.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gemini": {
+                    "model_pools": {
+                        "library_collection_validation": [
+                            "model-a",
+                            "model-b",
+                            "model-a",
+                        ]
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
+
+    pools = gemini_config.load_gemini_model_pools()
+
+    assert pools["library_collection_validation"] == ["model-a", "model-b"]

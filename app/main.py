@@ -34,10 +34,13 @@ from app.dependencies import (
 )
 from app.factory import create_manzara_app
 from app.modules.library.collections import (
+    decide_collection_proposal,
     get_collection_insights,
     get_collection_overview,
+    get_collection_proposal_review,
     get_collection_review,
     list_collection_items,
+    list_collection_proposals,
     list_collections as list_library_collections,
     merge_collections,
     update_collection,
@@ -185,6 +188,9 @@ def _entities_operations() -> EntitiesOperations:
             "get_collection_insights": get_collection_insights,
             "get_collection_review": get_collection_review,
             "list_collection_items": list_collection_items,
+            "list_collection_proposals": list_collection_proposals,
+            "get_collection_proposal_review": get_collection_proposal_review,
+            "decide_collection_proposal": decide_collection_proposal,
             "update_collection": update_collection,
             "merge_collections": merge_collections,
         }

@@ -41,6 +41,10 @@ class GeminiRequestRejectedError(GeminiRuntimeError):
     """Raised when Gemini rejects one request payload (e.g. HTTP 400)."""
 
 
+class GeminiStopRequestedError(GeminiRuntimeError):
+    """Raised when a task requests graceful stop while waiting for Gemini."""
+
+
 @dataclass(frozen=True)
 class GeminiLease:
     """Reserved key context for one Gemini request attempt."""
@@ -99,14 +103,18 @@ class GeminiRuntimeManager:
         *,
         task_id: Optional[str],
         panel_id: Optional[str],
+        should_stop: Optional[Callable[[], bool]] = None,
     ):
         self.db = db
         self.task_id = task_id
         self.panel_id = panel_id
+        self.should_stop = should_stop or (lambda: False)
         self._rand = random.SystemRandom()
         self._local_lock = threading.Lock()
 
-    def _emit(self, event_type: str, payload: Dict[str, Any], *, run_id: Optional[int] = None) -> None:
+    def _emit(
+        self, event_type: str, payload: Dict[str, Any], *, run_id: Optional[int] = None
+    ) -> None:
         self.db.insert_event(
             event_type,
             task_id=self.task_id,
@@ -137,7 +145,9 @@ class GeminiRuntimeManager:
     @staticmethod
     def _blackout_window(now_utc: datetime) -> Dict[str, Any]:
         pt_now = now_utc.astimezone(_PACIFIC_TZ)
-        midnight_today = datetime(pt_now.year, pt_now.month, pt_now.day, tzinfo=_PACIFIC_TZ)
+        midnight_today = datetime(
+            pt_now.year, pt_now.month, pt_now.day, tzinfo=_PACIFIC_TZ
+        )
         midnight_next = midnight_today + timedelta(days=1)
 
         prev_start = midnight_today - timedelta(hours=1)
@@ -184,7 +194,9 @@ class GeminiRuntimeManager:
             control = self.db.ensure_gemini_runtime_control(cycle_label)
         return control
 
-    def _clear_elapsed_pause_if_needed(self, control: Dict[str, Any], now_utc: datetime) -> Dict[str, Any]:
+    def _clear_elapsed_pause_if_needed(
+        self, control: Dict[str, Any], now_utc: datetime
+    ) -> Dict[str, Any]:
         pause_until = _parse_ts(control.get("pause_until"))
         if pause_until is None or pause_until > now_utc:
             return control
@@ -197,7 +209,9 @@ class GeminiRuntimeManager:
         )
         return updated
 
-    def _wait_reason(self, control: Dict[str, Any], now_utc: datetime) -> Optional[Dict[str, Any]]:
+    def _wait_reason(
+        self, control: Dict[str, Any], now_utc: datetime
+    ) -> Optional[Dict[str, Any]]:
         blackout = self._blackout_window(now_utc)
         if blackout["active"]:
             return {
@@ -251,7 +265,9 @@ class GeminiRuntimeManager:
                     earliest_cooldown = cooldown_until
 
         if not available_by_account:
-            raise GeminiAllKeysExhaustedError(f"All Gemini keys exhausted for model '{model_name}'")
+            raise GeminiAllKeysExhaustedError(
+                f"All Gemini keys exhausted for model '{model_name}'"
+            )
 
         if not ready_by_account:
             return {
@@ -269,18 +285,32 @@ class GeminiRuntimeManager:
 
     def _sleep_until(self, wait_until: Optional[datetime]) -> None:
         if wait_until is None:
+            if self.should_stop():
+                raise GeminiStopRequestedError(
+                    "Gemini wait interrupted by graceful stop"
+                )
             time.sleep(1.0)
             return
         while True:
+            if self.should_stop():
+                raise GeminiStopRequestedError(
+                    "Gemini wait interrupted by graceful stop"
+                )
             now_utc = _utc_now()
             remaining = (wait_until - now_utc).total_seconds()
             if remaining <= 0:
                 return
             time.sleep(min(float(remaining), _MAX_WAIT_SLICE_SECONDS))
 
-    def acquire_key(self, *, model_name: str, run_id: Optional[int] = None) -> GeminiLease:
+    def acquire_key(
+        self, *, model_name: str, run_id: Optional[int] = None
+    ) -> GeminiLease:
         """Block until one key+model slot is available and reserve one-minute cooldown."""
         while True:
+            if self.should_stop():
+                raise GeminiStopRequestedError(
+                    "Gemini request skipped after graceful stop"
+                )
             now_utc = _utc_now()
             keys = self._sync_key_registry()
             if not keys:
@@ -295,7 +325,9 @@ class GeminiRuntimeManager:
                 continue
 
             self._ensure_model_rows(keys, model_name)
-            decision = self._pick_candidate(keys=keys, model_name=model_name, now_utc=now_utc)
+            decision = self._pick_candidate(
+                keys=keys, model_name=model_name, now_utc=now_utc
+            )
             if decision.get("type") == "wait":
                 self._sleep_until(decision.get("wait_until"))
                 continue
@@ -391,7 +423,9 @@ class GeminiRuntimeManager:
                 error_text=error_text,
                 exhausted=False,
             )
-            self.db.set_gemini_pause(_iso_utc(pause_until), reason=f"gemini_{status_code}")
+            self.db.set_gemini_pause(
+                _iso_utc(pause_until), reason=f"gemini_{status_code}"
+            )
             self._emit(
                 "gemini.pause.started",
                 {
@@ -547,7 +581,9 @@ class GeminiRuntimeManager:
                 models_by_key.get(key.key_id, []),
                 key=lambda item: str(item.get("model_name") or ""),
             )
-            exhausted_models = [item["model_name"] for item in model_rows if item.get("exhausted")]
+            exhausted_models = [
+                item["model_name"] for item in model_rows if item.get("exhausted")
+            ]
             grouped.setdefault(key.account_id, []).append(
                 {
                     "key_id": key.key_id,
@@ -583,7 +619,9 @@ class GeminiRuntimeManager:
             "global": {
                 "now_utc": _iso_utc(now_utc),
                 "timezone_reset": "America/Los_Angeles",
-                "cycle_label": str(control.get("cycle_label") or self._cycle_label(now_utc)),
+                "cycle_label": str(
+                    control.get("cycle_label") or self._cycle_label(now_utc)
+                ),
                 "pause_until": pause_until,
                 "pause_active": bool(pause_active),
                 "pause_reason": control.get("last_pause_reason"),

@@ -139,6 +139,51 @@ def register_library_entities_routes(
         )
         return JSONResponse(payload)
 
+    @app.get("/api/library/collection-proposals")
+    def get_library_collection_proposals(
+        status: str = q_text(default="review_ready", max_length=40),
+        search: str = q_text(),
+        page: int = q_page(),
+        page_size: int = q_page_size(default=25, max_value=100),
+    ) -> JSONResponse:
+        """Return paginated collection proposals."""
+        return JSONResponse(
+            operations_provider().list_collection_proposals(
+                status=status,
+                search=search,
+                page=page,
+                page_size=page_size,
+            )
+        )
+
+    @app.get("/api/library/collection-proposals/{proposal_id}")
+    def get_library_collection_proposal(proposal_id: int) -> JSONResponse:
+        """Return one proposal with per-document evidence."""
+        return JSONResponse(operations_provider().get_collection_proposal_review(proposal_id))
+
+    @app.post("/api/library/collection-proposals/{proposal_id}/decision")
+    def decide_library_collection_proposal(
+        proposal_id: int,
+        payload: Dict[str, Any] = Body(...),
+    ) -> JSONResponse:
+        """Approve selected proposal items or reject the proposal."""
+        selected = payload.get("selected_md5s")
+        if selected is not None and (
+            not isinstance(selected, list)
+            or any(not isinstance(value, str) for value in selected)
+        ):
+            raise HTTPException(status_code=400, detail="selected_md5s must be an array of strings")
+        try:
+            result = operations_provider().decide_collection_proposal(
+                state_provider().db,
+                proposal_id,
+                decision=str(payload.get("decision") or "").strip(),
+                selected_md5s=selected,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result)
+
     @app.get("/api/library/collections/{collection_id}/items")
     def get_library_collection_items(
         collection_id: int,

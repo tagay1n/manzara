@@ -2,6 +2,11 @@ gemini:
   models:
     library_meta_evaluate: "gemini-3-flash-preview"
     library_normalization: "gemini-2.5-flash"
+  model_pools:
+    library_collection_validation:
+      - "gemini-3.6-flash"
+      - "gemini-3.5-flash"
+      - "gemini-3-flash-preview"
   accounts:
     tt:
       - "<REDACTED>"
@@ -9,99 +14,6 @@ gemini:
     secondary:
       - "<REDACTED>"
       - "<REDACTED>"
-
-# legacy fallback (still supported):
-gemini_api_keys:
-  # tt
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-#  foobar5754
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
- # foobar5755
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-# mjoef992
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-# gdt10148
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-# rfhf8723:
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  # fkfye68:
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  # kjeit637:
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
-  - "<REDACTED>"
 
 documents:
   cache_path: /home/tans1q/.monocorpus/0_entry_point

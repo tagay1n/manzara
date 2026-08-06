@@ -13,6 +13,7 @@ import pytest
     "relative_script_path",
     [
         "app/modules/library/runtime/run_collection_detect.py",
+        "app/modules/library/runtime/run_collection_validate.py",
         "app/modules/library/runtime/run_collection_apply.py",
         "app/modules/library/runtime/run_normalization_refresh.py",
         "app/modules/library/runtime/run_generate_book_previews.py",

@@ -1,57 +1,26 @@
 const state = {
   overviewPayload: null,
-  tablePayload: null,
   globalPayload: null,
-  viewState: "loading",
-  refreshTimer: null,
+  tablePayload: null,
+  mode: "review_ready",
+  page: 1,
+  pageSize: 25,
+  expandedId: null,
+  reviews: {},
   eventCursor: 0,
   eventStreamController: null,
   soundNotifier: null,
-  page: 1,
-  pageSize: 25,
-  expandedCollectionId: null,
-  reviewPayloads: {},
-  reviewErrors: {},
-  reviewLoading: {},
-  mergeSourceId: null,
 };
 
-const viewState = window.ManzaraCore.attachViewState(state, "loading");
+const api = (path, options = {}) => window.ManzaraCore.api(path, options);
+const escapeHtml = (value) => window.ManzaraCore.escapeHtml(value);
+const message = (text, options = {}) => window.ManzaraCore.renderWorkflowFootnoteMessage(text, options);
+const canReviewProposal = () => ["review_ready", "ai_dismissed"].includes(state.mode);
 
-async function api(path, options = {}) {
-  return window.ManzaraCore.api(path, options);
-}
-
-function escapeHtml(value) {
-  return window.ManzaraCore.escapeHtml(value);
-}
-
-function setStatusMessage(node, text, options = {}) {
-  window.ManzaraCore.setStatusMessage(node, text, options);
-}
-
-function renderWorkflowFootnoteMessage(text, options = {}) {
-  return window.ManzaraCore.renderWorkflowFootnoteMessage(text, options);
-}
-
-function initSoundNotifier() {
-  const createNotifier = window.ManzaraSound?.createNotifier;
-  if (typeof createNotifier === "function") {
-    state.soundNotifier = createNotifier({ repeatGapMs: 2000 });
-  }
-}
-
-function teardownSoundNotifier() {
-  state.soundNotifier?.teardown?.();
-  state.soundNotifier = null;
-}
-
-function renderGlobalState(payload) {
-  const active = payload.global.active_tasks || 0;
-  const activeWorkflows = payload.global.active_workflows || 0;
+function renderGlobal(payload) {
   document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
-    active,
-    activeWorkflows,
+    payload.global.active_tasks || 0,
+    payload.global.active_workflows || 0,
   );
   window.ManzaraCore.applyStopAllButton(
     document.getElementById("stop-all-btn"),
@@ -59,57 +28,96 @@ function renderGlobalState(payload) {
   );
 }
 
-function tableUrl() {
+function renderOverview(overview) {
+  const stats = overview.stats || {};
+  document.getElementById("collections-status").textContent = overview.available
+    ? "Collection state is current."
+    : `Collections unavailable: ${overview.error || "unknown error"}`;
+  document.getElementById("collections-stat-grid").innerHTML = `
+    <div class="library-stat-card"><span class="library-stat-label">Needs review</span><strong class="library-stat-value">${Number(stats.suggested_collections || 0)}</strong></div>
+    <div class="library-stat-card"><span class="library-stat-label">Awaiting AI</span><strong class="library-stat-value">${Number(stats.awaiting_validation || 0)}</strong></div>
+    <div class="library-stat-card"><span class="library-stat-label">Collections</span><strong class="library-stat-value">${Number(stats.approved_collections || 0)}</strong></div>
+    <div class="library-stat-card"><span class="library-stat-label">Members</span><strong class="library-stat-value">${Number(stats.items_linked || 0)}</strong></div>`;
+}
+
+function listUrl() {
   const params = new URLSearchParams({
     page: String(state.page),
     page_size: String(state.pageSize),
     search: document.getElementById("filter-search").value.trim(),
-    status: document.getElementById("filter-status").value,
-    include: "all",
-    sort: document.getElementById("filter-sort").value,
   });
-  return `/api/library/collections/table?${params.toString()}`;
-}
-
-function renderOverview(overview) {
-  state.overviewPayload = overview;
-  const stats = overview.stats || {};
-  if (overview.available) {
-    setStatusMessage(document.getElementById("collections-status"), "Review state is current.");
-  } else {
-    setStatusMessage(
-      document.getElementById("collections-status"),
-      `Collections unavailable: ${overview.error || "unknown error"}`,
-      { error: true },
-    );
+  if (state.mode === "collections") {
+    params.set("sort", "updated_desc");
+    return `/api/library/collections/table?${params.toString()}`;
   }
-  document.getElementById("collections-stat-grid").innerHTML = `
-    <div class="library-stat-card"><span class="library-stat-label">To review</span><span class="library-stat-value">${Number(stats.suggested_collections || 0)}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Approved</span><span class="library-stat-value">${Number(stats.approved_collections || 0)}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Linked items</span><span class="library-stat-value">${Number(stats.items_linked || 0)}</span></div>
-  `;
+  params.set("status", state.mode);
+  return `/api/library/collection-proposals?${params.toString()}`;
 }
 
-function renderCollectionList(payload) {
+function proposalCard(item) {
+  const id = Number(item.proposal_id || 0);
+  const expanded = state.expandedId === id;
+  const kind = item.proposal_type === "attach_to_collection" ? "Addition" : "New collection";
+  return `<article class="collection-queue-card${expanded ? " is-expanded" : ""}">
+    <div class="collection-queue-head">
+      <button class="collection-queue-trigger" data-proposal-toggle="${id}" aria-expanded="${expanded}">
+        <span class="collection-queue-copy">
+          <span class="collection-queue-title">${escapeHtml(item.title || "-")}</span>
+          <span class="collection-queue-meta">${kind} · ${Number(item.item_count || 0)} documents · ${Math.round(Number(item.confidence || 0) * 100)}%</span>
+        </span>
+        <span class="collection-queue-tail"><span class="panel-pill">${escapeHtml(item.status || "-")}</span><i data-lucide="chevron-down"></i></span>
+      </button>
+      ${canReviewProposal() ? `<button class="small-btn collection-quick-reject" data-proposal-reject="${id}">Reject</button>` : ""}
+    </div>
+    ${expanded ? reviewDetails(id) : ""}
+  </article>`;
+}
+
+function collectionCard(item) {
+  return `<article class="collection-queue-card">
+    <div class="collection-queue-head"><div class="collection-queue-trigger collection-static-row">
+      <span class="collection-queue-copy"><span class="collection-queue-title">${escapeHtml(item.title || "-")}</span><span class="collection-queue-meta">${Number(item.item_count || 0)} accepted documents</span></span>
+      <span class="panel-pill">approved</span>
+    </div></div>
+  </article>`;
+}
+
+function reviewDetails(id) {
+  const payload = state.reviews[String(id)];
+  if (!payload) return `<div class="collection-queue-details"><div class="workflow-footnote">Loading evidence...</div></div>`;
+  if (!payload.available) return `<div class="collection-queue-details">${message(payload.error || "Review unavailable", { error: true })}</div>`;
+  const proposal = payload.proposal || {};
+  const items = (payload.items || []).map((item) => {
+    const checked = item.selected_by_default ? "checked" : "";
+    const confidence = item.confidence == null ? "not validated" : `${Math.round(Number(item.confidence) * 100)}%`;
+    return `<label class="collection-proposal-item">
+      <input type="checkbox" data-proposal-item="${id}" value="${escapeHtml(item.md5)}" ${checked} />
+      <span class="collection-proposal-item-copy"><strong>${escapeHtml(item.title || item.md5)}</strong>
+        <small>${escapeHtml([item.publication_date, item.issue_number && `Issue ${item.issue_number}`, ...(item.publishers || [])].filter(Boolean).join(" · ") || "Metadata only")}</small>
+        <span>${escapeHtml(item.rationale || "No Gemini rationale")}</span>
+      </span>
+      <span class="collection-proposal-item-tail"><span class="panel-pill">${escapeHtml(item.verdict || "pending")}</span><small>${confidence}</small><a class="small-btn" href="/api/library/documents/${encodeURIComponent(item.md5)}/open" target="_blank" rel="noopener">Open</a></span>
+    </label>`;
+  }).join("");
+  return `<div class="collection-queue-details">
+    <div class="collection-review-safety"><i data-lucide="shield-check"></i><div><strong>Review proposal only</strong><span>Detection and Gemini have not changed collection membership or document metadata.</span></div></div>
+    <div class="collection-proposal-summary"><strong>${escapeHtml(proposal.rationale || "Gemini validation complete")}</strong><span>Select the exact documents to accept.</span></div>
+    <div class="collection-proposal-items">${items || message("No proposal items available.")}</div>
+    ${canReviewProposal() ? `<div class="collection-queue-actions"><button class="small-btn collection-review-approve" data-proposal-approve="${id}">Approve selected</button></div>` : ""}
+  </div>`;
+}
+
+function renderList(payload) {
   state.tablePayload = payload;
-  const statusNode = document.getElementById("collections-list-status");
   const root = document.getElementById("collections-list-root");
   if (!payload.available) {
-    const message = `Collections unavailable: ${payload.error || "unknown error"}`;
-    setStatusMessage(statusNode, message, { error: true });
-    root.innerHTML = renderWorkflowFootnoteMessage(message, { error: true });
+    root.innerHTML = message(payload.error || "Collections unavailable", { error: true });
     return;
   }
-
-  const items = payload.items || [];
-  setStatusMessage(
-    statusNode,
-    items.length ? `${payload.total} collections` : "No collections match this view.",
-  );
-  root.innerHTML = items.length
-    ? items.map(renderCollectionCard).join("")
-    : '<div class="collections-review-empty">Nothing needs attention here.</div>';
-
+  document.getElementById("collections-list-status").textContent = payload.total
+    ? `${payload.total} ${state.mode === "collections" ? "collections" : "proposals"}`
+    : "Nothing in this view.";
+  root.innerHTML = (payload.items || []).map(state.mode === "collections" ? collectionCard : proposalCard).join("") || '<div class="collections-review-empty">Nothing needs attention here.</div>';
   window.ManzaraCore.applyPaginationControls({
     labelNode: document.getElementById("page-label"),
     prevNode: document.getElementById("page-prev"),
@@ -117,444 +125,117 @@ function renderCollectionList(payload) {
     page: payload.page,
     totalPages: payload.total_pages,
   });
-}
-
-function renderCollectionCard(item) {
-  const collectionId = Number(item.collection_id || 0);
-  const expanded = collectionId > 0 && state.expandedCollectionId === collectionId;
-  return `
-    <article class="collection-queue-card${expanded ? " is-expanded" : ""}">
-      <div class="collection-queue-head">
-        <button
-          type="button"
-          class="collection-queue-trigger"
-          data-queue-collection-id="${collectionId}"
-          aria-expanded="${expanded ? "true" : "false"}"
-          aria-controls="collection-queue-details-${collectionId}"
-        >
-          <span class="collection-queue-copy">
-            <span class="collection-queue-title">${escapeHtml(item.title || "-")}</span>
-            <span class="collection-queue-meta">${Number(item.item_count || 0)} items · ${Math.round(Number(item.confidence || 0) * 100)}% confidence</span>
-          </span>
-          <span class="collection-queue-tail">
-            <span class="panel-pill">${escapeHtml(item.status || "-")}</span>
-            <i data-lucide="chevron-down" aria-hidden="true"></i>
-          </span>
-        </button>
-        <button
-          type="button"
-          class="small-btn collection-quick-reject"
-          data-queue-decision="reject"
-          data-queue-decision-id="${collectionId}"
-        >Reject</button>
-      </div>
-      ${expanded ? renderReviewDetails(collectionId) : ""}
-    </article>
-  `;
-}
-
-function renderReviewDetails(collectionId) {
-  const key = String(collectionId);
-  if (state.reviewLoading[key]) {
-    return `<div id="collection-queue-details-${collectionId}" class="collection-queue-details"><div class="workflow-footnote">Loading evidence...</div></div>`;
-  }
-  if (state.reviewErrors[key]) {
-    return `<div id="collection-queue-details-${collectionId}" class="collection-queue-details">${renderWorkflowFootnoteMessage(state.reviewErrors[key], { error: true })}</div>`;
-  }
-  const payload = state.reviewPayloads[key];
-  if (!payload) {
-    return `<div id="collection-queue-details-${collectionId}" class="collection-queue-details"><div class="workflow-footnote">Evidence is not loaded.</div></div>`;
-  }
-  if (!payload.available) {
-    return `<div id="collection-queue-details-${collectionId}" class="collection-queue-details">${renderWorkflowFootnoteMessage(payload.error || "Review unavailable", { error: true })}</div>`;
-  }
-
-  const summary = payload.summary || {};
-  const safety = payload.safety || {};
-  const evidence = (payload.grouping_evidence || [])
-    .map(
-      (item) => `
-        <div class="collection-review-evidence-row">
-          <span>${escapeHtml(item.label || item.key || "Evidence")}</span>
-          <strong>${escapeHtml(item.value || "-")}</strong>
-        </div>`,
-    )
-    .join("");
-  const consistency = Object.entries(payload.consistency || {})
-    .map(
-      ([key, item]) => `
-        <div class="collection-review-metric">
-          <span>${escapeHtml(reviewMetricLabel(key))}</span>
-          <strong>${Number(item?.percent || 0).toFixed(0)}%</strong>
-          <small>${escapeHtml(item?.dominant || "No metadata")} · ${Number(item?.distinct || 0)} variants</small>
-        </div>`,
-    )
-    .join("");
-  const outliers = (payload.outliers || []).map(renderReviewItem).join("");
-  const samples = (payload.samples || []).map(renderReviewItem).join("");
-  const mergeTargets = renderMergeTargets(collectionId, payload.merge_candidates || []);
-
-  return `
-    <div id="collection-queue-details-${collectionId}" class="collection-queue-details">
-      <div class="collection-queue-actions collection-review-actions">
-        <button type="button" class="small-btn" data-queue-merge="${collectionId}">Merge</button>
-        <button type="button" class="small-btn collection-review-approve" data-queue-decision="approve" data-queue-decision-id="${collectionId}">Approve</button>
-      </div>
-      ${state.mergeSourceId === collectionId ? mergeTargets : ""}
-      <div class="collection-review-safety">
-        <i data-lucide="shield-check" aria-hidden="true"></i>
-        <div>
-          <strong>${escapeHtml(safety.approval_effect || "Approval records the review decision only")}</strong>
-          <span>Document metadata changes only when the separate override task runs.</span>
-        </div>
-      </div>
-      <div class="collection-review-summary">
-        ${renderReviewStat("Items", summary.item_count || 0)}
-        ${renderReviewStat("Dates", `${Number(summary.date_coverage?.percent || 0).toFixed(0)}%`)}
-        ${renderReviewStat("Issue numbers", `${Number(summary.issue_number_coverage?.percent || 0).toFixed(0)}%`)}
-        ${renderReviewStat("Outliers", payload.outliers_total || 0)}
-        ${renderReviewStat("Date range", reviewDateRange(summary.date_range || {}))}
-      </div>
-      <div class="collection-review-grid">
-        <section class="collection-review-section">
-          <h3>Why grouped</h3>
-          <div class="collection-review-evidence">${evidence || '<div class="workflow-footnote">No grouping evidence.</div>'}</div>
-        </section>
-        <section class="collection-review-section">
-          <h3>Consistency</h3>
-          <div class="collection-review-metrics">${consistency || '<div class="workflow-footnote">No consistency data.</div>'}</div>
-        </section>
-      </div>
-      <section class="collection-review-section collection-review-outliers">
-        <div class="collection-review-section-head"><h3>Possible exceptions</h3><span class="panel-pill">${Number(payload.outliers_total || 0)}</span></div>
-        <div class="collection-queue-items">${outliers || '<div class="workflow-footnote">No metadata outliers detected.</div>'}</div>
-      </section>
-      <section class="collection-review-section">
-        <h3>Representative documents</h3>
-        <div class="collection-queue-items">${samples || '<div class="workflow-footnote">No linked items.</div>'}</div>
-      </section>
-    </div>
-  `;
-}
-
-function renderMergeTargets(sourceId, candidates) {
-  const rows = candidates
-    .map(
-      (item) => `
-        <button
-          type="button"
-          class="collection-merge-target"
-          data-merge-source-id="${sourceId}"
-          data-merge-target-id="${Number(item.collection_id || 0)}"
-        >
-          <span>
-            <strong>${escapeHtml(item.title || "-")}</strong>
-            <small>${Number(item.item_count || 0)} items · ${escapeHtml(item.status || "-")}</small>
-          </span>
-          <span class="panel-pill">${item.same_parent ? "same folder" : `${Math.round(Number(item.title_similarity || 0) * 100)}% title match`}</span>
-        </button>`,
-    )
-    .join("");
-  return `
-    <section class="collection-merge-picker">
-      <div class="collection-merge-picker-head">
-        <div><strong>Merge into</strong><span>The selected collection remains canonical.</span></div>
-        <button type="button" class="icon-btn quiet" data-queue-merge="${sourceId}" aria-label="Close merge choices" title="Close"><i data-lucide="x"></i></button>
-      </div>
-      <div class="collection-merge-targets">${rows || '<div class="workflow-footnote">No likely matches found.</div>'}</div>
-    </section>`;
-}
-
-function renderReviewStat(label, value) {
-  return `<div class="collection-review-stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`;
-}
-
-function reviewMetricLabel(key) {
-  return {
-    title: "Titles",
-    publisher: "Publishers",
-    genre: "Genres",
-    work_type: "Document types",
-    parent: "Source folders",
-  }[String(key)] || String(key || "Metadata");
-}
-
-function reviewReasonLabel(reason) {
-  return {
-    title_mismatch: "Title differs",
-    publisher_mismatch: "Publisher differs",
-    genre_mismatch: "Genre differs",
-    type_mismatch: "Document type differs",
-    parent_mismatch: "Source folder differs",
-    missing_date: "Date missing",
-    missing_issue_number: "Issue number missing",
-  }[String(reason)] || String(reason || "Unusual metadata");
-}
-
-function reviewDate(value) {
-  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return match ? `${match[3]}.${match[2]}.${match[1]}` : String(value || "-");
-}
-
-function reviewDateRange(range) {
-  if (!range?.earliest && !range?.latest) return "-";
-  if (range.earliest === range.latest) return reviewDate(range.earliest);
-  return `${reviewDate(range.earliest)} – ${reviewDate(range.latest)}`;
-}
-
-function renderReviewItem(item) {
-  const reasons = (item.reasons || [])
-    .map((reason) => `<span class="collection-review-reason">${escapeHtml(reviewReasonLabel(reason))}</span>`)
-    .join("");
-  const facts = [
-    item.publication_date ? reviewDate(item.publication_date) : null,
-    item.issue_number ? `Issue ${item.issue_number}` : null,
-    item.publisher || null,
-    item.genre || item.work_type || null,
-    item.number_of_pages ? `${item.number_of_pages} pages` : null,
-  ].filter(Boolean);
-  const digest = String(item.md5 || "").toLowerCase();
-  const openLink = /^[0-9a-f]{32}$/.test(digest)
-    ? `<a class="small-btn collection-document-link" href="/api/library/documents/${encodeURIComponent(digest)}/open" target="_blank" rel="noopener noreferrer">Open</a>`
-    : "";
-  return `
-    <div class="collection-queue-item${reasons ? " has-outlier" : ""}">
-      <div class="collection-queue-item-main">
-        <span class="collection-queue-item-title">${escapeHtml(item.title || item.file_name || item.md5 || "-")}</span>
-        <span class="collection-review-item-facts">${facts.map((fact) => escapeHtml(fact)).join(" · ") || "Metadata unavailable"}</span>
-        <span class="collection-queue-item-path">${escapeHtml(item.file_name || item.path || "-")}</span>
-        ${reasons ? `<span class="collection-review-reasons">${reasons}</span>` : ""}
-      </div>
-      <span class="collection-review-item-actions">
-        ${openLink}
-        <span class="panel-pill">${item.included ? "included" : "not included"}</span>
-      </span>
-    </div>`;
+  lucide.createIcons();
 }
 
 async function refreshOverview() {
   const payload = await api("/api/library/collections");
   state.globalPayload = payload;
-  renderGlobalState(payload);
+  renderGlobal(payload);
   renderOverview(payload.overview || {});
 }
 
 async function refreshList() {
-  renderCollectionList(await api(tableUrl()));
-  lucide.createIcons();
+  renderList(await api(listUrl()));
 }
 
 async function refreshAll() {
-  viewState.set("loading");
   try {
     await Promise.all([refreshOverview(), refreshList()]);
-    viewState.set("ready");
   } catch (error) {
-    viewState.set("error");
-    const message = String(error?.message || error || "Failed to load collections");
-    setStatusMessage(
-      document.getElementById("collections-status"),
-      `Collections unavailable: ${message}`,
-      { error: true },
-    );
-    setStatusMessage(document.getElementById("collections-list-status"), message, { error: true });
-    document.getElementById("collections-list-root").innerHTML = renderWorkflowFootnoteMessage(
-      message,
-      { error: true },
-    );
+    const text = `Collections unavailable: ${String(error?.message || error)}`;
+    document.getElementById("collections-status").textContent = text;
+    document.getElementById("collections-list-status").textContent = text;
+    document.getElementById("collections-list-root").innerHTML = message(text, { error: true });
     throw error;
   }
 }
 
-async function toggleCollection(collectionId) {
-  const id = Number(collectionId || 0);
-  if (!id) return;
-  if (state.expandedCollectionId === id) {
-    state.expandedCollectionId = null;
-    renderCollectionList(state.tablePayload);
-    lucide.createIcons();
+async function toggleProposal(id) {
+  id = Number(id);
+  if (state.expandedId === id) {
+    state.expandedId = null;
+    renderList(state.tablePayload);
     return;
   }
-
-  state.expandedCollectionId = id;
-  const key = String(id);
-  if (state.reviewPayloads[key]) {
-    renderCollectionList(state.tablePayload);
-    lucide.createIcons();
-    return;
-  }
-
-  state.reviewLoading[key] = true;
-  delete state.reviewErrors[key];
-  renderCollectionList(state.tablePayload);
-  try {
-    state.reviewPayloads[key] = await api(
-      `/api/library/collections/${encodeURIComponent(key)}/review`,
-    );
-  } catch (error) {
-    state.reviewErrors[key] = String(error?.message || error || "Failed to load evidence");
-  } finally {
-    state.reviewLoading[key] = false;
-    renderCollectionList(state.tablePayload);
-    lucide.createIcons();
-  }
+  state.expandedId = id;
+  renderList(state.tablePayload);
+  const payload = await api(`/api/library/collection-proposals/${id}`);
+  state.reviews[String(id)] = payload;
+  renderList(state.tablePayload);
 }
 
-async function decideCollection(collectionId, decision) {
-  const id = Number(collectionId || 0);
-  if (!id) return;
-  const status = decision === "approve" ? "approved" : "rejected";
-  await api(`/api/library/collections/${encodeURIComponent(String(id))}`, {
-    method: "PATCH",
-    body: JSON.stringify({ status }),
-  });
-  delete state.reviewPayloads[String(id)];
-  state.expandedCollectionId = null;
-  await Promise.all([refreshOverview(), refreshList()]);
-  window.ManzaraUI.toast(
-    status === "approved" ? "Collection approved." : "Collection rejected.",
-  );
-}
-
-function toggleMergeTargets(collectionId) {
-  const id = Number(collectionId || 0);
-  state.mergeSourceId = state.mergeSourceId === id ? null : id;
-  renderCollectionList(state.tablePayload);
-  lucide.createIcons();
-}
-
-async function mergeCollection(sourceCollectionId, targetCollectionId) {
-  const sourceId = Number(sourceCollectionId || 0);
-  const targetId = Number(targetCollectionId || 0);
-  const review = state.reviewPayloads[String(sourceId)] || {};
-  const source = review.collection || {};
-  const target = (review.merge_candidates || []).find(
-    (item) => Number(item.collection_id || 0) === targetId,
-  );
-  if (!sourceId || !targetId || !target) return;
+async function decideProposal(id, decision) {
+  const payload = state.reviews[String(id)];
+  const selected = decision === "approve"
+    ? [...document.querySelectorAll(`[data-proposal-item="${id}"]:checked`)].map((node) => node.value)
+    : [];
+  const title = payload?.proposal?.title || "This proposal";
   const confirmed = await window.ManzaraUI.confirm({
-    title: "Merge collections",
-    message: `${source.title || "This collection"} (${Number(source.item_count || 0)} items) will be merged into ${target.title || "the selected collection"} (${Number(target.item_count || 0)} items). The selected collection keeps its verdict and metadata.`,
-    acceptLabel: "Merge",
-    destructive: true,
+    title: decision === "approve" ? "Approve collection proposal" : "Reject collection proposal",
+    message: decision === "approve" ? `${selected.length} selected document(s) will become authoritative members of ${title}.` : `${title} will be dismissed until its metadata evidence changes.`,
+    acceptLabel: decision === "approve" ? "Approve selected" : "Reject",
+    destructive: decision === "reject",
   });
   if (!confirmed) return;
-
-  const result = await api(`/api/library/collections/${encodeURIComponent(String(sourceId))}/merge`, {
+  await api(`/api/library/collection-proposals/${id}/decision`, {
     method: "POST",
-    body: JSON.stringify({ target_collection_id: targetId }),
+    body: JSON.stringify({ decision, selected_md5s: selected }),
   });
-  delete state.reviewPayloads[String(sourceId)];
-  state.expandedCollectionId = null;
-  state.mergeSourceId = null;
+  delete state.reviews[String(id)];
+  state.expandedId = null;
   await refreshAll();
-  window.ManzaraUI.toast(`Merged ${Number(result.moved_items || 0)} items.`);
+  window.ManzaraUI.toast(decision === "approve" ? "Collection proposal approved." : "Collection proposal rejected.");
 }
 
-function queueRefresh(delayMs = 250) {
-  window.ManzaraCore.scheduleRefresh(state, refreshAll, delayMs);
-}
-
-async function stopAll() {
-  if (state.globalPayload?.global?.stop_all_state === "armed") {
-    const confirmed = await window.ManzaraUI.confirm({
-      title: "Force stop all tasks",
-      message: "Running tasks will be terminated immediately without waiting for a safe boundary.",
-      acceptLabel: "Force stop",
-      destructive: true,
-    });
-    if (!confirmed) return;
-  }
-  await api("/api/system/stop-all", { method: "POST" });
-  queueRefresh(0);
-}
-
-function setupEventStream() {
-  state.eventStreamController?.stop();
+function setupEvents() {
   state.eventStreamController = window.ManzaraCore.createSseController({
     eventTypes: window.ManzaraCore.DEFAULT_EVENT_TYPES,
     initialCursor: window.ManzaraCore.eventCursorFromSnapshot(state.globalPayload),
     getCursor: () => Number(state.eventCursor || 0),
-    setCursor: (nextCursor) => {
-      state.eventCursor = Number(nextCursor || 0);
-    },
+    setCursor: (cursor) => { state.eventCursor = Number(cursor || 0); },
     onEvent: (payload, event) => {
       document.getElementById("last-event").textContent = window.ManzaraCore.formatEventBanner(payload);
       state.soundNotifier?.handleEvent(payload, event.lastEventId || "");
-      const eventType = String(payload?.type || "");
-      const taskFinished = ["task.artifact", "task.completed", "task.failed", "task.stopped"]
-        .includes(eventType);
-      if (
-        eventType.startsWith("library.")
-        || (String(payload?.panel_id || "") === "library" && taskFinished)
-      ) {
-        queueRefresh(100);
+      if (String(payload?.type || "").startsWith("library.") || String(payload?.panel_id || "") === "library") {
+        window.ManzaraCore.scheduleRefresh(state, refreshAll, 150);
       }
     },
   });
   state.eventStreamController.start();
 }
 
-function attachUiHandlers() {
-  document.getElementById("filter-apply").addEventListener("click", () => {
+function attachHandlers() {
+  document.querySelectorAll("[data-collection-mode]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelectorAll("[data-collection-mode]").forEach((item) => item.classList.toggle("is-active", item === button));
+    state.mode = button.dataset.collectionMode;
     state.page = 1;
-    refreshList().catch((error) => console.error(error));
-  });
-  document.getElementById("page-prev").addEventListener("click", () => {
-    state.page = Math.max(1, state.page - 1);
-    refreshList().catch((error) => console.error(error));
-  });
-  document.getElementById("page-next").addEventListener("click", () => {
-    const totalPages = Math.max(1, Number(state.tablePayload?.total_pages || 1));
-    state.page = Math.min(totalPages, state.page + 1);
-    refreshList().catch((error) => console.error(error));
-  });
-  document.getElementById("stop-all-btn").addEventListener("click", () => {
-    stopAll().catch((error) => console.error(error));
-  });
+    state.expandedId = null;
+    refreshList().catch(console.error);
+  }));
+  document.getElementById("filter-apply").addEventListener("click", () => { state.page = 1; refreshList().catch(console.error); });
+  document.getElementById("page-prev").addEventListener("click", () => { state.page = Math.max(1, state.page - 1); refreshList().catch(console.error); });
+  document.getElementById("page-next").addEventListener("click", () => { state.page = Math.min(Number(state.tablePayload?.total_pages || 1), state.page + 1); refreshList().catch(console.error); });
   document.getElementById("collections-list-root").addEventListener("click", (event) => {
-    const mergeTarget = event.target?.closest?.("[data-merge-target-id]");
-    if (mergeTarget) {
-      mergeCollection(
-        mergeTarget.dataset.mergeSourceId,
-        mergeTarget.dataset.mergeTargetId,
-      ).catch((error) => console.error(error));
-      return;
-    }
-    const mergeToggle = event.target?.closest?.("[data-queue-merge]");
-    if (mergeToggle) {
-      toggleMergeTargets(mergeToggle.dataset.queueMerge);
-      return;
-    }
-    const decisionTarget = event.target?.closest?.("[data-queue-decision]");
-    if (decisionTarget) {
-      decideCollection(
-        decisionTarget.dataset.queueDecisionId,
-        decisionTarget.dataset.queueDecision,
-      ).catch((error) => console.error(error));
-      return;
-    }
-    const toggleTarget = event.target?.closest?.("[data-queue-collection-id]");
-    if (toggleTarget) {
-      toggleCollection(toggleTarget.dataset.queueCollectionId).catch((error) => console.error(error));
-    }
+    const toggle = event.target.closest("[data-proposal-toggle]");
+    const approve = event.target.closest("[data-proposal-approve]");
+    const reject = event.target.closest("[data-proposal-reject]");
+    if (approve) decideProposal(Number(approve.dataset.proposalApprove), "approve").catch(console.error);
+    else if (reject) decideProposal(Number(reject.dataset.proposalReject), "reject").catch(console.error);
+    else if (toggle) toggleProposal(toggle.dataset.proposalToggle).catch(console.error);
   });
+  document.getElementById("stop-all-btn").addEventListener("click", () => api("/api/system/stop-all", { method: "POST" }).catch(console.error));
 }
 
-async function bootstrap() {
-  initSoundNotifier();
-  window.addEventListener("beforeunload", () => {
-    teardownSoundNotifier();
-    state.eventStreamController?.stop();
-    state.eventStreamController = null;
-  });
-  attachUiHandlers();
+async function init() {
+  state.soundNotifier = window.ManzaraSound?.createNotifier?.({ repeatGapMs: 2000 }) || null;
+  attachHandlers();
   await refreshAll();
-  setupEventStream();
-  lucide.createIcons();
+  setupEvents();
 }
 
-bootstrap().catch((error) => {
-  console.error(error);
-  window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
+window.addEventListener("beforeunload", () => {
+  state.eventStreamController?.stop();
+  state.soundNotifier?.teardown?.();
 });
+init().catch(console.error);

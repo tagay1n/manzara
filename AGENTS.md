@@ -171,6 +171,15 @@ Notes:
   - One-page PDFs have first-page previews; two-page PDFs have first/last; longer PDFs have first/second/last.
   - Missing semantic roles for short PDFs are intentional completeness, not partial failure; never create duplicate page previews.
   - Frontend/API consumers use manifest roles and actual page numbers, never infer semantics from compact S3 filenames.
+- Library collection detection is proposal-based and path-independent:
+  - Canonical collections and accepted memberships are authoritative; detector and Gemini reruns must never mutate them directly.
+  - Detection eligibility requires an object-valued `metadata.schema_org` with a usable title. Exclude `@type=Legislation` and centralized normalized legal-genre policy matches before feature indexing.
+  - Never use Yandex paths, parent directories, filenames, or storage hierarchy as collection evidence or Gemini prompt input.
+  - Match new records against approved collection signatures first, then create new-collection proposals from coherent unmatched groups.
+  - A document has at most one canonical collection membership. Conflicts require explicit owner resolution and must never silently move a document.
+  - Discovery writes resumable proposal rows; Gemini validation writes advisory verdicts; only an explicit owner approval transaction creates collections or memberships.
+  - New collections require at least two approved documents. Attachment proposals to an existing collection may contain one document.
+  - Keep `library.collection_apply` separate from proposal approval; applying collection metadata is an independent explicit operation.
 - Gemini usage must be centralized behind a shared runtime manager (no per-task ad-hoc key picking):
   - Treat Gemini keys as grouped by `account -> keys[]` from config.
   - Do not hardcode model names in task logic; resolve model aliases from config (`gemini.models`), while quota/runtime state stays per `(account, key, model)`.
@@ -179,13 +188,16 @@ Notes:
   - Per-key minute throttle: at most one request per minute per `(account, key, model)`.
   - Selection policy: random account first, then random key in that account; if selected key is cooling down, try another key before waiting.
   - Daily limits are inferred from Gemini responses (no local fixed RPD enforcement).
-  - On Gemini `429`: log full payload/context and fail current task run; parsing subtypes can be improved incrementally from observed payloads.
+  - On Gemini `429`: log full payload/context and fail the current task by default. Explicit model-pool workflows may persist the failed attempt and continue through another configured model; never implement this rotation ad hoc inside task business logic.
   - On Gemini `400`: treat as request-level rejection (prompt/input issue); do not exhaust or pause keys, skip/fail only the current item and continue workflow processing.
   - On Gemini `5xx`: start a global Gemini pause for 60 seconds and block new Gemini calls during pause.
   - Enforce Gemini reset blackout window around Pacific reset:
     - No new Gemini calls from 1 hour before to 1 hour after reset.
     - In-flight requests may finish gracefully.
   - At daily reset rollover, clear exhausted markers for all keys.
+  - Collection validation uses `gemini.model_pools.library_collection_validation`, one model verdict per batch, and no consensus voting.
+  - Collection validation batches are adaptive per model: start at or below 20, retry timeout/malformed output twice, then reduce through `20 -> 10 -> 5 -> 2 -> 1`; `400`, `429`, blackout, and `5xx` do not change batch size.
+  - Strictly validate collection responses against the requested MD5 set. Missing, duplicated, unknown, or malformed item results are response failures, not successful checkpoints.
 ## Low-Context Scalability Rules
 These rules apply to both backend and frontend to keep implementation understandable as flows/tasks/pages grow.
 

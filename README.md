@@ -69,6 +69,7 @@ Flow tasks (seeded at startup):
 - `maintenance.sync_documents_s3`
 - `maintenance.monocorpus_meta_evaluate`
 - `library.collection_detect`
+- `library.collection_validate`
 - `library.collection_apply`
 - `library.generate_book_previews`
 - `library.personality_suggestions_refresh`
@@ -113,6 +114,11 @@ Runtime control behavior:
 Library data tooling currently includes:
 - Classification views and merge/normalization previews
 - Personality and publisher views
+- Path-independent collection workflow:
+  - **Discover collections** indexes eligible `metadata.schema_org` records and writes proposals without mutating approved memberships.
+  - Documents require a usable metadata title; `Legislation` and normalized legal-document genres from `LEGAL_GENRE_BLACKLIST` are excluded before clustering.
+  - **Validate collection proposals** uses an adaptive Gemini model pool with strict per-MD5 JSON responses and resumable PostgreSQL attempts.
+  - Review supports per-document selection. Approval creates authoritative membership; applying collection metadata remains a separate task.
 - Resumable PDF preview generation for applicable Library books:
   - WebP variants bounded to `400x600` (quality 80) and `1000x1500` (quality 85)
   - First page for one-page PDFs, first/last for two-page PDFs, and first/second/last otherwise
@@ -277,6 +283,11 @@ gemini:
   models:
     library_meta_evaluate: "gemini-3-flash-preview"
     library_normalization: "gemini-2.5-flash"
+  model_pools:
+    library_collection_validation:
+      - "gemini-3.6-flash"
+      - "gemini-3.5-flash"
+      - "gemini-3-flash-preview"
   accounts:
     account_a:
       - "AIza..."
@@ -285,13 +296,12 @@ gemini:
       - "AIza..."
 ```
 
-Legacy `gemini_api_keys: []` is still supported as fallback (single default account).
-
 Model policy:
 - Task flows should resolve Gemini model names from `gemini.models` aliases (not hardcoded in task logic).
 - Current default aliases are:
   - `library_meta_evaluate`
   - `library_normalization`
+- Collection proposal validation load-balances one verdict per request across `gemini.model_pools.library_collection_validation`. Timeout or malformed responses reduce that model's batch size; quota/service/request errors follow the shared Gemini runtime policy.
 
 Backup task note:
 - Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.
@@ -393,6 +403,14 @@ Coverage notes:
 - Runtime-heavy external flows still require manual smoke checks, especially:
   - `maintenance.monocorpus_meta_evaluate`
   - normalization refresh with real config + Gemini keys
+  - Library collection discovery and validation against the real catalog:
+    - apply Alembic migration `20260806_0018` and confirm approved collections and memberships retain their IDs while legacy suggested rows become proposal/history state
+    - run `library.collection_detect` and confirm the artifact/SSE summary reports scanned, eligible, excluded legal, attachment, and new-collection counts
+    - inspect a proposal and confirm its evidence and Gemini prompt contain metadata only, with no Yandex path or parent-directory data
+    - run `library.collection_validate` and confirm per-model batch sizes decrease after malformed/timeout responses, recover after three successes, and persist attempts across restart
+    - stop validation and confirm the current Gemini request finishes while unvalidated proposal items remain queued for the next run
+    - approve selected proposal items and confirm only that explicit action creates canonical memberships; rerun discovery and confirm approved memberships and rejected decisions remain unchanged
+    - confirm proposal, progress, and final summary changes arrive through SSE without parsing task logs
   - `library.generate_book_previews` against a real PDF source and preview bucket
   - `shayan.transfer_yadisk_webdav` against the real Nextcloud account:
     - confirm password authentication and target quota before transfer
@@ -455,6 +473,9 @@ Library:
 - `GET /api/library/collections/{collection_id}/items`
 - `PATCH /api/library/collections/{collection_id}`
 - `POST /api/library/collections/{collection_id}/merge`
+- `GET /api/library/collection-proposals`
+- `GET /api/library/collection-proposals/{proposal_id}`
+- `POST /api/library/collection-proposals/{proposal_id}/decision`
 
 Normalization API (`{entity_type}` = `personality|publisher`):
 - `GET /api/library/normalization/{entity_type}`

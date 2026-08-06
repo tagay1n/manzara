@@ -15,27 +15,21 @@
         <div class="collections-review-head">
           <div>
             <h2>Collections</h2>
-            <p>Review detected series as a whole. Expand a candidate to see why its documents belong together.</p>
+            <p>Review path-independent series proposals without changing approved collections automatically.</p>
           </div>
           <div id="collections-status" class="workflow-footnote">Loading overview...</div>
         </div>
 
         <div id="collections-stat-grid" class="library-stat-grid collections-stat-grid"></div>
 
+        <div class="collections-mode-tabs" role="tablist" aria-label="Collection views">
+          <button class="small-btn is-active" data-collection-mode="review_ready" role="tab">Needs review</button>
+          <button class="small-btn" data-collection-mode="collections" role="tab">Collections</button>
+          <button class="small-btn" data-collection-mode="ai_dismissed" role="tab">AI dismissed</button>
+          <button class="small-btn" data-collection-mode="rejected" role="tab">History</button>
+        </div>
         <div class="classification-filters collections-review-toolbar">
           <input id="filter-search" class="filter-input" type="search" placeholder="Find a collection" />
-          <select id="filter-status" class="filter-select" aria-label="Review status">
-            <option value="suggested" selected>To review</option>
-            <option value="approved">Approved</option>
-            <option value="rejected">Rejected</option>
-            <option value="">All</option>
-          </select>
-          <select id="filter-sort" class="filter-select" aria-label="Sort collections">
-            <option value="confidence_desc" selected>Highest confidence</option>
-            <option value="items_desc">Most items</option>
-            <option value="updated_desc">Recently detected</option>
-            <option value="title_asc">Title</option>
-          </select>
           <button id="filter-apply" class="small-btn">Apply</button>
         </div>
 

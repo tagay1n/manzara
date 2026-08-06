@@ -16,6 +16,13 @@ DEFAULT_GEMINI_MODELS: Dict[str, str] = {
     "library_meta_evaluate": "gemini-3-flash-preview",
     "library_normalization": "gemini-2.5-flash",
 }
+DEFAULT_GEMINI_MODEL_POOLS: Dict[str, List[str]] = {
+    "library_collection_validation": [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3-flash-preview",
+    ],
+}
 
 
 @dataclass(frozen=True)
@@ -86,7 +93,9 @@ def _iter_new_shape(payload: Dict[str, Any]) -> Iterable[GeminiKey]:
         for index, item in enumerate(accounts):
             if not isinstance(item, dict):
                 continue
-            account_id = str(item.get("account_id") or item.get("name") or f"account-{index + 1}").strip()
+            account_id = str(
+                item.get("account_id") or item.get("name") or f"account-{index + 1}"
+            ).strip()
             account_id = account_id or f"account-{index + 1}"
             keys = item.get("keys")
             if not isinstance(keys, list):
@@ -127,34 +136,9 @@ def _iter_new_shape(payload: Dict[str, Any]) -> Iterable[GeminiKey]:
     return []
 
 
-def _iter_legacy_shape(payload: Dict[str, Any]) -> Iterable[GeminiKey]:
-    keys = payload.get("gemini_api_keys")
-    if not isinstance(keys, list):
-        return []
-    rows: List[GeminiKey] = []
-    for raw_key in keys:
-        key = _clean_key(raw_key)
-        if not key:
-            continue
-        account_id = "default"
-        rows.append(
-            GeminiKey(
-                account_id=account_id,
-                key_id=_key_id(account_id, key),
-                key_value=key,
-                masked_key=_mask_key(key),
-            )
-        )
-    return rows
-
-
 def load_gemini_keys() -> List[GeminiKey]:
-    """Load configured Gemini keys (new account-grouped shape with legacy fallback)."""
-    payload = _load_config_payload()
-    keys = list(_iter_new_shape(payload))
-    if keys:
-        return keys
-    return list(_iter_legacy_shape(payload))
+    """Load configured Gemini keys from the account-grouped config shape."""
+    return list(_iter_new_shape(_load_config_payload()))
 
 
 def load_gemini_models() -> Dict[str, str]:
@@ -174,3 +158,22 @@ def load_gemini_models() -> Dict[str, str]:
         **DEFAULT_GEMINI_MODELS,
         **overrides,
     }
+
+
+def load_gemini_model_pools() -> Dict[str, List[str]]:
+    """Load ordered model pools used by load-balanced Gemini workflows."""
+    payload = _load_config_payload()
+    pools = {key: list(values) for key, values in DEFAULT_GEMINI_MODEL_POOLS.items()}
+    gemini = payload.get("gemini")
+    configured = gemini.get("model_pools") if isinstance(gemini, dict) else None
+    if not isinstance(configured, dict):
+        return pools
+    for raw_alias, raw_models in configured.items():
+        alias = str(raw_alias or "").strip()
+        if not alias or not isinstance(raw_models, list):
+            continue
+        models = [str(value or "").strip() for value in raw_models]
+        models = list(dict.fromkeys(value for value in models if value))
+        if models:
+            pools[alias] = models
+    return pools

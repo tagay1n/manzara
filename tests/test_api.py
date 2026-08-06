@@ -107,6 +107,7 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     library_task_ids = {task["task_id"] for task in library["tasks"]}
     assert "maintenance.monocorpus_meta_evaluate" in library_task_ids
     assert "library.collection_detect" in library_task_ids
+    assert "library.collection_validate" in library_task_ids
     assert "library.collection_apply" in library_task_ids
 
 
@@ -1288,6 +1289,48 @@ def test_library_collection_review_endpoint(test_client, monkeypatch) -> None:
     payload = response.json()
     assert payload["collection_id"] == 9
     assert payload["summary"]["item_count"] == 24
+
+
+def test_library_collection_proposals_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+    monkeypatch.setattr(
+        main_app,
+        "list_collection_proposals",
+        lambda **kwargs: {
+            "available": True,
+            "page": kwargs["page"],
+            "total_pages": 1,
+            "total": 1,
+            "items": [{"proposal_id": 17, "status": kwargs["status"]}],
+        },
+    )
+
+    response = client.get("/api/library/collection-proposals?status=review_ready&page=1")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["proposal_id"] == 17
+
+
+def test_library_collection_proposal_decision_endpoint(test_client, monkeypatch) -> None:
+    client, main_app = test_client
+    monkeypatch.setattr(
+        main_app,
+        "decide_collection_proposal",
+        lambda _db, proposal_id, decision, selected_md5s: {
+            "ok": True,
+            "proposal_id": proposal_id,
+            "decision": decision,
+            "selected_count": len(selected_md5s),
+        },
+    )
+
+    response = client.post(
+        "/api/library/collection-proposals/17/decision",
+        json={"decision": "approve", "selected_md5s": ["a" * 32, "b" * 32]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["selected_count"] == 2
 
 
 def test_library_collection_update_endpoint(test_client, monkeypatch) -> None:

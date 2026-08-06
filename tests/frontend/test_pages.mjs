@@ -201,8 +201,6 @@ const COLLECTIONS_PAGE_IDS = [
   "page-prev",
   "page-next",
   "filter-search",
-  "filter-status",
-  "filter-sort",
   "filter-apply",
 ];
 
@@ -1922,17 +1920,16 @@ function createCollectionsResolver({
           available: true,
           config_source: "test",
           stats: {
-            total_collections: 3,
             approved_collections: 1,
-            included_collections: 1,
-            suggested_collections: 2,
+            suggested_collections: 1,
+            awaiting_validation: 2,
             items_linked: 14,
           },
           top_collections: [],
         },
       };
     }
-    if (path.startsWith("/api/library/collections/table?")) {
+    if (path.startsWith("/api/library/collection-proposals?")) {
       return {
         available: true,
         page: 1,
@@ -1940,149 +1937,48 @@ function createCollectionsResolver({
         total: 2,
         items: [
           {
-            collection_id: 11,
+            proposal_id: 11,
+            proposal_type: "new_collection",
             title: "Collection One",
-            normalized_title: "collection one",
-            status: "suggested",
-            include_in_library: true,
+            status: "review_ready",
             confidence: 0.81,
             item_count: 3,
-            last_detected_at: "2026-03-25T12:00:00Z",
           },
         ],
       };
     }
-    if (path === "/api/library/collections/insights") {
+    if (path === "/api/library/collection-proposals/11") {
       return {
         available: true,
-        summary: summary || {
-          cluster_count: 7,
-          queue_total: 5,
-        },
-        clusters: [
-          {
-            title: "Collection One",
-            status: "suggested",
-            item_count: 3,
-            confidence: 0.81,
-          },
-        ],
-        queue: {
-          total: 1,
-          items: [
-            {
-              collection_id: 11,
-              title: "Collection One",
-              status: "suggested",
-              include_in_library: true,
-              confidence: 0.81,
-              item_count: 3,
-            },
-          ],
-        },
-      };
-    }
-    if (path.startsWith("/api/library/collections/11/items")) {
-      return {
-        available: true,
-        collection_id: 11,
-        items: [
-          {
-            md5: "abc123",
-            item_title: "Issue #1",
-            ya_path: "/path/issue-1.pdf",
-            lib: false,
-          },
-        ],
-      };
-    }
-    if (path.startsWith("/api/library/collections/11/review")) {
-      return {
-        available: true,
-        collection_id: 11,
-        collection: {
-          collection_id: 11,
+        proposal: {
+          proposal_id: 11,
+          proposal_type: "new_collection",
           title: "Collection One",
-          status: "suggested",
-          item_count: 3,
+          status: "review_ready",
           confidence: 0.81,
+          rationale: "Recurring named newspaper",
         },
-        safety: {
-          approval_mutates_documents: false,
-          approval_effect: "Records the review decision only",
-          apply_task_id: "library.collection_apply",
-        },
-        summary: {
-          item_count: 3,
-          included_count: 2,
-          excluded_count: 1,
-          date_coverage: { count: 2, total: 3, percent: 66.7 },
-          issue_number_coverage: { count: 3, total: 3, percent: 100 },
-          date_range: { earliest: "1955-01-01", latest: "1955-03-01" },
-        },
-        grouping_evidence: [
-          { key: "shared_parent", label: "Shared source folder", value: "/press/collection" },
-          { key: "issue_markers", label: "Issue marker detection", value: "100%" },
-        ],
-        consistency: {
-          title: { dominant: "Collection One", count: 3, distinct: 1, percent: 100 },
-          publisher: { dominant: "Publisher", count: 2, distinct: 2, percent: 66.7 },
-        },
-        outliers_total: 1,
-        outliers: [
-          {
-            md5: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            title: "Different issue",
-            file_name: "different.pdf",
-            path: "/press/collection/different.pdf",
-            publication_date: "",
-            issue_number: "3",
-            publisher: "Other Publisher",
-            genre: "Newspaper",
-            work_type: "NewsArticle",
-            included: false,
-            reasons: ["publisher_mismatch", "missing_date"],
-          },
-        ],
-        samples: [
+        items: [
           {
             md5: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             title: "Issue #1",
-            file_name: "issue-1.pdf",
-            path: "/path/issue-1.pdf",
             publication_date: "1955-01-01",
             issue_number: "1",
-            publisher: "Publisher",
-            genre: "Newspaper",
+            publishers: ["Publisher"],
+            genres: ["Newspaper"],
             work_type: "NewsArticle",
-            number_of_pages: 4,
             included: true,
-            reasons: [],
-          },
-        ],
-        merge_candidates: [
-          {
-            collection_id: 38,
-            title: "Canonical Collection",
-            status: "approved",
-            item_count: 7,
-            confidence: 0.99,
-            same_parent: true,
-            title_similarity: 0.88,
+            verdict: "belongs",
+            confidence: 0.96,
+            rationale: "Matching title and issue evidence",
+            model: "gemini-3-flash-preview",
+            selected_by_default: true,
           },
         ],
       };
     }
-    if (path === "/api/library/collections/11" && options.method === "PATCH") {
-      return { ok: true, collection: { collection_id: 11, status: "approved" } };
-    }
-    if (path === "/api/library/collections/11/merge" && options.method === "POST") {
-      return {
-        ok: true,
-        source_collection_id: 11,
-        target_collection_id: 38,
-        moved_items: 3,
-      };
+    if (path === "/api/library/collection-proposals/11/decision" && options.method === "POST") {
+      return { ok: true, proposal_id: 11 };
     }
     if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
     throw new Error(`unexpected path: ${path}`);
@@ -2368,7 +2264,7 @@ test("library collections page renders API error state", async () => {
   assert.match(harness.elements.get("collections-list-root").innerHTML, /collections unavailable/);
 });
 
-test("library collections page renders each candidate once without duplicate insight views", async () => {
+test("library collections page renders each proposal once", async () => {
   const harness = createHarness({
     source: LIBRARY_COLLECTIONS_SOURCE,
     ids: COLLECTIONS_PAGE_IDS,
@@ -2378,13 +2274,10 @@ test("library collections page renders each candidate once without duplicate ins
 
   const html = harness.elements.get("collections-list-root").innerHTML;
   assert.equal((html.match(/Collection One/g) || []).length, 1);
-  assert.equal(
-    harness.apiCalls.some((call) => call.path === "/api/library/collections/insights"),
-    false,
-  );
+  assert.ok(harness.apiCalls.some((call) => call.path.startsWith("/api/library/collection-proposals?")));
 });
 
-test("library collections list expands evidence workspace", async () => {
+test("library collections list expands proposal evidence with item selection", async () => {
   const harness = createHarness({
     source: LIBRARY_COLLECTIONS_SOURCE,
     ids: COLLECTIONS_PAGE_IDS,
@@ -2401,8 +2294,8 @@ test("library collections list expands evidence workspace", async () => {
   listRoot.dispatch("click", {
     target: {
       closest(selector) {
-        if (selector !== "[data-queue-collection-id]") return null;
-        return { dataset: { queueCollectionId: "11" } };
+        if (selector !== "[data-proposal-toggle]") return null;
+        return { dataset: { proposalToggle: "11" } };
       },
     },
   });
@@ -2410,36 +2303,26 @@ test("library collections list expands evidence workspace", async () => {
 
   assert.equal(
     harness.apiCalls.some(
-      (call) => call.path === "/api/library/collections/11/review",
+      (call) => call.path === "/api/library/collection-proposals/11",
     ),
     true,
   );
   assert.match(listRoot.innerHTML, /aria-expanded="true"/);
   assert.match(listRoot.innerHTML, /Issue #1/);
-  assert.match(listRoot.innerHTML, /issue-1\.pdf/);
   assert.match(
     listRoot.innerHTML,
     /\/api\/library\/documents\/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\/open/,
   );
   assert.match(listRoot.innerHTML, /target="_blank"/);
-  assert.match(listRoot.innerHTML, /Records the review decision only/);
-  assert.match(listRoot.innerHTML, /Issue marker detection/);
-  assert.match(listRoot.innerHTML, /Different issue/);
-  assert.match(listRoot.innerHTML, /Publisher differs/);
-  assert.match(listRoot.innerHTML, />Approve</);
+  assert.match(listRoot.innerHTML, /Review proposal only/);
+  assert.match(listRoot.innerHTML, /Recurring named newspaper/);
+  assert.match(listRoot.innerHTML, /Matching title and issue evidence/);
+  assert.match(listRoot.innerHTML, /Approve selected/);
   assert.equal((listRoot.innerHTML.match(/>Reject</g) || []).length, 1);
-  assert.ok(
-    listRoot.innerHTML.indexOf(">Reject<")
-      < listRoot.innerHTML.indexOf('<div id="collection-queue-details'),
-  );
-  assert.doesNotMatch(listRoot.innerHTML, /Leave for later|Approve candidate|Reject candidate/);
-  assert.ok(
-    listRoot.innerHTML.indexOf("collection-review-actions")
-      < listRoot.innerHTML.indexOf("collection-review-safety"),
-  );
+  assert.match(listRoot.innerHTML, /type="checkbox"/);
 });
 
-test("library collections review approval records decision without apply task", async () => {
+test("library collections approval posts selected proposal decision", async () => {
   const harness = createHarness({
     source: LIBRARY_COLLECTIONS_SOURCE,
     ids: COLLECTIONS_PAGE_IDS,
@@ -2450,82 +2333,22 @@ test("library collections review approval records decision without apply task", 
   harness.elements.get("collections-list-root").dispatch("click", {
     target: {
       closest(selector) {
-        if (selector !== "[data-queue-decision]") return null;
-        return {
-          dataset: {
-            queueDecisionId: "11",
-            queueDecision: "approve",
-          },
-        };
+        if (selector !== "[data-proposal-approve]") return null;
+        return { dataset: { proposalApprove: "11" } };
       },
     },
   });
   await harness.flush();
 
-  const patchCall = harness.apiCalls.find(
-    (call) => call.path === "/api/library/collections/11" && call.options.method === "PATCH",
+  const decisionCall = harness.apiCalls.find(
+    (call) => call.path === "/api/library/collection-proposals/11/decision" && call.options.method === "POST",
   );
-  assert.ok(patchCall);
-  assert.deepEqual(JSON.parse(patchCall.options.body), { status: "approved" });
+  assert.ok(decisionCall);
+  assert.equal(JSON.parse(decisionCall.options.body).decision, "approve");
   assert.equal(
     harness.apiCalls.some((call) => call.path.includes("collection_apply")),
     false,
   );
-});
-
-test("library collections merge confirms and posts selected canonical target", async () => {
-  const harness = createHarness({
-    source: LIBRARY_COLLECTIONS_SOURCE,
-    ids: COLLECTIONS_PAGE_IDS,
-    apiResolver: createCollectionsResolver(),
-    confirmResult: true,
-  });
-  await harness.flush();
-  const root = harness.elements.get("collections-list-root");
-
-  root.dispatch("click", {
-    target: {
-      closest(selector) {
-        if (selector !== "[data-queue-collection-id]") return null;
-        return { dataset: { queueCollectionId: "11" } };
-      },
-    },
-  });
-  await harness.flush();
-
-  root.dispatch("click", {
-    target: {
-      closest(selector) {
-        if (selector !== "[data-queue-merge]") return null;
-        return { dataset: { queueMerge: "11" } };
-      },
-    },
-  });
-  await harness.flush();
-  assert.match(root.innerHTML, /Canonical Collection/);
-
-  root.dispatch("click", {
-    target: {
-      closest(selector) {
-        if (selector !== "[data-merge-target-id]") return null;
-        return {
-          dataset: {
-            mergeSourceId: "11",
-            mergeTargetId: "38",
-            mergeTargetTitle: "Canonical Collection",
-          },
-        };
-      },
-    },
-  });
-  await harness.flush();
-
-  const mergeCall = harness.apiCalls.find(
-    (call) => call.path === "/api/library/collections/11/merge",
-  );
-  assert.ok(mergeCall);
-  assert.equal(mergeCall.options.method, "POST");
-  assert.deepEqual(JSON.parse(mergeCall.options.body), { target_collection_id: 38 });
 });
 
 test("library classification detail page renders API error state", async () => {
