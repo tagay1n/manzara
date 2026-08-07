@@ -1,13 +1,9 @@
 rename schema in database
 move gec-annotations-filter
 add upstream metadata to database
-clean s3 storageda
 notification panel
-
-multiple task simultaneously
 
 tasks hierarchy/concurrency
 
-shayan flow should upload too
-
 fix test_task_completion_not_blocked_by_open_stdout_fd completion timeout
+normalize metadata - should be only english
