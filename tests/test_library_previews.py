@@ -137,6 +137,18 @@ def test_library_tasks_exclude_local_llm_tasks(tmp_path: Path) -> None:
     assert "library.collection_triage_smoke" not in task_ids
 
 
+def test_library_cleanup_task_runs_as_importable_module(tmp_path: Path) -> None:
+    tasks = library_task_definitions(app_root=tmp_path)
+    task = next(
+        item for item in tasks if item["task_id"] == "library.prepare_document_cleanup"
+    )
+
+    assert task["panel_id"] == "library"
+    assert "-m app.modules.library.runtime.run_prepare_document_cleanup" in task[
+        "command"
+    ]["value"]
+
+
 def test_preview_repository_checkpoints_and_aggregates_coverage(
     test_client: tuple[object, object],
     prepared_test_schema: tuple[str, str],

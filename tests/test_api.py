@@ -106,9 +106,15 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     library = panels["library"]
     library_task_ids = {task["task_id"] for task in library["tasks"]}
     assert "maintenance.monocorpus_meta_evaluate" in library_task_ids
-    assert "library.collection_detect" in library_task_ids
-    assert "library.collection_validate" in library_task_ids
-    assert "library.collection_apply" in library_task_ids
+    assert not any(task_id.startswith("library.collection_") for task_id in library_task_ids)
+
+    collections = panels["collections"]
+    collection_task_ids = {task["task_id"] for task in collections["tasks"]}
+    assert collection_task_ids == {
+        "library.collection_detect",
+        "library.collection_validate",
+        "library.collection_apply",
+    }
 
 
 def test_rename_flow_and_task_title(test_client) -> None:

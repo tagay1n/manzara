@@ -228,6 +228,7 @@ def test_preview_settings_use_backblaze_source_and_yandex_target(
                 "documents": {
                     "source_path": "/documents",
                     "restricted_path": "/documents/private",
+                    "filtered_out_path": "/documents/filtered-out",
                 },
             },
             "cloud": {

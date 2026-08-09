@@ -15,6 +15,7 @@ from app.modules.library.collection_detection import (
     normalize_collection_text,
     title_core,
 )
+from app.modules.library.collection_constants import COLLECTIONS_PANEL_ID
 from app.modules.library.stats import create_runtime_engine
 
 
@@ -518,7 +519,7 @@ def decide_collection_proposal(
             "library.collections.proposal_decided",
             task_id=None,
             run_id=None,
-            panel_id="library",
+            panel_id=COLLECTIONS_PANEL_ID,
             payload=payload,
         )
         return {"ok": True, **payload}
@@ -661,7 +662,7 @@ def update_collection(
             "library.collections.updated",
             task_id=None,
             run_id=None,
-            panel_id="library",
+            panel_id=COLLECTIONS_PANEL_ID,
             payload={
                 "collection_id": int(collection_id),
                 "updated_fields": sorted(clean),
@@ -732,7 +733,7 @@ def merge_collections(
             "library.collections.merged",
             task_id=None,
             run_id=None,
-            panel_id="library",
+            panel_id=COLLECTIONS_PANEL_ID,
             payload=payload,
         )
         return {"ok": True, "error": None, **payload}

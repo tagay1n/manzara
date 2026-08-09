@@ -20,4 +20,5 @@ PANEL_DEFS: list[dict[str, Any]] = [
     {"panel_id": "shayan", "title": "Shayan"},
     {"panel_id": "maintenance", "title": "Maintenance"},
     {"panel_id": "library", "title": "Library"},
+    {"panel_id": "collections", "title": "Collections"},
 ]

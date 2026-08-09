@@ -41,6 +41,7 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
                 "documents": {
                     "source_path": "/documents",
                     "restricted_path": "/documents/private",
+                    "filtered_out_path": "/documents/filtered-out",
                 },
             },
             "cloud": {
@@ -61,6 +62,7 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
     assert settings.cache_path == tmp_path / "cache"
     assert settings.source_path == "/documents"
     assert settings.restricted_path == "/documents/private"
+    assert settings.filtered_out_path == "/documents/filtered-out"
     assert settings.primary.endpoint_url == "https://s3.eu-central-003.backblazeb2.com"
     assert settings.primary.region_name == "eu-central-003"
     assert settings.primary.access_key_id == "b2-key-id"

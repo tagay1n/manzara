@@ -29,11 +29,12 @@ from app.modules.library.collection_detection import (
     PROMPT_VERSION,
     parse_validation_response,
 )
+from app.modules.library.collection_constants import COLLECTIONS_PANEL_ID
 from app.modules.library.stats import create_runtime_engine
 
 
 TASK_ID = "library.collection_validate"
-PANEL_ID = "library"
+PANEL_ID = COLLECTIONS_PANEL_ID
 
 
 def _now() -> str:

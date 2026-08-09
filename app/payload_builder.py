@@ -244,10 +244,26 @@ class PayloadBuilder:
             tasks=tasks_by_panel.get("library", []),
             title=panel_titles.get("library", "Library"),
         )
+        collection_overview = ops.get_collection_overview()
+        collection_stats = collection_overview.get("stats") or {}
+        collections_panel = {
+            "panel_id": "collections",
+            "title": panel_titles.get("collections", "Collections"),
+            "description": "Discover, validate, and apply document collections.",
+            "status_counts": state.db.run_count_by_status("collections"),
+            "stats_cards": [
+                {"label": "Needs Review", "value": str(collection_stats.get("suggested_collections") or 0)},
+                {"label": "Awaiting AI", "value": str(collection_stats.get("awaiting_validation") or 0)},
+                {"label": "Collections", "value": str(collection_stats.get("approved_collections") or 0)},
+                {"label": "Members", "value": str(collection_stats.get("items_linked") or 0)},
+            ],
+            "tasks": tasks_by_panel.get("collections", []),
+        }
         return {
             "shayan": shayan_panel,
             "maintenance": maintenance_panel,
             "library": library_panel,
+            "collections": collections_panel,
         }
 
     def build_system_state_payload(self) -> Dict[str, Any]:
@@ -284,6 +300,7 @@ class PayloadBuilder:
             panel_payloads["shayan"],
             panel_payloads["maintenance"],
             panel_payloads["library"],
+            panel_payloads["collections"],
         ]
         for panel in ordered_panels:
             panel_id = str(panel.get("panel_id") or "")

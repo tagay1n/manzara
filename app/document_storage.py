@@ -49,6 +49,7 @@ class DocumentStorageSettings:
     cache_path: Path
     source_path: str
     restricted_path: str
+    filtered_out_path: str
     primary: S3ConnectionSettings
     legacy: S3ConnectionSettings
     public_bucket: str
@@ -86,6 +87,9 @@ def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorag
         source_path=_required(disk_documents, "source_path", "yandex.disk.documents"),
         restricted_path=_required(
             disk_documents, "restricted_path", "yandex.disk.documents"
+        ),
+        filtered_out_path=_required(
+            disk_documents, "filtered_out_path", "yandex.disk.documents"
         ),
         primary=S3ConnectionSettings(
             endpoint_url=_required(

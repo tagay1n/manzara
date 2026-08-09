@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db import Database  # noqa: E402
+from app.modules.library.collection_constants import COLLECTIONS_PANEL_ID  # noqa: E402
 from app.modules.library.collection_detection import discover_collections  # noqa: E402
 from app.run_artifact_channel import emit_run_artifact  # noqa: E402
 from app.settings import load_settings  # noqa: E402
@@ -40,7 +41,7 @@ def main() -> None:
             "task.progress",
             task_id="library.collection_detect",
             run_id=run_id,
-            panel_id="library",
+            panel_id=COLLECTIONS_PANEL_ID,
             payload={"status": "running", "progress": snapshot},
         )
 
@@ -73,7 +74,7 @@ def main() -> None:
             "task.progress",
             task_id="library.collection_detect",
             run_id=run_id,
-            panel_id="library",
+            panel_id=COLLECTIONS_PANEL_ID,
             payload={
                 "status": terminal_status,
                 "progress": payload,

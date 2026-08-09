@@ -26,6 +26,10 @@ const LIBRARY_COLLECTIONS_SOURCE = readFileSync(
   new URL("../../static/library-collections.js", import.meta.url),
   "utf-8",
 );
+const LIBRARY_DOCUMENT_CLEANUP_SOURCE = readFileSync(
+  new URL("../../static/library-document-cleanup.js", import.meta.url),
+  "utf-8",
+);
 const LIBRARY_CLASSIFICATION_SOURCE = readFileSync(
   new URL("../../static/library-classification.js", import.meta.url),
   "utf-8",
@@ -202,6 +206,13 @@ const COLLECTIONS_PAGE_IDS = [
   "page-next",
   "filter-search",
   "filter-apply",
+];
+
+const DOCUMENT_CLEANUP_PAGE_IDS = [
+  "cleanup-stat-grid",
+  "cleanup-status",
+  "cleanup-list",
+  "last-event",
 ];
 
 class FakeClassList {
@@ -3038,4 +3049,49 @@ test("library normalization evidence action opens dialog and loads evidence text
     entry.path.startsWith("/api/library/normalization/personality/evidence?"),
   );
   assert.equal(Boolean(evidenceCall), true);
+});
+
+test("document cleanup page bootstraps from its snapshot cursor and queue API", async () => {
+  const harness = createHarness({
+    source: LIBRARY_DOCUMENT_CLEANUP_SOURCE,
+    ids: DOCUMENT_CLEANUP_PAGE_IDS,
+    selectors: ["[data-cleanup-mode]"],
+    locationPathname: "/library/document-cleanup",
+    apiResolver(path) {
+      if (path === "/api/library/document-cleanup") {
+        return {
+          event_cursor: 73,
+          stats: {
+            active_plans: 2,
+            pending_reviews: 1,
+            failed_plans: 0,
+            completed_plans: 5,
+          },
+        };
+      }
+      if (path === "/api/library/document-cleanup/queue?limit=200") {
+        return {
+          items: [
+            {
+              cleanup_id: 9,
+              action: "move",
+              reason: "non_tatar",
+              source_path: "/books/a.pdf",
+              status: "planned",
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+
+  assert.match(harness.elements.get("cleanup-stat-grid").innerHTML, /Active plans/);
+  assert.match(harness.elements.get("cleanup-list").innerHTML, /non_tatar/);
+  assert.equal(harness.sse.config.initialCursor, 73);
+  assert.equal(
+    harness.sse.config.eventTypes.includes("library.document_cleanup_changed"),
+    true,
+  );
 });

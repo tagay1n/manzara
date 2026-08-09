@@ -43,6 +43,7 @@ def register_page_routes(
         ("/library/personalities", "library-personalities.html"),
         ("/library/publishers", "library-publishers.html"),
         ("/library/collections", "library-collections.html"),
+        ("/library/document-cleanup", "library-document-cleanup.html"),
     ]
 
     for path, file_name in routes:

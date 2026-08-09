@@ -3294,3 +3294,51 @@ textarea:focus,
 .collection-proposal-item-copy small, .collection-proposal-item-copy span { color:var(--text-muted); }
 .collection-proposal-item-tail { display:flex; align-items:center; gap:.45rem; }
 @media (max-width: 760px) { .collection-proposal-item { grid-template-columns:auto minmax(0,1fr); } .collection-proposal-item-tail { grid-column:2; flex-wrap:wrap; } }
+.cleanup-task-links {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.cleanup-row-main,
+.cleanup-review-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.cleanup-action-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.cleanup-action-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cleanup-row .collection-queue-copy,
+.cleanup-review-head .collection-queue-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.cleanup-review-card .collection-queue-details {
+  display: block;
+}
+
+@media (max-width: 720px) {
+  .cleanup-task-links {
+    width: 100%;
+  }
+
+  .cleanup-task-links .small-btn {
+    flex: 1;
+  }
+}

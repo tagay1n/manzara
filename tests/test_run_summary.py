@@ -249,3 +249,25 @@ def test_document_sync_summary_reports_unavailable_yandex_paths() -> None:
     highlights = {item["label"]: item["value"] for item in summary["highlights"]}
     assert highlights["Discovery failures"] == "2"
     assert highlights["Database-only"] == "Not evaluated"
+def test_document_cleanup_preparation_summary_uses_structured_artifact() -> None:
+    summary = build_structured_run_summary(
+        task_id="library.prepare_document_cleanup",
+        panel_id="library",
+        status="completed",
+        exit_code=0,
+        error_text=None,
+        stop_mode=None,
+        started_at="2026-08-08T10:00:00+00:00",
+        finished_at="2026-08-08T10:00:01+00:00",
+        log_lines=[],
+        artifacts={
+            "kind": "library.document_cleanup_preparation_summary",
+            "scanned": 100,
+            "plans_created": 3,
+            "isbn_groups": 2,
+            "isbn_reviews_created": 1,
+        },
+    )
+
+    assert summary["message"] == "Document cleanup plans prepared; no storage was mutated."
+    assert {item["label"]: item["value"] for item in summary["highlights"]}["Plans"] == "3"

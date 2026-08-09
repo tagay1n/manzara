@@ -13,6 +13,7 @@
     { title: "Personalities", href: "/library/personalities", icon: "users", kind: "Library" },
     { title: "Publishers", href: "/library/publishers", icon: "building-2", kind: "Library" },
     { title: "Collections", href: "/library/collections", icon: "library", kind: "Library" },
+    { title: "Document cleanup", href: "/library/document-cleanup", icon: "list-filter", kind: "Library" },
   ];
 
   const shellState = {
@@ -30,6 +31,7 @@
     { title: "Personalities", href: "/library/personalities", match: /^\/library\/personalities/ },
     { title: "Publishers", href: "/library/publishers", match: /^\/library\/publishers/ },
     { title: "Collections", href: "/library/collections", match: /^\/library\/collections/ },
+    { title: "Document cleanup", href: "/library/document-cleanup", match: /^\/library\/document-cleanup/ },
   ];
 
   function navMarkup(activePage) {

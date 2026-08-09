@@ -61,6 +61,11 @@ Notes:
   - Persist S3 size/ETag/verification timestamps in PostgreSQL; do not re-download or re-hash verified unchanged objects on every run.
   - The legacy `public.document` table currently has no database uniqueness constraint on `md5`. Treat MD5 as the application identity: reject duplicate/null identities before remote work, persist with transactional update-then-insert, and roll back if an update matches more than one row. Do not add or alter its constraint without explicit owner approval.
   - Every completed document sync must emit a structured source/database reconciliation report: source file count, canonical source document count, database rows before/after, synced/unsynced source documents, database-only rows, duplicate source paths, item failures, and a `fully_synced` result.
+  - Every document-related Yandex Disk move or removal must be represented by a PostgreSQL `document_cleanup_queue` row before mutation. Task code must use the guarded cleanup executor rather than calling Yandex move/remove directly.
+  - `library.prepare_document_cleanup` is planning-only: it may identify non-Tatar/non-document records and duplicate ISBNs, but must not mutate documents or remote storage. Ambiguous ISBN groups remain review rows.
+  - `maintenance.monocorpus_sync` applies persisted cleanup rows and synchronizes Yandex catalog state. Duplicate-MD5 resources may be queued and executed in the same traversal; ordinary unrestricted documents missing a public URL may be published, while restricted documents must never be published.
+  - A document cleanup move is complete only after the filtered-out target is MD5-verified, managed S3 derivatives are removed, and dependent PostgreSQL state is deleted. Each phase must be resumable and idempotent.
+  - `maintenance.monocorpus_sync` and `maintenance.sync_documents_s3` must share one PostgreSQL advisory lock and never overlap.
   - Exact reconciliation is valid only after Yandex traversal finishes. A stopped partial traversal must report `discovery_complete=false`, leave database-only counts unevaluated, and never claim `fully_synced`.
   - Reconciliation differences are reportable outcomes, not process failures. Complete the task with differences so the web UI can show final statistics; still fail normally when discovery or another task-level error prevents producing a trustworthy final report.
 - Artifact location rule (all flows/tasks): write all task/flow artifacts (logs, temp files, exports, caches, run metadata) only under `~/.manzara` by default (or under `MANZARA_ARTIFACTS_ROOT` when explicitly overridden). Do not write artifacts into repository-root folders such as `_artifacts`.
@@ -172,6 +177,7 @@ Notes:
   - Missing semantic roles for short PDFs are intentional completeness, not partial failure; never create duplicate page previews.
   - Frontend/API consumers use manifest roles and actual page numbers, never infer semantics from compact S3 filenames.
 - Library collection detection is proposal-based and path-independent:
+  - Collection detection, Gemini validation, and explicit metadata application tasks belong to the dedicated `collections` flow; keep general Library operations in `library`.
   - Canonical collections and accepted memberships are authoritative; detector and Gemini reruns must never mutate them directly.
   - Detection eligibility requires an object-valued `metadata.schema_org` with a usable title. Exclude `@type=Legislation` and centralized normalized legal-genre policy matches before feature indexing.
   - Never use Yandex paths, parent directories, filenames, or storage hierarchy as collection evidence or Gemini prompt input.

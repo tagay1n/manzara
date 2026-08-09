@@ -199,6 +199,39 @@ def build_structured_run_summary(
             summary["message"] = "Document sync completed."
         return summary
 
+    if task_id == "maintenance.monocorpus_sync":
+        data = artifacts if isinstance(artifacts, dict) else {}
+        if data.get("kind") == "maintenance.monocorpus_sync_summary":
+            summary["highlights"].extend(
+                [
+                    {"label": "Discovered", "value": str(int(data.get("discovered") or 0))},
+                    {"label": "Added", "value": str(int(data.get("created") or 0))},
+                    {"label": "Published", "value": str(int(data.get("published") or 0))},
+                    {"label": "Cleaned", "value": str(int(data.get("cleanups_completed") or 0))},
+                    {"label": "Failed", "value": str(int(data.get("failed") or 0))},
+                ]
+            )
+            summary["message"] = (
+                "Monocorpus sync stopped at a safe item boundary."
+                if data.get("stopped")
+                else "Monocorpus catalog and cleanup queue synchronized."
+            )
+        return summary
+
+    if task_id == "library.prepare_document_cleanup":
+        data = artifacts if isinstance(artifacts, dict) else {}
+        if data.get("kind") == "library.document_cleanup_preparation_summary":
+            summary["highlights"].extend(
+                [
+                    {"label": "Scanned", "value": str(int(data.get("scanned") or 0))},
+                    {"label": "Plans", "value": str(int(data.get("plans_created") or 0))},
+                    {"label": "ISBN groups", "value": str(int(data.get("isbn_groups") or 0))},
+                    {"label": "Reviews", "value": str(int(data.get("isbn_reviews_created") or 0))},
+                ]
+            )
+            summary["message"] = "Document cleanup plans prepared; no storage was mutated."
+        return summary
+
     if panel_id == "shayan" and status == "completed":
         if task_id.endswith(".scan_changes"):
             scan_artifacts = artifacts if isinstance(artifacts, dict) else {}

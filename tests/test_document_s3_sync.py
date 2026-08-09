@@ -210,6 +210,7 @@ def settings(cache: Path) -> DocumentStorageSettings:
         cache_path=cache,
         source_path="/documents",
         restricted_path="/documents/private",
+        filtered_out_path="/documents/filtered-out",
         primary=S3ConnectionSettings(
             endpoint_url="https://s3.primary.example.test",
             region_name="primary-region",
@@ -511,6 +512,42 @@ def test_sync_never_publishes_restricted_yandex_document(tmp_path: Path) -> None
     assert result["failed"] == 0
     assert yadisk.published == []
     assert repository.saved[-1]["ya_public_url"] is None
+
+
+def test_sync_preserves_existing_public_url_when_listing_omits_it(
+    tmp_path: Path,
+) -> None:
+    content = b"existing-public-document"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    (tmp_path / f"{digest}.pdf").write_bytes(content)
+    existing_public_url = "https://disk.example/public/existing"
+    repository = FakeRepository(
+        {
+            digest: {
+                "md5": digest,
+                "ya_public_url": existing_public_url,
+                "document_url": None,
+            }
+        }
+    )
+
+    result = run_document_sync(
+        repository=repository,
+        state_db=FakeStateDb(),
+        yadisk=FakeYaDisk(
+            {"/documents/book.pdf": content},
+            include_public_metadata=False,
+        ),
+        primary_s3=FakeS3(),
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work-preserve-public-url",
+        run_id=131,
+        should_stop=lambda: False,
+    )
+
+    assert result["failed"] == 0
+    assert repository.saved[-1]["ya_public_url"] == existing_public_url
 
 
 def test_sync_graceful_stop_finishes_current_document(tmp_path: Path) -> None:

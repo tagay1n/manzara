@@ -10,12 +10,13 @@ from app.dependencies import (
     build_normalization_operations,
     build_route_payload_builders,
 )
+from app.modules.library.collection_tasks import collection_task_definitions
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.maintenance.tasks import maintenance_task_definitions
 from app.registry import build_startup_seed_registry
 
 
-def test_maintenance_task_definitions_exclude_retired_sync_task(tmp_path) -> None:
+def test_maintenance_task_definitions_include_guarded_sync_task(tmp_path) -> None:
     tasks = maintenance_task_definitions(
         MaintenanceSettings(
             monocorpus_repo_path=tmp_path,
@@ -24,7 +25,19 @@ def test_maintenance_task_definitions_exclude_retired_sync_task(tmp_path) -> Non
     )
 
     task_ids = {str(task["task_id"]) for task in tasks}
-    assert "maintenance.monocorpus_sync" not in task_ids
+    assert "maintenance.monocorpus_sync" in task_ids
+    assert not any(task_id.startswith("library.collection_") for task_id in task_ids)
+
+
+def test_collection_tasks_belong_to_dedicated_flow(tmp_path) -> None:
+    tasks = collection_task_definitions(app_root=tmp_path)
+
+    assert {task["task_id"] for task in tasks} == {
+        "library.collection_detect",
+        "library.collection_validate",
+        "library.collection_apply",
+    }
+    assert {task["panel_id"] for task in tasks} == {"collections"}
 
 
 def test_startup_seed_registry_uses_injected_factories() -> None:
@@ -40,6 +53,7 @@ def test_startup_seed_registry_uses_injected_factories() -> None:
         shayan_task_definitions=lambda _cfg: [{"task_id": "a"}],
         maintenance_task_definitions=lambda _cfg: [{"task_id": "b"}],
         library_task_definitions=lambda: [{"task_id": "c"}],
+        collection_task_definitions=lambda: [{"task_id": "d"}],
         shayan_workflow_bundle=lambda _cfg: {"workflow_id": "w1"},
         maintenance_backup_full_workflow_bundle=lambda: {"workflow_id": "w2"},
         maintenance_backup_incr_workflow_bundle=lambda: {"workflow_id": "w3"},
@@ -49,7 +63,7 @@ def test_startup_seed_registry_uses_injected_factories() -> None:
     )
 
     assert registry.panel_defs == panel_defs
-    assert [item["task_id"] for item in registry.task_defs] == ["a", "b", "c"]
+    assert [item["task_id"] for item in registry.task_defs] == ["a", "b", "c", "d"]
     assert [item["workflow_id"] for item in registry.workflow_bundles] == [
         "w1",
         "w2",

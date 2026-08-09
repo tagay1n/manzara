@@ -8,6 +8,7 @@ from app.constants import PANEL_DEFS
 from app.contracts import JSONDict, StartupSeedRegistry
 from app.modules.maintenance.tasks import maintenance_task_definitions
 from app.modules.library.tasks import library_task_definitions
+from app.modules.library.collection_tasks import collection_task_definitions
 from app.modules.maintenance.workflow import (
     library_personality_normalization_workflow_bundle,
     library_publisher_normalization_workflow_bundle,
@@ -25,11 +26,20 @@ def build_startup_seed_registry(
     *,
     panel_defs: list[JSONDict] | None = None,
     shayan_task_definitions: Callable[[Any], list[JSONDict]] = shayan_task_definitions,
-    maintenance_task_definitions: Callable[[Any], list[JSONDict]] = maintenance_task_definitions,
+    maintenance_task_definitions: Callable[
+        [Any], list[JSONDict]
+    ] = maintenance_task_definitions,
     library_task_definitions: Callable[[], list[JSONDict]] = library_task_definitions,
+    collection_task_definitions: Callable[
+        [], list[JSONDict]
+    ] = collection_task_definitions,
     shayan_workflow_bundle: Callable[[Any], JSONDict] = shayan_workflow_bundle,
-    maintenance_backup_full_workflow_bundle: Callable[[], JSONDict] = maintenance_backup_full_workflow_bundle,
-    maintenance_backup_incr_workflow_bundle: Callable[[], JSONDict] = maintenance_backup_incr_workflow_bundle,
+    maintenance_backup_full_workflow_bundle: Callable[
+        [], JSONDict
+    ] = maintenance_backup_full_workflow_bundle,
+    maintenance_backup_incr_workflow_bundle: Callable[
+        [], JSONDict
+    ] = maintenance_backup_incr_workflow_bundle,
     library_workflow_bundle: Callable[[], JSONDict] = library_workflow_bundle,
     library_personality_normalization_workflow_bundle: Callable[
         [], JSONDict
@@ -44,6 +54,7 @@ def build_startup_seed_registry(
         *shayan_task_definitions(settings.shayan),
         *maintenance_task_definitions(settings.maintenance),
         *library_task_definitions(),
+        *collection_task_definitions(),
     ]
     workflow_bundles = [
         shayan_workflow_bundle(settings.shayan),

@@ -13,6 +13,7 @@ def _settings() -> DocumentStorageSettings:
         cache_path=Path("/tmp/manzara-document-access-test"),
         source_path="/documents",
         restricted_path="/documents/private",
+        filtered_out_path="/documents/filtered-out",
         primary=S3ConnectionSettings(
             endpoint_url="https://s3.primary.test",
             region_name="eu-test-1",

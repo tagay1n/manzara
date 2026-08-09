@@ -52,6 +52,7 @@ Pages:
 - `/library/personalities`
 - `/library/publishers`
 - `/library/collections`
+- `/library/document-cleanup`
 - `/library/normalization/personality`
 - `/library/normalization/publisher`
 
@@ -67,11 +68,13 @@ Flow tasks (seeded at startup):
 - `maintenance.pgbackrest_backup_full`
 - `maintenance.pgbackrest_backup_incr`
 - `maintenance.sync_documents_s3`
+- `maintenance.monocorpus_sync`
 - `maintenance.monocorpus_meta_evaluate`
 - `library.collection_detect`
 - `library.collection_validate`
 - `library.collection_apply`
 - `library.generate_book_previews`
+- `library.prepare_document_cleanup`
 - `library.personality_suggestions_refresh`
 - `library.publisher_suggestions_refresh`
 
@@ -110,11 +113,13 @@ Runtime control behavior:
 - Shayan Yandex-to-Nextcloud transfer checkpoints each video in `shayan_webdav_transfers`. It uses Nextcloud chunked upload v2, assembles into deterministic temporary DAV paths, and independently verifies content before the final DAV move. Verified rows remain `uploaded`, making subsequent runs skip them without uploading again. The task emits chunk-level byte progress over SSE, stops gracefully at file boundaries, and restarts only an interrupted current chunk upload. It never deletes, trashes, or moves source videos on Yandex Disk.
 - Long-running tasks can persist `runs.progress_json`; `task.progress` SSE events update determinate progress bars without frontend-owned domain state.
 - Document synchronization keeps Yandex Disk as a non-destructive, non-publishing auxiliary source while Backblaze B2 S3 is primary. It verifies existing objects, copies missing/corrupt objects, independently reads back new uploads, checkpoints verification on `document`, and reports live byte progress and structured run artifacts.
+- Document cleanup is split into preparation and execution. `library.prepare_document_cleanup` only writes PostgreSQL plans/reviews. `maintenance.monocorpus_sync` applies persisted plans, synchronizes Yandex catalog entries, publishes missing links only for unrestricted documents, and records duplicate-MD5 removals before executing them.
 
 Library data tooling currently includes:
 - Classification views and merge/normalization previews
 - Personality and publisher views
 - Path-independent collection workflow:
+  - Operational tasks are grouped in the dedicated **Collections** flow at `/flows/collections`; the Library collections review page remains at `/library/collections`.
   - **Discover collections** indexes eligible `metadata.schema_org` records and writes proposals without mutating approved memberships.
   - Documents require a usable metadata title; `Legislation` and normalized legal-document genres from `LEGAL_GENRE_BLACKLIST` are excluded before clustering.
   - **Validate collection proposals** uses an adaptive Gemini model pool with strict per-MD5 JSON responses and resumable PostgreSQL attempts.

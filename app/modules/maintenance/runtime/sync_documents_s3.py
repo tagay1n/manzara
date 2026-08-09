@@ -33,6 +33,7 @@ from app.modules.runtime_shared_utils import decrypt, encrypt, prefix
 from app.modules.maintenance.document_sync_repository import (
     PostgresDocumentSyncRepository,
 )
+from app.modules.maintenance.document_sync_lock import document_sync_lock
 from app.run_artifact_channel import emit_run_artifact
 from app.runtime_config import load_runtime_config
 from app.settings import load_settings
@@ -695,7 +696,7 @@ def run_document_sync(
                     settings=settings,
                 )
                 if raw_public_url
-                else None
+                else (existing.get("ya_public_url") if existing else None)
             )
             remote_size = int(verified_head.get("ContentLength") or resource["source_size"])
             remote_etag = _etag(verified_head.get("ETag"))
@@ -935,18 +936,21 @@ def main() -> int:
     workspace_root = flow_artifacts_dir("maintenance") / "document-s3-sync"
     workspace_root.mkdir(parents=True, exist_ok=True)
     try:
-        with tempfile.TemporaryDirectory(prefix=f"run-{run_id}-", dir=workspace_root) as temp_dir:
-            summary = run_document_sync(
-                repository=repository,
-                state_db=state_db,
-                yadisk=yadisk,
-                primary_s3=primary_s3,
-                legacy_s3=legacy_s3,
-                settings=settings,
-                workspace=Path(temp_dir),
-                run_id=run_id,
-                should_stop=lambda: bool(stop_state["requested"]),
-            )
+        with document_sync_lock(
+            app_settings.database_url, schema=app_settings.database_schema
+        ):
+            with tempfile.TemporaryDirectory(prefix=f"run-{run_id}-", dir=workspace_root) as temp_dir:
+                summary = run_document_sync(
+                    repository=repository,
+                    state_db=state_db,
+                    yadisk=yadisk,
+                    primary_s3=primary_s3,
+                    legacy_s3=legacy_s3,
+                    settings=settings,
+                    workspace=Path(temp_dir),
+                    run_id=run_id,
+                    should_stop=lambda: bool(stop_state["requested"]),
+                )
         print(f"document sync: final {json.dumps(summary, sort_keys=True)}", flush=True)
         emit_run_artifact(summary)
         return _result_exit_code(summary)
