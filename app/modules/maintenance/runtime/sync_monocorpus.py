@@ -10,6 +10,7 @@ from typing import Any, Callable, Mapping
 
 from boto3 import Session
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from yadisk_client import YaDisk
 from yadisk.exceptions import PathExistsError, PathNotFoundError
 
@@ -99,28 +100,46 @@ def _catalog_changed(existing: Mapping[str, Any], payload: Mapping[str, Any]) ->
     return any(existing.get(key) != payload.get(key) for key in keys)
 
 
-def _delete_prefix(s3: Any, bucket: str, md5: str) -> int:
+def _delete_prefix(
+    s3: Any,
+    bucket: str,
+    md5: str,
+    *,
+    missing_bucket_ok: bool = False,
+) -> int:
     deleted = 0
     token: str | None = None
-    while True:
-        request: dict[str, Any] = {"Bucket": bucket, "Prefix": md5}
-        if token:
-            request["ContinuationToken"] = token
-        page = s3.list_objects_v2(**request)
-        for item in page.get("Contents", []):
-            key = str(item.get("Key") or "")
-            if not key:
-                continue
-            s3.delete_object(Bucket=bucket, Key=key)
-            deleted += 1
-        if not page.get("IsTruncated"):
-            verification = s3.list_objects_v2(Bucket=bucket, Prefix=md5, MaxKeys=1)
-            if verification.get("Contents"):
-                raise RuntimeError(
-                    f"Managed S3 objects remain after cleanup: s3://{bucket}/{md5}*"
+    try:
+        while True:
+            request: dict[str, Any] = {"Bucket": bucket, "Prefix": md5}
+            if token:
+                request["ContinuationToken"] = token
+            page = s3.list_objects_v2(**request)
+            for item in page.get("Contents", []):
+                key = str(item.get("Key") or "")
+                if not key:
+                    continue
+                s3.delete_object(Bucket=bucket, Key=key)
+                deleted += 1
+            if not page.get("IsTruncated"):
+                verification = s3.list_objects_v2(
+                    Bucket=bucket, Prefix=md5, MaxKeys=1
                 )
-            return deleted
-        token = str(page.get("NextContinuationToken") or "") or None
+                if verification.get("Contents"):
+                    raise RuntimeError(
+                        f"Managed S3 objects remain after cleanup: s3://{bucket}/{md5}*"
+                    )
+                return deleted
+            token = str(page.get("NextContinuationToken") or "") or None
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code") or "")
+        if missing_bucket_ok and code == "NoSuchBucket":
+            print(
+                f"monocorpus sync: warning legacy bucket missing; cleanup skipped bucket={bucket}",
+                flush=True,
+            )
+            return 0
+        raise
 
 
 def _managed_legacy_buckets(config: Mapping[str, Any]) -> list[str]:
@@ -142,7 +161,12 @@ def _cleanup_managed_storage(
     for bucket in {settings.public_bucket, settings.private_bucket}:
         deleted += _delete_prefix(primary_s3, bucket, md5)
     for bucket in _managed_legacy_buckets(config):
-        deleted += _delete_prefix(legacy_s3, bucket, md5)
+        deleted += _delete_prefix(
+            legacy_s3,
+            bucket,
+            md5,
+            missing_bucket_ok=True,
+        )
     return deleted
 
 

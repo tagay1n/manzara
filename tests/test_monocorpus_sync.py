@@ -6,8 +6,13 @@ import base64
 import hashlib
 from pathlib import Path
 
+from botocore.exceptions import ClientError
+
 from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
-from app.modules.maintenance.runtime.sync_monocorpus import run_monocorpus_sync
+from app.modules.maintenance.runtime.sync_monocorpus import (
+    _cleanup_managed_storage,
+    run_monocorpus_sync,
+)
 
 
 class _YaDisk:
@@ -118,6 +123,19 @@ class _S3:
         return {"Contents": [], "IsTruncated": False}
 
 
+class _MissingBucketS3(_S3):
+    def list_objects_v2(self, *, Bucket, **_kwargs):  # noqa: N803, ANN001
+        if Bucket == "missing-legacy":
+            raise ClientError(
+                {
+                    "Error": {"Code": "NoSuchBucket", "Message": "missing"},
+                    "ResponseMetadata": {"HTTPStatusCode": 404},
+                },
+                "ListObjectsV2",
+            )
+        return {"Contents": [], "IsTruncated": False}
+
+
 def _settings() -> DocumentStorageSettings:
     connection = S3ConnectionSettings("https://s3.test", "region", "key", "secret")
     return DocumentStorageSettings(
@@ -203,3 +221,15 @@ def test_restricted_and_existing_public_documents_are_not_published() -> None:
     assert yadisk.published == []
     assert repository.documents[restricted_md5]["ya_public_url"] is None
     assert repository.documents[public_md5]["ya_public_url"] == "https://disk/existing"
+
+
+def test_cleanup_treats_absent_legacy_bucket_as_empty() -> None:
+    removed = _cleanup_managed_storage(
+        md5="a" * 32,
+        primary_s3=_S3(),
+        legacy_s3=_MissingBucketS3(),
+        settings=_settings(),
+        config={"yandex": {"cloud": {"bucket": {"obsolete": "missing-legacy"}}}},
+    )
+
+    assert removed == 0
