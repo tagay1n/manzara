@@ -46,7 +46,11 @@ class FakeYaDisk:
                     "type": "file",
                     "size": len(content),
                     "md5": hashlib.md5(content).hexdigest(),  # noqa: S324
-                    "mime_type": "application/pdf",
+                    "mime_type": (
+                        "application/zip"
+                        if remote_path.lower().endswith(".zip")
+                        else "application/pdf"
+                    ),
                     "resource_id": "resource:" + first,
                     "public_key": "key:" + first if self.include_public_metadata else "",
                     "public_url": (
@@ -344,6 +348,30 @@ def test_sync_prefers_valid_cache_and_uploads_missing_object(tmp_path: Path) -> 
     )
     assert second["unchanged"] == 1
     assert len(repository.saved) == saved_count
+
+
+def test_sync_filters_non_document_before_remote_or_database_work(tmp_path: Path) -> None:
+    yadisk = FakeYaDisk({"/documents/archive.zip": b"not a document"})
+    primary_s3 = FakeS3()
+    repository = FakeRepository()
+
+    result = run_document_sync(
+        repository=repository,
+        state_db=FakeStateDb(),
+        yadisk=yadisk,
+        primary_s3=primary_s3,
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=8,
+        should_stop=lambda: False,
+    )
+
+    assert result["filtered"] == 1
+    assert result["source_files"] == 1
+    assert result["source_documents"] == 0
+    assert repository.saved == []
+    assert primary_s3.uploads == []
 
 
 def test_sync_reuses_plain_md5_etag_without_downloading(tmp_path: Path) -> None:

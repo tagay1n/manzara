@@ -21,6 +21,7 @@ from app.document_storage import (
 )
 from app.modules.maintenance.document_cleanup_executor import execute_yandex_cleanup
 from app.modules.maintenance.document_sync_lock import document_sync_lock
+from app.modules.maintenance.document_sync_filter import classify_document
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
 from app.modules.maintenance.runtime.sync_documents_s3 import (
     _correct_mime,
@@ -268,6 +269,7 @@ def run_monocorpus_sync(
         "unchanged": 0,
         "published": 0,
         "duplicate_resources_queued": 0,
+        "filtered": 0,
         "cleanups_completed": 0,
         "cleanups_failed": 0,
         "objects_removed": 0,
@@ -300,6 +302,17 @@ def run_monocorpus_sync(
         counters["discovered"] += 1
         md5 = str(resource.get("source_md5") or "").lower()
         source_path = str(resource.get("source_path") or "")
+        decision = classify_document(source_path, str(resource.get("mime_type") or ""))
+        if not decision.accepted:
+            counters["filtered"] += 1
+            print(
+                f"monocorpus sync: filtered path={source_path} "
+                f"mime_type={decision.mime_type} reason={decision.reason}",
+                flush=True,
+            )
+            _publish_progress(db, run_id, counters, source_path)
+            continue
+        resource["mime_type"] = decision.mime_type
         if not md5:
             counters["failed"] += 1
             print(f"monocorpus sync: warning missing md5 path={source_path}", flush=True)

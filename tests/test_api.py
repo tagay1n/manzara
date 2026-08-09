@@ -98,7 +98,7 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
 
     maintenance = panels["maintenance"]
     maintenance_task_ids = {task["task_id"] for task in maintenance["tasks"]}
-    assert "maintenance.monocorpus_sync" not in maintenance_task_ids
+    assert "maintenance.monocorpus_sync" in maintenance_task_ids
     assert "maintenance.pgbackrest_backup_full" in maintenance_task_ids
     assert "maintenance.pgbackrest_backup_incr" in maintenance_task_ids
     assert "maintenance.monocorpus_meta_evaluate" not in maintenance_task_ids

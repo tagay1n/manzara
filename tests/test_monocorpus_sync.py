@@ -43,7 +43,11 @@ class _YaDisk:
                 "type": "file",
                 "size": len(content),
                 "md5": hashlib.md5(content).hexdigest(),  # noqa: S324
-                "mime_type": "application/pdf",
+                "mime_type": (
+                    "application/zip"
+                    if remote_path.lower().endswith(".zip")
+                    else "application/pdf"
+                ),
                 "resource_id": "resource:" + first,
                 "public_key": "key:" + first if self.public_metadata else "",
                 "public_url": "https://disk/" + first if self.public_metadata else "",
@@ -221,6 +225,27 @@ def test_restricted_and_existing_public_documents_are_not_published() -> None:
     assert yadisk.published == []
     assert repository.documents[restricted_md5]["ya_public_url"] is None
     assert repository.documents[public_md5]["ya_public_url"] == "https://disk/existing"
+
+
+def test_filtered_resource_is_not_published_or_saved() -> None:
+    yadisk = _YaDisk({"/documents/archive.zip": b"not a document"})
+    repository = _Repository(yadisk)
+
+    result = run_monocorpus_sync(
+        repository=repository,
+        db=_Db(),
+        yadisk=yadisk,
+        primary_s3=_S3(),
+        legacy_s3=_S3(),
+        settings=_settings(),
+        config={"yandex": {"cloud": {"bucket": {}}}},
+        run_id=5,
+        should_stop=lambda: False,
+    )
+
+    assert result["filtered"] == 1
+    assert repository.saved == []
+    assert yadisk.published == []
 
 
 def test_cleanup_treats_absent_legacy_bucket_as_empty() -> None:

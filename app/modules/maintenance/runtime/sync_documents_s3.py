@@ -34,6 +34,10 @@ from app.modules.maintenance.document_sync_repository import (
     PostgresDocumentSyncRepository,
 )
 from app.modules.maintenance.document_sync_lock import document_sync_lock
+from app.modules.maintenance.document_sync_filter import (
+    classify_document,
+    normalize_document_mime,
+)
 from app.run_artifact_channel import emit_run_artifact
 from app.runtime_config import load_runtime_config
 from app.settings import load_settings
@@ -109,15 +113,7 @@ def _walk_files(
 
 
 def _correct_mime(mime_type: str, source_path: str) -> str:
-    normalized = str(mime_type or "").strip().lower()
-    suffix = Path(str(source_path)).suffix.lower()
-    if normalized == "application/octet-stream" and suffix == ".pdf":
-        return "application/pdf"
-    if normalized == "text/html" and suffix == ".txt":
-        return "text/plain"
-    if normalized == "text/html" and suffix == ".doc":
-        return "text/plain"
-    return normalized or "application/octet-stream"
+    return normalize_document_mime(source_path, mime_type)
 
 
 def _etag(value: Any) -> str:
@@ -450,6 +446,7 @@ def run_document_sync(
         "updated": 0,
         "unchanged": 0,
         "duplicates": 0,
+        "filtered": 0,
         "private_cleaned": 0,
         "discovery_failed": 0,
         "failed": 0,
@@ -528,9 +525,22 @@ def run_document_sync(
             stopped = True
             break
         source_files += 1
+        source_path = str(resource["source_path"])
+        decision = classify_document(source_path, str(resource.get("mime_type") or ""))
+        if not decision.accepted:
+            counters["filtered"] += 1
+            source_md5 = str(resource.get("source_md5") or "").lower()
+            if source_md5:
+                source_md5s.add(source_md5)
+            print(
+                f"document sync: filtered source_path={source_path} "
+                f"mime_type={decision.mime_type} reason={decision.reason}",
+                flush=True,
+            )
+            continue
+        resource["mime_type"] = decision.mime_type
         total += 1
         bytes_total += int(resource.get("source_size") or 0)
-        source_path = str(resource["source_path"])
         temporary_paths: list[Path] = []
         cache_file: Path | None = None
         try:
