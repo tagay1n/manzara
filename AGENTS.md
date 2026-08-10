@@ -182,6 +182,7 @@ Notes:
   - Preserve the adopted monocorpus metadata prompt, Schema.org validation, PDF edge-page slicing, and normalization unless the owner explicitly requests a prompt/version change.
   - Resolve the ordered model list only from `gemini.model_pools.library_metadata_extraction`; do not provide code defaults.
   - Persist content-level model failures after each attempt and resume with the next untried model. Quota, service, storage, and stop conditions remain retryable and must not terminally exclude a document.
+  - Exhaustion of only the models remaining for one document must defer that document and continue the batch. Stop with `all_keys_exhausted` only when every configured model is unavailable; expose quota/service/source deferrals and unresolved remaining count in progress and artifacts.
   - Treat metadata as usable only when it has a non-placeholder title and at least one independent bibliographic/content signal. Boilerplate-only, title-only, or title-missing responses are model failures and must advance to the next configured model.
   - Never overwrite usable `metadata.schema_org`. Existing objectively low-quality metadata may be replaced only after a validated usable response; preserve the old payload if all models fail. Never erase an existing document language with null, upload metadata ZIPs, or mutate document storage URLs.
 - Library collection detection is proposal-based and path-independent:
@@ -205,6 +206,7 @@ Notes:
   - On Gemini `429`: log full payload/context and fail the current task by default. Explicit model-pool workflows may persist the failed attempt and continue through another configured model; never implement this rotation ad hoc inside task business logic.
   - On Gemini `400`: treat as request-level rejection (prompt/input issue); do not exhaust or pause keys, skip/fail only the current item and continue workflow processing.
   - On Gemini `5xx`: start a global Gemini pause for 60 seconds and block new Gemini calls during pause.
+  - Treat connection resets and equivalent transport failures as transient. Share one bounded retry budget with `5xx` handling; after that budget is exhausted, defer the current item without exhausting the key or failing the whole batch. Authentication and configuration errors remain task-fatal.
   - Enforce Gemini reset blackout window around Pacific reset:
     - No new Gemini calls from 1 hour before to 1 hour after reset.
     - In-flight requests may finish gracefully.

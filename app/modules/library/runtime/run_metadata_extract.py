@@ -82,10 +82,15 @@ def _publish_progress(
     model_attempts: Mapping[str, int],
     model_successes: Mapping[str, int],
 ) -> None:
+    resolved = sum(
+        int(counters.get(key, 0))
+        for key in ("succeeded", "already_complete", "terminal")
+    )
     payload = {
         "current": int(current),
         "total": int(total),
         "percent": 100 if total == 0 else round((current / total) * 100, 2),
+        "remaining": max(0, int(total) - resolved),
         **{key: int(value) for key, value in counters.items()},
         "model_attempts": dict(model_attempts),
         "model_successes": dict(model_successes),
@@ -120,7 +125,9 @@ def run_metadata_extraction(
         succeeded=0,
         already_complete=0,
         terminal=0,
-        retryable_failed=0,
+        source_deferred=0,
+        quota_deferred=0,
+        service_deferred=0,
     )
     model_attempts: Counter[str] = Counter()
     model_successes: Counter[str] = Counter()
@@ -165,7 +172,7 @@ def run_metadata_extraction(
                 primary_s3=primary_s3,
             )
         except Exception as exc:  # noqa: BLE001
-            counters["retryable_failed"] += 1
+            counters["source_deferred"] += 1
             processed += 1
             print(
                 f"library metadata: source failure md5={candidate.md5} "
@@ -239,26 +246,29 @@ def run_metadata_extraction(
                 flush=True,
             )
         except GeminiModelPoolUnavailableError as exc:
-            outcome = "all_keys_exhausted"
+            counters["quota_deferred"] += 1
+            processed += 1
+            globally_exhausted = set(exc.unavailable_models) == set(models)
+            if globally_exhausted:
+                outcome = "all_keys_exhausted"
             print(
-                f"library metadata: blocked md5={candidate.md5} reason={exc}",
+                f"library metadata: quota deferred md5={candidate.md5} "
+                f"global={globally_exhausted} reason={exc}",
                 flush=True,
             )
-            break
         except GeminiModelPoolOperationalError as exc:
-            counters["retryable_failed"] += 1
-            processed += 1
             print(
                 f"library metadata: operational failure md5={candidate.md5} "
                 f"retryable={exc.retryable} error={exc}",
                 flush=True,
             )
-            if not exc.retryable:
+            if exc.retryable:
+                counters["service_deferred"] += 1
+                processed += 1
+            else:
                 outcome = "gemini_unavailable"
-                break
         except GeminiStopRequestedError:
             outcome = "stopped"
-            break
         else:
             stored = repository.save_success(
                 candidate.md5,
@@ -285,15 +295,22 @@ def run_metadata_extraction(
             model_attempts=model_attempts,
             model_successes=model_successes,
         )
+        if outcome != "completed":
+            break
         if should_stop():
             outcome = "stopped"
             break
 
+    resolved = sum(
+        int(counters.get(key, 0))
+        for key in ("succeeded", "already_complete", "terminal")
+    )
     summary = {
         "kind": "library.metadata_extraction_summary",
         "outcome": outcome,
         "eligible": total,
         "processed": processed,
+        "remaining": max(0, total - resolved),
         **dict(counters),
         "model_attempts": dict(model_attempts),
         "model_successes": dict(model_successes),

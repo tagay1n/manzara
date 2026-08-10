@@ -14,6 +14,7 @@ from app.gemini_runtime import (
     GeminiRuntimeManager,
     GeminiServerPauseError,
     GeminiStopRequestedError,
+    GeminiTransportError,
 )
 
 
@@ -79,7 +80,7 @@ def run_ordered_model_pool(
     for model_name in ordered:
         if model_name in failed:
             continue
-        server_retries = 0
+        transient_retries = 0
         while True:
             try:
                 raw = manager.run_with_key(
@@ -95,8 +96,15 @@ def run_ordered_model_pool(
                 unavailable.append(model_name)
                 break
             except GeminiServerPauseError as exc:
-                if server_retries == 0:
-                    server_retries += 1
+                if transient_retries == 0:
+                    transient_retries += 1
+                    continue
+                raise GeminiModelPoolOperationalError(
+                    str(exc), retryable=True
+                ) from exc
+            except GeminiTransportError as exc:
+                if transient_retries == 0:
+                    transient_retries += 1
                     continue
                 raise GeminiModelPoolOperationalError(
                     str(exc), retryable=True

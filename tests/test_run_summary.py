@@ -5,6 +5,44 @@ from __future__ import annotations
 from app.run_summary import build_structured_run_summary
 
 
+def test_metadata_extraction_summary_surfaces_quota_pause_and_remaining_work() -> None:
+    summary = build_structured_run_summary(
+        task_id="library.metadata_extract",
+        panel_id="library",
+        status="completed",
+        exit_code=0,
+        error_text=None,
+        stop_mode=None,
+        started_at="2026-08-10T10:00:00+00:00",
+        finished_at="2026-08-10T11:00:00+00:00",
+        log_lines=[],
+        artifacts={
+            "kind": "library.metadata_extraction_summary",
+            "outcome": "all_keys_exhausted",
+            "eligible": 358,
+            "processed": 53,
+            "remaining": 307,
+            "succeeded": 14,
+            "terminal": 37,
+            "quota_deferred": 1,
+            "service_deferred": 2,
+            "source_deferred": 0,
+        },
+    )
+
+    assert summary["message"] == "Paused by Gemini quota with 307 documents remaining."
+    assert {item["label"]: item["value"] for item in summary["highlights"]} == {
+        "Eligible": "358",
+        "Processed": "53",
+        "Succeeded": "14",
+        "Terminal": "37",
+        "Quota deferred": "1",
+        "Service deferred": "2",
+        "Source deferred": "0",
+        "Remaining": "307",
+    }
+
+
 def test_shayan_scan_summary_uses_artifact_counts() -> None:
     summary = build_structured_run_summary(
         task_id="shayan.scan_changes",

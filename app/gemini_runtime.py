@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import errno
 import threading
 import time
 from dataclasses import dataclass
@@ -43,6 +44,10 @@ class GeminiRequestRejectedError(GeminiRuntimeError):
 
 class GeminiRequestTimeoutError(GeminiRuntimeError):
     """Raised when one model request exceeds its response deadline."""
+
+
+class GeminiTransportError(GeminiRuntimeError):
+    """Raised for a transient network failure without an HTTP response."""
 
 
 class GeminiStopRequestedError(GeminiRuntimeError):
@@ -104,6 +109,49 @@ def _is_timeout_error(error: Exception) -> bool:
     name = type(error).__name__.casefold()
     message = str(error).casefold()
     return "timeout" in name or "timed out" in message or "deadline exceeded" in message
+
+
+def _is_transport_error(error: Exception) -> bool:
+    retryable_errno = {
+        errno.ECONNABORTED,
+        errno.ECONNREFUSED,
+        errno.ECONNRESET,
+        errno.ENETDOWN,
+        errno.ENETRESET,
+        errno.ENETUNREACH,
+        errno.EPIPE,
+    }
+    retryable_names = {
+        "connecterror",
+        "connectionerror",
+        "connectionreseterror",
+        "networkerror",
+        "readerror",
+        "remoteprotocolerror",
+        "writeerror",
+    }
+    retryable_messages = (
+        "broken pipe",
+        "connection aborted",
+        "connection reset",
+        "remote end closed connection",
+        "server disconnected",
+    )
+    current: Optional[BaseException] = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ConnectionError):
+            return True
+        if getattr(current, "errno", None) in retryable_errno:
+            return True
+        if type(current).__name__.casefold() in retryable_names:
+            return True
+        message = str(current).casefold()
+        if any(marker in message for marker in retryable_messages):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class GeminiRuntimeManager:
@@ -472,6 +520,29 @@ class GeminiRuntimeManager:
             )
             raise GeminiRequestTimeoutError(
                 f"Gemini request timed out for model={lease.model_name}: {error_text}"
+            ) from error
+
+        if _is_transport_error(error):
+            self.db.mark_gemini_error(
+                lease.key_id,
+                lease.model_name,
+                now_ts=_iso_utc(now_utc),
+                error_text=error_text,
+                exhausted=False,
+            )
+            self._emit(
+                "gemini.request.transport_error",
+                {
+                    "account_id": lease.account_id,
+                    "key_id": lease.key_id,
+                    "masked_key": lease.masked_key,
+                    "model_name": lease.model_name,
+                    "error": error_text,
+                },
+                run_id=run_id,
+            )
+            raise GeminiTransportError(
+                f"Gemini transport failed for model={lease.model_name}: {error_text}"
             ) from error
 
         self.db.mark_gemini_error(

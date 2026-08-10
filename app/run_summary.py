@@ -232,6 +232,41 @@ def build_structured_run_summary(
             summary["message"] = "Document cleanup plans prepared; no storage was mutated."
         return summary
 
+    if task_id == "library.metadata_extract":
+        data = artifacts if isinstance(artifacts, dict) else {}
+        if data.get("kind") == "library.metadata_extraction_summary":
+            values = {
+                "Eligible": int(data.get("eligible") or 0),
+                "Processed": int(data.get("processed") or 0),
+                "Succeeded": int(data.get("succeeded") or 0),
+                "Terminal": int(data.get("terminal") or 0),
+                "Quota deferred": int(data.get("quota_deferred") or 0),
+                "Service deferred": int(data.get("service_deferred") or 0),
+                "Source deferred": int(data.get("source_deferred") or 0),
+                "Remaining": int(data.get("remaining") or 0),
+            }
+            summary["highlights"].extend(
+                {"label": label, "value": str(value)}
+                for label, value in values.items()
+            )
+            outcome = str(data.get("outcome") or "")
+            remaining = values["Remaining"]
+            if outcome == "all_keys_exhausted":
+                summary["message"] = (
+                    f"Paused by Gemini quota with {remaining} documents remaining."
+                )
+            elif outcome == "stopped":
+                summary["message"] = (
+                    f"Metadata extraction stopped with {remaining} documents remaining."
+                )
+            elif remaining:
+                summary["message"] = (
+                    f"Metadata extraction completed with {remaining} deferred documents."
+                )
+            else:
+                summary["message"] = "Metadata extraction completed."
+        return summary
+
     if panel_id == "shayan" and status == "completed":
         if task_id.endswith(".scan_changes"):
             scan_artifacts = artifacts if isinstance(artifacts, dict) else {}
