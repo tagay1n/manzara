@@ -37,6 +37,45 @@ TEXT_SLICE_CHARS = 20_000
 PDF_EDGE_PAGES = 4
 PROMPT_VERSION = "prompt.v2"
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SUPPORTING_METADATA_FIELDS = (
+    "author",
+    "contributor",
+    "publisher",
+    "datePublished",
+    "isbn",
+    "inLanguage",
+    "description",
+    "numberOfPages",
+    "bookEdition",
+    "about",
+    "genre",
+    "audience",
+    "suggestedMinAge",
+    "isBasedOn",
+)
+
+
+def _has_value(value: Any) -> bool:
+    if value is None or isinstance(value, bool):
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping):
+        return bool(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(_has_value(item) for item in value)
+    return True
+
+
+def metadata_quality_issue(schema_org: Any) -> str | None:
+    """Return why metadata is unusable, or ``None`` for a safe result."""
+    if not isinstance(schema_org, Mapping):
+        return "metadata is not an object"
+    if not _has_value(schema_org.get("name")):
+        return "metadata has no usable title"
+    if not any(_has_value(schema_org.get(field)) for field in _SUPPORTING_METADATA_FIELDS):
+        return "metadata has no usable bibliographic evidence beyond the title"
+    return None
 
 
 @dataclass(frozen=True)
@@ -99,7 +138,25 @@ class MetadataExtractionRepository:
             FROM document d
             LEFT JOIN metadata m ON m.md5 = d.md5
             LEFT JOIN library_metadata_extraction_state state ON state.md5 = d.md5
-            WHERE (m.md5 IS NULL OR m.schema_org IS NULL)
+            WHERE (
+                  m.md5 IS NULL
+                  OR m.schema_org IS NULL
+                  OR NULLIF(BTRIM(m.schema_org->>'name'), '') IS NULL
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM jsonb_each(m.schema_org::jsonb) AS signal(key, value)
+                      WHERE signal.key = ANY(ARRAY[
+                                'author', 'contributor', 'publisher', 'datePublished',
+                                'isbn', 'inLanguage', 'description', 'numberOfPages',
+                                'bookEdition', 'about', 'genre', 'audience',
+                                'suggestedMinAge', 'isBasedOn'
+                            ])
+                        AND signal.value <> 'null'::jsonb
+                        AND signal.value <> to_jsonb(''::text)
+                        AND signal.value <> '[]'::jsonb
+                        AND signal.value <> '{}'::jsonb
+                  )
+              )
               AND d.document_url IS NOT NULL
               AND d.primary_storage_size IS NOT NULL
               AND d.primary_storage_verified_at IS NOT NULL
@@ -240,7 +297,7 @@ class MetadataExtractionRepository:
         schema_org: Mapping[str, Any],
         model_name: str,
     ) -> bool:
-        """Persist metadata without replacing an existing non-null payload."""
+        """Persist usable metadata without replacing an existing usable payload."""
         language = str(schema_org.get("inLanguage") or "").strip() or None
         with self.engine.begin() as conn:
             rows = conn.execute(
@@ -259,12 +316,17 @@ class MetadataExtractionRepository:
                 raise RuntimeError(
                     f"Document MD5 {md5} matched {len(rows)} rows; refusing metadata write"
                 )
-            if rows[0].get("schema_org") is not None:
+            existing_schema_org = rows[0].get("schema_org")
+            if existing_schema_org is not None and metadata_quality_issue(
+                existing_schema_org
+            ) is None:
                 conn.execute(
                     text("DELETE FROM library_metadata_extraction_state WHERE md5 = :md5"),
                     {"md5": str(md5)},
                 )
                 return False
+            if issue := metadata_quality_issue(schema_org):
+                raise ValueError(f"Refusing low-quality metadata write: {issue}")
 
             stored = conn.execute(
                 text(
@@ -273,7 +335,6 @@ class MetadataExtractionRepository:
                     VALUES (:md5, CAST(:schema_org AS JSONB))
                     ON CONFLICT (md5) DO UPDATE SET
                         schema_org = EXCLUDED.schema_org
-                    WHERE metadata.schema_org IS NULL
                     """
                 ),
                 {
@@ -435,7 +496,10 @@ def parse_metadata_response(raw_response: Any) -> dict[str, Any]:
             ensure_ascii=False,
         )
     )
-    return normalize_base_schema_org(schema_org)
+    normalized = normalize_base_schema_org(schema_org)
+    if issue := metadata_quality_issue(normalized):
+        raise GeminiModelResponseError(f"Gemini returned no usable metadata: {issue}")
+    return normalized
 
 
 __all__ = [
@@ -445,6 +509,7 @@ __all__ = [
     "PROMPT_VERSION",
     "build_pdf_prompt",
     "build_text_prompt",
+    "metadata_quality_issue",
     "parse_metadata_response",
     "prepare_metadata_request",
     "select_pdf_pages",

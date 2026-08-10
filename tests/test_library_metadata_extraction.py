@@ -10,8 +10,10 @@ from app.modules.library.metadata_extraction import (
     MetadataExtractionRepository,
     build_pdf_prompt,
     build_text_prompt,
+    parse_metadata_response,
     select_pdf_pages,
 )
+from app.gemini_model_pool import GeminiModelResponseError
 from app.modules.library.metadata_normalization import normalize_base_schema_org
 from app.modules.library.metadata_prompt import (
     DEFINE_META_PROMPT_BODY,
@@ -175,6 +177,18 @@ def test_candidate_query_requires_verified_primary_storage() -> None:
     assert "ya_public_url" not in sql
 
 
+def test_candidate_query_includes_existing_low_quality_metadata() -> None:
+    repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
+    repository.engine = _Engine()
+
+    repository.list_candidates(limit=25)
+
+    sql = repository.engine.statements[0]
+    assert "m.schema_org IS NULL" in sql
+    assert "m.schema_org->>'name'" in sql
+    assert "datePublished" in sql
+
+
 def test_candidate_query_excludes_terminal_failures_only() -> None:
     repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
     repository.engine = _Engine()
@@ -205,7 +219,19 @@ def test_candidate_query_rejects_duplicate_document_md5() -> None:
 def test_success_write_preserves_existing_non_null_metadata() -> None:
     repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
     repository.engine = _WriteEngine(
-        _WriteResult(rows=[{"md5": "a" * 32, "schema_org": {"name": "Existing"}}]),
+        _WriteResult(
+            rows=[
+                {
+                    "md5": "a" * 32,
+                    "schema_org": {
+                        "@context": "https://schema.org",
+                        "@type": "Book",
+                        "name": "Existing",
+                        "description": "Useful existing metadata",
+                    },
+                }
+            ]
+        ),
         _WriteResult(rowcount=1),
     )
 
@@ -219,6 +245,93 @@ def test_success_write_preserves_existing_non_null_metadata() -> None:
     assert len(repository.engine.statements) == 2
     assert not any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
     assert not any("UPDATE document" in sql for sql in repository.engine.statements)
+
+
+def test_success_write_replaces_only_low_quality_existing_metadata() -> None:
+    repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
+    repository.engine = _WriteEngine(
+        _WriteResult(
+            rows=[
+                {
+                    "md5": "a" * 32,
+                    "schema_org": {
+                        "@context": "https://schema.org",
+                        "@type": "Book",
+                    },
+                }
+            ]
+        ),
+        _WriteResult(rowcount=1),
+        _WriteResult(rowcount=1),
+        _WriteResult(rowcount=1),
+    )
+
+    stored = repository.save_success(
+        "a" * 32,
+        schema_org={
+            "@context": "https://schema.org",
+            "@type": "Book",
+            "name": "Recovered title",
+            "datePublished": "1998",
+        },
+        model_name="new-model",
+    )
+
+    assert stored is True
+    assert any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
+    assert any("UPDATE document" in sql for sql in repository.engine.statements)
+
+
+def test_success_write_rejects_low_quality_replacement() -> None:
+    repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
+    repository.engine = _WriteEngine(
+        _WriteResult(
+            rows=[
+                {
+                    "md5": "a" * 32,
+                    "schema_org": {
+                        "@context": "https://schema.org",
+                        "@type": "Book",
+                    },
+                }
+            ]
+        )
+    )
+
+    with pytest.raises(ValueError, match="Refusing low-quality metadata write"):
+        repository.save_success(
+            "a" * 32,
+            schema_org={"@context": "https://schema.org", "@type": "Book"},
+            model_name="new-model",
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"@context":"https://schema.org","@type":"Book"}',
+        '{"@context":"https://schema.org","@type":"Book","name":"Title only"}',
+        (
+            '{"@context":"https://schema.org","@type":"Book",'
+            '"description":"Description without an identified title"}'
+        ),
+    ],
+)
+def test_parse_metadata_response_rejects_effectively_empty_or_poor_payloads(
+    payload: str,
+) -> None:
+    with pytest.raises(GeminiModelResponseError, match="usable metadata"):
+        parse_metadata_response(payload)
+
+
+def test_parse_metadata_response_accepts_title_with_independent_evidence() -> None:
+    parsed = parse_metadata_response(
+        '{"@context":"https://schema.org","@type":"Book",'
+        '"name":"Useful title","datePublished":"1998"}'
+    )
+
+    assert parsed["name"] == "Useful title"
+    assert parsed["datePublished"] == "1998"
 
 
 def test_success_write_rejects_ambiguous_document_md5() -> None:

@@ -247,13 +247,15 @@ def run_metadata_extraction(
             break
         except GeminiModelPoolOperationalError as exc:
             counters["retryable_failed"] += 1
-            outcome = "gemini_unavailable"
+            processed += 1
             print(
                 f"library metadata: operational failure md5={candidate.md5} "
-                f"error={exc}",
+                f"retryable={exc.retryable} error={exc}",
                 flush=True,
             )
-            break
+            if not exc.retryable:
+                outcome = "gemini_unavailable"
+                break
         except GeminiStopRequestedError:
             outcome = "stopped"
             break

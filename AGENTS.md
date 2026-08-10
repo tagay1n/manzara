@@ -182,7 +182,8 @@ Notes:
   - Preserve the adopted monocorpus metadata prompt, Schema.org validation, PDF edge-page slicing, and normalization unless the owner explicitly requests a prompt/version change.
   - Resolve the ordered model list only from `gemini.model_pools.library_metadata_extraction`; do not provide code defaults.
   - Persist content-level model failures after each attempt and resume with the next untried model. Quota, service, storage, and stop conditions remain retryable and must not terminally exclude a document.
-  - Never overwrite non-null `metadata.schema_org`, erase an existing document language with null, upload metadata ZIPs, or mutate document storage URLs.
+  - Treat metadata as usable only when it has a non-placeholder title and at least one independent bibliographic/content signal. Boilerplate-only, title-only, or title-missing responses are model failures and must advance to the next configured model.
+  - Never overwrite usable `metadata.schema_org`. Existing objectively low-quality metadata may be replaced only after a validated usable response; preserve the old payload if all models fail. Never erase an existing document language with null, upload metadata ZIPs, or mutate document storage URLs.
 - Library collection detection is proposal-based and path-independent:
   - Collection detection, Gemini validation, and explicit metadata application tasks belong to the dedicated `collections` flow; keep general Library operations in `library`.
   - Canonical collections and accepted memberships are authoritative; detector and Gemini reruns must never mutate them directly.

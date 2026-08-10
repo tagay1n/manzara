@@ -44,6 +44,10 @@ class GeminiModelPoolUnavailableError(GeminiModelPoolError):
 class GeminiModelPoolOperationalError(GeminiModelPoolError):
     """Gemini remained unavailable after its bounded server-error retry."""
 
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        self.retryable = bool(retryable)
+        super().__init__(message)
+
 
 @dataclass(frozen=True)
 class GeminiModelPoolResult(Generic[T]):
@@ -94,7 +98,9 @@ def run_ordered_model_pool(
                 if server_retries == 0:
                     server_retries += 1
                     continue
-                raise GeminiModelPoolOperationalError(str(exc)) from exc
+                raise GeminiModelPoolOperationalError(
+                    str(exc), retryable=True
+                ) from exc
             except GeminiStopRequestedError:
                 raise
             except GeminiRequestRejectedError as exc:

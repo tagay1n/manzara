@@ -17,6 +17,7 @@ from app.gemini_runtime import (
     GeminiQuotaExceededError,
     GeminiRequestTimeoutError,
     GeminiRuntimeError,
+    GeminiServerPauseError,
 )
 
 
@@ -147,3 +148,26 @@ def test_model_timeout_falls_through_but_unknown_runtime_error_is_operational() 
             parse=lambda raw: raw,
             record_failure=lambda *_args: None,
         )
+
+
+def test_repeated_server_pause_is_retryable_operational_error() -> None:
+    manager = _Manager(
+        {
+            "first": [
+                GeminiServerPauseError("paused"),
+                GeminiServerPauseError("still paused"),
+            ]
+        }
+    )
+
+    with pytest.raises(GeminiModelPoolOperationalError) as exc_info:
+        run_ordered_model_pool(
+            manager=manager,
+            models=["first"],
+            run_id=13,
+            request=lambda _model, _key, _lease: None,
+            parse=lambda raw: raw,
+            record_failure=lambda *_args: None,
+        )
+
+    assert exc_info.value.retryable is True
