@@ -8,6 +8,7 @@ from app.modules.shayan.config import ShayanSettings
 from app.modules.shayan.tasks import shayan_task_definitions
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.maintenance.tasks import maintenance_task_definitions
+from app.modules.library.tasks import library_task_definitions
 
 
 def test_shayan_tasks_include_storage_transfer_stage() -> None:
@@ -42,5 +43,17 @@ def test_maintenance_tasks_include_document_s3_sync() -> None:
     assert task["panel_id"] == "maintenance"
     assert task["task_type"] == "transfer"
     assert "app.modules.maintenance.runtime.sync_documents_s3" in str(
+        task["command"]["value"]
+    )
+
+
+def test_library_tasks_include_metadata_extraction() -> None:
+    task = {
+        item["task_id"]: item for item in library_task_definitions(app_root=Path("/tmp/manzara"))
+    }["library.metadata_extract"]
+
+    assert task["panel_id"] == "library"
+    assert task["title"] == "Extract metadata"
+    assert "app.modules.library.runtime.run_metadata_extract" in str(
         task["command"]["value"]
     )

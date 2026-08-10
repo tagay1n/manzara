@@ -177,3 +177,21 @@ def load_gemini_model_pools() -> Dict[str, List[str]]:
         if models:
             pools[alias] = models
     return pools
+
+
+def load_required_gemini_model_pool(alias: str) -> List[str]:
+    """Load one explicitly configured ordered pool without implicit defaults."""
+    pool_name = str(alias or "").strip()
+    if not pool_name:
+        raise ValueError("Gemini model pool alias must not be empty")
+    payload = _load_config_payload()
+    gemini = payload.get("gemini")
+    configured = gemini.get("model_pools") if isinstance(gemini, dict) else None
+    raw_models = configured.get(pool_name) if isinstance(configured, dict) else None
+    if not isinstance(raw_models, list):
+        raise RuntimeError(f"gemini.model_pools.{pool_name} is required")
+    models = [str(value or "").strip() for value in raw_models]
+    models = list(dict.fromkeys(value for value in models if value))
+    if not models:
+        raise RuntimeError(f"gemini.model_pools.{pool_name} must not be empty")
+    return models

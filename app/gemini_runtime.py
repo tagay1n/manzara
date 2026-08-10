@@ -41,6 +41,10 @@ class GeminiRequestRejectedError(GeminiRuntimeError):
     """Raised when Gemini rejects one request payload (e.g. HTTP 400)."""
 
 
+class GeminiRequestTimeoutError(GeminiRuntimeError):
+    """Raised when one model request exceeds its response deadline."""
+
+
 class GeminiStopRequestedError(GeminiRuntimeError):
     """Raised when a task requests graceful stop while waiting for Gemini."""
 
@@ -92,6 +96,14 @@ def _extract_status_code(error: Exception) -> Optional[int]:
         if f"{code}" in text:
             return code
     return None
+
+
+def _is_timeout_error(error: Exception) -> bool:
+    if isinstance(error, TimeoutError):
+        return True
+    name = type(error).__name__.casefold()
+    message = str(error).casefold()
+    return "timeout" in name or "timed out" in message or "deadline exceeded" in message
 
 
 class GeminiRuntimeManager:
@@ -437,6 +449,29 @@ class GeminiRuntimeManager:
             )
             raise GeminiServerPauseError(
                 f"Gemini server error {status_code}; paused until {_iso_utc(pause_until)}"
+            ) from error
+
+        if _is_timeout_error(error):
+            self.db.mark_gemini_error(
+                lease.key_id,
+                lease.model_name,
+                now_ts=_iso_utc(now_utc),
+                error_text=error_text,
+                exhausted=False,
+            )
+            self._emit(
+                "gemini.request.timeout",
+                {
+                    "account_id": lease.account_id,
+                    "key_id": lease.key_id,
+                    "masked_key": lease.masked_key,
+                    "model_name": lease.model_name,
+                    "error": error_text,
+                },
+                run_id=run_id,
+            )
+            raise GeminiRequestTimeoutError(
+                f"Gemini request timed out for model={lease.model_name}: {error_text}"
             ) from error
 
         self.db.mark_gemini_error(

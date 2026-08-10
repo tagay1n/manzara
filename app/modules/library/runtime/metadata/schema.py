@@ -1,6 +1,6 @@
 """Pydantic models for schema.org JSON-LD metadata."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List
 
 class PersonOrOrganization(BaseModel):
@@ -27,6 +27,8 @@ class CreativeWork(BaseModel):
 
 class Book(BaseModel):
     """Schema.org Book metadata model."""
+    model_config = ConfigDict(populate_by_name=True)
+
     context: str = Field(alias="@context")
     type: str = Field(alias="@type")
 
@@ -51,10 +53,6 @@ class Book(BaseModel):
     suggestedMinAge: Optional[int] = None
     isBasedOn: Optional[CreativeWork] = None 
     
-    class Config:
-        populate_by_name = True
-
-
 class BookPatch(Book):
     """Partial Book payload used for metadata patching."""
 

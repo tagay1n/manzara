@@ -313,6 +313,68 @@ def resolve_document_object_location(
     return parse_object_url(source, endpoint_url)
 
 
+def download_verified_primary_document(
+    *,
+    settings: DocumentStorageSettings,
+    s3: Any,
+    document_url: str,
+    expected_md5: str,
+    expected_size: int | None = None,
+    destination: Path,
+) -> Path:
+    """Download one document exclusively from configured primary storage."""
+    location = verify_primary_document_object(
+        settings=settings,
+        s3=s3,
+        document_url=document_url,
+        expected_size=expected_size,
+    )
+
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".download")
+    temporary.unlink(missing_ok=True)
+    try:
+        s3.download_file(location[0], location[1], str(temporary))
+        actual_md5 = calculate_md5(temporary)
+        if actual_md5 != str(expected_md5 or "").strip().lower():
+            raise ValueError(
+                f"Primary document MD5 mismatch: expected={expected_md5} actual={actual_md5}"
+            )
+        temporary.replace(destination)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return destination
+
+
+def verify_primary_document_object(
+    *,
+    settings: DocumentStorageSettings,
+    s3: Any,
+    document_url: str,
+    expected_size: int | None,
+) -> tuple[str, str]:
+    """Require an existing object in one configured primary-storage bucket."""
+    location = resolve_document_object_location(
+        document_url=document_url,
+        encryption_key=settings.encryption_key,
+        endpoint_url=settings.primary.endpoint_url,
+    )
+    if location is None or location[0] not in {
+        settings.public_bucket,
+        settings.private_bucket,
+    }:
+        raise ValueError("Document URL is not in configured primary Backblaze storage")
+    response = s3.head_object(Bucket=location[0], Key=location[1])
+    remote_size = int(response.get("ContentLength") or 0)
+    if expected_size is not None and remote_size != int(expected_size):
+        raise ValueError(
+            f"Primary document size mismatch: expected={expected_size} actual={remote_size}"
+        )
+    return location
+
+
 __all__ = [
     "DEFAULT_MULTIPART_CHUNK_SIZE",
     "DocumentStorageSettings",
@@ -321,6 +383,7 @@ __all__ = [
     "calculate_md5",
     "calculate_multipart_etag",
     "document_object_key",
+    "download_verified_primary_document",
     "find_valid_cache_file",
     "find_valid_cache_entry",
     "load_document_storage_settings",
@@ -329,4 +392,5 @@ __all__ = [
     "parse_object_url",
     "resolve_document_download_url",
     "resolve_document_object_location",
+    "verify_primary_document_object",
 ]

@@ -8,6 +8,7 @@ from typing import Any
 
 LIBRARY_GENERATE_BOOK_PREVIEWS_TASK_ID = "library.generate_book_previews"
 LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID = "library.prepare_document_cleanup"
+LIBRARY_METADATA_EXTRACT_TASK_ID = "library.metadata_extract"
 
 
 def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, Any]]:
@@ -16,6 +17,20 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
     runner = root / "app" / "modules" / "library" / "runtime" / "run_generate_book_previews.py"
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
     return [
+        {
+            "task_id": LIBRARY_METADATA_EXTRACT_TASK_ID,
+            "panel_id": "library",
+            "title": "Extract metadata",
+            "task_type": "metadata",
+            "icon_idle": "ScanText",
+            "icon_running": "Square",
+            "cwd": str(root),
+            "command": {
+                "mode": "shell",
+                "value": py_bootstrap
+                + '"$PY_BIN" -m app.modules.library.runtime.run_metadata_extract',
+            },
+        },
         {
             "task_id": LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID,
             "panel_id": "library",
@@ -49,5 +64,6 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
 __all__ = [
     "LIBRARY_GENERATE_BOOK_PREVIEWS_TASK_ID",
     "LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID",
+    "LIBRARY_METADATA_EXTRACT_TASK_ID",
     "library_task_definitions",
 ]

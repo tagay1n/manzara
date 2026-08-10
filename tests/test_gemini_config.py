@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from app import gemini_config
@@ -66,3 +67,40 @@ def test_load_collection_validation_model_pool(monkeypatch, tmp_path: Path) -> N
     pools = gemini_config.load_gemini_model_pools()
 
     assert pools["library_collection_validation"] == ["model-a", "model-b"]
+
+
+def test_required_model_pool_has_no_implicit_default(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.local.yaml"
+    config_path.write_text("gemini:\n  accounts: {}\n", encoding="utf-8")
+    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
+
+    with pytest.raises(RuntimeError, match="library_metadata_extraction"):
+        gemini_config.load_required_gemini_model_pool(
+            "library_metadata_extraction"
+        )
+
+
+def test_required_model_pool_preserves_configured_order(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.local.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gemini": {
+                    "model_pools": {
+                        "library_metadata_extraction": [
+                            "model-first",
+                            "model-second",
+                            "model-first",
+                        ]
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
+
+    assert gemini_config.load_required_gemini_model_pool(
+        "library_metadata_extraction"
+    ) == ["model-first", "model-second"]

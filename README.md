@@ -74,6 +74,7 @@ Flow tasks (seeded at startup):
 - `library.collection_validate`
 - `library.collection_apply`
 - `library.generate_book_previews`
+- `library.metadata_extract`
 - `library.prepare_document_cleanup`
 - `library.personality_suggestions_refresh`
 - `library.publisher_suggestions_refresh`
@@ -128,6 +129,12 @@ Library data tooling currently includes:
   - WebP variants bounded to `400x600` (quality 80) and `1000x1500` (quality 85)
   - First page for one-page PDFs, first/last for two-page PDFs, and first/second/last otherwise
   - PostgreSQL manifests, per-object S3 verification, live progress, and per-run structured summaries
+- Resumable Schema.org metadata extraction:
+  - Selects only documents with a verified Backblaze primary-storage checkpoint
+  - Uses extracted text when present; otherwise reads PDF bytes only from Backblaze
+  - Preserves the established monocorpus prompt, PDF edge-page slicing, and normalization
+  - Tries the configured model pool in order and checkpoints content failures in PostgreSQL
+  - Writes metadata to PostgreSQL only; it does not write metadata ZIPs or mutate storage URLs
 - Normalization workbench:
   - Review queue
   - Canonical registry
@@ -207,6 +214,13 @@ yandex:
 ```
 
 `documents.primary_storage` is isolated from `yandex.cloud`: changing the document primary does not repoint upstream metadata, preview images, backups, or unrelated Yandex Object Storage consumers. Backblaze clients use SigV4 and path-style addressing. Library metadata evaluation reads signed private documents from Backblaze; preview generation reads source PDFs from Backblaze while keeping generated preview images in the configured Yandex preview bucket.
+
+`library.metadata_extract` requires a verified Backblaze checkpoint (`document_url`, size, and verification timestamp) before a document is eligible. It never reads document bytes from Yandex Disk, legacy S3, or the shared cache. A source read failure remains retryable. Content-level failures are checkpointed per model in `library_metadata_extraction_state`; after every configured model fails, the document remains excluded until its state row is manually removed:
+
+```sql
+DELETE FROM monocorpus.library_metadata_extraction_state
+WHERE md5 = '<document-md5>';
+```
 
 `maintenance.sync_documents_s3` recursively discovers files only from the configured Yandex Disk root. Discovery and transfer are one sequential streaming pipeline: each first-seen MD5 is checked and synchronized immediately, without waiting for a complete Yandex listing or Backblaze bucket inventory. For required bytes it uses a hash-valid cache file first, a verified Backblaze object second, a verified legacy Yandex S3 object third, and Yandex Disk last. Cache-only files are ignored, and document sync never writes into the shared cache.
 
@@ -289,6 +303,10 @@ gemini:
     library_meta_evaluate: "gemini-3-flash-preview"
     library_normalization: "gemini-2.5-flash"
   model_pools:
+    library_metadata_extraction:
+      - "gemini-3.6-flash"
+      - "gemini-3.5-flash"
+      - "gemini-3-flash-preview"
     library_collection_validation:
       - "gemini-3.6-flash"
       - "gemini-3.5-flash"
@@ -307,6 +325,7 @@ Model policy:
   - `library_meta_evaluate`
   - `library_normalization`
 - Collection proposal validation load-balances one verdict per request across `gemini.model_pools.library_collection_validation`. Timeout or malformed responses reduce that model's batch size; quota/service/request errors follow the shared Gemini runtime policy.
+- Metadata extraction tries `gemini.model_pools.library_metadata_extraction` in order. The pool is mandatory and has no code default. Empty, malformed, timed-out, or rejected content moves to the next model; quota exhaustion rotates keys without marking the document failed.
 
 Backup task note:
 - Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.

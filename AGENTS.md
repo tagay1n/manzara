@@ -176,6 +176,13 @@ Notes:
   - One-page PDFs have first-page previews; two-page PDFs have first/last; longer PDFs have first/second/last.
   - Missing semantic roles for short PDFs are intentional completeness, not partial failure; never create duplicate page previews.
   - Frontend/API consumers use manifest roles and actual page numbers, never infer semantics from compact S3 filenames.
+- Library metadata extraction is Backblaze-only and resumable:
+  - `library.metadata_extract` may select only documents with a verified primary-storage checkpoint and must read document bytes only from configured Backblaze buckets.
+  - Do not add Yandex Disk, legacy S3, local-cache, or compatibility source branches to metadata extraction.
+  - Preserve the adopted monocorpus metadata prompt, Schema.org validation, PDF edge-page slicing, and normalization unless the owner explicitly requests a prompt/version change.
+  - Resolve the ordered model list only from `gemini.model_pools.library_metadata_extraction`; do not provide code defaults.
+  - Persist content-level model failures after each attempt and resume with the next untried model. Quota, service, storage, and stop conditions remain retryable and must not terminally exclude a document.
+  - Never overwrite non-null `metadata.schema_org`, erase an existing document language with null, upload metadata ZIPs, or mutate document storage URLs.
 - Library collection detection is proposal-based and path-independent:
   - Collection detection, Gemini validation, and explicit metadata application tasks belong to the dedicated `collections` flow; keep general Library operations in `library`.
   - Canonical collections and accepted memberships are authoritative; detector and Gemini reruns must never mutate them directly.

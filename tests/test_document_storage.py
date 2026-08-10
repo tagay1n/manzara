@@ -9,7 +9,10 @@ from pathlib import Path
 import pytest
 
 from app.document_storage import (
+    DocumentStorageSettings,
+    S3ConnectionSettings,
     calculate_multipart_etag,
+    download_verified_primary_document,
     document_object_key,
     find_valid_cache_file,
     load_document_storage_settings,
@@ -136,3 +139,64 @@ def test_private_document_url_is_resolved_to_short_lived_signed_url() -> None:
         private_bucket="private-docs",
         s3=FakeS3(),
     ) == "https://signed.example/book.pdf"
+
+
+def _primary_settings(tmp_path: Path) -> DocumentStorageSettings:
+    connection = S3ConnectionSettings(
+        endpoint_url="https://s3.example.test",
+        region_name="eu-test",
+        access_key_id="key",
+        secret_access_key="secret",
+    )
+    return DocumentStorageSettings(
+        cache_path=tmp_path,
+        source_path="/unused",
+        restricted_path="/unused/private",
+        filtered_out_path="/unused/filtered",
+        primary=connection,
+        legacy=connection,
+        public_bucket="public-docs",
+        private_bucket="private-docs",
+        legacy_public_bucket="unused",
+        legacy_private_bucket="unused-private",
+        upstream_bucket="unused-upstream",
+        encryption_key="unused",
+    )
+
+
+def test_primary_download_accepts_only_verified_backblaze_location(tmp_path: Path) -> None:
+    content = b"primary-document"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+
+    class FakeS3:
+        def head_object(self, *, Bucket, Key):  # noqa: N803
+            assert (Bucket, Key) == ("public-docs", f"{digest}.pdf")
+            return {"ContentLength": len(content)}
+
+        def download_file(self, bucket, key, target):  # noqa: ANN001
+            assert (bucket, key) == ("public-docs", f"{digest}.pdf")
+            Path(target).write_bytes(content)
+
+    destination = tmp_path / "book.pdf"
+    result = download_verified_primary_document(
+        settings=_primary_settings(tmp_path),
+        s3=FakeS3(),
+        document_url=f"https://s3.example.test/public-docs/{digest}.pdf",
+        expected_md5=digest,
+        expected_size=len(content),
+        destination=destination,
+    )
+
+    assert result == destination
+    assert destination.read_bytes() == content
+
+
+def test_primary_download_rejects_non_primary_url(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="primary Backblaze"):
+        download_verified_primary_document(
+            settings=_primary_settings(tmp_path),
+            s3=object(),
+            document_url="https://storage.yandexcloud.net/docs/book.pdf",
+            expected_md5="a" * 32,
+            destination=tmp_path / "book.pdf",
+        )

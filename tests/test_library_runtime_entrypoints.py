@@ -17,6 +17,7 @@ import pytest
         "app/modules/library/runtime/run_collection_apply.py",
         "app/modules/library/runtime/run_normalization_refresh.py",
         "app/modules/library/runtime/run_generate_book_previews.py",
+        "app/modules/library/runtime/run_metadata_extract.py",
     ],
 )
 def test_library_runtime_script_help_runs_outside_repo_cwd(
