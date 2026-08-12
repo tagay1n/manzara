@@ -260,7 +260,7 @@ function renderTaskRuns(runs, taskTitle) {
         <div class="flow-task-run-row task-status-${cssName(run?.status || "idle", "idle")}">
           <div class="flow-task-run-head">
             <span class="task-run-id">#${escapeHtml(String(runId || "-"))}</span>
-            <span class="task-run-status">${escapeHtml(String(run?.status || "idle"))}</span>
+            ${window.ManzaraCore.renderTaskStatusBadge(run || {}, { compact: true })}
             <span class="task-run-time">${escapeHtml(formatDateTime(run?.started_at))}</span>
           </div>
           <div class="flow-task-run-summary">${escapeHtml(runSummaryMessage(run))}</div>
@@ -303,7 +303,7 @@ function renderTaskCard(task) {
         <div class="task-title-row">
           <a class="task-title task-detail-link" href="/tasks/${taskPathKey}">${escapeHtml(task.title)}</a>
         </div>
-        <div class="task-status">${escapeHtml(model.statusLabel)}</div>
+        ${window.ManzaraCore.renderTaskStatusBadge(task.run || {}, { label: model.statusLabel })}
       </div>
       ${progressHtml}
       <div class="workflow-footnote">${escapeHtml(summaryText)}</div>

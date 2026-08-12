@@ -67,7 +67,7 @@ def maintenance_backup_full_workflow_bundle() -> Dict[str, Any]:
     """Return workflow bundle for weekly full pgBackRest backup."""
     workflow = {
         "workflow_id": MAINTENANCE_BACKUP_FULL_WORKFLOW_ID,
-        "panel_id": "maintenance",
+        "panel_id": "backup",
         "title": "Postgres full backup (weekly)",
         "description": "Run weekly full pgBackRest backup for monocorpus stanza.",
         "enabled": 1,
@@ -106,7 +106,7 @@ def maintenance_backup_incr_workflow_bundle() -> Dict[str, Any]:
     """Return workflow bundle for 12-hour incremental pgBackRest backup."""
     workflow = {
         "workflow_id": MAINTENANCE_BACKUP_INCR_WORKFLOW_ID,
-        "panel_id": "maintenance",
+        "panel_id": "backup",
         "title": "Postgres incremental backup (every 12h)",
         "description": "Run pgBackRest incremental backup every 12 hours.",
         "enabled": 1,

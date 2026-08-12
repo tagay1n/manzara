@@ -234,7 +234,7 @@ function renderRunList(runs) {
       return `
         <button class="task-run-row ${activeClass}" data-run-id="${run.run_id}">
           <span class="task-run-id">#${run.run_id}</span>
-          <span class="task-run-status task-status-${cssName(run.status, "idle")}">${escapeHtml(run.status)}</span>
+          ${window.ManzaraCore.renderTaskStatusBadge(run, { compact: true })}
           <span class="task-run-time">${escapeHtml(formatDateTime(run.started_at))}</span>
           <span class="task-run-summary">${escapeHtml(runSummaryMessage(run))}</span>
         </button>

@@ -548,6 +548,98 @@ button {
   font-size: 11px;
 }
 
+.task-status-badge {
+  --task-progress: 0%;
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--muted);
+  background: rgba(20, 27, 36, 0.92);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.task-status-badge::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0 auto 0 0;
+  width: var(--task-progress);
+  background: linear-gradient(90deg, rgba(61, 141, 255, 0.34), rgba(18, 191, 216, 0.22));
+  transition: width 180ms ease-out;
+}
+
+.task-status-badge.is-active {
+  border-color: rgba(80, 176, 255, 0.78);
+  color: #c9e8ff;
+  background: rgba(31, 75, 126, 0.34);
+  box-shadow: 0 0 0 1px rgba(61, 141, 255, 0.12), 0 0 12px rgba(61, 141, 255, 0.2);
+  animation: task-badge-active 1.8s ease-in-out infinite;
+}
+
+.task-status-badge.is-active:not(.has-progress)::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #69d8ea;
+  box-shadow: 0 0 8px rgba(105, 216, 234, 0.9);
+}
+
+.task-status-badge.is-failed {
+  border-color: rgba(255, 107, 122, 0.82);
+  color: #ffd5da;
+  background: rgba(128, 30, 45, 0.4);
+  box-shadow: 0 0 0 1px rgba(255, 107, 122, 0.12), 0 0 12px rgba(255, 107, 122, 0.18);
+  font-weight: 700;
+}
+
+.task-status-badge.is-failed::after {
+  content: "!";
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  background: #d75c68;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.task-status-badge.is-compact {
+  padding: 2px 7px;
+  font-size: 9px;
+}
+
+.task-status-progress {
+  padding-left: 6px;
+  border-left: 1px solid rgba(201, 232, 255, 0.32);
+  color: #e3f5ff;
+  font-weight: 700;
+}
+
+@keyframes task-badge-active {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(61, 141, 255, 0.12), 0 0 8px rgba(61, 141, 255, 0.14);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(61, 141, 255, 0.24), 0 0 16px rgba(61, 141, 255, 0.3);
+  }
+}
+
 .task-card.task-type-scan {
   --task-accent: #3d8dff;
 }

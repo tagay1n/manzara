@@ -238,6 +238,12 @@ class PayloadBuilder:
             tasks=tasks_by_panel.get("maintenance", []),
             title=panel_titles.get("maintenance", "Maintenance"),
         )
+        backup_panel = ops.build_backup_panel(
+            db=state.db,
+            maintenance=state.settings.maintenance,
+            tasks=tasks_by_panel.get("backup", []),
+            title=panel_titles.get("backup", "Backup"),
+        )
         library_panel = ops.build_library_panel(
             db=state.db,
             maintenance=state.settings.maintenance,
@@ -262,6 +268,7 @@ class PayloadBuilder:
         return {
             "shayan": shayan_panel,
             "maintenance": maintenance_panel,
+            "backup": backup_panel,
             "library": library_panel,
             "collections": collections_panel,
         }
@@ -299,6 +306,7 @@ class PayloadBuilder:
         ordered_panels = [
             panel_payloads["shayan"],
             panel_payloads["maintenance"],
+            panel_payloads["backup"],
             panel_payloads["library"],
             panel_payloads["collections"],
         ]

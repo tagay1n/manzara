@@ -87,6 +87,7 @@ from app.modules.library.stats import get_library_dataset_stats
 from app.modules.library.tasks import library_task_definitions
 from app.modules.library.collection_tasks import collection_task_definitions
 from app.modules.maintenance.panel import (
+    build_backup_panel,
     build_database_state_snapshot,
     build_library_panel,
     build_maintenance_panel,
@@ -125,6 +126,7 @@ def _payload_builder_operations() -> PayloadBuilderOperations:
             "build_default_run_summary": build_default_run_summary,
             "build_shayan_panel": build_shayan_panel,
             "build_maintenance_panel": build_maintenance_panel,
+            "build_backup_panel": build_backup_panel,
             "build_library_panel": build_library_panel,
             "get_library_dataset_stats": get_library_dataset_stats,
             "build_database_state_snapshot": build_database_state_snapshot,

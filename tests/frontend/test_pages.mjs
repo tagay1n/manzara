@@ -507,6 +507,38 @@ function createHarness({
           value === "stopping_force"
         );
       },
+      renderTaskStatusBadge(run = {}, options = {}) {
+        const status = String(run?.status || "idle");
+        const active = this.isActiveStatus(status);
+        const progress = run?.progress && typeof run.progress === "object" ? run.progress : {};
+        const current = Number(progress.current);
+        const total = Number(progress.total);
+        const determinate = active && Number.isFinite(current) && current >= 0
+          && Number.isFinite(total) && total > 0;
+        const suppliedPercent = Number(progress.percent);
+        const percent = Math.round(Math.max(0, Math.min(
+          100,
+          Number.isFinite(suppliedPercent) ? suppliedPercent : determinate ? current / total * 100 : 0,
+        )));
+        const labels = {
+          idle: "Idle", starting: "Starting", running: "Running",
+          stopping_graceful: "Stopping", stopping_force: "Force stopping",
+          completed: "Completed", failed: "Failed", stopped: "Stopped",
+        };
+        const label = String(options.label || labels[status] || status);
+        const classes = [
+          "task-status-badge",
+          `task-status-${this.cssName(status, "idle")}`,
+          active ? "is-active" : "",
+          status === "failed" ? "is-failed" : "",
+          determinate ? "has-progress" : "",
+          options.compact ? "is-compact" : "",
+        ].filter(Boolean).join(" ");
+        const details = determinate
+          ? `<span class="task-status-progress">${current} / ${total} · ${percent}%</span>`
+          : "";
+        return `<span class="${classes}"><span class="task-status-label">${this.escapeHtml(label)}</span>${details}</span>`;
+      },
       formatDateTime(value) {
         return `DT:${String(value)}`;
       },
@@ -722,6 +754,7 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
               status: "running",
               started_at: "2026-03-24T10:00:00Z",
               finished_at: null,
+              progress: { current: 3, total: 12, percent: 25 },
             },
           },
         ],
@@ -745,6 +778,9 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
   assert.equal(harness.elements.get("global-status").textContent, "Tasks: 2 • Flows: 1");
   assert.equal(harness.elements.get("stop-all-btn").dataset.stopState, "normal");
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /\/tasks\/quick/);
+  assert.match(harness.elements.get("task-flow-grid").innerHTML, /task-status-running is-active has-progress/);
+  assert.match(harness.elements.get("task-flow-grid").innerHTML, /3 \/ 12/);
+  assert.match(harness.elements.get("task-flow-grid").innerHTML, /25%/);
 
   const before = harness.apiCalls.filter((call) => call.path === "/api/tasks").length;
   harness.sse.config.onEvent({ type: "task.completed" }, { lastEventId: "18" });
@@ -1660,6 +1696,50 @@ test("database page renders loading then API error state", async () => {
   assert.match(harness.elements.get("db-status").textContent, /Database state unavailable/);
   assert.match(harness.elements.get("db-stat-grid").innerHTML, /Error: database unavailable/);
   assert.match(harness.elements.get("db-table-body").innerHTML, /Error: database unavailable/);
+});
+
+test("database page refreshes after a Backup catalog task finishes", async () => {
+  const payload = {
+    event_cursor: 80,
+    global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+    database_state: {
+      available: false,
+      error: "metrics unavailable",
+      captured_at: "2026-08-12T12:00:00Z",
+      backup: {},
+    },
+  };
+  const harness = createHarness({
+    source: DATABASE_SOURCE,
+    ids: [
+      "global-status",
+      "stop-all-btn",
+      "last-event",
+      "db-warning-pill",
+      "db-status",
+      "db-stat-grid",
+      "db-backup-grid",
+      "db-table-body",
+      "db-table-footnote",
+    ],
+    apiResolver(path) {
+      if (path === "/api/database/state") return JSON.parse(JSON.stringify(payload));
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  const before = harness.apiCalls.length;
+
+  harness.sse.config.onEvent({
+    type: "task.completed",
+    task_id: "maintenance.pgbackrest_backup_full",
+    panel_id: "backup",
+    payload: { status: "completed" },
+  }, { lastEventId: "81" });
+  await harness.timer.runAllTimeouts();
+  await harness.flush();
+
+  assert.equal(harness.apiCalls.length, before + 1);
 });
 
 test("library classifications page renders API error state", async () => {

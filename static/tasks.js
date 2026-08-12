@@ -43,7 +43,7 @@ function renderTaskItem(task) {
       <div class="task-list-title">${window.ManzaraCore.escapeHtml(task.title)}</div>
       <div class="task-list-meta">
         <span>${window.ManzaraCore.escapeHtml(task.task_type)}</span>
-        <span>${window.ManzaraCore.escapeHtml(active ? "active" : status)}</span>
+        ${window.ManzaraCore.renderTaskStatusBadge(task.run || { status }, { compact: true })}
       </div>
       <div class="task-list-time">${window.ManzaraCore.escapeHtml(formatDateTime(task.run?.started_at || task.run?.finished_at))}</div>
     </a>

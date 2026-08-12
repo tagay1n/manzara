@@ -464,6 +464,48 @@ test("task progress SSE updates the matching run without frontend shadow state",
   assert.equal(root.tasks[0].run.progress.current, 3);
 });
 
+test("task status badge exposes active determinate progress", () => {
+  const core = loadCore();
+
+  const html = core.renderTaskStatusBadge({
+    status: "running",
+    progress: { current: 3, total: 12, percent: 25 },
+  });
+
+  assert.match(html, /task-status-badge task-status-running is-active has-progress/);
+  assert.match(html, /Running/);
+  assert.match(html, /3 \/ 12/);
+  assert.match(html, /25%/);
+  assert.match(html, /role="progressbar"/);
+  assert.match(html, /aria-valuenow="25"/);
+});
+
+test("task status badge makes failure explicit without stale progress", () => {
+  const core = loadCore();
+
+  const html = core.renderTaskStatusBadge({
+    status: "failed",
+    progress: { current: 9, total: 10, percent: 90 },
+  });
+
+  assert.match(html, /task-status-failed is-failed/);
+  assert.match(html, />Failed</);
+  assert.doesNotMatch(html, /9 \/ 10/);
+  assert.doesNotMatch(html, /role="progressbar"/);
+});
+
+test("task status badge derives percent when only current and total are provided", () => {
+  const core = loadCore();
+
+  const html = core.renderTaskStatusBadge({
+    status: "starting",
+    progress: { current: 2, total: 8 },
+  });
+
+  assert.match(html, /2 \/ 8/);
+  assert.match(html, /25%/);
+});
+
 test("late task progress does not revert a stopping task to running", () => {
   const core = loadCore();
   const root = {

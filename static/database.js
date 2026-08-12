@@ -224,7 +224,7 @@ function setupEventStream() {
       const taskFinished = ["task.artifact", "task.completed", "task.failed", "task.stopped"]
         .includes(eventType);
       if (
-        (String(payload?.panel_id || "") === "maintenance" && taskFinished)
+        (["maintenance", "backup"].includes(String(payload?.panel_id || "")) && taskFinished)
         || eventType.startsWith("schedule.")
       ) {
         queueRefresh(100);

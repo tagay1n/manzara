@@ -370,6 +370,67 @@
     );
   }
 
+  const TASK_STATUS_LABELS = {
+    idle: "Idle",
+    starting: "Starting",
+    running: "Running",
+    stopping_graceful: "Stopping",
+    stopping_force: "Force stopping",
+    completed: "Completed",
+    failed: "Failed",
+    stopped: "Stopped",
+  };
+
+  function taskStatusBadgeModel(run = {}, options = {}) {
+    const status = String(run?.status || "idle");
+    const active = isActiveStatus(status);
+    const failed = status === "failed";
+    const progress = run?.progress && typeof run.progress === "object" ? run.progress : {};
+    const current = Number(progress.current);
+    const total = Number(progress.total);
+    const determinate = active
+      && Number.isFinite(current)
+      && current >= 0
+      && Number.isFinite(total)
+      && total > 0;
+    const suppliedPercent = Number(progress.percent);
+    const calculatedPercent = determinate ? (current / total) * 100 : 0;
+    const percent = Math.round(Math.max(0, Math.min(
+      100,
+      Number.isFinite(suppliedPercent) ? suppliedPercent : calculatedPercent,
+    )));
+    return {
+      status,
+      statusClass: cssName(status, "idle"),
+      label: String(options.label || TASK_STATUS_LABELS[status] || status),
+      active,
+      failed,
+      determinate,
+      current,
+      total,
+      percent,
+    };
+  }
+
+  function renderTaskStatusBadge(run = {}, options = {}) {
+    const model = taskStatusBadgeModel(run, options);
+    const classes = [
+      "task-status-badge",
+      `task-status-${model.statusClass}`,
+      model.active ? "is-active" : "",
+      model.failed ? "is-failed" : "",
+      model.determinate ? "has-progress" : "",
+      options.compact ? "is-compact" : "",
+    ].filter(Boolean).join(" ");
+    const progressText = model.determinate
+      ? `<span class="task-status-progress">${escapeHtml(model.current)} / ${escapeHtml(model.total)} · ${model.percent}%</span>`
+      : "";
+    const progressAttributes = model.determinate
+      ? ` role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${model.percent}" aria-label="${escapeHtml(model.label)}: ${escapeHtml(model.current)} of ${escapeHtml(model.total)}, ${model.percent}%" style="--task-progress: ${model.percent}%"`
+      : ` aria-label="${escapeHtml(model.label)}"`;
+    return `<span class="${classes}"${progressAttributes}><span class="task-status-label">${escapeHtml(model.label)}</span>${progressText}</span>`;
+  }
+
   function applyStopAllButton(button, stopAllState) {
     if (!button) return;
     const state = String(stopAllState || "disabled");
@@ -857,6 +918,8 @@
     eventNeedsReconciliation,
     applyTaskEventState,
     isActiveStatus,
+    taskStatusBadgeModel,
+    renderTaskStatusBadge,
     renderLoadingTableRow,
     renderRunRowMessage,
     renderWorkflowFootnoteMessage,

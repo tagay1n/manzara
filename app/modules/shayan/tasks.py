@@ -76,7 +76,7 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
         {
             "task_id": "shayan.transfer_yadisk_webdav",
             "panel_id": "shayan",
-            "title": "Copy Yandex Disk videos to Nextcloud",
+            "title": "Migrate to Hetzner",
             "task_type": "transfer",
             "icon_idle": "CloudCog",
             "icon_running": "Square",

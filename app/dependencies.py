@@ -65,6 +65,7 @@ from app.modules.library.publishers import (
 )
 from app.modules.library.stats import get_library_dataset_stats
 from app.modules.maintenance.panel import (
+    build_backup_panel,
     build_database_state_snapshot,
     build_library_panel,
     build_maintenance_panel,
@@ -80,6 +81,7 @@ class PayloadBuilderOperationsService:
     build_default_run_summary: Callable[[JSONDict], JSONDict]
     build_shayan_panel: Callable[..., JSONDict]
     build_maintenance_panel: Callable[..., JSONDict]
+    build_backup_panel: Callable[..., JSONDict]
     build_library_panel: Callable[..., JSONDict]
     get_library_dataset_stats: Callable[..., JSONDict]
     build_database_state_snapshot: Callable[..., JSONDict]
@@ -181,6 +183,7 @@ def build_payload_builder_operations() -> PayloadBuilderOperations:
         build_default_run_summary=build_default_run_summary,
         build_shayan_panel=build_shayan_panel,
         build_maintenance_panel=build_maintenance_panel,
+        build_backup_panel=build_backup_panel,
         build_library_panel=build_library_panel,
         get_library_dataset_stats=get_library_dataset_stats,
         build_database_state_snapshot=build_database_state_snapshot,

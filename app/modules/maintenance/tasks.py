@@ -81,8 +81,8 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
         },
         {
             "task_id": MAINTENANCE_PGBACKREST_FULL_TASK_ID,
-            "panel_id": "maintenance",
-            "title": "Postgres full backup",
+            "panel_id": "backup",
+            "title": "Full backup",
             "task_type": "backup",
             "icon_idle": "Database",
             "icon_running": "Square",
@@ -91,8 +91,8 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
         },
         {
             "task_id": MAINTENANCE_PGBACKREST_INCR_TASK_ID,
-            "panel_id": "maintenance",
-            "title": "Postgres incremental backup",
+            "panel_id": "backup",
+            "title": "Incremental backup",
             "task_type": "backup",
             "icon_idle": "Clock3",
             "icon_running": "Square",

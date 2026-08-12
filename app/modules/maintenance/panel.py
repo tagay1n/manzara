@@ -210,6 +210,24 @@ def build_maintenance_panel(
     )
 
 
+def build_backup_panel(
+    db: Database,
+    maintenance: MaintenanceSettings,
+    tasks: List[Dict[str, Any]],
+    *,
+    title: str = "Backup",
+) -> Dict[str, Any]:
+    """Build dashboard panel payload for database backup tasks."""
+    return _build_ops_panel(
+        db=db,
+        maintenance=maintenance,
+        panel_id="backup",
+        title=title,
+        description="PostgreSQL backup operations and schedules.",
+        tasks=tasks,
+    )
+
+
 def build_library_panel(
     db: Database,
     maintenance: MaintenanceSettings,

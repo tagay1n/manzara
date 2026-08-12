@@ -25,7 +25,7 @@ def test_shayan_tasks_include_storage_transfer_stage() -> None:
 
     transfer = by_id["shayan.transfer_yadisk_webdav"]
     assert transfer["task_type"] == "transfer"
-    assert transfer["title"] == "Copy Yandex Disk videos to Nextcloud"
+    assert transfer["title"] == "Migrate to Hetzner"
     assert transfer["icon_idle"] == "CloudCog"
     assert "app.modules.shayan.runtime.transfer_yadisk_webdav" in str(
         transfer["command"]["value"]
@@ -45,6 +45,24 @@ def test_maintenance_tasks_include_document_s3_sync() -> None:
     assert "app.modules.maintenance.runtime.sync_documents_s3" in str(
         task["command"]["value"]
     )
+
+
+def test_backup_tasks_have_a_dedicated_catalog_and_short_titles() -> None:
+    tasks = maintenance_task_definitions(
+        MaintenanceSettings(
+            monocorpus_repo_path=Path("/tmp/monocorpus"),
+            pgbackrest_stanza="monocorpus",
+        )
+    )
+    by_id = {item["task_id"]: item for item in tasks}
+
+    full = by_id["maintenance.pgbackrest_backup_full"]
+    assert full["panel_id"] == "backup"
+    assert full["title"] == "Full backup"
+
+    incremental = by_id["maintenance.pgbackrest_backup_incr"]
+    assert incremental["panel_id"] == "backup"
+    assert incremental["title"] == "Incremental backup"
 
 
 def test_library_tasks_include_metadata_extraction() -> None:

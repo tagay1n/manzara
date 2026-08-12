@@ -89,6 +89,7 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     panels = {panel["panel_id"]: panel for panel in payload["panels"]}
     assert "shayan" in panels
     assert "maintenance" in panels
+    assert "backup" in panels
 
     shayan = panels["shayan"]
     task_ids = {task["task_id"] for task in shayan["tasks"]}
@@ -99,9 +100,14 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     maintenance = panels["maintenance"]
     maintenance_task_ids = {task["task_id"] for task in maintenance["tasks"]}
     assert "maintenance.monocorpus_sync" in maintenance_task_ids
-    assert "maintenance.pgbackrest_backup_full" in maintenance_task_ids
-    assert "maintenance.pgbackrest_backup_incr" in maintenance_task_ids
+    assert "maintenance.pgbackrest_backup_full" not in maintenance_task_ids
+    assert "maintenance.pgbackrest_backup_incr" not in maintenance_task_ids
     assert "maintenance.monocorpus_meta_evaluate" not in maintenance_task_ids
+
+    backup = panels["backup"]
+    backup_tasks = {task["task_id"]: task for task in backup["tasks"]}
+    assert backup_tasks["maintenance.pgbackrest_backup_full"]["title"] == "Full backup"
+    assert backup_tasks["maintenance.pgbackrest_backup_incr"]["title"] == "Incremental backup"
 
     library = panels["library"]
     library_task_ids = {task["task_id"] for task in library["tasks"]}

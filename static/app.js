@@ -320,8 +320,34 @@ function renderPanel(panel) {
             </button>
           </div>
         `;
+      const progress = task.run?.progress && typeof task.run.progress === "object"
+        ? task.run.progress
+        : {};
+      const progressCurrent = Number(progress.current);
+      const progressTotal = Number(progress.total);
+      const hasDeterminateProgress = model.showProgress
+        && Number.isFinite(progressCurrent)
+        && progressCurrent >= 0
+        && Number.isFinite(progressTotal)
+        && progressTotal > 0;
+      const suppliedPercent = Number(progress.percent);
+      const progressPercent = Math.max(0, Math.min(
+        100,
+        Number.isFinite(suppliedPercent)
+          ? suppliedPercent
+          : hasDeterminateProgress ? (progressCurrent / progressTotal) * 100 : 0,
+      ));
       const progressHtml = model.showProgress
-        ? `<div class="progress-wrap"><div class="progress-indeterminate ${model.progressClass}"></div></div>`
+        ? hasDeterminateProgress
+          ? `
+            <div class="progress-meta">
+              <span>${escapeHtml(String(progressCurrent))} / ${escapeHtml(String(progressTotal))}</span>
+              <span>${escapeHtml(String(Math.round(progressPercent)))}%</span>
+            </div>
+            <div class="progress-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(String(Math.round(progressPercent)))}">
+              <div class="progress-determinate ${model.progressClass}" style="width: ${progressPercent}%"></div>
+            </div>`
+          : `<div class="progress-wrap"><div class="progress-indeterminate ${model.progressClass}"></div></div>`
         : "";
 
       return `
@@ -329,7 +355,7 @@ function renderPanel(panel) {
           <div class="task-card-head">
             <div class="task-type-chip">${escapeHtml(task.task_type)}</div>
             ${taskTitleHtml}
-            <div class="task-status">${escapeHtml(statusText)}</div>
+            ${window.ManzaraCore.renderTaskStatusBadge(task.run || {}, { label: statusText })}
           </div>
           ${progressHtml}
           <div class="task-controls-grid">
