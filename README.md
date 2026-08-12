@@ -255,22 +255,17 @@ Environment variables:
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
 - `SHAYAN_OUTPUT_PATH` (default: `~/.manzara/shayan`)
 - `SHAYAN_YADISK_OAUTH_TOKEN` (optional override; defaults to `yandex.disk.oauth_token` in YAML)
-- `SHAYAN_YADISK_CARTOONS_TARGET_DIR` (optional override; defaults to `yandex.disk.shayan.cartoons` in YAML)
-- `SHAYAN_YADISK_SHOWS_TARGET_DIR` (optional override; defaults to `yandex.disk.shayan.shows` in YAML)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 - `PG_BACKREST_STANZA` (default: `monocorpus`)
 - `PG_BACKREST_S3_BUCKET` (default: `tt-monocorpus-postgres-backups`; used for S3 backup verification)
 - `PG_BACKREST_S3_ENDPOINT` (default: `https://storage.yandexcloud.net`)
 
-YAML configuration for Shayan Yandex upload and Nextcloud archival tasks:
+YAML configuration for direct Shayan uploads and Yandex-to-Hetzner migration:
 
 ```yaml
 yandex:
   disk:
     oauth_token: "<token>"
-    shayan:
-      cartoons: "/neurotatarlar/video/shayantv/cartoons"
-      shows: "/neurotatarlar/video/shayantv/shows"
 
 nextcloud:
   webdav_url: "https://nx104082.your-storageshare.de/remote.php/dav/files/Admin"
@@ -282,9 +277,9 @@ nextcloud:
       target_dir: "/Безнең тәҗрибә/Мультфильмнар"
 ```
 
-Use a revocable app password created under Nextcloud Personal settings -> Security in `nextcloud.password`; providers may reject the regular account password for WebDAV. Never commit either credential. Each configured route preserves its source-relative hierarchy. For example, `/neurotatarlar/video/shayantv/cartoons/Program/S01/Episode.mkv` becomes `/Безнең тәҗрибә/Мультфильмнар/cartoons/Program/S01/Episode.mkv`. Categories without an explicit `source_dir`/`target_dir` route are not discovered or copied. These copy routes are separate from `yandex.disk.shayan`, which remains the destination configuration for uploads to Yandex Disk.
+Use a revocable app password created under Nextcloud Personal settings -> Security in `nextcloud.password`; providers may reject the regular account password for WebDAV. Never commit either credential. The `Upload` task sends newly downloaded local files directly to the category's `target_dir`, preserving the hierarchy below `videos/<category>/`, and deletes a local file only after independent verification on Hetzner. The `Migrate to Hetzner` task uses `source_dir` to discover existing Yandex files, preserves the hierarchy relative to that source, and retains the Yandex source unchanged. Categories without a `target_dir` are not uploaded; migration additionally requires `source_dir`.
 
-The task runs a logged WebDAV preflight before Yandex discovery. A `401` fails once with an actionable credential error; a `429` waits and retries the same request, honoring `Retry-After` or using an interruptible 60-300 second backoff. Read-only `PROPFIND` probes retry transient `500`/`502`/`503`/`504` responses with an interruptible 5-60 second backoff. Discovery logs its route immediately and reports every 25 directories. Uploads use 64 MiB chunks through Nextcloud's v2 endpoint, assemble into a short deterministic `.manzara-<md5>.uploading` staging path, and stream the staged file back to verify its MD5 before the final WebDAV `MOVE`. Do not change the staging suffix to `.part`: Hetzner Storage Share returns a server-side `500 TypeError` for those probes. A stored `OC-Checksum` value alone is never accepted as upload proof. The Yandex source is retained unchanged after successful verification.
+Both tasks run a logged WebDAV preflight. A `401` fails once with an actionable credential error; a `429` waits and retries the same request, honoring `Retry-After` or using an interruptible backoff. Read-only `PROPFIND` probes retry transient `500`/`502`/`503`/`504` responses. Uploads use 64 MiB chunks through Nextcloud's v2 endpoint, assemble into a short deterministic `.manzara-<md5>.uploading` staging path, and stream the staged file back to verify its MD5 before the final WebDAV `MOVE`. Do not change the staging suffix to `.part`: Hetzner Storage Share returns a server-side `500 TypeError` for those probes. A stored `OC-Checksum` value alone is never accepted as upload proof.
 
 Embedded runtimes read YAML config in this order:
 1. `MANZARA_CONFIG_PATH` (if set)

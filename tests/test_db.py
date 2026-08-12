@@ -139,6 +139,45 @@ def test_run_progress_and_shayan_webdav_checkpoints_round_trip(tmp_path: Path) -
         assert refreshed[0]["status"] == "pending"
 
 
+def test_shayan_direct_webdav_upload_checkpoints_round_trip(tmp_path: Path) -> None:
+    with _isolated_database() as db:
+        local_path = tmp_path / "videos" / "cartoons" / "episode.mkv"
+        db.replace_shayan_manifest_entries(
+            {
+                "episode-1": {
+                    "file": str(local_path),
+                    "category": "cartoons",
+                }
+            }
+        )
+
+        candidates = db.list_shayan_manifest_webdav_upload_candidates()
+        assert len(candidates) == 1
+        payload_hash = str(candidates[0]["payload_hash"])
+        db.mark_shayan_manifest_webdav_upload_started(
+            "episode-1",
+            remote_path="/Hetzner/Cartoons/episode.mkv",
+            source_md5="abc123",
+            source_size=42,
+            payload_hash=payload_hash,
+        )
+        started = db.list_shayan_manifest_webdav_upload_candidates()[0]
+        assert started["webdav_status"] == "uploading"
+        assert started["source_md5"] == "abc123"
+        assert started["source_size"] == 42
+
+        db.mark_shayan_manifest_webdav_uploaded(
+            "episode-1",
+            remote_path="/Hetzner/Cartoons/episode.mkv",
+            payload_hash=payload_hash,
+            target_etag="etag-1",
+            target_checksum="abc123",
+        )
+
+        assert db.list_shayan_manifest_webdav_upload_candidates() == []
+        assert db.shayan_manifest_webdav_uploaded_count() == 1
+
+
 def test_recover_active_workflow_runs_marks_running_as_failed(tmp_path: Path) -> None:
     with _isolated_database() as db:
 

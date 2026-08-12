@@ -37,9 +37,6 @@ yandex:
       source_path: /neurotatarlar/kitaplar/monocorpus
       restricted_path: /neurotatarlar/kitaplar/monocorpus/__ТАРАТМАСКА_DONT_SHARE_НЕ_ДЕЛИТЬСЯ
       filtered_out_path: /neurotatarlar/kitaplar/filtered_out
-    shayan:
-      cartoons: /neurotatarlar/video/shayantv/cartoons
-      shows: /neurotatarlar/video/shayantv/shows
   cloud:
     endpoint_url: https://storage.yandexcloud.net
     region_name: ru-central1

@@ -57,6 +57,16 @@ class ShayanRepository:
                     yadisk_uploaded_at,
                     yadisk_last_attempt_at,
                     yadisk_last_error,
+                    webdav_status,
+                    webdav_remote_path,
+                    webdav_source_md5,
+                    webdav_source_size,
+                    webdav_target_etag,
+                    webdav_target_checksum,
+                    webdav_uploaded_payload_hash,
+                    webdav_uploaded_at,
+                    webdav_last_attempt_at,
+                    webdav_last_error,
                     created_at,
                     updated_at
                 FROM shayan_manifest_entries
@@ -112,6 +122,16 @@ class ShayanRepository:
                     m.yadisk_uploaded_at,
                     m.yadisk_last_attempt_at,
                     m.yadisk_last_error,
+                    m.webdav_status,
+                    m.webdav_remote_path,
+                    m.webdav_source_md5,
+                    m.webdav_source_size,
+                    m.webdav_target_etag,
+                    m.webdav_target_checksum,
+                    m.webdav_uploaded_payload_hash,
+                    m.webdav_uploaded_at,
+                    m.webdav_last_attempt_at,
+                    m.webdav_last_error,
                     m.updated_at AS manifest_updated_at
                 FROM shayan_snapshot_entries s
                 FULL OUTER JOIN shayan_manifest_entries m
@@ -163,6 +183,21 @@ class ShayanRepository:
                 FROM shayan_manifest_entries
                 WHERE yadisk_status = 'uploaded'
                   AND COALESCE(yadisk_uploaded_payload_hash, '') = COALESCE(payload_hash, '')
+                """
+            ).scalar()
+        return int(value or 0)
+
+
+    def shayan_manifest_webdav_uploaded_count(self) -> int:
+        """Return count of manifest entries uploaded directly to Hetzner WebDAV."""
+        with self._connect() as conn:
+            value = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM shayan_manifest_entries
+                WHERE webdav_status = 'uploaded'
+                  AND COALESCE(webdav_uploaded_payload_hash, '') = COALESCE(payload_hash, '')
+                  AND COALESCE(webdav_remote_path, '') <> ''
                 """
             ).scalar()
         return int(value or 0)
@@ -323,6 +358,171 @@ class ShayanRepository:
                     ),
                 )
         return int(cur.rowcount)
+
+
+    def list_shayan_manifest_webdav_upload_candidates(
+        self,
+        *,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Return manifest rows requiring direct upload to Hetzner WebDAV."""
+        row_limit = max(1, min(int(limit), 5000))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    entry_key,
+                    payload_json,
+                    payload_hash,
+                    webdav_status,
+                    webdav_remote_path AS target_path,
+                    webdav_source_md5 AS source_md5,
+                    webdav_source_size AS source_size,
+                    webdav_target_etag AS target_etag,
+                    webdav_target_checksum AS target_checksum,
+                    webdav_uploaded_payload_hash,
+                    webdav_uploaded_at,
+                    webdav_last_attempt_at,
+                    webdav_last_error
+                FROM shayan_manifest_entries
+                WHERE NOT (
+                    COALESCE(webdav_status, 'pending') = 'legacy_yadisk'
+                    AND COALESCE(yadisk_uploaded_payload_hash, '') = COALESCE(payload_hash, '')
+                )
+                  AND NOT (
+                    COALESCE(webdav_status, 'pending') = 'uploaded'
+                    AND COALESCE(webdav_uploaded_payload_hash, '') = COALESCE(payload_hash, '')
+                    AND COALESCE(webdav_remote_path, '') <> ''
+                )
+                ORDER BY updated_at ASC, entry_key ASC
+                LIMIT ?
+                """,
+                (row_limit,),
+            ).fetchall()
+
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            try:
+                parsed = json.loads(str(payload.pop("payload_json") or "{}"))
+            except Exception:
+                parsed = {}
+            payload["payload"] = parsed if isinstance(parsed, dict) else {}
+            result.append(payload)
+        return result
+
+
+    def mark_shayan_manifest_webdav_upload_started(
+        self,
+        entry_key: str,
+        *,
+        remote_path: str,
+        source_md5: str,
+        source_size: int,
+        payload_hash: str,
+    ) -> int:
+        """Persist local identity before starting an external WebDAV mutation."""
+        _ = payload_hash
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE shayan_manifest_entries
+                    SET
+                        webdav_status = 'uploading',
+                        webdav_remote_path = ?,
+                        webdav_source_md5 = ?,
+                        webdav_source_size = ?,
+                        webdav_target_etag = NULL,
+                        webdav_target_checksum = NULL,
+                        webdav_last_attempt_at = ?,
+                        webdav_last_error = NULL,
+                        updated_at = ?
+                    WHERE entry_key = ?
+                    """,
+                    (
+                        str(remote_path),
+                        str(source_md5).lower(),
+                        int(source_size),
+                        now,
+                        now,
+                        str(entry_key),
+                    ),
+                )
+        return int(cur.rowcount or 0)
+
+
+    def mark_shayan_manifest_webdav_uploaded(
+        self,
+        entry_key: str,
+        *,
+        remote_path: str,
+        payload_hash: str,
+        target_etag: str,
+        target_checksum: str,
+    ) -> int:
+        """Mark one manifest entry as independently verified on Hetzner WebDAV."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE shayan_manifest_entries
+                    SET
+                        webdav_status = 'uploaded',
+                        webdav_remote_path = ?,
+                        webdav_target_etag = ?,
+                        webdav_target_checksum = ?,
+                        webdav_uploaded_payload_hash = ?,
+                        webdav_uploaded_at = ?,
+                        webdav_last_attempt_at = ?,
+                        webdav_last_error = NULL,
+                        updated_at = ?
+                    WHERE entry_key = ?
+                    """,
+                    (
+                        str(remote_path),
+                        str(target_etag or "").strip() or None,
+                        str(target_checksum).strip().lower(),
+                        str(payload_hash),
+                        now,
+                        now,
+                        now,
+                        str(entry_key),
+                    ),
+                )
+        return int(cur.rowcount or 0)
+
+
+    def mark_shayan_manifest_webdav_failed(
+        self,
+        entry_key: str,
+        *,
+        error_text: str,
+    ) -> int:
+        """Persist an actionable direct-to-WebDAV upload failure."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE shayan_manifest_entries
+                    SET
+                        webdav_status = 'failed',
+                        webdav_last_attempt_at = ?,
+                        webdav_last_error = ?,
+                        updated_at = ?
+                    WHERE entry_key = ?
+                    """,
+                    (
+                        now,
+                        str(error_text or "").strip()[:4000],
+                        now,
+                        str(entry_key),
+                    ),
+                )
+        return int(cur.rowcount or 0)
 
 
     def upsert_shayan_webdav_transfer(

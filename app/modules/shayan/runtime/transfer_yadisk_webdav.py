@@ -93,10 +93,8 @@ def _normalize_remote_path(path: str) -> str:
     return "/" + "/".join(parts) if parts else "/"
 
 
-def load_transfer_settings(payload: Mapping[str, Any]) -> TransferSettings:
-    """Parse the single supported Yandex-to-Nextcloud configuration contract."""
-    yandex = _mapping(payload.get("yandex"))
-    disk = _mapping(yandex.get("disk"))
+def load_nextcloud_settings(payload: Mapping[str, Any]) -> NextcloudSettings:
+    """Parse the shared Shayan destination contract for direct and migrated uploads."""
     nextcloud = _mapping(payload.get("nextcloud"))
     shayan_routes = _mapping(nextcloud.get("shayan"))
     webdav_url = _required(nextcloud, "webdav_url", "nextcloud").rstrip("/")
@@ -105,38 +103,46 @@ def load_transfer_settings(payload: Mapping[str, Any]) -> TransferSettings:
         raise RuntimeError(
             "nextcloud.webdav_url must be an HTTPS Nextcloud files WebDAV URL"
         )
-    source_dirs: Dict[str, str] = {}
     target_dirs: Dict[str, str] = {}
     for category in ("cartoons", "shows"):
         route = _mapping(shayan_routes.get(category))
         if not route:
             continue
+        target_dirs[category] = _normalize_remote_path(
+            _required(route, "target_dir", f"nextcloud.shayan.{category}")
+        )
+    if not target_dirs:
+        raise RuntimeError(
+            "Configure at least one Nextcloud Shayan destination: "
+            "nextcloud.shayan.cartoons or nextcloud.shayan.shows"
+        )
+    return NextcloudSettings(
+        webdav_url=webdav_url,
+        username=_required(nextcloud, "username", "nextcloud"),
+        password=_required(nextcloud, "password", "nextcloud"),
+        target_dirs=target_dirs,
+    )
+
+
+def load_transfer_settings(payload: Mapping[str, Any]) -> TransferSettings:
+    """Parse the single supported Yandex-to-Nextcloud configuration contract."""
+    yandex = _mapping(payload.get("yandex"))
+    disk = _mapping(yandex.get("disk"))
+    nextcloud = _mapping(payload.get("nextcloud"))
+    shayan_routes = _mapping(nextcloud.get("shayan"))
+    nextcloud_settings = load_nextcloud_settings(payload)
+    source_dirs: Dict[str, str] = {}
+    for category in nextcloud_settings.target_dirs:
+        route = _mapping(shayan_routes.get(category))
         source_dirs[category] = _required(
             route,
             "source_dir",
             f"nextcloud.shayan.{category}",
         )
-        target_dirs[category] = _normalize_remote_path(
-            _required(
-                route,
-                "target_dir",
-                f"nextcloud.shayan.{category}",
-            )
-        )
-    if not target_dirs:
-        raise RuntimeError(
-            "Configure at least one Nextcloud copy route: "
-            "nextcloud.shayan.cartoons or nextcloud.shayan.shows"
-        )
     return TransferSettings(
         yadisk_token=_required(disk, "oauth_token", "yandex.disk"),
         source_dirs=source_dirs,
-        nextcloud=NextcloudSettings(
-            webdav_url=webdav_url,
-            username=_required(nextcloud, "username", "nextcloud"),
-            password=_required(nextcloud, "password", "nextcloud"),
-            target_dirs=target_dirs,
-        ),
+        nextcloud=nextcloud_settings,
     )
 
 

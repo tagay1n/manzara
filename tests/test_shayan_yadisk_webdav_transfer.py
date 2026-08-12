@@ -14,6 +14,7 @@ from app.modules.shayan.runtime.transfer_yadisk_webdav import (
     RemoteFile,
     TransferSettings,
     WebDavError,
+    load_nextcloud_settings,
     load_transfer_settings,
     remote_path,
     run_transfer,
@@ -306,6 +307,21 @@ def test_load_transfer_settings_requires_nextcloud_contract() -> None:
     )
     with pytest.raises(ValueError, match="Invalid WebDAV path"):
         load_transfer_settings(payload)
+
+
+def test_direct_upload_settings_need_no_yandex_source() -> None:
+    settings = load_nextcloud_settings(
+        {
+            "nextcloud": {
+                "webdav_url": "https://cloud.example/remote.php/dav/files/Admin",
+                "username": "Admin",
+                "password": "password",
+                "shayan": {"shows": {"target_dir": "/Hetzner/Shows"}},
+            }
+        }
+    )
+
+    assert settings.target_dirs == {"shows": "/Hetzner/Shows"}
 
 
 def test_webdav_stat_uses_standard_properties_and_encodes_path() -> None:

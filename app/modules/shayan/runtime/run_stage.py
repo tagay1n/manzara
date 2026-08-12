@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-import posixpath
 import re
 import subprocess
 import tempfile
@@ -15,16 +13,12 @@ import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
-import yaml
 
 from app.db import Database
 from app.run_artifact_channel import emit_run_artifact
 from app.settings import load_settings
 
-from yadisk_client import ConflictResolution, YaDisk
-
-
-STAGES = ["scan_changes", "download_new", "upload_yadisk"]
+STAGES = ["scan_changes", "download_new"]
 _EPISODES_SUMMARY_RE = re.compile(
     r"episodes:\s*"
     r"seen\s+(?P<seen>\d+)\s*\|\s*"
@@ -128,98 +122,6 @@ def _emit_artifacts(payload: Dict[str, Any]) -> None:
     if emit_run_artifact(payload):
         return
     print("shayan artifacts channel unavailable: MANZARA_RUN_ARTIFACT_PATH is not set", flush=True)
-
-
-def _contains_redacted(node: Any) -> bool:
-    if isinstance(node, str):
-        return "<REDACTED>" in node
-    if isinstance(node, dict):
-        return any(_contains_redacted(value) for value in node.values())
-    if isinstance(node, list):
-        return any(_contains_redacted(value) for value in node)
-    return False
-
-
-def _load_runtime_config_payload() -> Dict[str, Any]:
-    env_override = str(os.environ.get("MANZARA_CONFIG_PATH") or "").strip()
-    repo_root = Path(__file__).resolve().parents[4]
-    candidates: list[Path]
-    if env_override:
-        candidates = [Path(env_override).expanduser()]
-    else:
-        candidates = [
-            repo_root / "config.local.yaml",
-            repo_root / "config.yaml",
-        ]
-
-    for path in candidates:
-        if not path.exists():
-            continue
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        if not isinstance(payload, dict):
-            continue
-        if _contains_redacted(payload):
-            continue
-        return payload
-    return {}
-
-
-def _lookup_nested(payload: Dict[str, Any], *keys: str) -> Any:
-    node: Any = payload
-    for key in keys:
-        if not isinstance(node, dict):
-            return None
-        node = node.get(key)
-    return node
-
-
-def _safe_value(value: Any) -> str:
-    return str(value or "").strip()
-
-
-@dataclass(frozen=True)
-class YaDiskUploadSettings:
-    token: str
-    category_target_dirs: Dict[str, str]
-
-
-def _load_yadisk_upload_settings() -> YaDiskUploadSettings:
-    payload = _load_runtime_config_payload()
-    token = _safe_value(
-        os.environ.get("SHAYAN_YADISK_OAUTH_TOKEN")
-        or _lookup_nested(payload, "yandex", "disk", "oauth_token")
-    )
-    if not token:
-        raise RuntimeError(
-            "Yandex Disk OAuth token is missing. Set SHAYAN_YADISK_OAUTH_TOKEN "
-            "or configure yandex.disk.oauth_token."
-        )
-
-    cartoons_target = _safe_value(
-        os.environ.get("SHAYAN_YADISK_CARTOONS_TARGET_DIR")
-        or _lookup_nested(payload, "yandex", "disk", "shayan", "cartoons")
-    ).rstrip("/")
-    shows_target = _safe_value(
-        os.environ.get("SHAYAN_YADISK_SHOWS_TARGET_DIR")
-        or _lookup_nested(payload, "yandex", "disk", "shayan", "shows")
-    ).rstrip("/")
-    if not cartoons_target or not shows_target:
-        raise RuntimeError(
-            "Yandex Disk Shayan target directories are missing. "
-            "Configure yandex.disk.shayan.cartoons and yandex.disk.shayan.shows "
-            "(or SHAYAN_YADISK_CARTOONS_TARGET_DIR / SHAYAN_YADISK_SHOWS_TARGET_DIR)."
-        )
-    return YaDiskUploadSettings(
-        token=token,
-        category_target_dirs={
-            "cartoons": cartoons_target,
-            "shows": shows_target,
-        },
-    )
-
-
-def _create_yadisk_client(token: str) -> YaDisk:
-    return YaDisk(token)
 
 
 def _run_best_effort_snapshot(
@@ -582,285 +484,6 @@ def _download_new_stage(
     return 0
 
 
-def _extract_local_file_path(payload: Dict[str, Any], output_path: Path) -> Optional[Path]:
-    raw = str(payload.get("file") or "").strip()
-    if not raw:
-        return None
-    candidate = Path(raw).expanduser()
-    if candidate.is_absolute():
-        return candidate
-    return (output_path / candidate).resolve()
-
-
-def _relative_video_path(local_file: Path, output_path: Path) -> str:
-    try:
-        rel = local_file.relative_to(output_path)
-        return rel.as_posix().lstrip("/")
-    except Exception:
-        pass
-    raw = local_file.as_posix()
-    marker = "/videos/"
-    idx = raw.rfind(marker)
-    if idx >= 0:
-        return raw[idx + 1 :].lstrip("/")
-    return local_file.name
-
-
-def _build_remote_upload_path(local_file: Path, output_path: Path, target_dir: str) -> str:
-    rel = _relative_video_path(local_file, output_path)
-    return posixpath.normpath(posixpath.join(target_dir, rel))
-
-
-def _extract_category(payload: Dict[str, Any], local_file: Path, output_path: Path) -> str:
-    direct = str(payload.get("category") or "").strip().lower()
-    if direct:
-        return direct
-    rel = _relative_video_path(local_file, output_path)
-    parts = [item for item in rel.strip("/").split("/") if item]
-    if len(parts) >= 2 and parts[0] == "videos":
-        return parts[1].strip().lower()
-    if parts:
-        return parts[0].strip().lower()
-    return ""
-
-
-def _relative_path_within_category(
-    *,
-    local_file: Path,
-    output_path: Path,
-    category: str,
-) -> str:
-    rel = _relative_video_path(local_file, output_path).strip("/")
-    if not rel:
-        return local_file.name
-    prefixes = [
-        f"videos/{category}/",
-        f"{category}/",
-    ]
-    for prefix in prefixes:
-        if rel.startswith(prefix):
-            trimmed = rel[len(prefix):].strip("/")
-            if trimmed:
-                return trimmed
-    return rel
-
-
-def _resolve_target_dir_for_category(settings: YaDiskUploadSettings, category: str) -> str:
-    category_key = str(category or "").strip().lower()
-    if not category_key:
-        return ""
-    return str(settings.category_target_dirs.get(category_key) or "").strip()
-
-
-def _calculate_local_md5(path: Path) -> str:
-    digest = hashlib.md5()  # noqa: S324 - md5 required for Yandex Disk compatibility checks
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _upload_yadisk_stage(
-    *,
-    db: Database,
-    output_path: Path,
-) -> int:
-    try:
-        upload_settings = _load_yadisk_upload_settings()
-    except Exception as exc:
-        print(f"shayan upload_yadisk: failed settings: {exc}", flush=True)
-        return 1
-
-    client = _create_yadisk_client(upload_settings.token)
-    try:
-        valid = client.check_token()
-    except Exception as exc:
-        print(f"shayan upload_yadisk: token validation failed: {type(exc).__name__}: {exc}", flush=True)
-        return 1
-    if valid is False:
-        print("shayan upload_yadisk: token validation failed: check_token returned false", flush=True)
-        return 1
-
-    candidates = db.list_shayan_manifest_upload_candidates(limit=5000)
-    print(
-        "shayan upload_yadisk: start "
-        f"considered={len(candidates)} "
-        f"target_dirs={json.dumps(upload_settings.category_target_dirs, ensure_ascii=False, sort_keys=True)}",
-        flush=True,
-    )
-    uploaded = 0
-    failed = 0
-    missing_local = 0
-    hash_mismatch = 0
-    deleted_local = 0
-
-    total = len(candidates)
-    for idx, item in enumerate(candidates, start=1):
-        entry_key = str(item.get("entry_key") or "").strip()
-        payload_hash = str(item.get("payload_hash") or "").strip()
-        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        if not entry_key or not payload_hash:
-            continue
-
-        local_file = _extract_local_file_path(payload, output_path)
-        if local_file is None:
-            db.mark_shayan_manifest_yadisk_failed(
-                entry_key,
-                error_text="local_file_missing_in_payload",
-            )
-            failed += 1
-            missing_local += 1
-            print(
-                "shayan upload_yadisk: failed "
-                f"progress={idx}/{total} entry_key={entry_key} reason=local_file_missing_in_payload",
-                flush=True,
-            )
-            continue
-        if not local_file.exists():
-            db.mark_shayan_manifest_yadisk_failed(
-                entry_key,
-                error_text=f"local_file_missing:{local_file}",
-            )
-            failed += 1
-            missing_local += 1
-            print(
-                "shayan upload_yadisk: failed "
-                f"progress={idx}/{total} entry_key={entry_key} reason=local_file_missing "
-                f"local_file={local_file}",
-                flush=True,
-            )
-            continue
-
-        category = _extract_category(payload, local_file, output_path)
-        target_dir = _resolve_target_dir_for_category(upload_settings, category)
-        if not target_dir:
-            db.mark_shayan_manifest_yadisk_failed(
-                entry_key,
-                error_text=f"missing_target_dir_for_category:{category or 'unknown'}",
-            )
-            failed += 1
-            print(
-                "shayan upload_yadisk: failed "
-                f"progress={idx}/{total} entry_key={entry_key} reason=missing_target_dir "
-                f"category={category or 'unknown'}",
-                flush=True,
-            )
-            continue
-        rel_within_category = _relative_path_within_category(
-            local_file=local_file,
-            output_path=output_path,
-            category=category,
-        )
-        remote_path = posixpath.normpath(posixpath.join(target_dir, rel_within_category))
-        remote_dir = posixpath.dirname(remote_path)
-        print(
-            "shayan upload_yadisk: uploading "
-            f"progress={idx}/{total} entry_key={entry_key} category={category or 'unknown'} "
-            f"local_file={local_file} remote_path={remote_path}",
-            flush=True,
-        )
-        try:
-            uploaded_path, _remote_md5 = client.upload_or_replace(
-                str(local_file),
-                remote_dir=remote_dir,
-                conflict_resolution=ConflictResolution.REPLACE_IF_DIFFERENT,
-            )
-            uploaded_remote_path = str(uploaded_path or remote_path)
-            local_md5 = _calculate_local_md5(local_file)
-            remote_md5 = str(_remote_md5 or "").strip().lower()
-            if not remote_md5:
-                remote_meta = client.get_meta_or_none(uploaded_remote_path, fields=["md5"])
-                if isinstance(remote_meta, dict):
-                    remote_md5 = str(remote_meta.get("md5") or "").strip().lower()
-            if not remote_md5:
-                db.mark_shayan_manifest_yadisk_failed(
-                    entry_key,
-                    error_text="remote_md5_missing_after_upload",
-                )
-                failed += 1
-                print(
-                    "shayan upload_yadisk: failed "
-                    f"progress={idx}/{total} entry_key={entry_key} reason=remote_md5_missing",
-                    flush=True,
-                )
-                continue
-            if remote_md5 != local_md5:
-                db.mark_shayan_manifest_yadisk_failed(
-                    entry_key,
-                    error_text=f"hash_mismatch local_md5={local_md5} remote_md5={remote_md5}",
-                )
-                failed += 1
-                hash_mismatch += 1
-                print(
-                    "shayan upload_yadisk: failed "
-                    f"progress={idx}/{total} entry_key={entry_key} reason=hash_mismatch "
-                    f"local_md5={local_md5} remote_md5={remote_md5}",
-                    flush=True,
-                )
-                continue
-            try:
-                local_file.unlink()
-            except Exception as delete_exc:
-                db.mark_shayan_manifest_yadisk_failed(
-                    entry_key,
-                    error_text=f"local_delete_failed:{type(delete_exc).__name__}: {delete_exc}",
-                )
-                failed += 1
-                print(
-                    "shayan upload_yadisk: failed "
-                    f"progress={idx}/{total} entry_key={entry_key} reason=local_delete_failed "
-                    f"error={type(delete_exc).__name__}: {delete_exc}",
-                    flush=True,
-                )
-                continue
-            db.mark_shayan_manifest_yadisk_uploaded(
-                entry_key,
-                remote_path=uploaded_remote_path,
-                payload_hash=payload_hash,
-            )
-            uploaded += 1
-            deleted_local += 1
-            print(
-                "shayan upload_yadisk: uploaded "
-                f"progress={idx}/{total} entry_key={entry_key} category={category or 'unknown'} "
-                f"remote_path={uploaded_remote_path} local_deleted=true",
-                flush=True,
-            )
-        except Exception as exc:
-            db.mark_shayan_manifest_yadisk_failed(
-                entry_key,
-                error_text=f"{type(exc).__name__}: {exc}",
-            )
-            failed += 1
-            print(
-                "shayan upload_yadisk: failed "
-                f"progress={idx}/{total} entry_key={entry_key} "
-                f"reason={type(exc).__name__}: {exc}",
-                flush=True,
-            )
-
-    artifacts = {
-        "kind": "shayan.upload_yadisk_summary",
-        "target_dirs": dict(upload_settings.category_target_dirs),
-        "considered": len(candidates),
-        "uploaded": uploaded,
-        "failed": failed,
-        "missing_local": missing_local,
-        "hash_mismatch": hash_mismatch,
-        "deleted_local": deleted_local,
-    }
-    _emit_artifacts(artifacts)
-    print(
-        "shayan upload_yadisk: completed "
-        f"considered={len(candidates)} uploaded={uploaded} failed={failed} "
-        f"missing_local={missing_local} hash_mismatch={hash_mismatch} deleted_local={deleted_local}",
-        flush=True,
-    )
-    return 0
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     settings = load_settings()
@@ -879,12 +502,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _download_new_stage(
             db=db,
             repo_path=repo_path,
-            output_path=output_path,
-        )
-
-    if args.stage == "upload_yadisk":
-        return _upload_yadisk_stage(
-            db=db,
             output_path=output_path,
         )
 

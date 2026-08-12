@@ -303,12 +303,19 @@ def build_structured_run_summary(
             missing_local = int(upload_artifacts.get("missing_local") or 0)
             deleted_local = int(upload_artifacts.get("deleted_local") or 0)
             hash_mismatch = int(upload_artifacts.get("hash_mismatch") or 0)
-            if upload_artifacts.get("kind") == "shayan.upload_yadisk_summary":
+            reused = int(upload_artifacts.get("reused") or 0)
+            if upload_artifacts.get("kind") in {
+                "shayan.upload_yadisk_summary",
+                "shayan.webdav_upload_summary",
+            }:
                 summary["highlights"].append({"label": "Uploaded", "value": str(uploaded)})
+                if upload_artifacts.get("kind") == "shayan.webdav_upload_summary":
+                    summary["highlights"].append({"label": "Reused", "value": str(reused)})
                 summary["highlights"].append({"label": "Failed", "value": str(failed)})
                 summary["highlights"].append({"label": "Missing local", "value": str(missing_local)})
                 summary["highlights"].append({"label": "Deleted local", "value": str(deleted_local)})
-                summary["highlights"].append({"label": "Hash mismatch", "value": str(hash_mismatch)})
+                if upload_artifacts.get("kind") == "shayan.upload_yadisk_summary":
+                    summary["highlights"].append({"label": "Hash mismatch", "value": str(hash_mismatch)})
                 summary["message"] = f"Upload completed: {uploaded} uploaded, {failed} failed."
             else:
                 summary["message"] = "Upload completed."

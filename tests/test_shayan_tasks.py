@@ -20,8 +20,12 @@ def test_shayan_tasks_include_storage_transfer_stage() -> None:
     tasks = shayan_task_definitions(settings)
     by_id = {item["task_id"]: item for item in tasks}
     assert "shayan.upload_yadisk" in by_id
-    command = str(by_id["shayan.upload_yadisk"]["command"]["value"])
-    assert "--stage upload_yadisk" in command
+    upload = by_id["shayan.upload_yadisk"]
+    command = str(upload["command"]["value"])
+    assert upload["title"] == "Upload"
+    assert "app.modules.shayan.runtime.upload_webdav" in command
+    assert "--output-path /tmp/shayan-output" in command
+    assert "upload_yadisk" not in command
 
     transfer = by_id["shayan.transfer_yadisk_webdav"]
     assert transfer["task_type"] == "transfer"

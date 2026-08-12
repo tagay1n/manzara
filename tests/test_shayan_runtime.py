@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,9 +16,6 @@ class _FakeDb:
         self.created_snapshots: list[dict] = []
         self.replaced_manifests: list[dict] = []
         self.replaced_changes: list[tuple[int, list[dict]]] = []
-        self.upload_candidates: list[dict] = []
-        self.uploaded_rows: list[dict] = []
-        self.failed_rows: list[dict] = []
 
     def get_latest_shayan_snapshot_entries(self):
         return dict(self.latest_snapshot_entries)
@@ -55,36 +51,6 @@ class _FakeDb:
         normalized = [dict(item) for item in changes]
         self.replaced_changes.append((int(run_id), normalized))
         return len(normalized)
-
-    def list_shayan_manifest_upload_candidates(self, *, limit=500):  # noqa: ANN001
-        _ = limit
-        return [dict(item) for item in self.upload_candidates]
-
-    def mark_shayan_manifest_yadisk_uploaded(
-        self,
-        entry_key,
-        *,
-        remote_path,
-        payload_hash,
-    ):  # noqa: ANN001
-        self.uploaded_rows.append(
-            {
-                "entry_key": str(entry_key),
-                "remote_path": str(remote_path),
-                "payload_hash": str(payload_hash),
-            }
-        )
-        return 1
-
-    def mark_shayan_manifest_yadisk_failed(self, entry_key, *, error_text):  # noqa: ANN001
-        self.failed_rows.append(
-            {
-                "entry_key": str(entry_key),
-                "error_text": str(error_text),
-            }
-        )
-        return 1
-
 
 def test_scan_stage_stores_snapshot_and_emits_artifacts(
     monkeypatch,
@@ -412,138 +378,3 @@ def test_download_stage_fails_when_updated_manifest_is_empty(
     )
     assert code == 1
     assert fake_db.replaced_manifests == []
-
-
-def test_upload_yadisk_stage_uploads_available_files_and_marks_missing(
-    monkeypatch,
-    tmp_path: Path,
-    capsys,
-) -> None:
-    artifact_path = tmp_path / "run-artifact.json"
-    monkeypatch.setenv("MANZARA_RUN_ARTIFACT_PATH", str(artifact_path))
-    fake_db = _FakeDb()
-    existing_file = tmp_path / "videos" / "cartoons" / "Show" / "S01" / "S01E01.mkv"
-    existing_file.parent.mkdir(parents=True, exist_ok=True)
-    existing_file.write_text("video-bytes", encoding="utf-8")
-    missing_file = tmp_path / "videos" / "cartoons" / "Show" / "S01" / "S01E02.mkv"
-
-    fake_db.upload_candidates = [
-        {
-            "entry_key": "ep-1",
-            "payload_hash": "hash-1",
-            "payload": {"file": str(existing_file), "title": "Episode 1"},
-        },
-        {
-            "entry_key": "ep-2",
-            "payload_hash": "hash-2",
-            "payload": {"file": str(missing_file), "title": "Episode 2"},
-        },
-    ]
-
-    monkeypatch.setattr(
-        run_stage,
-        "load_settings",
-        lambda: SimpleNamespace(
-            database_url="postgresql+psycopg2://user:pass@localhost:5432/monocorpus",
-            database_schema="monocorpus",
-        ),
-    )
-    monkeypatch.setattr(run_stage, "Database", lambda *_args, **_kwargs: fake_db)
-    monkeypatch.setattr(
-        run_stage,
-        "_load_yadisk_upload_settings",
-        lambda: run_stage.YaDiskUploadSettings(
-            token="oauth-token",
-            category_target_dirs={
-                "cartoons": "/uploads/cartoons",
-                "shows": "/uploads/shows",
-            },
-        ),
-    )
-
-    upload_calls: list[dict] = []
-
-    class _FakeYaDisk:
-        def check_token(self):
-            return True
-
-        def upload_or_replace(self, local_file, remote_dir, conflict_resolution=0):  # noqa: ANN001
-            upload_calls.append(
-                {
-                    "local_file": str(local_file),
-                    "remote_dir": str(remote_dir),
-                    "conflict_resolution": conflict_resolution,
-                }
-            )
-            md5 = hashlib.md5(Path(local_file).read_bytes()).hexdigest()  # noqa: S324
-            return f"{remote_dir}/S01E01.mkv", md5
-
-        def get_meta_or_none(self, remote_path, **kwargs):  # noqa: ANN001
-            _ = remote_path, kwargs
-            return {"md5": "unused"}
-
-    monkeypatch.setattr(run_stage, "_create_yadisk_client", lambda _token: _FakeYaDisk())
-
-    repo = tmp_path / "shayan-video-downloader"
-    repo.mkdir(parents=True, exist_ok=True)
-    output = tmp_path
-    code = run_stage.main(
-        [
-            "--stage",
-            "upload_yadisk",
-            "--repo-path",
-            str(repo),
-            "--output-path",
-            str(output),
-        ]
-    )
-    assert code == 0
-    assert len(upload_calls) == 1
-    assert upload_calls[0]["local_file"] == str(existing_file)
-    assert upload_calls[0]["remote_dir"].endswith("/uploads/cartoons/Show/S01")
-    assert existing_file.exists() is False
-    assert len(fake_db.uploaded_rows) == 1
-    assert fake_db.uploaded_rows[0]["entry_key"] == "ep-1"
-    assert len(fake_db.failed_rows) == 1
-    assert fake_db.failed_rows[0]["entry_key"] == "ep-2"
-    assert "local_file_missing" in fake_db.failed_rows[0]["error_text"]
-
-    output_text = capsys.readouterr().out
-    assert "shayan upload_yadisk: start considered=2" in output_text
-    assert "shayan upload_yadisk: uploading progress=1/2 entry_key=ep-1" in output_text
-    assert "shayan upload_yadisk: uploaded progress=1/2 entry_key=ep-1" in output_text
-    assert "shayan upload_yadisk: failed progress=2/2 entry_key=ep-2 reason=local_file_missing" in output_text
-    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-    assert payload["kind"] == "shayan.upload_yadisk_summary"
-    assert int(payload["uploaded"]) == 1
-    assert int(payload["failed"]) == 1
-    assert int(payload["deleted_local"]) == 1
-    assert int(payload["hash_mismatch"]) == 0
-
-
-def test_load_yadisk_upload_settings_reads_new_shayan_targets(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        """
-yandex:
-  disk:
-    oauth_token: token-1
-    shayan:
-      cartoons: /neurotatarlar/video/shayantv/cartoons
-      shows: /neurotatarlar/video/shayantv/shows
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
-    monkeypatch.delenv("SHAYAN_YADISK_OAUTH_TOKEN", raising=False)
-    monkeypatch.delenv("SHAYAN_YADISK_CARTOONS_TARGET_DIR", raising=False)
-    monkeypatch.delenv("SHAYAN_YADISK_SHOWS_TARGET_DIR", raising=False)
-
-    settings = run_stage._load_yadisk_upload_settings()
-    assert settings.token == "token-1"
-    assert settings.category_target_dirs["cartoons"] == "/neurotatarlar/video/shayantv/cartoons"
-    assert settings.category_target_dirs["shows"] == "/neurotatarlar/video/shayantv/shows"

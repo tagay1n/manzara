@@ -77,7 +77,7 @@ def build_shayan_panel(
         "title": title,
         "stats": {
             "downloaded_files_total": db.shayan_manifest_entry_count(),
-            "uploaded_to_yadisk_total": db.shayan_manifest_yadisk_uploaded_count(),
+            "uploaded_to_webdav_total": db.shayan_manifest_webdav_uploaded_count(),
             "newly_downloaded_last_run": downloaded_last_run,
             "failed_last_run": failed_last_run,
             "uploaded_last_run": uploaded_last_run,

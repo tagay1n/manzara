@@ -32,9 +32,7 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
     )
     upload_cmd = (
         py_bootstrap
-        + '"$PY_BIN" -m app.modules.shayan.runtime.run_stage'
-        + " --stage upload_yadisk"
-        + f" --repo-path {repo_path}"
+        + '"$PY_BIN" -m app.modules.shayan.runtime.upload_webdav'
         + f" --output-path {output_path}"
     )
     transfer_cmd = (
@@ -66,7 +64,7 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
         {
             "task_id": "shayan.upload_yadisk",
             "panel_id": "shayan",
-            "title": "Upload to Yandex Disk",
+            "title": "Upload",
             "task_type": "upload",
             "icon_idle": "CloudUpload",
             "icon_running": "Square",
