@@ -35,10 +35,16 @@ const LIBRARY_CLASSIFICATION_SOURCE = readFileSync(
   new URL("../../static/library-classification.js", import.meta.url),
   "utf-8",
 );
-const LIBRARY_NORMALIZATION_SOURCE = readFileSync(
-  new URL("../../static/library-normalization.js", import.meta.url),
-  "utf-8",
-);
+const LIBRARY_NORMALIZATION_SOURCE = [
+  readFileSync(
+    new URL("../../static/library-normalization-rendering.js", import.meta.url),
+    "utf-8",
+  ),
+  readFileSync(
+    new URL("../../static/library-normalization.js", import.meta.url),
+    "utf-8",
+  ),
+].join("\n");
 
 const NORMALIZATION_PAGE_IDS = [
   "global-status",

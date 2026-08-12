@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import os
 import re
-import shlex
 import signal
 import subprocess
 import threading
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, TextIO
 
@@ -22,28 +19,16 @@ from app.runtime_states import (
     resolve_task_terminal_status,
     task_terminal_event_type,
 )
-from app.modules.maintenance.backup_s3_verify import (
-    capture_pgbackrest_s3_state,
-    wait_for_pgbackrest_s3_change,
-)
+from app.modules.maintenance.backup_s3_verify import wait_for_pgbackrest_s3_change
 from app.run_artifacts import capture_pre_run_artifacts, collect_post_run_artifacts
 from app.run_artifact_channel import RUN_ARTIFACT_PATH_ENV, read_run_artifact
 from app.run_summary import build_structured_run_summary
+from app.task_runtime.commands import TaskCommandMixin
+from app.task_runtime.logging import TaskLoggingMixin
+from app.task_runtime.process import ProcessHandle
 
 
-@dataclass
-class ProcessHandle:
-    """In-memory link between a run id and active process."""
-
-    run_id: int
-    task_id: str
-    panel_id: str
-    proc: subprocess.Popen[str]
-    log_file: Optional[TextIO] = None
-    log_path: Optional[str] = None
-
-
-class TaskRunner:
+class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
     """Runtime that starts/stops long-running task processes."""
 
     _LOG_REDACTION_PATTERNS = (
@@ -110,6 +95,7 @@ class TaskRunner:
         self._artifacts_root = task_runs_dir()
         self._artifacts_root.mkdir(parents=True, exist_ok=True)
 
+
     def check_task_start(
         self,
         task_id: str,
@@ -125,6 +111,7 @@ class TaskRunner:
                 "message": f"Unknown task id: {task_id}",
             }
         return self._check_sudo_requirements(task, sudo_password=sudo_password)
+
 
     def start_task(
         self,
@@ -184,6 +171,7 @@ class TaskRunner:
             "run": run,
         }
 
+
     def toggle_task(
         self,
         task_id: str,
@@ -217,6 +205,7 @@ class TaskRunner:
             "run": self.db.get_run(run_id),
         }
 
+
     def stop_all_toggle(self) -> Dict[str, Any]:
         """Global two-step stop-all behavior for active tasks."""
         active_runs = self.db.list_active_runs()
@@ -248,6 +237,7 @@ class TaskRunner:
             "mode": mode,
             "affected_runs": [int(r["run_id"]) for r in active_runs],
         }
+
 
     def _request_stop(self, run_id: int, mode: str) -> None:
         """Persist stop mode and signal process if currently live."""
@@ -294,6 +284,7 @@ class TaskRunner:
             os.kill(target_pid, sig)
         except (ProcessLookupError, PermissionError):
             return
+
 
     def _run_task(
         self,
@@ -538,6 +529,7 @@ class TaskRunner:
             with self._lock:
                 self._processes.pop(run_id, None)
 
+
     def _validate_success_conditions(
         self,
         *,
@@ -586,467 +578,3 @@ class TaskRunner:
             ),
         )
         return None
-
-    def _emit_task_log(
-        self,
-        *,
-        run_id: int,
-        task_id: str,
-        panel_id: str,
-        line: str,
-    ) -> None:
-        """Persist one runtime log line and broadcast over SSE."""
-        safe_line = self._sanitize_log_line(line)
-        self.db.append_log(run_id, stream="stdout", line=safe_line)
-        self.db.insert_event(
-            "task.log",
-            task_id=task_id,
-            run_id=run_id,
-            panel_id=panel_id,
-            payload={"line": safe_line},
-        )
-        self._write_run_log(
-            run_id=run_id,
-            task_id=task_id,
-            panel_id=panel_id,
-            level="INFO",
-            source="runtime",
-            message=safe_line,
-        )
-
-    def _is_pgbackrest_backup_task(self, task: Dict[str, Any]) -> bool:
-        task_id = str(task.get("task_id") or "")
-        return task_id.startswith("maintenance.pgbackrest_backup_")
-
-    def _capture_pgbackrest_s3_state(
-        self,
-        *,
-        command_value: str,
-    ) -> Dict[str, Any]:
-        return capture_pgbackrest_s3_state(
-            command_value=command_value,
-            monocorpus_repo_path=Path(
-                str(os.environ.get("MONOCORPUS_REPO_PATH") or "/home/tans1q/projects/monocorpus")
-            ),
-        )
-
-    def _stream_stdout_lines(
-        self,
-        proc: subprocess.Popen[str],
-        run_id: int,
-        task_id: str,
-        panel_id: str,
-    ) -> None:
-        """Stream stdout lines into run logs/events without blocking task finalization."""
-        stream = proc.stdout
-        if stream is None:
-            return
-        try:
-            for raw_line in stream:
-                line = raw_line.rstrip("\n")
-                if not line:
-                    continue
-                safe_line = self._sanitize_log_line(line)
-                self.db.append_log(run_id, stream="stdout", line=safe_line)
-                self.db.heartbeat(run_id)
-                self.db.insert_event(
-                    "task.log",
-                    task_id=task_id,
-                    run_id=run_id,
-                    panel_id=panel_id,
-                    payload={"line": safe_line},
-                )
-                self._write_run_log(
-                    run_id=run_id,
-                    task_id=task_id,
-                    panel_id=panel_id,
-                    level="INFO",
-                    source="stdout",
-                    message=safe_line,
-                )
-        except Exception as exc:
-            if self._is_benign_log_stream_close(exc):
-                return
-            # Do not break task lifecycle on log-stream errors, but emit
-            # actionable context for UI/DB/artifact diagnostics.
-            error_line = self._sanitize_log_line(f"log_stream_error={exc}")
-            try:
-                self.db.append_log(run_id, stream="stderr", line=error_line)
-                self.db.insert_event(
-                    "task.log",
-                    task_id=task_id,
-                    run_id=run_id,
-                    panel_id=panel_id,
-                    payload={"line": error_line},
-                )
-            except Exception:
-                pass
-            self._write_run_log(
-                run_id=run_id,
-                task_id=task_id,
-                panel_id=panel_id,
-                level="WARNING",
-                source="runtime",
-                message=error_line,
-            )
-            return
-
-    @staticmethod
-    def _is_benign_log_stream_close(exc: Exception) -> bool:
-        text = str(exc or "").strip().lower()
-        if not text:
-            return False
-        return "i/o operation on closed file" in text or "closed file" in text
-
-    def _open_run_log(self, task: Dict[str, Any], run_id: int) -> tuple[Optional[TextIO], Optional[str]]:
-        task_id = str(task.get("task_id") or "unknown")
-        task_dir = self._artifacts_root / self._safe_slug(task_id)
-        task_dir.mkdir(parents=True, exist_ok=True)
-        log_path = task_dir / f"run-{run_id}.log"
-        try:
-            handle = log_path.open("a", encoding="utf-8")
-            header = self._format_run_log(
-                level="INFO",
-                run_id=run_id,
-                task_id=task_id,
-                panel_id=str(task.get("panel_id") or "unknown"),
-                source="runtime",
-                message=f"log_path={log_path}",
-            )
-            handle.write(header + "\n")
-            handle.flush()
-            return handle, str(log_path)
-        except Exception:
-            return None, None
-
-    def _artifact_output_path(self, task: Dict[str, Any], run_id: int) -> Path:
-        task_id = str(task.get("task_id") or "unknown")
-        task_dir = self._artifacts_root / self._safe_slug(task_id)
-        task_dir.mkdir(parents=True, exist_ok=True)
-        return task_dir / f"run-{run_id}.artifact.json"
-
-    def _artifact_event_payload(self, artifacts: Dict[str, Any]) -> Dict[str, Any]:
-        if not isinstance(artifacts, dict) or not artifacts:
-            return {}
-        kind = str(artifacts.get("kind") or "").strip()
-        if not kind:
-            return {}
-        payload: Dict[str, Any] = {"kind": kind}
-        if kind == "shayan.snapshot_diff":
-            payload["episodes_added"] = int(artifacts.get("episodes_added") or 0)
-            payload["episodes_changed"] = int(artifacts.get("episodes_changed") or 0)
-            payload["episodes_removed"] = int(artifacts.get("episodes_removed") or 0)
-            return payload
-        if kind == "shayan.download_summary":
-            payload["downloaded"] = int(artifacts.get("downloaded") or 0)
-            payload["failed"] = int(artifacts.get("failed") or 0)
-            payload["manifest_added"] = int(artifacts.get("manifest_added") or 0)
-            payload["manifest_changed"] = int(artifacts.get("manifest_changed") or 0)
-            return payload
-        if kind == "shayan.upload_yadisk_summary":
-            payload["uploaded"] = int(artifacts.get("uploaded") or 0)
-            payload["failed"] = int(artifacts.get("failed") or 0)
-            payload["missing_local"] = int(artifacts.get("missing_local") or 0)
-            payload["deleted_local"] = int(artifacts.get("deleted_local") or 0)
-            payload["hash_mismatch"] = int(artifacts.get("hash_mismatch") or 0)
-            return payload
-        if kind == "shayan.yadisk_webdav_transfer_summary":
-            payload["copied"] = int(artifacts.get("copied") or 0)
-            payload["reused"] = int(artifacts.get("reused") or 0)
-            payload["failed"] = int(artifacts.get("failed") or 0)
-            payload["bytes_copied"] = int(artifacts.get("bytes_copied") or 0)
-            payload["stopped"] = bool(artifacts.get("stopped"))
-            return payload
-        if kind == "library.book_preview_summary":
-            for key in (
-                "processed",
-                "total",
-                "ready",
-                "partial",
-                "failed",
-                "uploaded_objects",
-                "reused_objects",
-                "downloaded_sources",
-            ):
-                payload[key] = int(artifacts.get(key) or 0)
-            payload["stopped"] = bool(artifacts.get("stopped"))
-            payload["recipe_version"] = str(artifacts.get("recipe_version") or "")
-            return payload
-        return payload
-
-    def _write_run_log(
-        self,
-        *,
-        run_id: int,
-        task_id: str,
-        panel_id: str,
-        level: str,
-        source: str,
-        message: str,
-    ) -> None:
-        with self._lock:
-            handle = self._processes.get(run_id)
-            log_file = handle.log_file if handle else None
-        safe_message = self._sanitize_log_line(message)
-        line = self._format_run_log(
-            level=level,
-            run_id=run_id,
-            task_id=task_id,
-            panel_id=panel_id,
-            source=source,
-            message=safe_message,
-        )
-        self._write_run_log_to_handle(log_file, line)
-
-    def _write_run_log_to_handle(self, log_file: Optional[TextIO], line: str) -> None:
-        """Write one already-formatted line to a run artifact log handle."""
-        if log_file is None:
-            return
-        try:
-            log_file.write(line + "\n")
-            log_file.flush()
-        except Exception:
-            return
-
-    def _format_run_log(
-        self,
-        *,
-        level: str,
-        run_id: int,
-        task_id: str,
-        panel_id: str,
-        source: str,
-        message: str,
-    ) -> str:
-        ts = datetime.now(timezone.utc).isoformat()
-        safe_message = str(message or "").replace("\n", "\\n")
-        return (
-            f"{ts} | {level.upper()} | "
-            f"run_id={run_id} task_id={task_id} panel_id={panel_id} source={source} | "
-            f"{safe_message}"
-        )
-
-    def _safe_slug(self, value: str) -> str:
-        text = str(value or "").strip().lower()
-        if not text:
-            return "unknown"
-        return re.sub(r"[^a-z0-9._-]+", "_", text)
-
-    def _sanitize_log_line(self, line: str) -> str:
-        """Mask common secret/token patterns before persisting user-visible logs."""
-        text = str(line or "")
-        if not text:
-            return ""
-        for pattern, replacement in self._LOG_REDACTION_PATTERNS:
-            text = pattern.sub(replacement, text)
-        return text
-
-    def _check_sudo_requirements(
-        self,
-        task: Dict[str, Any],
-        *,
-        sudo_password: Optional[str],
-    ) -> Dict[str, Any]:
-        """Detect whether command requires sudo password before task start."""
-        command = str((task.get("command") or {}).get("value") or "")
-        parsed = self._split_leading_sudo_command(command)
-        if not parsed:
-            return {"ok": True}
-
-        options, command_tokens = parsed
-        probe_tokens, probe_input = self._build_sudo_probe(
-            options=options,
-            command_tokens=command_tokens,
-            sudo_password=sudo_password,
-        )
-        try:
-            result = subprocess.run(
-                probe_tokens,
-                input=probe_input,
-                capture_output=True,
-                text=True,
-                timeout=12,
-            )
-        except FileNotFoundError:
-            return {
-                "ok": False,
-                "reason": "sudo_missing",
-                "message": "sudo is not installed on this machine.",
-            }
-        except subprocess.TimeoutExpired:
-            return {
-                "ok": False,
-                "reason": "sudo_probe_timeout",
-                "message": "Timed out while checking sudo access.",
-            }
-
-        if int(result.returncode) == 0:
-            return {"ok": True}
-
-        output = f"{result.stdout}\n{result.stderr}".strip().lower()
-        if self._sudo_password_invalid(output):
-            return {
-                "ok": False,
-                "reason": "sudo_password_invalid",
-                "message": "Sudo password is incorrect.",
-            }
-
-        if self._sudo_password_required(output):
-            if sudo_password:
-                return {
-                    "ok": False,
-                    "reason": "sudo_password_invalid",
-                    "message": "Sudo password is incorrect.",
-                }
-            return {
-                "ok": False,
-                "reason": "sudo_password_required",
-                "message": "Sudo password is required for this command.",
-            }
-
-        if self._sudo_access_denied(output):
-            return {
-                "ok": False,
-                "reason": "sudo_access_denied",
-                "message": "Current user is not allowed to run this sudo command.",
-            }
-
-        return {
-            "ok": False,
-            "reason": "sudo_unavailable",
-            "message": "Unable to validate sudo access for this command.",
-        }
-
-    def _prepare_command(
-        self,
-        command: str,
-        sudo_password: Optional[str],
-    ) -> tuple[str, Optional[str]]:
-        if not sudo_password:
-            return command, None
-
-        parsed = self._split_leading_sudo_command(command)
-        if not parsed:
-            return command, None
-
-        options, command_tokens = parsed
-        rebuilt_options: list[str] = []
-        i = 0
-        saw_stdin_flag = False
-        saw_prompt = False
-        while i < len(options):
-            token = options[i]
-            if token == "-n":
-                i += 1
-                continue
-            if token == "-S":
-                saw_stdin_flag = True
-                rebuilt_options.append(token)
-                i += 1
-                continue
-            if token == "-p":
-                saw_prompt = True
-                i += 2
-                continue
-            if token.startswith("--prompt="):
-                saw_prompt = True
-                i += 1
-                continue
-            rebuilt_options.append(token)
-            i += 1
-
-        if not saw_stdin_flag:
-            rebuilt_options.insert(0, "-S")
-        if not saw_prompt:
-            rebuilt_options[0:0] = ["-p", ""]
-
-        rebuilt = ["sudo", *rebuilt_options, *command_tokens]
-        return shlex.join(rebuilt), f"{sudo_password}\n"
-
-    def _build_sudo_probe(
-        self,
-        *,
-        options: list[str],
-        command_tokens: list[str],
-        sudo_password: Optional[str],
-    ) -> tuple[list[str], Optional[str]]:
-        sanitized: list[str] = []
-        i = 0
-        while i < len(options):
-            token = options[i]
-            if token in {"-n", "-S"}:
-                i += 1
-                continue
-            if token == "-p":
-                i += 2
-                continue
-            if token.startswith("--prompt="):
-                i += 1
-                continue
-            sanitized.append(token)
-            i += 1
-
-        # Validate sudo policy for this exact command without executing it.
-        probe_suffix = ["-l", "--", *command_tokens]
-        if sudo_password:
-            return ["sudo", "-S", "-p", "", *sanitized, *probe_suffix], f"{sudo_password}\n"
-        return ["sudo", "-n", *sanitized, *probe_suffix], None
-
-    def _split_leading_sudo_command(self, command: str) -> Optional[tuple[list[str], list[str]]]:
-        try:
-            tokens = shlex.split(command, posix=True)
-        except ValueError:
-            return None
-        if not tokens or tokens[0] != "sudo":
-            return None
-
-        options: list[str] = []
-        i = 1
-        while i < len(tokens):
-            token = tokens[i]
-            if token == "--":
-                i += 1
-                break
-            if not token.startswith("-"):
-                break
-            options.append(token)
-            if token in {"-u", "-g", "-h", "-p", "-r", "-t", "-C", "-T"} and i + 1 < len(tokens):
-                options.append(tokens[i + 1])
-                i += 2
-                continue
-            i += 1
-
-        command_tokens = tokens[i:]
-        if not command_tokens:
-            return None
-        return options, command_tokens
-
-    def _sudo_password_required(self, text: str) -> bool:
-        return any(
-            marker in text
-            for marker in (
-                "a password is required",
-                "password is required",
-                "terminal is required",
-                "no tty present and no askpass program specified",
-            )
-        )
-
-    def _sudo_password_invalid(self, text: str) -> bool:
-        return any(
-            marker in text
-            for marker in (
-                "incorrect password",
-                "sorry, try again",
-            )
-        )
-
-    def _sudo_access_denied(self, text: str) -> bool:
-        return any(
-            marker in text
-            for marker in (
-                "not in the sudoers",
-                "is not allowed to execute",
-                "is not allowed to run sudo",
-            )
-        )
