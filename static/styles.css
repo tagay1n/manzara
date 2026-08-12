@@ -2025,9 +2025,7 @@ button {
   gap: 12px;
 }
 
-.conveyor-head h2,
-.conveyor-palette-wrap h3,
-.conveyor-palette-group h4 {
+.conveyor-head h2 {
   margin: 0;
 }
 
@@ -2040,44 +2038,16 @@ button {
 }
 
 .conveyor-workspace {
-  display: grid;
-  grid-template-columns: minmax(180px, 0.32fr) minmax(0, 1fr);
-  gap: 12px;
-  min-height: 180px;
+  min-height: 0;
 }
 
-.conveyor-palette-wrap {
-  border: 1px solid #223a62;
-  border-radius: 9px;
-  padding: 10px;
-  background: rgba(9, 20, 39, 0.58);
+.task-list-item[draggable="true"] {
+  cursor: grab;
 }
 
-.conveyor-palette,
-.conveyor-palette-group,
 .conveyor-stages {
   display: grid;
   gap: 8px;
-}
-
-.conveyor-palette-group h4 {
-  color: #7e97be;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.conveyor-palette-task {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  border: 1px solid #2a4876;
-  border-radius: 7px;
-  padding: 6px 7px;
-  background: rgba(20, 40, 72, 0.72);
-  cursor: grab;
-  font-size: 12px;
 }
 
 .conveyor-stage {
@@ -2183,6 +2153,10 @@ button {
   place-items: center;
   color: #6f89ad;
   font-size: 10px;
+}
+
+.conveyor-stages.is-empty .conveyor-new-row-drop {
+  min-height: 46px;
 }
 
 .conveyor-new-row-drop:hover {
@@ -3630,7 +3604,4 @@ textarea:focus,
     flex-wrap: wrap;
   }
 
-  .conveyor-workspace {
-    grid-template-columns: 1fr;
-  }
 }

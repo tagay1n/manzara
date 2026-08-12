@@ -11,6 +11,23 @@
   </head>
   <body class="console-body" data-manzara-page="tasks">
     <main class="dashboard" data-page-content>
+          <section class="runs-card conveyor-card" aria-labelledby="conveyor-title">
+            <div class="conveyor-head">
+              <div>
+                <h2 id="conveyor-title">Conveyor</h2>
+                <div id="conveyor-status" class="workflow-footnote">Build one reusable task pipeline.</div>
+              </div>
+              <div class="conveyor-actions">
+                <button id="conveyor-clear" class="small-btn quiet" type="button">Clear</button>
+                <button id="conveyor-run" class="small-btn primary" type="button">Run</button>
+                <button id="conveyor-stop" class="small-btn danger" type="button" hidden>Stop</button>
+              </div>
+            </div>
+            <div class="conveyor-workspace">
+              <div id="conveyor-stages" class="conveyor-stages" aria-label="Conveyor stages"></div>
+            </div>
+          </section>
+
           <section class="runs-card">
             <h2>Task Catalog</h2>
             <div id="task-flow-grid" class="task-flow-grid"></div>
@@ -21,6 +38,7 @@
     <script src="/static/core.js"></script>
     <script src="/static/ui.js"></script>
     <script src="/static/shell.js"></script>
+    <script src="/static/conveyor.js"></script>
     <script src="/static/tasks.js"></script>
   </body>
 </html>

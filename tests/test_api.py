@@ -63,12 +63,12 @@ def test_static_ui_assets_require_browser_revalidation(test_client) -> None:
         assert response.headers["cache-control"] == "no-cache"
 
 
-def test_task_detail_includes_global_conveyor_and_can_save_definition(test_client) -> None:
+def test_tasks_catalog_includes_global_conveyor_and_can_save_definition(test_client) -> None:
     client, _main_app = test_client
 
-    detail = client.get("/api/tasks/shayan.quick")
-    assert detail.status_code == 200
-    conveyor = detail.json()["conveyor"]
+    catalog = client.get("/api/tasks")
+    assert catalog.status_code == 200
+    conveyor = catalog.json()["conveyor"]
     assert conveyor["definition"]["revision"] == 0
     assert any(task["task_id"] == "shayan.quick" for task in conveyor["available_tasks"])
 

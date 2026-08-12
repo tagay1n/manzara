@@ -5,6 +5,7 @@ const state = {
   eventCursor: 0,
   eventStreamController: null,
   soundNotifier: null,
+  conveyorController: null,
 };
 
 const viewState = window.ManzaraCore.attachViewState(state, "loading");
@@ -39,7 +40,8 @@ function renderTaskItem(task) {
   const active = window.ManzaraCore.isActiveStatus(status);
   const taskPathKey = encodeURIComponent(task.slug || task.task_id);
   return `
-    <a href="/tasks/${taskPathKey}" class="task-list-item task-status-${window.ManzaraCore.cssName(status, "idle")}">
+    <a href="/tasks/${taskPathKey}" class="task-list-item task-status-${window.ManzaraCore.cssName(status, "idle")}"
+      draggable="true" data-conveyor-task-id="${window.ManzaraCore.escapeHtml(task.task_id)}">
       <div class="task-list-title">${window.ManzaraCore.escapeHtml(task.title)}</div>
       <div class="task-list-meta">
         <span>${window.ManzaraCore.escapeHtml(task.task_type)}</span>
@@ -78,6 +80,7 @@ function renderGlobalState(payload) {
 
 function renderTasks(payload) {
   state.payload = payload;
+  state.conveyorController?.sync(payload);
   const flowGrid = document.getElementById("task-flow-grid");
   const flows = payload.flows || [];
   const taskCount = flows.reduce((acc, flow) => acc + Number(flow.tasks?.length || 0), 0);
@@ -89,11 +92,13 @@ function renderTasks(payload) {
     flowGrid.innerHTML = flows.map(renderTaskFlow).join("");
   }
   renderGlobalState(payload);
+  state.conveyorController?.render();
   lucide.createIcons();
 }
 
 function renderTasksLoading() {
   viewState.set("loading");
+  state.conveyorController?.setLoading();
   document.getElementById("task-flow-grid").innerHTML = '<div class="run-row">Loading tasks...</div>';
 }
 
@@ -101,6 +106,7 @@ function renderTasksError(error) {
   viewState.set("error");
   const message = String(error?.message || error || "Failed to load tasks.");
   document.getElementById("task-flow-grid").innerHTML = `<div class="run-row">Error: ${window.ManzaraCore.escapeHtml(message)}</div>`;
+  state.conveyorController?.setError(error);
 }
 
 async function refreshTasks({ showLoading = false } = {}) {
@@ -147,6 +153,7 @@ function setupEventStream() {
     onEvent: (payload, event) => {
       document.getElementById("last-event").textContent = window.ManzaraCore.formatEventBanner(payload);
       maybePlayTaskNotification(payload, event.lastEventId || "");
+      state.conveyorController?.handleEvent(payload);
       if (window.ManzaraCore.applyTaskEventState(state.payload, payload)) {
         renderTasks(state.payload);
       }
@@ -167,6 +174,11 @@ function attachUiHandlers() {
 
 async function bootstrap() {
   initSoundNotifier();
+  state.conveyorController = window.ManzaraConveyor.createController({
+    api,
+    getPayload: () => state.payload,
+    refresh: () => refreshTasks(),
+  });
   window.addEventListener("beforeunload", () => {
     teardownSoundNotifier();
     if (state.eventStreamController) {
@@ -176,6 +188,7 @@ async function bootstrap() {
 
   });
   attachUiHandlers();
+  state.conveyorController.attach();
   await refreshTasks({ showLoading: true });
   setupEventStream();
 }

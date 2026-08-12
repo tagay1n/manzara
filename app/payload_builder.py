@@ -424,7 +424,49 @@ class PayloadBuilder:
             "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "flows": sorted(task_groups.values(), key=lambda item: str(item.get("title", "")).lower()),
+            "conveyor": self._build_conveyor_payload(
+                state,
+                panel_titles=panel_titles,
+            ),
         }
+
+    @staticmethod
+    def _build_conveyor_payload(
+        state: Any,
+        *,
+        panel_titles: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Compose the global conveyor snapshot and its task palette."""
+        titles = dict(panel_titles or state.db.get_panel_title_map())
+        conveyor = state.conveyor_service.snapshot()
+        available_tasks: list[Dict[str, Any]] = []
+        task_map: Dict[str, Dict[str, Any]] = {}
+        for task in state.db.list_tasks():
+            task_id = str(task["task_id"])
+            panel_id = str(task["panel_id"])
+            item = {
+                "task_id": task_id,
+                "panel_id": panel_id,
+                "panel_title": titles.get(panel_id, panel_id),
+                "title": task["title"],
+                "task_type": task["task_type"],
+                "icon_idle": task["icon_idle"],
+            }
+            available_tasks.append(item)
+            task_map[task_id] = item
+        conveyor["available_tasks"] = sorted(
+            available_tasks,
+            key=lambda item: (
+                str(item["panel_title"]).lower(),
+                str(item["title"]).lower(),
+            ),
+        )
+        for run_item in conveyor.get("items") or []:
+            metadata = task_map.get(str(run_item.get("task_id") or ""), {})
+            run_item["title"] = metadata.get("title") or run_item.get("task_id")
+            run_item["panel_id"] = metadata.get("panel_id")
+            run_item["panel_title"] = metadata.get("panel_title")
+        return conveyor
 
     def build_task_detail_payload(self, task_key: str, limit: int = 20) -> Dict[str, Any]:
         """Compose one task detail payload with run history."""
@@ -446,36 +488,6 @@ class PayloadBuilder:
             status_counts[key] = int(status_counts.get(key, 0)) + 1
 
         active_runs = state.db.list_active_runs()
-        conveyor = state.conveyor_service.snapshot()
-        panel_titles = state.db.get_panel_title_map()
-        conveyor_tasks: list[Dict[str, Any]] = []
-        task_map: Dict[str, Dict[str, Any]] = {}
-        for available_task in state.db.list_tasks():
-            available_task_id = str(available_task["task_id"])
-            available_panel_id = str(available_task["panel_id"])
-            item = {
-                "task_id": available_task_id,
-                "panel_id": available_panel_id,
-                "panel_title": panel_titles.get(available_panel_id, available_panel_id),
-                "title": available_task["title"],
-                "task_type": available_task["task_type"],
-                "icon_idle": available_task["icon_idle"],
-            }
-            conveyor_tasks.append(item)
-            task_map[available_task_id] = item
-        conveyor["available_tasks"] = sorted(
-            conveyor_tasks,
-            key=lambda item: (
-                str(item["panel_title"]).lower(),
-                str(item["title"]).lower(),
-            ),
-        )
-        for conveyor_item in conveyor.get("items") or []:
-            metadata = task_map.get(str(conveyor_item.get("task_id") or ""), {})
-            conveyor_item["title"] = metadata.get("title") or conveyor_item.get("task_id")
-            conveyor_item["panel_id"] = metadata.get("panel_id")
-            conveyor_item["panel_title"] = metadata.get("panel_title")
-
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "event_cursor": event_cursor,
@@ -501,7 +513,6 @@ class PayloadBuilder:
                 ),
             },
             "runs": runs,
-            "conveyor": conveyor,
         }
 
     def build_flow_detail_payload(self, flow_key: str, limit_per_task: int = 20) -> Dict[str, Any]:

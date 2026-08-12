@@ -10,9 +10,6 @@ const state = {
   shayanChangesCache: {},
   logViewer: null,
   soundNotifier: null,
-  conveyorDraft: null,
-  conveyorSaving: false,
-  conveyorDrag: null,
 };
 
 const viewState = window.ManzaraCore.attachViewState(state, "loading");
@@ -68,212 +65,6 @@ function runDuration(run) {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}m ${s}s`;
-}
-
-function conveyorId(prefix) {
-  if (globalThis.crypto?.randomUUID) return `${prefix}-${globalThis.crypto.randomUUID()}`;
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function conveyorTaskMap() {
-  return new Map(
-    (state.payload?.conveyor?.available_tasks || []).map((task) => [String(task.task_id), task])
-  );
-}
-
-function conveyorRunActive() {
-  return ["starting", "running"].includes(String(state.payload?.conveyor?.run?.status || ""));
-}
-
-function conveyorLockedItemIds() {
-  if (!conveyorRunActive()) return new Set();
-  return new Set(
-    (state.payload?.conveyor?.items || [])
-      .filter((item) => String(item.status || "pending") !== "pending")
-      .map((item) => String(item.item_id))
-  );
-}
-
-function syncConveyorDraft(payload) {
-  const stages = payload?.conveyor?.definition?.stages;
-  state.conveyorDraft = JSON.parse(JSON.stringify(Array.isArray(stages) ? stages : []));
-}
-
-function conveyorItemState(itemId) {
-  return (state.payload?.conveyor?.items || []).find(
-    (item) => String(item.item_id) === String(itemId)
-  ) || null;
-}
-
-function conveyorStatusText() {
-  const run = state.payload?.conveyor?.run;
-  if (!run) return "Arrange rows top-to-bottom. Tasks in one row run in parallel.";
-  const status = String(run.status || "idle");
-  if (status === "completed" && run.outcome === "no_op") {
-    return "Completed early: a sequential task produced no new work.";
-  }
-  if (status === "failed") return String(run.error_text || "Conveyor failed.");
-  if (status === "stopped") return "Conveyor stopped; pending rows were canceled.";
-  if (status === "running" || status === "starting") {
-    if (run.stop_requested) return "Stopping after the current tasks reach a safe boundary.";
-    return "Running. Completed and current rows are locked; future rows remain editable.";
-  }
-  return `Last conveyor run: ${status}.`;
-}
-
-function renderConveyorPalette(tasks) {
-  if (!tasks.length) return '<div class="conveyor-empty">No tasks available.</div>';
-  const groups = new Map();
-  tasks.forEach((task) => {
-    const key = String(task.panel_title || task.panel_id || "Other");
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(task);
-  });
-  return [...groups.entries()].map(([title, items]) => `
-    <section class="conveyor-palette-group">
-      <h4>${escapeHtml(title)}</h4>
-      ${items.map((task) => `
-        <div class="conveyor-palette-task" draggable="true" data-conveyor-task-id="${escapeHtml(task.task_id)}">
-          <span>${escapeHtml(task.title)}</span>
-          <button class="conveyor-add-task small-btn quiet" type="button"
-            data-task-id="${escapeHtml(task.task_id)}" aria-label="Add ${escapeHtml(task.title)} as a new row">+</button>
-        </div>
-      `).join("")}
-    </section>
-  `).join("");
-}
-
-function conveyorItemHtml(item, stageIndex, itemIndex, locked, taskMap) {
-  const task = taskMap.get(String(item.task_id)) || { title: item.task_id, panel_title: "Unknown" };
-  const runtime = conveyorItemState(item.item_id);
-  const status = String(runtime?.status || "pending");
-  const progress = runtime?.progress && typeof runtime.progress === "object" ? runtime.progress : {};
-  const progressModel = window.ManzaraCore.taskStatusBadgeModel({ status, progress });
-  const progressLabel = progressModel.determinate
-    ? ` • ${progressModel.current} / ${progressModel.total} · ${progressModel.percent}%`
-    : "";
-  const meaningful = runtime?.meaningful;
-  const resultLabel = meaningful === false ? " • no-op" : "";
-  return `
-    <article class="conveyor-item conveyor-status-${cssName(status)} ${locked ? "is-locked" : ""}"
-      draggable="${locked ? "false" : "true"}" data-conveyor-item-id="${escapeHtml(item.item_id)}">
-      <div class="conveyor-item-main">
-        <strong>${escapeHtml(task.title)}</strong>
-        <span>${escapeHtml(task.panel_title || task.panel_id || "")} • ${escapeHtml(status)}${resultLabel}${escapeHtml(progressLabel)}</span>
-      </div>
-      ${progressModel.determinate ? `<div class="conveyor-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progressModel.percent}" aria-label="${escapeHtml(task.title)}: ${progressModel.current} of ${progressModel.total}"><span style="width:${progressModel.percent}%"></span></div>` : ""}
-      <div class="conveyor-item-actions">
-        <button type="button" class="icon-btn quiet conveyor-item-prev" data-stage-index="${stageIndex}" data-item-index="${itemIndex}" ${locked || stageIndex === 0 ? "disabled" : ""} aria-label="Move to previous row" title="Move to previous row"><i data-lucide="arrow-up-to-line"></i></button>
-        <button type="button" class="icon-btn quiet conveyor-item-next" data-stage-index="${stageIndex}" data-item-index="${itemIndex}" ${locked ? "disabled" : ""} aria-label="Move to next row" title="Move to next row"><i data-lucide="arrow-down-to-line"></i></button>
-        <button type="button" class="icon-btn quiet conveyor-remove-item" data-stage-index="${stageIndex}" data-item-index="${itemIndex}" ${locked ? "disabled" : ""} aria-label="Remove task" title="Remove task"><i data-lucide="x"></i></button>
-      </div>
-    </article>
-  `;
-}
-
-function renderConveyorStages(stages, taskMap, lockedIds) {
-  if (!stages.length) {
-    return '<div class="conveyor-new-row-drop" data-new-stage-index="0">Drop a task here to create the first row</div>';
-  }
-  const lockedStageIndexes = stages
-    .map((stage, index) => stage.items.some((item) => lockedIds.has(String(item.item_id))) ? index : -1)
-    .filter((index) => index >= 0);
-  const minimumEditableIndex = lockedStageIndexes.length ? Math.max(...lockedStageIndexes) + 1 : 0;
-  return stages.map((stage, stageIndex) => {
-    const locked = stage.items.some((item) => lockedIds.has(String(item.item_id)));
-    return `
-      ${stageIndex >= minimumEditableIndex ? `<div class="conveyor-new-row-drop" data-new-stage-index="${stageIndex}">Drop for a sequential row</div>` : ""}
-      <section class="conveyor-stage ${locked ? "is-locked" : ""}" data-stage-index="${stageIndex}">
-        <div class="conveyor-stage-head">
-          <span>Stage ${stageIndex + 1}${stage.items.length > 1 ? " • parallel" : ""}</span>
-          <div>
-            <button type="button" class="icon-btn quiet conveyor-stage-up" data-stage-index="${stageIndex}" ${locked || stageIndex <= minimumEditableIndex ? "disabled" : ""} aria-label="Move stage up"><i data-lucide="arrow-up"></i></button>
-            <button type="button" class="icon-btn quiet conveyor-stage-down" data-stage-index="${stageIndex}" ${locked || stageIndex === stages.length - 1 ? "disabled" : ""} aria-label="Move stage down"><i data-lucide="arrow-down"></i></button>
-          </div>
-        </div>
-        <div class="conveyor-stage-items" ${locked ? "" : `data-stage-drop-index="${stageIndex}"`}>
-          ${stage.items.map((item, itemIndex) => conveyorItemHtml(item, stageIndex, itemIndex, locked, taskMap)).join("")}
-        </div>
-      </section>
-    `;
-  }).join("") + `<div class="conveyor-new-row-drop" data-new-stage-index="${stages.length}">Drop for a final sequential row</div>`;
-}
-
-function renderConveyor() {
-  const root = document.getElementById("conveyor-stages");
-  const palette = document.getElementById("conveyor-palette");
-  if (!root || !palette) return;
-  const conveyor = state.payload?.conveyor || {};
-  if (!state.conveyorDraft) syncConveyorDraft(state.payload);
-  const tasks = Array.isArray(conveyor.available_tasks) ? conveyor.available_tasks : [];
-  const lockedIds = conveyorLockedItemIds();
-  palette.innerHTML = renderConveyorPalette(tasks);
-  root.innerHTML = renderConveyorStages(state.conveyorDraft || [], conveyorTaskMap(), lockedIds);
-  const statusNode = document.getElementById("conveyor-status");
-  if (statusNode) statusNode.textContent = conveyorStatusText();
-  const active = conveyorRunActive();
-  const runBtn = document.getElementById("conveyor-run");
-  const stopBtn = document.getElementById("conveyor-stop");
-  const clearBtn = document.getElementById("conveyor-clear");
-  if (runBtn) {
-    runBtn.hidden = active;
-    runBtn.disabled = !state.conveyorDraft?.length || state.conveyorSaving;
-  }
-  if (stopBtn) stopBtn.hidden = !active;
-  if (clearBtn) clearBtn.disabled = state.conveyorSaving || lockedIds.size > 0;
-}
-
-async function saveConveyorDraft() {
-  if (state.conveyorSaving) return;
-  state.conveyorSaving = true;
-  renderConveyor();
-  try {
-    const revision = Number(state.payload?.conveyor?.definition?.revision || 0);
-    const result = await api("/api/conveyor", {
-      method: "PUT",
-      body: JSON.stringify({ revision, stages: state.conveyorDraft || [] }),
-    });
-    state.payload.conveyor.definition = result.definition;
-    syncConveyorDraft(state.payload);
-  } catch (error) {
-    window.ManzaraUI.toast(error?.message || String(error), { tone: "error" });
-    await refreshTaskDetail();
-  } finally {
-    state.conveyorSaving = false;
-    renderConveyor();
-  }
-}
-
-function addTaskAsStage(taskId, stageIndex = null) {
-  const task = conveyorTaskMap().get(String(taskId));
-  if (!task) return;
-  const stage = {
-    stage_id: conveyorId("stage"),
-    items: [{ item_id: conveyorId("item"), task_id: String(taskId) }],
-  };
-  const index = stageIndex === null ? state.conveyorDraft.length : Number(stageIndex);
-  state.conveyorDraft.splice(index, 0, stage);
-  saveConveyorDraft().catch((error) => console.error(error));
-}
-
-function removeConveyorItem(stageIndex, itemIndex) {
-  const stage = state.conveyorDraft?.[stageIndex];
-  if (!stage) return;
-  stage.items.splice(itemIndex, 1);
-  if (!stage.items.length) state.conveyorDraft.splice(stageIndex, 1);
-}
-
-function moveConveyorItem(stageIndex, itemIndex, targetStageIndex) {
-  const source = state.conveyorDraft?.[stageIndex];
-  const target = state.conveyorDraft?.[targetStageIndex];
-  if (!source || !target) return;
-  const [item] = source.items.splice(itemIndex, 1);
-  if (!item || target.items.some((entry) => entry.task_id === item.task_id)) {
-    if (item) source.items.splice(itemIndex, 0, item);
-    return;
-  }
-  target.items.push(item);
-  if (!source.items.length) state.conveyorDraft.splice(stageIndex, 1);
 }
 
 function selectedRun() {
@@ -550,7 +341,6 @@ function renderGlobalState(payload) {
 function renderTaskDetail(payload) {
   viewState.set("ready");
   state.payload = payload;
-  syncConveyorDraft(payload);
   const task = payload.task;
   const runs = payload.runs || [];
   if (!state.selectedRunId && runs.length) {
@@ -575,8 +365,6 @@ function renderTaskDetail(payload) {
   `;
   document.getElementById("task-run-list").innerHTML = renderRunList(runs);
   document.getElementById("run-result").innerHTML = renderRunResult(currentRun);
-  renderConveyor();
-
   const toggleBtn = document.getElementById("task-toggle-btn");
   toggleBtn.classList.remove("active", "red");
   if (buttonModel.cls) toggleBtn.classList.add(buttonModel.cls);
@@ -597,8 +385,6 @@ function renderTaskLoading() {
   document.getElementById("task-stat-grid").innerHTML = "";
   document.getElementById("task-run-list").innerHTML = '<div class="run-row">Loading runs...</div>';
   document.getElementById("run-result").innerHTML = '<div class="run-row">Loading run details...</div>';
-  const conveyorStatus = document.getElementById("conveyor-status");
-  if (conveyorStatus) conveyorStatus.textContent = "Loading conveyor...";
 }
 
 function renderTaskError(error) {
@@ -610,8 +396,6 @@ function renderTaskError(error) {
   document.getElementById("task-stat-grid").innerHTML = "";
   document.getElementById("task-run-list").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
   document.getElementById("run-result").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
-  const conveyorStatus = document.getElementById("conveyor-status");
-  if (conveyorStatus) conveyorStatus.textContent = `Error: ${message}`;
 }
 
 function ensureCanonicalTaskPath(taskPathKey) {
@@ -727,45 +511,6 @@ async function toggleTask() {
   queueRefresh(0);
 }
 
-async function runConveyor(sudoPassword = null) {
-  const body = sudoPassword ? { sudo_password: sudoPassword } : {};
-  const result = await api("/api/conveyor/run", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  if (["sudo_password_required", "sudo_password_invalid"].includes(String(result?.reason))) {
-    const password = await window.ManzaraUI.prompt({
-      title: "Sudo password required",
-      message: String(result.message || "Enter the sudo password needed by this conveyor."),
-      inputLabel: "Sudo password",
-      inputType: "password",
-      acceptLabel: "Run conveyor",
-    });
-    if (password) return runConveyor(password);
-    return result;
-  }
-  maybeShowTaskActionError(result);
-  queueRefresh(0);
-  return result;
-}
-
-async function stopConveyor() {
-  await api("/api/conveyor/stop", { method: "POST", body: JSON.stringify({}) });
-  queueRefresh(0);
-}
-
-async function clearConveyor() {
-  const confirmed = await window.ManzaraUI.confirm({
-    title: "Clear conveyor",
-    message: "Remove every task from the saved conveyor?",
-    acceptLabel: "Clear",
-    destructive: true,
-  });
-  if (!confirmed) return;
-  state.conveyorDraft = [];
-  await saveConveyorDraft();
-}
-
 async function stopAll() {
   const stopState = state.payload?.global?.stop_all_state;
   if (stopState === "armed") {
@@ -813,19 +558,6 @@ function setupEventStream() {
       if (relevant && window.ManzaraCore.eventNeedsReconciliation(payload)) {
         queueRefresh(100);
       }
-      const eventType = String(payload?.type || "");
-      if (eventType === "task.progress") {
-        const item = (state.payload?.conveyor?.items || []).find(
-          (entry) => Number(entry.task_run_id || 0) === Number(payload?.run_id || 0)
-        );
-        if (item && payload?.payload?.progress) {
-          item.progress = { ...payload.payload.progress };
-          renderConveyor();
-        }
-      }
-      if (eventType.startsWith("conveyor.")) {
-        queueRefresh(eventType === "conveyor.updated" ? 0 : 100);
-      }
     },
   });
   state.eventStreamController.start();
@@ -838,136 +570,6 @@ function attachUiHandlers() {
       console.error(error);
       window.ManzaraUI.toast(error?.message || String(error), { tone: "error" });
     });
-  });
-
-  document.getElementById("conveyor-add-current")?.addEventListener("click", () => {
-    const taskId = String(state.payload?.task?.task_id || "");
-    if (taskId) addTaskAsStage(taskId);
-  });
-  document.getElementById("conveyor-run")?.addEventListener("click", () => {
-    runConveyor().catch((error) => {
-      console.error(error);
-      window.ManzaraUI.toast(error?.message || String(error), { tone: "error" });
-    });
-  });
-  document.getElementById("conveyor-stop")?.addEventListener("click", () => {
-    stopConveyor().catch((error) => console.error(error));
-  });
-  document.getElementById("conveyor-clear")?.addEventListener("click", () => {
-    clearConveyor().catch((error) => console.error(error));
-  });
-
-  const palette = document.getElementById("conveyor-palette");
-  palette?.addEventListener("click", (event) => {
-    const button = event.target.closest(".conveyor-add-task");
-    if (button) addTaskAsStage(button.dataset.taskId);
-  });
-  palette?.addEventListener("dragstart", (event) => {
-    const task = event.target.closest("[data-conveyor-task-id]");
-    if (!task) return;
-    state.conveyorDrag = { type: "task", taskId: String(task.dataset.conveyorTaskId) };
-    event.dataTransfer?.setData("text/plain", `task:${task.dataset.conveyorTaskId}`);
-  });
-
-  const stagesRoot = document.getElementById("conveyor-stages");
-  stagesRoot?.addEventListener("click", (event) => {
-    const control = event.target.closest("button");
-    if (!control || control.disabled) return;
-    const stageIndex = Number(control.dataset.stageIndex);
-    const itemIndex = Number(control.dataset.itemIndex);
-    if (control.classList.contains("conveyor-remove-item")) {
-      removeConveyorItem(stageIndex, itemIndex);
-    } else if (control.classList.contains("conveyor-item-prev")) {
-      moveConveyorItem(stageIndex, itemIndex, stageIndex - 1);
-    } else if (control.classList.contains("conveyor-item-next")) {
-      if (stageIndex + 1 >= state.conveyorDraft.length) {
-        const item = state.conveyorDraft[stageIndex]?.items[itemIndex];
-        if (!item) return;
-        removeConveyorItem(stageIndex, itemIndex);
-        state.conveyorDraft.push({ stage_id: conveyorId("stage"), items: [item] });
-      } else {
-        moveConveyorItem(stageIndex, itemIndex, stageIndex + 1);
-      }
-    } else if (control.classList.contains("conveyor-stage-up") && stageIndex > 0) {
-      [state.conveyorDraft[stageIndex - 1], state.conveyorDraft[stageIndex]] =
-        [state.conveyorDraft[stageIndex], state.conveyorDraft[stageIndex - 1]];
-    } else if (
-      control.classList.contains("conveyor-stage-down")
-      && stageIndex < state.conveyorDraft.length - 1
-    ) {
-      [state.conveyorDraft[stageIndex], state.conveyorDraft[stageIndex + 1]] =
-        [state.conveyorDraft[stageIndex + 1], state.conveyorDraft[stageIndex]];
-    } else {
-      return;
-    }
-    saveConveyorDraft().catch((error) => console.error(error));
-  });
-  stagesRoot?.addEventListener("dragstart", (event) => {
-    const item = event.target.closest("[data-conveyor-item-id]");
-    if (!item) return;
-    state.conveyorDrag = { type: "item", itemId: String(item.dataset.conveyorItemId) };
-    event.dataTransfer?.setData("text/plain", `item:${item.dataset.conveyorItemId}`);
-  });
-  stagesRoot?.addEventListener("dragover", (event) => {
-    if (event.target.closest("[data-stage-drop-index], [data-new-stage-index]")) {
-      event.preventDefault();
-    }
-  });
-  stagesRoot?.addEventListener("drop", (event) => {
-    event.preventDefault();
-    const drag = state.conveyorDrag;
-    state.conveyorDrag = null;
-    if (!drag) return;
-    const parallelTarget = event.target.closest("[data-stage-drop-index]");
-    const rowTarget = event.target.closest("[data-new-stage-index]");
-    let draggedItem = null;
-    let sourceStageIndex = -1;
-    let sourceStageId = null;
-    const parallelIndex = parallelTarget ? Number(parallelTarget.dataset.stageDropIndex) : -1;
-    const targetStageId = parallelIndex >= 0
-      ? String(state.conveyorDraft[parallelIndex]?.stage_id || "")
-      : null;
-    let newStageIndex = rowTarget ? Number(rowTarget.dataset.newStageIndex) : -1;
-    if (drag.type === "item") {
-      for (let stageIndex = 0; stageIndex < state.conveyorDraft.length; stageIndex += 1) {
-        const itemIndex = state.conveyorDraft[stageIndex].items.findIndex(
-          (item) => String(item.item_id) === drag.itemId
-        );
-        if (itemIndex >= 0) {
-          sourceStageIndex = stageIndex;
-          sourceStageId = String(state.conveyorDraft[stageIndex].stage_id);
-          if (targetStageId && targetStageId === sourceStageId) return;
-          [draggedItem] = state.conveyorDraft[stageIndex].items.splice(itemIndex, 1);
-          if (!state.conveyorDraft[stageIndex].items.length) {
-            state.conveyorDraft.splice(stageIndex, 1);
-            if (newStageIndex > sourceStageIndex) newStageIndex -= 1;
-          }
-          break;
-        }
-      }
-    } else if (drag.type === "task") {
-      draggedItem = { item_id: conveyorId("item"), task_id: drag.taskId };
-    }
-    if (!draggedItem) return;
-    if (parallelTarget) {
-      const index = state.conveyorDraft.findIndex(
-        (stage) => String(stage.stage_id) === targetStageId
-      );
-      const target = state.conveyorDraft[index];
-      if (!target || target.items.some((item) => item.task_id === draggedItem.task_id)) {
-        refreshTaskDetail().catch((error) => console.error(error));
-        return;
-      }
-      target.items.push(draggedItem);
-    } else if (rowTarget) {
-      state.conveyorDraft.splice(newStageIndex, 0, {
-        stage_id: conveyorId("stage"),
-        items: [draggedItem],
-      });
-    } else {
-      return;
-    }
-    saveConveyorDraft().catch((error) => console.error(error));
   });
 
   document.getElementById("stop-all-btn").addEventListener("click", () => {

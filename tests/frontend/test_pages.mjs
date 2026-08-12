@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const TASKS_SOURCE = readFileSync(new URL("../../static/tasks.js", import.meta.url), "utf-8");
+const CONVEYOR_SOURCE = readFileSync(new URL("../../static/conveyor.js", import.meta.url), "utf-8");
+const TASKS_PAGE_SOURCE = [CONVEYOR_SOURCE, TASKS_SOURCE].join("\n");
 const TASK_SOURCE = readFileSync(new URL("../../static/task.js", import.meta.url), "utf-8");
 const FLOW_SOURCE = readFileSync(new URL("../../static/flow.js", import.meta.url), "utf-8");
 const DASHBOARD_SOURCE = readFileSync(new URL("../../static/app.js", import.meta.url), "utf-8");
@@ -784,7 +786,7 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
     ],
   };
   const harness = createHarness({
-    source: TASKS_SOURCE,
+    source: TASKS_PAGE_SOURCE,
     ids: ["global-status", "stop-all-btn", "task-flow-grid", "last-event"],
     apiResolver(path) {
       if (path === "/api/tasks") return JSON.parse(JSON.stringify(payload));
@@ -824,7 +826,7 @@ test("tasks page renders empty state when no tasks exist", async () => {
     flows: [{ panel_id: "shayan", title: "Shayan", tasks: [] }],
   };
   const harness = createHarness({
-    source: TASKS_SOURCE,
+    source: TASKS_PAGE_SOURCE,
     ids: ["global-status", "stop-all-btn", "task-flow-grid", "last-event"],
     apiResolver(path) {
       if (path === "/api/tasks") return JSON.parse(JSON.stringify(payload));
@@ -837,7 +839,7 @@ test("tasks page renders empty state when no tasks exist", async () => {
 
 test("tasks page renders error state when API fails", async () => {
   const harness = createHarness({
-    source: TASKS_SOURCE,
+    source: TASKS_PAGE_SOURCE,
     ids: ["global-status", "stop-all-btn", "task-flow-grid", "last-event"],
     apiResolver(path) {
       if (path === "/api/tasks") {
@@ -860,7 +862,7 @@ test("tasks page stop-all does not call API when force-stop confirmation is reje
     flows: [],
   };
   const harness = createHarness({
-    source: TASKS_SOURCE,
+    source: TASKS_PAGE_SOURCE,
     ids: ["global-status", "stop-all-btn", "task-flow-grid", "last-event"],
     confirmResult: false,
     apiResolver(path) {
@@ -958,22 +960,27 @@ test("task page renders running control state and toggles task endpoint", async 
   assert.ok(detailCalls.length >= 2);
 });
 
-test("task page renders conveyor and adds current task as a sequential row", async () => {
+test("tasks catalog drags a task badge into a sequential conveyor row", async () => {
   let revision = 0;
   let stages = [];
-  const detailPayload = {
+  const catalogPayload = {
     event_cursor: 9,
-    task: {
-      task_id: "shayan.quick",
-      slug: "quick",
-      title: "Quick",
-      task_type: "scan",
-      icon_idle: "Play",
-    },
-    panel: { title: "Shayan" },
-    stats: { total_runs: 0, status_counts: {}, last_success_at: null },
-    runs: [],
     global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+    flows: [
+      {
+        panel_id: "shayan",
+        title: "Shayan",
+        tasks: [
+          {
+            task_id: "shayan.quick",
+            slug: "quick",
+            title: "Quick",
+            task_type: "scan",
+            run: { status: "idle" },
+          },
+        ],
+      },
+    ],
     conveyor: {
       definition: { revision, stages },
       run: null,
@@ -991,22 +998,19 @@ test("task page renders conveyor and adds current task as a sequential row", asy
     },
   };
   const ids = [
-    "global-status", "stop-all-btn", "task-toggle-btn", "task-title", "task-subtitle",
-    "task-stat-grid", "task-run-list", "run-result", "last-event", "close-logs",
-    "log-dialog", "copy-logs", "log-title", "log-content", "conveyor-status",
-    "conveyor-palette", "conveyor-stages", "conveyor-add-current", "conveyor-clear",
+    "global-status", "stop-all-btn", "task-flow-grid", "last-event", "conveyor-status",
+    "conveyor-stages", "conveyor-clear",
     "conveyor-run", "conveyor-stop",
   ];
   const harness = createHarness({
-    source: TASK_SOURCE,
+    source: TASKS_PAGE_SOURCE,
     ids,
-    locationPathname: "/tasks/quick",
     apiResolver(path, options) {
-      if (path === "/api/tasks/quick?limit=20") {
+      if (path === "/api/tasks") {
         return JSON.parse(JSON.stringify({
-          ...detailPayload,
+          ...catalogPayload,
           conveyor: {
-            ...detailPayload.conveyor,
+            ...catalogPayload.conveyor,
             definition: { revision, stages },
           },
         }));
@@ -1023,10 +1027,31 @@ test("task page renders conveyor and adds current task as a sequential row", asy
   });
 
   await harness.flush();
-  assert.match(harness.elements.get("conveyor-palette").innerHTML, /Quick/);
-  assert.match(harness.elements.get("conveyor-stages").innerHTML, /first row/);
+  assert.match(harness.elements.get("task-flow-grid").innerHTML, /data-conveyor-task-id="shayan.quick"/);
+  assert.match(harness.elements.get("conveyor-stages").innerHTML, /Drag a task badge here/);
+  assert.equal(harness.elements.get("conveyor-stages").classList.contains("is-empty"), true);
 
-  harness.elements.get("conveyor-add-current").dispatch("click");
+  const transfer = { effectAllowed: "", setData() {} };
+  harness.elements.get("task-flow-grid").dispatch("dragstart", {
+    dataTransfer: transfer,
+    target: {
+      closest(selector) {
+        return selector === "[data-conveyor-task-id]"
+          ? { dataset: { conveyorTaskId: "shayan.quick" } }
+          : null;
+      },
+    },
+  });
+  harness.elements.get("conveyor-stages").dispatch("drop", {
+    preventDefault() {},
+    target: {
+      closest(selector) {
+        return selector === "[data-new-stage-index]"
+          ? { dataset: { newStageIndex: "0" } }
+          : null;
+      },
+    },
+  });
   await harness.flush();
 
   const saves = harness.apiCalls.filter((call) => call.path === "/api/conveyor");
@@ -1034,6 +1059,7 @@ test("task page renders conveyor and adds current task as a sequential row", asy
   assert.equal(stages.length, 1);
   assert.equal(stages[0].items[0].task_id, "shayan.quick");
   assert.match(harness.elements.get("conveyor-stages").innerHTML, /Stage 1/);
+  assert.equal(harness.elements.get("conveyor-stages").classList.contains("is-empty"), false);
 });
 
 test("task page normalizes idle icon names for lucide glyph rendering", async () => {
