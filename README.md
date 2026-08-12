@@ -41,7 +41,7 @@ Current UI foundations:
 
 Pages:
 - `/database`
-- `/gemini`
+- `/gemini` (masked key/runtime state, reset controls, and an expiring confirmed override for the active reset blackout)
 - `/schedules`
 - `/tasks`
 - `/tasks/{task-slug-or-id}`
@@ -222,13 +222,13 @@ DELETE FROM monocorpus.library_metadata_extraction_state
 WHERE md5 = '<document-md5>';
 ```
 
-`maintenance.sync_documents_s3` recursively discovers files only from the configured Yandex Disk root. Discovery and transfer are one sequential streaming pipeline: each first-seen MD5 is checked and synchronized immediately, without waiting for a complete Yandex listing or Backblaze bucket inventory. For required bytes it uses a hash-valid cache file first, a verified Backblaze object second, a verified legacy Yandex S3 object third, and Yandex Disk last. Cache-only files are ignored, and document sync never writes into the shared cache.
+`maintenance.sync_documents_s3` recursively discovers files only from the configured Yandex Disk root. Discovery and transfer are one sequential streaming pipeline: each first-seen MD5 is checked and synchronized immediately, without waiting for a complete Yandex listing or Backblaze bucket inventory. A persisted `document_url` that resolves to the expected Backblaze bucket/key is the resumability checkpoint: later runs trust it and make no per-object Backblaze request. When that checkpoint is absent, required bytes use a hash-valid cache file first, a verified Backblaze object second, a verified legacy Yandex S3 object third, and Yandex Disk last. Cache-only files are ignored, and document sync never writes into the shared cache.
 
-Legacy S3 objects are verified rather than blindly replaced. Plain ETags and reproducible boto3 multipart ETags are checked first; otherwise the object is downloaded once and hashed. Every newly uploaded Backblaze object is independently downloaded and MD5-verified before PostgreSQL is updated. Size and client-written metadata alone are not accepted as proof. Verification size, ETag, and timestamp are persisted on `document`, so unchanged objects are cheap on later runs.
+Legacy S3 objects are verified rather than blindly replaced. Plain ETags and reproducible boto3 multipart ETags are checked first; otherwise the object is downloaded once and hashed. A newly uploaded Backblaze object is not downloaded again: a post-upload `HEAD` must confirm its expected size and submitted `source-md5` metadata before PostgreSQL is updated. Restricted-object cleanup also finishes before the Backblaze link is committed. If upload succeeds but that database commit fails, the next run may safely upload the same content-addressed key again.
 
 Objects use flat content-addressed keys (`<md5>.<extension>`), independent of the Yandex folder hierarchy. Existing valid object keys are retained. Revision `20260731_0013` adds `primary_storage_size`, `primary_storage_etag`, and `primary_storage_verified_at` to the existing `document` table; normal application startup applies it automatically.
 
-The task never publishes, deletes, trashes, or moves Yandex Disk files. After a restricted file is safely copied to the Backblaze private bucket and PostgreSQL is committed, an obsolete public S3 copy is deleted and absence is verified. Boto3 upload callbacks emit byte-level SSE progress. Stop requests finish the current document; the next run reuses verified objects, aborts unfinished multipart uploads for the current content-addressed key, and restarts only that interrupted document. Per-file failures are logged, processing continues, and those failures remain visible in the final reconciliation report. The task has no default schedule: run it manually from the Maintenance flow or explicitly configure a schedule on `/schedules`.
+The task never publishes, deletes, trashes, or moves Yandex Disk files. After a restricted file is safely copied to the Backblaze private bucket, an obsolete public S3 copy is deleted and absence is verified before PostgreSQL stores the private link. Boto3 upload callbacks emit byte-level SSE progress. Stop requests finish the current document; the next run skips files with persisted Backblaze links and restarts only work whose checkpoint was not committed. Per-file failures are logged, processing continues, and those failures remain visible in the final reconciliation report. The task has no default schedule: run it manually from the Maintenance flow or explicitly configure a schedule on `/schedules`.
 
 Every finished run emits a structured reconciliation artifact used by the web run summary. It compares Yandex source files and canonical MD5 documents with PostgreSQL rows, reporting database rows before/after, synced and unsynced source documents, database-only rows, duplicate source paths, item failures, and whether the two sides are fully synchronized. Exact database-only reconciliation is calculated only when traversal reaches the end. A stopped run reports discovery as incomplete and database-only as not evaluated. Differences complete as a visible report rather than failing the task; discovery or task-level errors that prevent a trustworthy report still fail normally.
 
@@ -443,8 +443,8 @@ Coverage notes:
     - stop after one file and confirm the next run resumes without uploading the verified file again
   - `maintenance.sync_documents_s3` against real Yandex/Backblaze services:
     - confirm a cached document uploads without a Yandex download
-    - confirm the uploaded Backblaze object is downloaded and MD5-verified before PostgreSQL is updated
-    - confirm an unchanged verified object is skipped on the next run
+    - confirm the uploaded Backblaze object passes the size and `source-md5` metadata `HEAD` check before PostgreSQL is updated, without a read-back download
+    - confirm an unchanged document with a persisted Backblaze link is skipped without per-object Backblaze requests on the next run
     - confirm a restricted document is private, its stored URL is encrypted, and any legacy public copy is absent
     - confirm migration does not create a Yandex Disk public link
     - confirm byte-level upload progress reaches the task card through SSE
@@ -472,6 +472,7 @@ Core:
 - `POST /api/system/stop-all`
 - `POST /api/gemini/reset-key`
 - `POST /api/gemini/reset-all`
+- `POST /api/gemini/override-blackout`
 - `GET /api/runs/{run_id}/logs`
 - `GET /api/events/stream`
 

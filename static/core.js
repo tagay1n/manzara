@@ -31,6 +31,7 @@
     "gemini.all_reset",
     "gemini.pause.started",
     "gemini.pause.ended",
+    "gemini.blackout.overridden",
     "library.collections.updated",
     "system.stop_all_requested",
     "system.workflow_recovery",

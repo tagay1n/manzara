@@ -26,9 +26,15 @@ function renderStats(summary, globalState) {
   const pauseLabel = globalState.pause_active
     ? `Paused until ${formatDateTime(globalState.pause_until)}`
     : "No global pause";
-  const blackoutLabel = globalState.blackout_active
-    ? `Blackout active until ${formatDateTime(globalState.blackout_end_utc)}`
-    : `Next blackout starts ${formatDateTime(globalState.blackout_start_utc)}`;
+  const blackoutLabel = globalState.blackout_overridden
+    ? `Blackout overridden until ${formatDateTime(globalState.blackout_override_until)}`
+    : globalState.blackout_active
+      ? `Blackout active until ${formatDateTime(globalState.blackout_end_utc)}`
+      : `Next blackout starts ${formatDateTime(globalState.blackout_start_utc)}`;
+  const overrideButton = document.getElementById("override-blackout-btn");
+  if (overrideButton) {
+    overrideButton.hidden = !globalState.blackout_active;
+  }
 
   statGrid.innerHTML = `
     <div class="stat-cell"><span>Accounts</span><strong>${Number(summary.accounts || 0)}</strong></div>
@@ -178,6 +184,21 @@ async function resetAll() {
   queueRefresh(0);
 }
 
+async function overrideBlackout() {
+  const confirmed = await window.ManzaraUI.confirm({
+    title: "End Gemini blackout",
+    message: "Allow all Gemini tasks to make requests during the rest of this reset window?",
+    acceptLabel: "End blackout",
+    destructive: true,
+  });
+  if (!confirmed) return;
+  await api("/api/gemini/override-blackout", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  queueRefresh(0);
+}
+
 function setupEventStream() {
   state.eventStreamController?.stop();
   state.eventStreamController = window.ManzaraCore.createSseController({
@@ -199,6 +220,10 @@ function setupEventStream() {
 }
 
 function attachUiHandlers() {
+  document.getElementById("override-blackout-btn").addEventListener("click", () => {
+    overrideBlackout().catch((error) => console.error(error));
+  });
+
   document.getElementById("reset-all-btn").addEventListener("click", () => {
     resetAll().catch((error) => console.error(error));
   });

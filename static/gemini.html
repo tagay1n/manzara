@@ -14,9 +14,14 @@
           <section class="runs-card">
             <div class="library-overview-head">
               <h2>Gemini Runtime</h2>
-              <button id="reset-all-btn" class="small-btn" title="Reset exhausted status for all keys">
-                Reset exhausted
-              </button>
+              <div class="library-head-actions">
+                <button id="override-blackout-btn" class="small-btn state-attention" title="Allow Gemini requests during the current blackout" hidden>
+                  End blackout
+                </button>
+                <button id="reset-all-btn" class="small-btn" title="Reset exhausted status for all keys">
+                  Reset exhausted
+                </button>
+              </div>
             </div>
             <div id="gemini-status" class="workflow-footnote">Loading...</div>
             <div id="gemini-stat-grid" class="stat-grid-compact"></div>

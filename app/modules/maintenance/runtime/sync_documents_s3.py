@@ -275,6 +275,20 @@ def _target_key(
     return document_object_key(md5, str(resource["source_path"]), resource.get("mime_type"))
 
 
+def _primary_checkpoint_matches(
+    existing: Mapping[str, Any] | None,
+    target_location: tuple[str, str],
+    settings: DocumentStorageSettings,
+) -> bool:
+    """Return whether PostgreSQL already points at the expected primary object."""
+    location = _existing_object_location(existing, settings)
+    return bool(
+        location
+        and location[0] == "primary"
+        and (location[1], location[2]) == target_location
+    )
+
+
 def _verify_by_download(
     *,
     s3: Any,
@@ -332,30 +346,20 @@ def _acquire_source(
     return candidate, "yandex"
 
 
-def _verify_upload(
+def _confirm_upload(
     s3: Any,
     bucket: str,
     key: str,
     md5: str,
     size: int,
-    workspace: Path,
 ) -> dict[str, Any]:
+    """Confirm the completed upload without downloading its bytes again."""
     head = dict(s3.head_object(Bucket=bucket, Key=key))
     metadata = head.get("Metadata") if isinstance(head.get("Metadata"), Mapping) else {}
     if int(head.get("ContentLength") or -1) != int(size):
         raise RuntimeError("S3 size verification failed")
     if str(metadata.get("source-md5") or "").lower() != md5:
         raise RuntimeError("S3 MD5 metadata verification failed")
-    verified_path = _verify_by_download(
-        s3=s3,
-        bucket=bucket,
-        key=key,
-        md5=md5,
-        workspace=workspace,
-    )
-    if verified_path is None:
-        raise RuntimeError("S3 read-back MD5 verification failed")
-    verified_path.unlink(missing_ok=True)
     return head
 
 
@@ -440,6 +444,7 @@ def run_document_sync(
     workspace.mkdir(parents=True, exist_ok=True)
     counters = {
         "verified": 0,
+        "checkpoint_reused": 0,
         "uploaded": 0,
         "reuploaded": 0,
         "created": 0,
@@ -569,9 +574,34 @@ def run_document_sync(
                 f"target=s3://{bucket}/{key}",
                 flush=True,
             )
-            remote = _head_object_or_none(primary_s3, bucket, key)
+            checkpoint_reused = _primary_checkpoint_matches(
+                existing,
+                target_location,
+                settings,
+            )
+            remote = (
+                None
+                if checkpoint_reused
+                else _head_object_or_none(primary_s3, bucket, key)
+            )
             cache_multipart_etag: str | None = None
             verified_head: Mapping[str, Any] | None = None
+
+            if checkpoint_reused:
+                verified_head = {
+                    "ContentLength": (
+                        existing.get("primary_storage_size")
+                        if existing and existing.get("primary_storage_size") is not None
+                        else int(resource["source_size"])
+                    ),
+                    "ETag": existing.get("primary_storage_etag") if existing else None,
+                }
+                counters["checkpoint_reused"] += 1
+                print(
+                    f"document sync: checkpoint reused md5={md5} "
+                    f"target=s3://{bucket}/{key}",
+                    flush=True,
+                )
 
             marker_matches = bool(
                 existing
@@ -590,10 +620,10 @@ def run_document_sync(
                 and int(remote.get("ContentLength") or -1) == int(resource["source_size"])
                 and _etag(remote.get("ETag")) == md5
             )
-            if marker_matches or plain_etag_matches:
+            if verified_head is None and (marker_matches or plain_etag_matches):
                 verified_head = remote
                 counters["verified"] += 1
-            elif remote:
+            elif verified_head is None and remote:
                 cache_entry = find_valid_cache_entry(cache_index, md5)
                 if cache_entry:
                     cache_file, cache_multipart_etag = cache_entry
@@ -680,13 +710,12 @@ def run_document_sync(
                     },
                     Callback=publish_upload_progress,
                 )
-                verified_head = _verify_upload(
+                verified_head = _confirm_upload(
                     primary_s3,
                     bucket,
                     key,
                     md5,
                     int(resource["source_size"]),
-                    workspace,
                 )
                 counters["reuploaded" if was_present else "uploaded"] += 1
 
@@ -716,11 +745,16 @@ def run_document_sync(
                 and int(existing.get("primary_storage_size") or -1) == remote_size
                 and _etag(existing.get("primary_storage_etag")) == remote_etag
             )
-            verified_at = (
-                existing.get("primary_storage_verified_at")
-                if existing_verification_matches
-                else datetime.now(timezone.utc).isoformat()
-            )
+            if checkpoint_reused:
+                verified_at = (
+                    existing.get("primary_storage_verified_at") if existing else None
+                )
+            else:
+                verified_at = (
+                    existing.get("primary_storage_verified_at")
+                    if existing_verification_matches
+                    else datetime.now(timezone.utc).isoformat()
+                )
             created = existing is None
             document_payload = {
                 "md5": md5,
@@ -738,16 +772,8 @@ def run_document_sync(
                 "primary_storage_verified_at": verified_at,
                 "created": created,
             }
-            if _document_needs_save(existing, document_payload):
-                repository.save_verified_document(document_payload)
-                counters["created" if created else "updated"] += 1
-                existing_documents[md5] = dict(document_payload)
-            else:
-                counters["unchanged"] += 1
-            synced_source_documents += 1
-
             legacy_location = _existing_object_location(existing, settings)
-            if restricted:
+            if restricted and not checkpoint_reused:
                 cleanup_targets: list[tuple[Any, str, str]] = []
                 if _head_object_or_none(primary_s3, settings.public_bucket, key):
                     cleanup_targets.append((primary_s3, settings.public_bucket, key))
@@ -771,6 +797,13 @@ def run_document_sync(
                             "Legacy public object still exists after deletion"
                         )
                     counters["private_cleaned"] += 1
+            if _document_needs_save(existing, document_payload):
+                repository.save_verified_document(document_payload)
+                counters["created" if created else "updated"] += 1
+                existing_documents[md5] = dict(document_payload)
+            else:
+                counters["unchanged"] += 1
+            synced_source_documents += 1
             bytes_completed += int(resource.get("source_size") or 0)
             print(
                 f"document sync: success md5={md5} source_path={source_path} "

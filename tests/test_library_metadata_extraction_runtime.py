@@ -67,7 +67,7 @@ def _candidate() -> MetadataExtractionCandidate:
 
 
 def test_runtime_persists_success_and_emits_structured_progress(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, capsys
 ) -> None:
     repository = _Repository(_candidate())
     db = _Db()
@@ -103,6 +103,18 @@ def test_runtime_persists_success_and_emits_structured_progress(
     assert repository.saved[0][2] == "first"
     assert repository.saved[0][1]["name"] == "Kitap"
     assert db.events[-1][0] == "task.progress"
+    output = capsys.readouterr().out
+    assert "library metadata: source prepare start" in output
+    assert "library metadata: source prepare complete" in output
+
+
+def test_primary_s3_config_bounds_network_waits() -> None:
+    config = runtime._primary_s3_config()
+
+    assert config.connect_timeout == 10
+    assert config.read_timeout == 30
+    assert config.retries == {"mode": "standard", "total_max_attempts": 2}
+    assert config.s3 == {"addressing_style": "path"}
 
 
 def test_runtime_completes_blocked_when_all_models_have_no_keys(

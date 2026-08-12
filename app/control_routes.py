@@ -305,3 +305,18 @@ def register_control_routes(
         )
         changed = manager.reset_all()
         return JSONResponse({"ok": True, "rows_changed": changed})
+
+    @app.post("/api/gemini/override-blackout")
+    def gemini_override_blackout() -> JSONResponse:
+        """Explicitly bypass only the currently active Gemini blackout."""
+        state = state_provider()
+        manager = GeminiRuntimeManager(
+            state.db,
+            task_id=None,
+            panel_id="library",
+        )
+        try:
+            result = manager.override_blackout()
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return JSONResponse({"ok": True, **result})

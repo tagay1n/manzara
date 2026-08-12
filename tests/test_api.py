@@ -752,6 +752,26 @@ def test_gemini_reset_key_rejects_missing_or_blank_key_id(test_client) -> None:
     assert blank.json()["detail"] == "key_id is required"
 
 
+def test_gemini_blackout_override_endpoint(test_client, monkeypatch) -> None:
+    client, _main_app = test_client
+    monkeypatch.setattr(
+        "app.control_routes.GeminiRuntimeManager.override_blackout",
+        lambda _self: {
+            "blackout_override_until": "2026-08-12T08:00:00+00:00",
+            "cycle_label": "2026-08-12",
+        },
+    )
+
+    response = client.post("/api/gemini/override-blackout")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "blackout_override_until": "2026-08-12T08:00:00+00:00",
+        "cycle_label": "2026-08-12",
+    }
+
+
 def test_gemini_400_rejection_does_not_exhaust_or_pause_key(test_client, monkeypatch) -> None:
     _client, main_app = test_client
     monkeypatch.setattr(

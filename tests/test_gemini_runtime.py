@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from app.gemini_runtime import (
@@ -47,3 +49,40 @@ def test_connection_reset_is_classified_as_transient_transport_failure() -> None
 
     assert db.errors
     assert db.events[-1][0] == "gemini.request.transport_error"
+
+
+def test_manual_blackout_override_disables_current_window(monkeypatch) -> None:
+    now = datetime(2026, 8, 12, 7, 30, tzinfo=timezone.utc)
+
+    class Db:
+        def __init__(self) -> None:
+            self.control = {
+                "cycle_label": "2026-08-12",
+                "pause_until": None,
+                "last_pause_reason": None,
+                "blackout_override_until": None,
+            }
+            self.events = []
+
+        def ensure_gemini_runtime_control(self, _cycle_label):  # noqa: ANN001
+            return dict(self.control)
+
+        def rollover_gemini_cycle(self, _cycle_label):  # noqa: ANN001
+            return False
+
+        def set_gemini_blackout_override(self, override_until):  # noqa: ANN001
+            self.control["blackout_override_until"] = override_until
+            return dict(self.control)
+
+        def insert_event(self, event_type, **kwargs):  # noqa: ANN001
+            self.events.append((event_type, kwargs))
+
+    db = Db()
+    manager = GeminiRuntimeManager(db, task_id=None, panel_id="library")
+    monkeypatch.setattr("app.gemini_runtime._utc_now", lambda: now)
+
+    result = manager.override_blackout()
+
+    assert result["blackout_override_until"] == "2026-08-12T08:00:00+00:00"
+    assert db.events[-1][0] == "gemini.blackout.overridden"
+    assert manager._wait_reason(db.control, now) is None

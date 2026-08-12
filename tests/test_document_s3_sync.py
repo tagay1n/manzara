@@ -103,14 +103,21 @@ class VanishingDirectoryYaDisk(FakeYaDisk):
 
 
 class FakeS3:
-    def __init__(self, *, corrupt_upload: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        corrupt_upload: bool = False,
+        omit_upload_metadata: bool = False,
+    ) -> None:
         self.objects: dict[tuple[str, str], dict] = {}
+        self.heads: list[tuple[str, str]] = []
         self.uploads: list[tuple[str, str]] = []
         self.downloads: list[tuple[str, str]] = []
         self.deletes: list[tuple[str, str]] = []
         self.incomplete_uploads: dict[tuple[str, str], list[str]] = {}
         self.aborted_uploads: list[tuple[str, str, str]] = []
         self.corrupt_upload = corrupt_upload
+        self.omit_upload_metadata = omit_upload_metadata
         self.bucket_acls: dict[str, dict] = {}
 
     def inventory(self, bucket: str) -> dict[str, dict]:
@@ -127,6 +134,7 @@ class FakeS3:
         return self.bucket_acls[str(Bucket)]
 
     def head_object(self, *, Bucket, Key):  # noqa: N803, ANN001
+        self.heads.append((str(Bucket), str(Key)))
         return dict(self.objects[(str(Bucket), str(Key))])
 
     def upload_file(
@@ -147,7 +155,9 @@ class FakeS3:
         self.objects[(str(bucket), str(key))] = {
             "ContentLength": len(stored_content),
             "ETag": etag,
-            "Metadata": dict(ExtraArgs.get("Metadata") or {}),
+            "Metadata": (
+                {} if self.omit_upload_metadata else dict(ExtraArgs.get("Metadata") or {})
+            ),
             "Body": stored_content,
         }
         self.uploads.append((str(bucket), str(key)))
@@ -314,7 +324,7 @@ def test_sync_prefers_valid_cache_and_uploads_missing_object(tmp_path: Path) -> 
     assert primary_s3.aborted_uploads == [
         ("public-docs", f"{digest}.pdf", "interrupted-upload")
     ]
-    assert primary_s3.downloads == [("public-docs", f"{digest}.pdf")]
+    assert primary_s3.downloads == []
     assert repository.saved[-1]["primary_storage_verified_at"]
     assert state_db.events[-1]["type"] == "task.progress"
     assert any(
@@ -402,6 +412,55 @@ def test_sync_reuses_plain_md5_etag_without_downloading(tmp_path: Path) -> None:
     assert result["uploaded"] == 0
     assert primary_s3.downloads == []
     assert yadisk.downloaded == []
+
+
+def test_sync_trusts_persisted_primary_url_without_backblaze_requests(
+    tmp_path: Path,
+) -> None:
+    content = b"database-checkpoint"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    key = f"{digest}.pdf"
+    primary_s3 = FakeS3()
+    repository = FakeRepository(
+        {
+            digest: {
+                "md5": digest,
+                "mime_type": "application/pdf",
+                "ya_path": "/documents/book.pdf",
+                "ya_public_url": "https://disk.example/book.pdf",
+                "ya_public_key": "key:book.pdf",
+                "ya_resource_id": "resource:book.pdf",
+                "full": True,
+                "sharing_restricted": False,
+                "document_url": (
+                    f"https://s3.primary.example.test/public-docs/{key}"
+                ),
+                "upstream_meta_url": None,
+                "primary_storage_size": len(content),
+                "primary_storage_etag": "persisted-etag",
+                "primary_storage_verified_at": "2026-08-10T10:00:00+00:00",
+            }
+        }
+    )
+
+    result = run_document_sync(
+        repository=repository,
+        state_db=FakeStateDb(),
+        yadisk=FakeYaDisk({"/documents/book.pdf": content}),
+        primary_s3=primary_s3,
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work-checkpoint",
+        run_id=81,
+        should_stop=lambda: False,
+    )
+
+    assert result["checkpoint_reused"] == 1
+    assert result["unchanged"] == 1
+    assert result["failed"] == 0
+    assert primary_s3.heads == []
+    assert primary_s3.uploads == []
+    assert primary_s3.downloads == []
 
 
 def test_restricted_sync_copies_to_private_then_removes_public(tmp_path: Path) -> None:
@@ -493,21 +552,49 @@ def test_restricted_sync_uses_legacy_s3_before_yandex(tmp_path: Path) -> None:
     assert yadisk.downloaded == []
 
 
-def test_sync_rejects_corrupt_remote_readback(tmp_path: Path) -> None:
+def test_sync_does_not_download_new_upload_for_readback(tmp_path: Path) -> None:
     content = b"correct-document"
     digest = hashlib.md5(content).hexdigest()  # noqa: S324
     (tmp_path / f"{digest}.pdf").write_bytes(content)
+    repository = FakeRepository()
+
+    primary_s3 = FakeS3(corrupt_upload=True)
+    result = run_document_sync(
+        repository=repository,
+        state_db=FakeStateDb(),
+        yadisk=FakeYaDisk({"/documents/book.pdf": content}),
+        primary_s3=primary_s3,
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=12,
+        should_stop=lambda: False,
+    )
+
+    assert result["failed"] == 0
+    assert result["uploaded"] == 1
+    assert primary_s3.downloads == []
+    assert repository.saved[-1]["document_url"]
+
+
+def test_sync_does_not_persist_upload_without_expected_md5_metadata(
+    tmp_path: Path,
+) -> None:
+    content = b"document"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    (tmp_path / f"{digest}.pdf").write_bytes(content)
+    primary_s3 = FakeS3(omit_upload_metadata=True)
     repository = FakeRepository()
 
     result = run_document_sync(
         repository=repository,
         state_db=FakeStateDb(),
         yadisk=FakeYaDisk({"/documents/book.pdf": content}),
-        primary_s3=FakeS3(corrupt_upload=True),
+        primary_s3=primary_s3,
         legacy_s3=FakeS3(),
         settings=settings(tmp_path),
-        workspace=tmp_path / "work",
-        run_id=12,
+        workspace=tmp_path / "work-metadata",
+        run_id=82,
         should_stop=lambda: False,
     )
 
@@ -625,7 +712,7 @@ def test_sync_reports_source_database_reconciliation_without_failing(
         repository=repository,
         state_db=FakeStateDb(),
         yadisk=FakeYaDisk({"/documents/book.pdf": source_content}),
-        primary_s3=FakeS3(corrupt_upload=True),
+        primary_s3=FakeS3(omit_upload_metadata=True),
         legacy_s3=FakeS3(),
         settings=settings(tmp_path),
         workspace=tmp_path / "work",

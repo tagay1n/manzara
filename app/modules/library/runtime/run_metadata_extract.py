@@ -54,6 +54,17 @@ PANEL_ID = "library"
 MODEL_POOL_ALIAS = "library_metadata_extraction"
 
 
+def _primary_s3_config() -> Config:
+    """Keep one unavailable object-store request from stalling the batch."""
+    return Config(
+        signature_version="s3v4",
+        connect_timeout=10,
+        read_timeout=30,
+        retries={"mode": "standard", "total_max_attempts": 2},
+        s3={"addressing_style": "path"},
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract document metadata")
     parser.add_argument(
@@ -165,11 +176,19 @@ def run_metadata_extraction(
         )
         request = None
         try:
+            print(
+                f"library metadata: source prepare start md5={candidate.md5}",
+                flush=True,
+            )
             request = prepare_metadata_request(
                 candidate,
                 workspace=workspace,
                 storage=storage,
                 primary_s3=primary_s3,
+            )
+            print(
+                f"library metadata: source prepare complete md5={candidate.md5}",
+                flush=True,
             )
         except Exception as exc:  # noqa: BLE001
             counters["source_deferred"] += 1
@@ -345,7 +364,7 @@ def main() -> int:
         aws_secret_access_key=storage.primary.secret_access_key,
         endpoint_url=storage.primary.endpoint_url,
         region_name=storage.primary.region_name,
-        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+        config=_primary_s3_config(),
     )
     primary_s3.head_bucket(Bucket=storage.public_bucket)
     primary_s3.head_bucket(Bucket=storage.private_bucket)

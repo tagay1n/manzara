@@ -1433,15 +1433,17 @@ class Database:
                 conn.execute(
                     """
                     INSERT INTO gemini_runtime_control (
-                        control_id, cycle_label, pause_until, last_pause_reason, updated_at
-                    ) VALUES (1, ?, NULL, NULL, ?)
+                        control_id, cycle_label, pause_until, last_pause_reason,
+                        blackout_override_until, updated_at
+                    ) VALUES (1, ?, NULL, NULL, NULL, ?)
                     ON CONFLICT(control_id) DO NOTHING
                     """,
                     (cycle_label, now),
                 )
                 row = conn.execute(
                     """
-                    SELECT control_id, cycle_label, pause_until, last_pause_reason, updated_at
+                    SELECT control_id, cycle_label, pause_until, last_pause_reason,
+                           blackout_override_until, updated_at
                     FROM gemini_runtime_control
                     WHERE control_id = 1
                     """
@@ -1451,6 +1453,7 @@ class Database:
             "cycle_label": cycle_label,
             "pause_until": None,
             "last_pause_reason": None,
+            "blackout_override_until": None,
             "updated_at": now,
         }
 
@@ -1470,8 +1473,9 @@ class Database:
                     conn.execute(
                         """
                         INSERT INTO gemini_runtime_control (
-                            control_id, cycle_label, pause_until, last_pause_reason, updated_at
-                        ) VALUES (1, ?, NULL, NULL, ?)
+                            control_id, cycle_label, pause_until, last_pause_reason,
+                            blackout_override_until, updated_at
+                        ) VALUES (1, ?, NULL, NULL, NULL, ?)
                         """,
                         (cycle_label, now),
                     )
@@ -1483,7 +1487,8 @@ class Database:
                 conn.execute(
                     """
                     UPDATE gemini_runtime_control
-                    SET cycle_label = ?, pause_until = NULL, updated_at = ?
+                    SET cycle_label = ?, pause_until = NULL,
+                        blackout_override_until = NULL, updated_at = ?
                     WHERE control_id = 1
                     """,
                     (cycle_label, now),
@@ -1517,7 +1522,8 @@ class Database:
                 )
                 row = conn.execute(
                     """
-                    SELECT control_id, cycle_label, pause_until, last_pause_reason, updated_at
+                    SELECT control_id, cycle_label, pause_until, last_pause_reason,
+                           blackout_override_until, updated_at
                     FROM gemini_runtime_control
                     WHERE control_id = 1
                     """
@@ -1527,6 +1533,39 @@ class Database:
             "cycle_label": "",
             "pause_until": pause_until,
             "last_pause_reason": reason,
+            "blackout_override_until": None,
+            "updated_at": now,
+        }
+
+    def set_gemini_blackout_override(
+        self, override_until: Optional[str]
+    ) -> Dict[str, Any]:
+        """Set or clear the current global Gemini blackout override."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE gemini_runtime_control
+                    SET blackout_override_until = ?, updated_at = ?
+                    WHERE control_id = 1
+                    """,
+                    (override_until, now),
+                )
+                row = conn.execute(
+                    """
+                    SELECT control_id, cycle_label, pause_until, last_pause_reason,
+                           blackout_override_until, updated_at
+                    FROM gemini_runtime_control
+                    WHERE control_id = 1
+                    """
+                ).fetchone()
+        return dict(row) if row else {
+            "control_id": 1,
+            "cycle_label": "",
+            "pause_until": None,
+            "last_pause_reason": None,
+            "blackout_override_until": override_until,
             "updated_at": now,
         }
 

@@ -10,6 +10,7 @@ const DASHBOARD_SOURCE = readFileSync(new URL("../../static/app.js", import.meta
 const SCHEDULES_SOURCE = readFileSync(new URL("../../static/schedules.js", import.meta.url), "utf-8");
 const LIBRARY_SOURCE = readFileSync(new URL("../../static/library.js", import.meta.url), "utf-8");
 const DATABASE_SOURCE = readFileSync(new URL("../../static/database.js", import.meta.url), "utf-8");
+const GEMINI_SOURCE = readFileSync(new URL("../../static/gemini.js", import.meta.url), "utf-8");
 const LIBRARY_CLASSIFICATIONS_SOURCE = readFileSync(
   new URL("../../static/library-classifications.js", import.meta.url),
   "utf-8",
@@ -102,6 +103,16 @@ const NORMALIZATION_PAGE_IDS = [
   "tab-panel-merge",
   "tab-panel-quality",
   "tab-panel-history",
+];
+
+const GEMINI_PAGE_IDS = [
+  "global-status",
+  "last-event",
+  "gemini-status",
+  "gemini-stat-grid",
+  "gemini-accounts",
+  "reset-all-btn",
+  "override-blackout-btn",
 ];
 
 const CLASSIFICATIONS_PAGE_IDS = [
@@ -3094,4 +3105,55 @@ test("document cleanup page bootstraps from its snapshot cursor and queue API", 
     harness.sse.config.eventTypes.includes("library.document_cleanup_changed"),
     true,
   );
+});
+
+test("gemini page confirms and overrides an active blackout", async () => {
+  let overridden = false;
+  const harness = createHarness({
+    source: GEMINI_SOURCE,
+    ids: GEMINI_PAGE_IDS,
+    locationPathname: "/gemini",
+    apiResolver(path, options = {}) {
+      if (path === "/api/gemini/state") {
+        return {
+          event_cursor: 91,
+          gemini: {
+            summary: { accounts: 0, keys: 0, models_seen: 0, exhausted_rows: 0 },
+            global: {
+              cycle_label: "2026-08-12",
+              reset_at_utc: "2026-08-12T07:00:00+00:00",
+              blackout_active: !overridden,
+              blackout_window_active: true,
+              blackout_overridden: overridden,
+              blackout_end_utc: "2026-08-12T08:00:00+00:00",
+              blackout_override_until: overridden
+                ? "2026-08-12T08:00:00+00:00"
+                : null,
+              pause_active: false,
+            },
+            accounts: [],
+          },
+        };
+      }
+      if (path === "/api/gemini/override-blackout" && options.method === "POST") {
+        overridden = true;
+        return { ok: true, blackout_override_until: "2026-08-12T08:00:00+00:00" };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+
+  assert.equal(harness.elements.get("override-blackout-btn").hidden, false);
+  harness.elements.get("override-blackout-btn").dispatch("click");
+  await harness.flush();
+  await harness.timer.runAllTimeouts();
+  await harness.flush();
+
+  const call = harness.apiCalls.find(
+    (entry) => entry.path === "/api/gemini/override-blackout",
+  );
+  assert.equal(call.options.method, "POST");
+  assert.equal(harness.elements.get("override-blackout-btn").hidden, true);
+  assert.match(harness.elements.get("gemini-stat-grid").innerHTML, /overridden until/i);
 });

@@ -128,6 +128,7 @@ def build_structured_run_summary(
             int(database_only_value or 0) if discovery_complete else None
         )
         duplicate_paths = int(sync_artifacts.get("duplicates") or 0)
+        checkpoint_reused = int(sync_artifacts.get("checkpoint_reused") or 0)
         uploaded = int(sync_artifacts.get("uploaded") or 0)
         updated = int(sync_artifacts.get("updated") or 0)
         discovery_failed = int(sync_artifacts.get("discovery_failed") or 0)
@@ -150,6 +151,11 @@ def build_structured_run_summary(
                         ),
                     },
                     {"label": "Duplicate paths", "value": str(duplicate_paths)},
+                    *(
+                        [{"label": "DB checkpoints", "value": str(checkpoint_reused)}]
+                        if checkpoint_reused
+                        else []
+                    ),
                     {"label": "Uploaded", "value": str(uploaded)},
                     {"label": "DB updated", "value": str(updated)},
                     {"label": "Failed", "value": str(failed)},

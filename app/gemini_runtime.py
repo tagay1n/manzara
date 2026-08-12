@@ -273,7 +273,13 @@ class GeminiRuntimeManager:
         self, control: Dict[str, Any], now_utc: datetime
     ) -> Optional[Dict[str, Any]]:
         blackout = self._blackout_window(now_utc)
-        if blackout["active"]:
+        override_until = _parse_ts(control.get("blackout_override_until"))
+        blackout_overridden = bool(
+            blackout["active"]
+            and override_until is not None
+            and override_until > now_utc
+        )
+        if blackout["active"] and not blackout_overridden:
             return {
                 "type": "blackout",
                 "wait_until": _parse_ts(blackout.get("wait_until_utc")),
@@ -649,6 +655,22 @@ class GeminiRuntimeManager:
         )
         return changed
 
+    def override_blackout(self, *, run_id: Optional[int] = None) -> Dict[str, Any]:
+        """Disable only the currently active reset blackout window."""
+        now_utc = _utc_now()
+        control = self._ensure_cycle(now_utc)
+        blackout = self._blackout_window(now_utc)
+        if not blackout["active"]:
+            raise ValueError("Gemini blackout is not currently active")
+        override_until = str(blackout["end_utc"])
+        control = self.db.set_gemini_blackout_override(override_until)
+        payload = {
+            "cycle_label": str(control.get("cycle_label") or self._cycle_label(now_utc)),
+            "blackout_override_until": override_until,
+        }
+        self._emit("gemini.blackout.overridden", payload, run_id=run_id)
+        return payload
+
     def snapshot(self) -> Dict[str, Any]:
         """Return current Gemini runtime status grouped by account and key."""
         now_utc = _utc_now()
@@ -656,6 +678,12 @@ class GeminiRuntimeManager:
         control = self._ensure_cycle(now_utc)
         control = self._clear_elapsed_pause_if_needed(control, now_utc)
         blackout = self._blackout_window(now_utc)
+        override_until = _parse_ts(control.get("blackout_override_until"))
+        blackout_overridden = bool(
+            blackout["active"]
+            and override_until is not None
+            and override_until > now_utc
+        )
         state_rows = self.db.list_gemini_model_states(model_name=None)
 
         models_by_key: Dict[str, List[Dict[str, Any]]] = {}
@@ -731,7 +759,12 @@ class GeminiRuntimeManager:
                 "pause_until": pause_until,
                 "pause_active": bool(pause_active),
                 "pause_reason": control.get("last_pause_reason"),
-                "blackout_active": bool(blackout["active"]),
+                "blackout_active": bool(blackout["active"] and not blackout_overridden),
+                "blackout_window_active": bool(blackout["active"]),
+                "blackout_overridden": blackout_overridden,
+                "blackout_override_until": (
+                    _iso_utc(override_until) if blackout_overridden else None
+                ),
                 "blackout_start_utc": blackout["start_utc"],
                 "blackout_end_utc": blackout["end_utc"],
                 "reset_at_utc": blackout["reset_utc"],
