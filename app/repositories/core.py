@@ -154,6 +154,14 @@ class CoreRepository:
     def _row_to_task(self, row: Dict[str, Any]) -> Dict[str, Any]:
         payload = dict(row)
         payload["command"] = json.loads(payload.pop("command_json"))
+        meaningful = payload.pop("meaningful_result_json", "{}")
+        try:
+            parsed_meaningful = json.loads(meaningful or "{}")
+        except Exception:
+            parsed_meaningful = {}
+        payload["meaningful_result"] = (
+            parsed_meaningful if isinstance(parsed_meaningful, dict) else {}
+        )
         return payload
 
 

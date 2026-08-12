@@ -50,6 +50,10 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": scan_cmd},
+            "meaningful_result": {
+                "artifact_kind": "shayan.snapshot_diff",
+                "any_positive": ["episodes_added", "episodes_changed"],
+            },
         },
         {
             "task_id": "shayan.download_new",
@@ -60,6 +64,10 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": download_cmd},
+            "meaningful_result": {
+                "artifact_kind": "shayan.download_summary",
+                "any_positive": ["downloaded"],
+            },
         },
         {
             "task_id": "shayan.upload_yadisk",
@@ -70,6 +78,10 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": upload_cmd},
+            "meaningful_result": {
+                "artifact_kind": "shayan.webdav_upload_summary",
+                "any_positive": ["uploaded", "reused"],
+            },
         },
         {
             "task_id": "shayan.transfer_yadisk_webdav",
@@ -80,5 +92,9 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": transfer_cmd},
+            "meaningful_result": {
+                "artifact_kind": "shayan.yadisk_webdav_transfer_summary",
+                "any_positive": ["copied", "reused"],
+            },
         },
     ]

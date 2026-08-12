@@ -419,7 +419,6 @@ class PayloadBuilder:
             group["tasks"].append(self._task_with_latest_run_payload(task, task_slug_map=task_slug_map))
 
         active_runs = state.db.list_active_runs()
-
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "event_cursor": event_cursor,
@@ -447,6 +446,35 @@ class PayloadBuilder:
             status_counts[key] = int(status_counts.get(key, 0)) + 1
 
         active_runs = state.db.list_active_runs()
+        conveyor = state.conveyor_service.snapshot()
+        panel_titles = state.db.get_panel_title_map()
+        conveyor_tasks: list[Dict[str, Any]] = []
+        task_map: Dict[str, Dict[str, Any]] = {}
+        for available_task in state.db.list_tasks():
+            available_task_id = str(available_task["task_id"])
+            available_panel_id = str(available_task["panel_id"])
+            item = {
+                "task_id": available_task_id,
+                "panel_id": available_panel_id,
+                "panel_title": panel_titles.get(available_panel_id, available_panel_id),
+                "title": available_task["title"],
+                "task_type": available_task["task_type"],
+                "icon_idle": available_task["icon_idle"],
+            }
+            conveyor_tasks.append(item)
+            task_map[available_task_id] = item
+        conveyor["available_tasks"] = sorted(
+            conveyor_tasks,
+            key=lambda item: (
+                str(item["panel_title"]).lower(),
+                str(item["title"]).lower(),
+            ),
+        )
+        for conveyor_item in conveyor.get("items") or []:
+            metadata = task_map.get(str(conveyor_item.get("task_id") or ""), {})
+            conveyor_item["title"] = metadata.get("title") or conveyor_item.get("task_id")
+            conveyor_item["panel_id"] = metadata.get("panel_id")
+            conveyor_item["panel_title"] = metadata.get("panel_title")
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -473,6 +501,7 @@ class PayloadBuilder:
                 ),
             },
             "runs": runs,
+            "conveyor": conveyor,
         }
 
     def build_flow_detail_payload(self, flow_key: str, limit_per_task: int = 20) -> Dict[str, Any]:

@@ -97,6 +97,7 @@
     const input = document.getElementById("ui-dialog-input");
     const wantsInput = Boolean(options.input);
     inputWrap.hidden = !wantsInput;
+    input.type = wantsInput && options.inputType === "password" ? "password" : "text";
     input.value = wantsInput ? String(options.value || "") : "";
     document.getElementById("ui-dialog-input-label").textContent =
       String(options.inputLabel || "Value");

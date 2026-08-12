@@ -63,6 +63,95 @@ def test_static_ui_assets_require_browser_revalidation(test_client) -> None:
         assert response.headers["cache-control"] == "no-cache"
 
 
+def test_task_detail_includes_global_conveyor_and_can_save_definition(test_client) -> None:
+    client, _main_app = test_client
+
+    detail = client.get("/api/tasks/shayan.quick")
+    assert detail.status_code == 200
+    conveyor = detail.json()["conveyor"]
+    assert conveyor["definition"]["revision"] == 0
+    assert any(task["task_id"] == "shayan.quick" for task in conveyor["available_tasks"])
+
+    response = client.put(
+        "/api/conveyor",
+        json={
+            "revision": 0,
+            "stages": [
+                {
+                    "stage_id": "stage-1",
+                    "items": [
+                        {"item_id": "item-1", "task_id": "shayan.quick"},
+                    ],
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["definition"]["revision"] == 1
+
+    stale = client.put("/api/conveyor", json={"revision": 0, "stages": []})
+    assert stale.status_code == 409
+
+
+def test_conveyor_rejects_non_integral_revision_and_unknown_task(test_client) -> None:
+    client, _main_app = test_client
+
+    fractional = client.put("/api/conveyor", json={"revision": 0.5, "stages": []})
+    assert fractional.status_code == 400
+
+    unknown = client.put(
+        "/api/conveyor",
+        json={
+            "revision": 0,
+            "stages": [
+                {
+                    "stage_id": "stage-1",
+                    "items": [{"item_id": "item-1", "task_id": "missing.task"}],
+                }
+            ],
+        },
+    )
+    assert unknown.status_code == 400
+
+
+def test_conveyor_runs_sequential_rows_to_completion(test_client) -> None:
+    client, main_app = test_client
+    saved = client.put(
+        "/api/conveyor",
+        json={
+            "revision": 0,
+            "stages": [
+                {
+                    "stage_id": "stage-1",
+                    "items": [{"item_id": "item-1", "task_id": "shayan.quick"}],
+                },
+                {
+                    "stage_id": "stage-2",
+                    "items": [{"item_id": "item-2", "task_id": "shayan.scan_changes"}],
+                },
+            ],
+        },
+    )
+    assert saved.status_code == 200
+
+    started = client.post("/api/conveyor/run", json={})
+    assert started.status_code == 200
+    run_id = int(started.json()["run"]["conveyor_run_id"])
+    deadline = time.time() + 10
+    run = None
+    while time.time() < deadline:
+        run = main_app.state.db.get_conveyor_run(run_id)
+        if run and run["status"] not in {"starting", "running"}:
+            break
+        time.sleep(0.05)
+
+    assert run is not None
+    assert run["status"] == "completed"
+    items = main_app.state.db.list_conveyor_run_items(run_id)
+    assert [item["status"] for item in items] == ["completed", "completed"]
+    assert items[0]["task_run_id"] < items[1]["task_run_id"]
+
+
 def test_system_state_returns_lightweight_global_payload(test_client) -> None:
     client, _main_app = test_client
 

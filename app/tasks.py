@@ -239,6 +239,13 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
         }
 
 
+    def request_stop_run(self, run_id: int, *, mode: str = "graceful") -> None:
+        """Request a stop for one known run without task-id ambiguity."""
+        if mode not in {"graceful", "force"}:
+            raise ValueError(f"Unsupported stop mode: {mode}")
+        self._request_stop(int(run_id), mode=mode)
+
+
     def _request_stop(self, run_id: int, mode: str) -> None:
         """Persist stop mode and signal process if currently live."""
         run = self.db.get_run(run_id)

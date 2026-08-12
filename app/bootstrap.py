@@ -73,6 +73,16 @@ def startup_app(
             payload={"recovered_workflow_runs": recovered_workflows},
         )
 
+    recovered_conveyors = db.recover_active_conveyor_runs()
+    if recovered_conveyors > 0:
+        db.insert_event(
+            "system.conveyor_recovery",
+            task_id=None,
+            run_id=None,
+            panel_id=None,
+            payload={"recovered_conveyor_runs": recovered_conveyors},
+        )
+
     if state.settings.scheduler_enabled:
         state.workflow_service.start()
 

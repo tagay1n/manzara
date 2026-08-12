@@ -83,6 +83,39 @@ WORKFLOW_RUN_TRANSITIONS: Mapping[str, Set[str]] = {
     WORKFLOW_RUN_STATUS_FAILED: set(),
 }
 
+CONVEYOR_RUN_STATUS_STARTING = "starting"
+CONVEYOR_RUN_STATUS_RUNNING = "running"
+CONVEYOR_RUN_STATUS_STOPPED = "stopped"
+CONVEYOR_RUN_STATUS_COMPLETED = "completed"
+CONVEYOR_RUN_STATUS_FAILED = "failed"
+
+CONVEYOR_RUN_ACTIVE_STATUSES = (
+    CONVEYOR_RUN_STATUS_STARTING,
+    CONVEYOR_RUN_STATUS_RUNNING,
+)
+
+CONVEYOR_RUN_TERMINAL_STATUSES = (
+    CONVEYOR_RUN_STATUS_STOPPED,
+    CONVEYOR_RUN_STATUS_COMPLETED,
+    CONVEYOR_RUN_STATUS_FAILED,
+)
+
+CONVEYOR_RUN_TRANSITIONS: Mapping[str, Set[str]] = {
+    CONVEYOR_RUN_STATUS_STARTING: {
+        CONVEYOR_RUN_STATUS_RUNNING,
+        CONVEYOR_RUN_STATUS_FAILED,
+        CONVEYOR_RUN_STATUS_STOPPED,
+    },
+    CONVEYOR_RUN_STATUS_RUNNING: {
+        CONVEYOR_RUN_STATUS_STOPPED,
+        CONVEYOR_RUN_STATUS_COMPLETED,
+        CONVEYOR_RUN_STATUS_FAILED,
+    },
+    CONVEYOR_RUN_STATUS_STOPPED: set(),
+    CONVEYOR_RUN_STATUS_COMPLETED: set(),
+    CONVEYOR_RUN_STATUS_FAILED: set(),
+}
+
 TASK_TERMINAL_EVENT_TYPES = {
     TASK_RUN_STATUS_STOPPED: "task.stopped",
     TASK_RUN_STATUS_COMPLETED: "task.completed",
@@ -106,6 +139,15 @@ def can_transition_workflow_run(current: str, target: str) -> bool:
     if current_value == target_value:
         return True
     return target_value in WORKFLOW_RUN_TRANSITIONS.get(current_value, set())
+
+
+def can_transition_conveyor_run(current: str, target: str) -> bool:
+    """Return True when a conveyor run status transition is allowed."""
+    current_value = str(current or "")
+    target_value = str(target or "")
+    if current_value == target_value:
+        return True
+    return target_value in CONVEYOR_RUN_TRANSITIONS.get(current_value, set())
 
 
 def task_status_from_stop_mode(mode: str) -> str:
@@ -132,4 +174,3 @@ def task_terminal_event_type(status: str) -> str:
     if value not in TASK_TERMINAL_EVENT_TYPES:
         raise ValueError(f"Unsupported terminal status for event mapping: {value!r}")
     return TASK_TERMINAL_EVENT_TYPES[value]
-

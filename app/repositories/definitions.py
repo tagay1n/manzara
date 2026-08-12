@@ -206,8 +206,9 @@ class DefinitionsRepository:
                         INSERT INTO task_definitions (
                             task_id, panel_id, title, task_type,
                             icon_idle, icon_running, command_json, cwd,
+                            meaningful_result_json,
                             created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(task_id) DO UPDATE SET
                             panel_id=excluded.panel_id,
                             task_type=excluded.task_type,
@@ -215,6 +216,7 @@ class DefinitionsRepository:
                             icon_running=excluded.icon_running,
                             command_json=excluded.command_json,
                             cwd=excluded.cwd,
+                            meaningful_result_json=excluded.meaningful_result_json,
                             updated_at=excluded.updated_at
                         """,
                         (
@@ -226,6 +228,7 @@ class DefinitionsRepository:
                             item["icon_running"],
                             json.dumps(item["command"]),
                             item["cwd"],
+                            json.dumps(item.get("meaningful_result", {}), ensure_ascii=False),
                             now,
                             now,
                         ),

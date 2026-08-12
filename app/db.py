@@ -1,6 +1,7 @@
 """Stable public database facade composed from focused repositories."""
 
 from app.repositories.core import CoreRepository, utc_now
+from app.repositories.conveyor import ConveyorRepository
 from app.repositories.definitions import DefinitionsRepository
 from app.repositories.gemini import GeminiRepository
 from app.repositories.normalization import NormalizationRepository
@@ -15,6 +16,7 @@ from app.runtime_states import (
 
 class Database(
     DefinitionsRepository,
+    ConveyorRepository,
     WorkflowRepository,
     RunRepository,
     GeminiRepository,

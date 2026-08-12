@@ -109,6 +109,7 @@ from app.run_summary import build_default_run_summary
 from app.settings import Settings, load_settings
 from app.tasks import TaskRunner
 from app.workflows import WorkflowService
+from app.conveyor import ConveyorService
 
 # Backward-compatible aliases used by tests and legacy references.
 _PANEL_DEFS = PANEL_DEFS
@@ -212,6 +213,7 @@ class AppState:
             self.db,
             self.runner,
         )
+        self.conveyor_service = ConveyorService(self.db, self.runner)
 
 
 settings = load_settings()

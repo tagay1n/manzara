@@ -507,6 +507,28 @@ function createHarness({
           value === "stopping_force"
         );
       },
+      taskStatusBadgeModel(run = {}) {
+        const status = String(run?.status || "idle");
+        const active = this.isActiveStatus(status);
+        const progress = run?.progress && typeof run.progress === "object" ? run.progress : {};
+        const current = Number(progress.current);
+        const total = Number(progress.total);
+        const determinate = active && Number.isFinite(current) && current >= 0
+          && Number.isFinite(total) && total > 0;
+        const suppliedPercent = Number(progress.percent);
+        const calculatedPercent = determinate ? current / total * 100 : 0;
+        return {
+          active,
+          current,
+          determinate,
+          percent: Math.round(Math.max(0, Math.min(
+            100,
+            Number.isFinite(suppliedPercent) ? suppliedPercent : calculatedPercent,
+          ))),
+          status,
+          total,
+        };
+      },
       renderTaskStatusBadge(run = {}, options = {}) {
         const status = String(run?.status || "idle");
         const active = this.isActiveStatus(status);
@@ -934,6 +956,84 @@ test("task page renders running control state and toggles task endpoint", async 
   assert.equal(toggleCalls.length, 1);
   const detailCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/quick?limit=20");
   assert.ok(detailCalls.length >= 2);
+});
+
+test("task page renders conveyor and adds current task as a sequential row", async () => {
+  let revision = 0;
+  let stages = [];
+  const detailPayload = {
+    event_cursor: 9,
+    task: {
+      task_id: "shayan.quick",
+      slug: "quick",
+      title: "Quick",
+      task_type: "scan",
+      icon_idle: "Play",
+    },
+    panel: { title: "Shayan" },
+    stats: { total_runs: 0, status_counts: {}, last_success_at: null },
+    runs: [],
+    global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+    conveyor: {
+      definition: { revision, stages },
+      run: null,
+      items: [],
+      available_tasks: [
+        {
+          task_id: "shayan.quick",
+          panel_id: "shayan",
+          panel_title: "Shayan",
+          title: "Quick",
+          task_type: "scan",
+          icon_idle: "Play",
+        },
+      ],
+    },
+  };
+  const ids = [
+    "global-status", "stop-all-btn", "task-toggle-btn", "task-title", "task-subtitle",
+    "task-stat-grid", "task-run-list", "run-result", "last-event", "close-logs",
+    "log-dialog", "copy-logs", "log-title", "log-content", "conveyor-status",
+    "conveyor-palette", "conveyor-stages", "conveyor-add-current", "conveyor-clear",
+    "conveyor-run", "conveyor-stop",
+  ];
+  const harness = createHarness({
+    source: TASK_SOURCE,
+    ids,
+    locationPathname: "/tasks/quick",
+    apiResolver(path, options) {
+      if (path === "/api/tasks/quick?limit=20") {
+        return JSON.parse(JSON.stringify({
+          ...detailPayload,
+          conveyor: {
+            ...detailPayload.conveyor,
+            definition: { revision, stages },
+          },
+        }));
+      }
+      if (path === "/api/conveyor" && options.method === "PUT") {
+        const body = JSON.parse(options.body);
+        assert.equal(body.revision, revision);
+        stages = body.stages;
+        revision += 1;
+        return { definition: { revision, stages } };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  await harness.flush();
+  assert.match(harness.elements.get("conveyor-palette").innerHTML, /Quick/);
+  assert.match(harness.elements.get("conveyor-stages").innerHTML, /first row/);
+
+  harness.elements.get("conveyor-add-current").dispatch("click");
+  await harness.flush();
+
+  const saves = harness.apiCalls.filter((call) => call.path === "/api/conveyor");
+  assert.equal(saves.length, 1);
+  assert.equal(stages.length, 1);
+  assert.equal(stages[0].items[0].task_id, "shayan.quick");
+  assert.match(harness.elements.get("conveyor-stages").innerHTML, /Stage 1/);
 });
 
 test("task page normalizes idle icon names for lucide glyph rendering", async () => {

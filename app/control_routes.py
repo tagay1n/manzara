@@ -10,6 +10,11 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from app.gemini_runtime import GeminiRuntimeManager
+from app.conveyor import (
+    ConveyorEditConflict,
+    ConveyorRevisionConflict,
+    ConveyorValidationError,
+)
 
 _TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
@@ -42,6 +47,23 @@ def _parse_optional_sudo_password(payload: Optional[Dict[str, Any]]) -> Optional
     if len(value) > 1024:
         raise HTTPException(status_code=400, detail="sudo_password is too long")
     return value
+
+
+def _parse_integral(value: Any, *, field_name: str, minimum: int = 0) -> int:
+    if isinstance(value, bool) or (
+        isinstance(value, float) and not value.is_integer()
+    ):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be an integer")
+    if parsed < minimum:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} must be at least {minimum}",
+        )
+    return parsed
 
 
 def register_control_routes(
@@ -132,6 +154,46 @@ def register_control_routes(
             sudo_password=sudo_password,
         )
         return JSONResponse(result)
+
+    @app.put("/api/conveyor")
+    def save_conveyor(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+        """Replace the singleton conveyor definition using optimistic revisioning."""
+        if "revision" not in payload:
+            raise HTTPException(status_code=400, detail="revision is required")
+        if "stages" not in payload:
+            raise HTTPException(status_code=400, detail="stages is required")
+        state = state_provider()
+        try:
+            definition = state.conveyor_service.save_definition(
+                expected_revision=_parse_integral(
+                    payload["revision"],
+                    field_name="revision",
+                ),
+                stages=payload["stages"],
+            )
+        except ConveyorValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (ConveyorRevisionConflict, ConveyorEditConflict) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return JSONResponse({"definition": definition})
+
+    @app.post("/api/conveyor/run")
+    def run_conveyor(
+        payload: Optional[Dict[str, Any]] = Body(default=None),
+    ) -> JSONResponse:
+        """Start the saved conveyor definition."""
+        state = state_provider()
+        return JSONResponse(
+            state.conveyor_service.trigger(
+                sudo_password=_parse_optional_sudo_password(payload),
+            )
+        )
+
+    @app.post("/api/conveyor/stop")
+    def stop_conveyor() -> JSONResponse:
+        """Gracefully stop the active conveyor and cancel its pending rows."""
+        state = state_provider()
+        return JSONResponse(state.conveyor_service.stop())
 
     @app.get("/api/workflows/{workflow_id}")
     def get_workflow(workflow_id: str) -> JSONResponse:
