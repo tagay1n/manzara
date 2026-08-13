@@ -29,7 +29,7 @@ See `docs/architecture.md` for the ownership index. More specific instructions l
 - Structured artifacts never come from parsing logs. Emit compact `task.artifact` SSE payloads, persist them in PostgreSQL, and expose large details through paginated endpoints.
 - Log reads use bounded cursor pagination (`after_log_id` for follow and `before_log_id` for backfill).
 - No silent failures: preserve actionable context in run state, logs, and events.
-- The editable conveyor is one PostgreSQL-backed global definition. Rows execute sequentially; tasks within one row execute in parallel. Running and completed rows are immutable, while future rows may be edited.
+- The editable conveyor is one PostgreSQL-backed global definition. Steps execute visually from left to right; tasks stacked within one step execute in parallel. Running and completed steps are immutable, while future steps may be edited.
 
 ## Backend standards
 

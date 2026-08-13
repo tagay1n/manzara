@@ -2046,8 +2046,11 @@ button {
 }
 
 .conveyor-stages {
-  display: grid;
+  display: flex;
+  align-items: stretch;
   gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .conveyor-stage {
@@ -2056,6 +2059,9 @@ button {
   background: rgba(14, 28, 52, 0.72);
   padding: 9px;
   display: grid;
+  flex: 1 0 230px;
+  min-width: 0;
+  align-content: start;
   gap: 8px;
 }
 
@@ -2073,7 +2079,8 @@ button {
 
 .conveyor-stage-items {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   gap: 8px;
   min-height: 48px;
 }
@@ -2149,14 +2156,19 @@ button {
   border: 1px dashed #36577f;
   border-radius: 7px;
   min-height: 28px;
+  min-width: 38px;
+  flex: 0 0 38px;
   display: grid;
   place-items: center;
+  padding: 6px;
+  text-align: center;
   color: #6f89ad;
   font-size: 10px;
 }
 
 .conveyor-stages.is-empty .conveyor-new-row-drop {
   min-height: 46px;
+  flex: 1 1 auto;
 }
 
 .conveyor-new-row-drop:hover {

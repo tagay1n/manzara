@@ -960,7 +960,7 @@ test("task page renders running control state and toggles task endpoint", async 
   assert.ok(detailCalls.length >= 2);
 });
 
-test("tasks catalog drags a task badge into a sequential conveyor row", async () => {
+test("tasks catalog presents conveyor steps in left-to-right execution order", async () => {
   let revision = 0;
   let stages = [];
   const catalogPayload = {
@@ -1028,6 +1028,7 @@ test("tasks catalog drags a task badge into a sequential conveyor row", async ()
 
   await harness.flush();
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /data-conveyor-task-id="shayan.quick"/);
+  assert.match(harness.elements.get("conveyor-status").textContent, /left to right/i);
   assert.match(harness.elements.get("conveyor-stages").innerHTML, /Drag a task badge here/);
   assert.equal(harness.elements.get("conveyor-stages").classList.contains("is-empty"), true);
 
@@ -1058,7 +1059,8 @@ test("tasks catalog drags a task badge into a sequential conveyor row", async ()
   assert.equal(saves.length, 1);
   assert.equal(stages.length, 1);
   assert.equal(stages[0].items[0].task_id, "shayan.quick");
-  assert.match(harness.elements.get("conveyor-stages").innerHTML, /Stage 1/);
+  assert.match(harness.elements.get("conveyor-stages").innerHTML, /Step 1/);
+  assert.match(harness.elements.get("conveyor-stages").innerHTML, /next sequential step/i);
   assert.equal(harness.elements.get("conveyor-stages").classList.contains("is-empty"), false);
 });
 

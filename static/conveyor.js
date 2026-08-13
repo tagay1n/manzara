@@ -53,7 +53,7 @@
 
     function statusText() {
       const run = payload().conveyor?.run;
-      if (!run) return "Drag task badges from the catalog below. Tasks in one row run in parallel.";
+      if (!run) return "Steps run left to right. Stack tasks in one step to run them in parallel.";
       const status = String(run.status || "idle");
       if (status === "completed" && run.outcome === "no_op") {
         return "Completed early: a sequential task produced no new work.";
@@ -94,8 +94,8 @@
           </div>
           ${progressHtml}
           <div class="conveyor-item-actions">
-            <button type="button" class="icon-btn quiet conveyor-item-prev" data-stage-index="${stageIndex}" data-item-index="${itemIndex}" ${locked || stageIndex === 0 ? "disabled" : ""} aria-label="Move to previous row" title="Move to previous row"><i data-lucide="arrow-up-to-line"></i></button>
-            <button type="button" class="icon-btn quiet conveyor-item-next" data-stage-index="${stageIndex}" data-item-index="${itemIndex}" ${locked ? "disabled" : ""} aria-label="Move to next row" title="Move to next row"><i data-lucide="arrow-down-to-line"></i></button>
+            <button type="button" class="icon-btn quiet conveyor-item-prev" data-stage-index="${stageIndex}" data-item-index="${itemIndex}" ${locked || stageIndex === 0 ? "disabled" : ""} aria-label="Move to previous step" title="Move to previous step"><i data-lucide="arrow-left-to-line"></i></button>
+            <button type="button" class="icon-btn quiet conveyor-item-next" data-stage-index="${stageIndex}" data-item-index="${itemIndex}" ${locked ? "disabled" : ""} aria-label="Move to next step" title="Move to next step"><i data-lucide="arrow-right-to-line"></i></button>
             <button type="button" class="icon-btn quiet conveyor-remove-item" data-stage-index="${stageIndex}" data-item-index="${itemIndex}" ${locked ? "disabled" : ""} aria-label="Remove task" title="Remove task"><i data-lucide="x"></i></button>
           </div>
         </article>
@@ -115,13 +115,13 @@
       return stages.map((stage, stageIndex) => {
         const locked = stage.items.some((item) => lockedIds.has(String(item.item_id)));
         return `
-          ${stageIndex >= minimumEditableIndex ? `<div class="conveyor-new-row-drop" data-new-stage-index="${stageIndex}">Drop for a sequential row</div>` : ""}
+          ${stageIndex >= minimumEditableIndex ? `<div class="conveyor-new-row-drop" data-new-stage-index="${stageIndex}">Insert sequential step</div>` : ""}
           <section class="conveyor-stage ${locked ? "is-locked" : ""}" data-stage-index="${stageIndex}">
             <div class="conveyor-stage-head">
-              <span>Stage ${stageIndex + 1}${stage.items.length > 1 ? " • parallel" : ""}</span>
+              <span>Step ${stageIndex + 1}${stage.items.length > 1 ? " • parallel" : ""}</span>
               <div>
-                <button type="button" class="icon-btn quiet conveyor-stage-up" data-stage-index="${stageIndex}" ${locked || stageIndex <= minimumEditableIndex ? "disabled" : ""} aria-label="Move stage up"><i data-lucide="arrow-up"></i></button>
-                <button type="button" class="icon-btn quiet conveyor-stage-down" data-stage-index="${stageIndex}" ${locked || stageIndex === stages.length - 1 ? "disabled" : ""} aria-label="Move stage down"><i data-lucide="arrow-down"></i></button>
+                <button type="button" class="icon-btn quiet conveyor-stage-up" data-stage-index="${stageIndex}" ${locked || stageIndex <= minimumEditableIndex ? "disabled" : ""} aria-label="Move step left"><i data-lucide="arrow-left"></i></button>
+                <button type="button" class="icon-btn quiet conveyor-stage-down" data-stage-index="${stageIndex}" ${locked || stageIndex === stages.length - 1 ? "disabled" : ""} aria-label="Move step right"><i data-lucide="arrow-right"></i></button>
               </div>
             </div>
             <div class="conveyor-stage-items" ${locked ? "" : `data-stage-drop-index="${stageIndex}"`}>
@@ -129,7 +129,7 @@
             </div>
           </section>
         `;
-      }).join("") + `<div class="conveyor-new-row-drop" data-new-stage-index="${stages.length}">Drop for a final sequential row</div>`;
+      }).join("") + `<div class="conveyor-new-row-drop" data-new-stage-index="${stages.length}">Add next sequential step</div>`;
     }
 
     function render() {

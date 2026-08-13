@@ -18,6 +18,22 @@ const PAGE_FILES = [
   "gemini.html",
 ];
 
+const STYLES_SOURCE = readFileSync(
+  new URL("../../static/styles.css", import.meta.url),
+  "utf-8",
+);
+
+test("conveyor lays sequential steps left-to-right and parallel tasks vertically", () => {
+  assert.match(
+    STYLES_SOURCE,
+    /\.conveyor-stages\s*\{[^}]*display:\s*flex;[^}]*overflow-x:\s*auto;/s,
+  );
+  assert.match(
+    STYLES_SOURCE,
+    /\.conveyor-stage-items\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s,
+  );
+});
+
 test("all application pages use the shared shell and omit permanent alert strips", () => {
   for (const file of PAGE_FILES) {
     const source = readFileSync(new URL(`../../static/${file}`, import.meta.url), "utf-8");
