@@ -227,15 +227,36 @@ def build_structured_run_summary(
     if task_id == "library.prepare_document_cleanup":
         data = artifacts if isinstance(artifacts, dict) else {}
         if data.get("kind") == "library.document_cleanup_preparation_summary":
+            planned_moves = data.get("planned_moves")
+            if not isinstance(planned_moves, dict):
+                planned_moves = {}
             summary["highlights"].extend(
                 [
                     {"label": "Scanned", "value": str(int(data.get("scanned") or 0))},
-                    {"label": "Plans", "value": str(int(data.get("plans_created") or 0))},
-                    {"label": "ISBN groups", "value": str(int(data.get("isbn_groups") or 0))},
-                    {"label": "Reviews", "value": str(int(data.get("isbn_reviews_created") or 0))},
+                    {
+                        "label": "By ISBN",
+                        "value": str(int(planned_moves.get("by_isbn") or 0)),
+                    },
+                    {
+                        "label": "By language",
+                        "value": str(int(planned_moves.get("by_language") or 0)),
+                    },
+                    {
+                        "label": "Non-document",
+                        "value": str(
+                            int(planned_moves.get("by_non_document_format") or 0)
+                        ),
+                    },
+                    {
+                        "label": "ISBN reviews",
+                        "value": str(int(data.get("isbn_review_groups") or 0)),
+                    },
                 ]
             )
-            summary["message"] = "Document cleanup plans prepared; no storage was mutated."
+            summary["message"] = (
+                "Cleanup plan prepared by ISBN, language, and document format; "
+                "no storage was mutated."
+            )
         return summary
 
     if task_id == "library.metadata_extract":

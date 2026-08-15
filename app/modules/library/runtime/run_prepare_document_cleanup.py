@@ -16,7 +16,7 @@ from app.settings import load_settings
 
 
 TASK_ID = "library.prepare_document_cleanup"
-PANEL_ID = "library"
+PANEL_ID = "maintenance"
 
 
 def _run_id() -> int:
@@ -32,6 +32,9 @@ def _progress(current: int, total: int, counters: Mapping[str, int]) -> dict[str
         "total": int(total),
         "percent": round((current / total) * 100, 2) if total else 100,
         "plans_created": int(counters.get("plans_created") or 0),
+        "planned_non_tatar": int(counters.get("planned_non_tatar") or 0),
+        "planned_non_document": int(counters.get("planned_non_document") or 0),
+        "planned_duplicate_isbn": int(counters.get("planned_duplicate_isbn") or 0),
         "reviews_created": int(counters.get("isbn_reviews_created") or 0),
     }
 

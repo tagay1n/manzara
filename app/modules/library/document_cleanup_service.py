@@ -40,9 +40,21 @@ def prepare_document_cleanup(
         "scanned": 0,
         "plans_created": 0,
         "plans_reused": 0,
+        "plans_suppressed": 0,
+        "planned_duplicate_isbn": 0,
+        "planned_non_document": 0,
+        "planned_non_tatar": 0,
         "isbn_groups": 0,
+        "isbn_auto_resolved_groups": 0,
+        "isbn_review_groups": 0,
+        "isbn_review_candidates": 0,
         "isbn_reviews_created": 0,
         "isbn_reviews_reused": 0,
+    }
+    planned_by_reason = {
+        "duplicate_isbn": 0,
+        "non_document": 0,
+        "non_tatar": 0,
     }
     isbn_documents: list[dict[str, Any]] = []
     by_md5: dict[str, dict[str, Any]] = {}
@@ -62,27 +74,31 @@ def prepare_document_cleanup(
         )
         if reasons:
             reason = reasons[0]
-            _, created = repository.enqueue_cleanup(
-                {
-                    "scope": "document",
-                    "action": "move",
-                    "reason": reason,
-                    "md5": md5,
-                    "source_resource_id": document.get("ya_resource_id") or None,
-                    "source_path": source_path,
-                    "target_path": cleanup_target_path(
-                        filtered_out_path,
-                        reason=reason,
-                        md5=md5,
-                        source_path=source_path,
-                    ),
-                    "evidence": {"reasons": reasons},
-                }
-            )
-            counters["plans_created" if created else "plans_reused"] += 1
+            payload = {
+                "scope": "document",
+                "action": "move",
+                "reason": reason,
+                "md5": md5,
+                "source_resource_id": document.get("ya_resource_id") or None,
+                "source_path": source_path,
+                "target_path": cleanup_target_path(
+                    filtered_out_path,
+                    reason=reason,
+                    md5=md5,
+                    source_path=source_path,
+                ),
+                "evidence": {"reasons": reasons},
+            }
+            if repository.is_cleanup_suppressed(payload):
+                counters["plans_suppressed"] += 1
+            else:
+                _, created = repository.enqueue_cleanup(payload)
+                counters["plans_created" if created else "plans_reused"] += 1
+                planned_by_reason[reason] += 1
+                counters[f"planned_{reason}"] += 1
         schema_org = parse_meta(document.get("schema_org"))
         isbn_values = extract_isbn_values(schema_org)
-        if isbn_values:
+        if isbn_values and not reasons:
             isbn_documents.append(
                 {
                     "md5": md5,
@@ -120,44 +136,37 @@ def prepare_document_cleanup(
             }
             for md5 in decision.candidate_md5s
         ]
-        if decision.requires_review:
-            _, created = repository.upsert_isbn_review(
-                isbn=decision.isbn,
-                candidates=candidates,
-                evidence=decision.evidence,
-            )
-            counters[
-                "isbn_reviews_created" if created else "isbn_reviews_reused"
-            ] += 1
-            continue
-        for md5 in decision.remove_md5s:
-            document = by_md5[md5]
-            source_path = str(document.get("ya_path") or "")
-            _, created = repository.enqueue_cleanup(
-                {
-                    "scope": "document",
-                    "action": "move",
-                    "reason": "duplicate_isbn",
-                    "md5": md5,
-                    "source_resource_id": document.get("ya_resource_id") or None,
-                    "source_path": source_path,
-                    "target_path": cleanup_target_path(
-                        filtered_out_path,
-                        reason="duplicate_isbn",
-                        md5=md5,
-                        source_path=source_path,
-                    ),
-                    "evidence": {
-                        "isbn": decision.isbn,
-                        "keep_md5s": list(decision.keep_md5s),
-                        **decision.evidence,
-                    },
-                }
-            )
-            counters["plans_created" if created else "plans_reused"] += 1
+        counters["isbn_review_groups"] += 1
+        counters["isbn_review_candidates"] += len(decision.candidate_md5s)
+        _, created = repository.upsert_isbn_review(
+            isbn=decision.isbn,
+            candidates=candidates,
+            evidence={
+                **decision.evidence,
+                "recommended_keep_md5s": list(decision.keep_md5s),
+                "automatic_cleanup": False,
+            },
+        )
+        counters[
+            "isbn_reviews_created" if created else "isbn_reviews_reused"
+        ] += 1
     summary = {
         "kind": "library.document_cleanup_preparation_summary",
         **counters,
+        "planned_by_reason": planned_by_reason,
+        "planned_moves": {
+            "total": sum(planned_by_reason.values()),
+            "by_isbn": planned_by_reason["duplicate_isbn"],
+            "by_language": planned_by_reason["non_tatar"],
+            "by_non_document_format": planned_by_reason["non_document"],
+        },
+        "isbn_analysis": {
+            "duplicate_groups": counters["isbn_groups"],
+            "auto_resolved_groups": counters["isbn_auto_resolved_groups"],
+            "books_planned_to_move": planned_by_reason["duplicate_isbn"],
+            "review_groups": counters["isbn_review_groups"],
+            "books_awaiting_review": counters["isbn_review_candidates"],
+        },
         "stopped": bool(should_stop()),
     }
     print(

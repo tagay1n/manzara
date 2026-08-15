@@ -21,7 +21,7 @@ from app.document_storage import (
 )
 from app.modules.maintenance.document_cleanup_executor import execute_yandex_cleanup
 from app.modules.maintenance.document_sync_lock import document_sync_lock
-from app.modules.maintenance.document_sync_filter import classify_document
+from app.document_sync_filter import classify_document
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
 from app.modules.maintenance.runtime.sync_documents_s3 import (
     _correct_mime,
@@ -107,34 +107,36 @@ def _delete_prefix(
     md5: str,
     *,
     missing_bucket_ok: bool = False,
+    missing_buckets: set[str] | None = None,
 ) -> int:
+    if missing_buckets is not None and bucket in missing_buckets:
+        return 0
     deleted = 0
-    token: str | None = None
+    previous_keys: tuple[str, ...] = ()
     try:
         while True:
-            request: dict[str, Any] = {"Bucket": bucket, "Prefix": md5}
-            if token:
-                request["ContinuationToken"] = token
-            page = s3.list_objects_v2(**request)
-            for item in page.get("Contents", []):
-                key = str(item.get("Key") or "")
-                if not key:
-                    continue
+            page = s3.list_objects_v2(Bucket=bucket, Prefix=md5, MaxKeys=1000)
+            keys = tuple(
+                str(item.get("Key") or "")
+                for item in page.get("Contents", [])
+                if str(item.get("Key") or "")
+            )
+            if not keys:
+                return deleted
+            if keys == previous_keys:
+                raise RuntimeError(
+                    f"Managed S3 objects did not disappear after deletion: "
+                    f"s3://{bucket}/{md5}*"
+                )
+            previous_keys = keys
+            for key in keys:
                 s3.delete_object(Bucket=bucket, Key=key)
                 deleted += 1
-            if not page.get("IsTruncated"):
-                verification = s3.list_objects_v2(
-                    Bucket=bucket, Prefix=md5, MaxKeys=1
-                )
-                if verification.get("Contents"):
-                    raise RuntimeError(
-                        f"Managed S3 objects remain after cleanup: s3://{bucket}/{md5}*"
-                    )
-                return deleted
-            token = str(page.get("NextContinuationToken") or "") or None
     except ClientError as exc:
         code = str(exc.response.get("Error", {}).get("Code") or "")
         if missing_bucket_ok and code == "NoSuchBucket":
+            if missing_buckets is not None:
+                missing_buckets.add(bucket)
             print(
                 f"monocorpus sync: warning legacy bucket missing; cleanup skipped bucket={bucket}",
                 flush=True,
@@ -157,6 +159,7 @@ def _cleanup_managed_storage(
     legacy_s3: Any,
     settings: DocumentStorageSettings,
     config: Mapping[str, Any],
+    missing_legacy_buckets: set[str] | None = None,
 ) -> int:
     deleted = 0
     for bucket in {settings.public_bucket, settings.private_bucket}:
@@ -167,6 +170,7 @@ def _cleanup_managed_storage(
             bucket,
             md5,
             missing_bucket_ok=True,
+            missing_buckets=missing_legacy_buckets,
         )
     return deleted
 
@@ -181,7 +185,8 @@ def _apply_cleanup(
     settings: DocumentStorageSettings,
     config: Mapping[str, Any],
     run_id: int,
-) -> tuple[int, bool]:
+    missing_legacy_buckets: set[str],
+) -> tuple[int, str]:
     cleanup_id = int(item["cleanup_id"])
     try:
         repository.mark_cleanup_running(cleanup_id, run_id=run_id, phase="yandex")
@@ -196,21 +201,39 @@ def _apply_cleanup(
                     "to choose a destructive resolution automatically"
                 )
             if not target_verified:
-                _ensure_yandex_directory(yadisk, str(PurePosixPath(target).parent))
                 if not source_exists:
-                    raise RuntimeError("Cleanup source and verified target are both missing")
+                    reason = "Cleanup source and verified target are both missing"
+                    repository.mark_cleanup_canceled(cleanup_id, reason)
+                    print(
+                        f"monocorpus sync: cleanup canceled cleanup_id={cleanup_id} "
+                        f"reason={reason}",
+                        flush=True,
+                    )
+                    return 0, "canceled"
+                _ensure_yandex_directory(yadisk, str(PurePosixPath(target).parent))
                 execute_yandex_cleanup(executable, yadisk=yadisk)
             if not _verify_moved_target(yadisk, item):
                 raise RuntimeError("Moved Yandex target failed MD5 verification")
             if _meta_or_none(yadisk, str(item["source_path"])) is not None:
                 raise RuntimeError("Original Yandex source remains after verified move")
             repository.mark_cleanup_phase(cleanup_id, "storage_cleanup")
+            print(
+                f"monocorpus sync: storage cleanup start cleanup_id={cleanup_id} "
+                f"md5={item['md5']}",
+                flush=True,
+            )
             removed_objects = _cleanup_managed_storage(
                 md5=str(item["md5"]),
                 primary_s3=primary_s3,
                 legacy_s3=legacy_s3,
                 settings=settings,
                 config=config,
+                missing_legacy_buckets=missing_legacy_buckets,
+            )
+            print(
+                f"monocorpus sync: storage cleanup complete cleanup_id={cleanup_id} "
+                f"md5={item['md5']} objects_removed={removed_objects}",
+                flush=True,
             )
             repository.mark_cleanup_phase(cleanup_id, "database_cleanup")
             repository.delete_document_state(str(item["md5"]))
@@ -226,7 +249,7 @@ def _apply_cleanup(
             f"action={item['action']} md5={item['md5']} objects_removed={removed_objects}",
             flush=True,
         )
-        return removed_objects, True
+        return removed_objects, "completed"
     except Exception as exc:
         repository.mark_cleanup_failed(cleanup_id, f"{type(exc).__name__}: {exc}")
         print(
@@ -234,11 +257,24 @@ def _apply_cleanup(
             f"error={type(exc).__name__}: {exc}",
             flush=True,
         )
-        return 0, False
+        return 0, "failed"
 
 
-def _publish_progress(db: Any, run_id: int, counters: Mapping[str, int], path: str = "") -> None:
-    payload = {"stage": "streaming", "current_path": path, **dict(counters)}
+def _publish_progress(
+    db: Any,
+    run_id: int,
+    counters: Mapping[str, int],
+    path: str = "",
+    *,
+    stage: str = "streaming",
+    current: int | None = None,
+    total: int | None = None,
+) -> None:
+    payload = {"stage": stage, "current_path": path, **dict(counters)}
+    if current is not None:
+        payload["current"] = int(current)
+    if total is not None:
+        payload["total"] = int(total)
     db.update_run_progress(run_id, payload)
     db.insert_event(
         "task.progress",
@@ -271,15 +307,30 @@ def run_monocorpus_sync(
         "duplicate_resources_queued": 0,
         "filtered": 0,
         "cleanups_completed": 0,
+        "cleanups_canceled": 0,
         "cleanups_failed": 0,
         "objects_removed": 0,
         "failed": 0,
     }
+    missing_legacy_buckets: set[str] = set()
     print(f"monocorpus sync: start run_id={run_id}", flush=True)
-    for item in repository.list_active_cleanup():
+    cleanup_items = repository.list_active_cleanup()
+    cleanup_total = len(cleanup_items)
+    if cleanup_total:
+        print(f"monocorpus sync: cleanup queue total={cleanup_total}", flush=True)
+    for cleanup_current, item in enumerate(cleanup_items, start=1):
         if should_stop():
             break
-        removed, completed = _apply_cleanup(
+        _publish_progress(
+            db,
+            run_id,
+            counters,
+            str(item.get("source_path") or ""),
+            stage="cleanup",
+            current=cleanup_current - 1,
+            total=cleanup_total,
+        )
+        removed, outcome = _apply_cleanup(
             item,
             repository=repository,
             yadisk=yadisk,
@@ -288,11 +339,20 @@ def run_monocorpus_sync(
             settings=settings,
             config=config,
             run_id=run_id,
+            missing_legacy_buckets=missing_legacy_buckets,
         )
         counters["objects_removed"] += removed
-        counters["cleanups_completed" if completed else "cleanups_failed"] += 1
-        counters["failed"] += int(not completed)
-        _publish_progress(db, run_id, counters, str(item.get("source_path") or ""))
+        counters[f"cleanups_{outcome}"] += 1
+        counters["failed"] += int(outcome == "failed")
+        _publish_progress(
+            db,
+            run_id,
+            counters,
+            str(item.get("source_path") or ""),
+            stage="cleanup",
+            current=cleanup_current,
+            total=cleanup_total,
+        )
 
     existing = repository.list_documents()
     seen: set[str] = set()
@@ -352,7 +412,7 @@ def run_monocorpus_sync(
                     "target_path": None,
                     "status": "planned",
                 }
-                _, completed = _apply_cleanup(
+                _, outcome = _apply_cleanup(
                     cleanup_item,
                     repository=repository,
                     yadisk=yadisk,
@@ -361,9 +421,10 @@ def run_monocorpus_sync(
                     settings=settings,
                     config=config,
                     run_id=run_id,
+                    missing_legacy_buckets=missing_legacy_buckets,
                 )
-                counters["cleanups_completed" if completed else "cleanups_failed"] += 1
-                counters["failed"] += int(not completed)
+                counters[f"cleanups_{outcome}"] += 1
+                counters["failed"] += int(outcome == "failed")
                 continue
         restricted = _is_restricted(source_path, settings)
         public_url = str(

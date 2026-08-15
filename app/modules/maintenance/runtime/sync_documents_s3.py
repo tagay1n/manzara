@@ -34,7 +34,7 @@ from app.modules.maintenance.document_sync_repository import (
     PostgresDocumentSyncRepository,
 )
 from app.modules.maintenance.document_sync_lock import document_sync_lock
-from app.modules.maintenance.document_sync_filter import (
+from app.document_sync_filter import (
     classify_document,
     normalize_document_mime,
 )

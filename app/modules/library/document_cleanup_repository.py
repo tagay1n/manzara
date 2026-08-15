@@ -89,6 +89,29 @@ class DocumentCleanupRepository:
             ).scalar_one()
         return int(cleanup_id), True
 
+    def is_cleanup_suppressed(self, payload: Mapping[str, Any]) -> bool:
+        """Return whether the same missing/unsafe plan was explicitly canceled."""
+        with self.engine.connect() as conn:
+            return bool(
+                conn.execute(
+                    text(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1 FROM document_cleanup_queue
+                            WHERE scope=:scope AND md5=:md5 AND reason=:reason
+                              AND source_path=:source_path AND status='canceled'
+                        )
+                        """
+                    ),
+                    {
+                        "scope": str(payload.get("scope") or ""),
+                        "md5": str(payload.get("md5") or ""),
+                        "reason": str(payload.get("reason") or ""),
+                        "source_path": str(payload.get("source_path") or ""),
+                    },
+                ).scalar_one()
+            )
+
     def upsert_isbn_review(
         self,
         *,

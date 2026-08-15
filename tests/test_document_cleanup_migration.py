@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 
 def test_document_cleanup_tables_are_migrated(prepared_test_schema) -> None:
@@ -21,5 +21,17 @@ def test_document_cleanup_tables_are_migrated(prepared_test_schema) -> None:
         assert {"cleanup_id", "phase", "evidence_json", "last_error"}.issubset(
             queue_columns
         )
+        with engine.begin() as conn:
+            for status in ("canceled", "recovered"):
+                conn.execute(
+                    text(
+                        f'''INSERT INTO "{schema}".document_cleanup_queue (
+                            scope, action, reason, md5, source_path, status
+                        ) VALUES (
+                            'document', 'move', 'test', :md5, '/test', :status
+                        )'''
+                    ),
+                    {"md5": status, "status": status},
+                )
     finally:
         engine.dispose()

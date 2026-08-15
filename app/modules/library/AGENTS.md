@@ -5,7 +5,7 @@ These rules apply to `app/modules/library/`.
 ## Source cache and cleanup planning
 
 - `~/.monocorpus/0_entry_point` is a shared persistent source-document cache, not a task artifact directory. Library tasks may verify, reuse, and populate it; generated and temporary outputs remain under `~/.manzara`.
-- `library.prepare_document_cleanup` is planning-only. It may identify non-Tatar/non-document records and duplicate ISBNs, but never mutates documents or remote storage. Ambiguous ISBN groups stay as review rows.
+- `library.prepare_document_cleanup` is planning-only. It may identify non-Tatar/non-document records and duplicate ISBNs, but never mutates documents or remote storage. Every duplicate-ISBN group requires explicit review; format or path flags may recommend a keeper but never queue automatic ISBN cleanup.
 
 ## PDF previews
 

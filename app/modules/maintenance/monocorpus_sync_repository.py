@@ -103,6 +103,24 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                 {"cleanup_id": cleanup_id, "error": str(error)[:4000]},
             )
 
+    def mark_cleanup_canceled(self, cleanup_id: int, reason: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE document_cleanup_queue SET status='canceled',
+                        phase='canceled', last_error=NULL,
+                        evidence_json=evidence_json || jsonb_build_object(
+                            'cancellation', :reason
+                        ),
+                        completed_at=COALESCE(completed_at, CURRENT_TIMESTAMP),
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE cleanup_id=:cleanup_id
+                    """
+                ),
+                {"cleanup_id": cleanup_id, "reason": str(reason)[:1000]},
+            )
+
     def save_discovered_document(self, payload: Mapping[str, Any]) -> bool:
         """Update Yandex catalog fields without erasing unrelated metadata."""
         values = dict(payload)

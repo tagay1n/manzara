@@ -10,7 +10,10 @@ from botocore.exceptions import ClientError
 
 from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
 from app.modules.maintenance.runtime.sync_monocorpus import (
+    _apply_cleanup,
     _cleanup_managed_storage,
+    _delete_prefix,
+    _publish_progress,
     run_monocorpus_sync,
 )
 
@@ -106,6 +109,9 @@ class _Repository:
     def mark_cleanup_failed(self, *_args, **_kwargs):
         return None
 
+    def mark_cleanup_canceled(self, cleanup_id, reason):  # noqa: ANN001
+        self.timeline.append(("canceled", f"{cleanup_id}:{reason}"))
+
     def save_discovered_document(self, payload):  # noqa: ANN001
         item = dict(payload)
         created = item["md5"] not in self.documents
@@ -115,11 +121,71 @@ class _Repository:
 
 
 class _Db:
+    def __init__(self) -> None:
+        self.progress: list[dict] = []
+
     def update_run_progress(self, *_args, **_kwargs):
+        self.progress.append(dict(_args[1]))
         return None
 
     def insert_event(self, *_args, **_kwargs):
         return None
+
+
+def test_cleanup_progress_exposes_queue_position_and_total() -> None:
+    db = _Db()
+
+    _publish_progress(
+        db,
+        12,
+        {"cleanups_completed": 4},
+        "/documents/book.pdf",
+        stage="cleanup",
+        current=4,
+        total=10,
+    )
+
+    assert db.progress == [
+        {
+            "stage": "cleanup",
+            "current_path": "/documents/book.pdf",
+            "cleanups_completed": 4,
+            "current": 4,
+            "total": 10,
+        }
+    ]
+
+
+def test_missing_cleanup_source_and_target_is_canceled_without_deleting_state() -> None:
+    yadisk = _YaDisk({})
+    repository = _Repository(yadisk)
+
+    removed, outcome = _apply_cleanup(
+        {
+            "cleanup_id": 146,
+            "scope": "document",
+            "action": "move",
+            "reason": "non_document",
+            "md5": "a" * 32,
+            "source_path": "/documents/missing.ttf",
+            "target_path": "/filtered/missing.ttf",
+            "status": "failed",
+        },
+        repository=repository,
+        yadisk=yadisk,
+        primary_s3=_S3(),
+        legacy_s3=_S3(),
+        settings=_settings(),
+        config={"yandex": {"cloud": {"bucket": {}}}},
+        run_id=630,
+        missing_legacy_buckets=set(),
+    )
+
+    assert removed == 0
+    assert outcome == "canceled"
+    assert repository.timeline == [
+        ("canceled", "146:Cleanup source and verified target are both missing")
+    ]
 
 
 class _S3:
@@ -128,7 +194,11 @@ class _S3:
 
 
 class _MissingBucketS3(_S3):
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
     def list_objects_v2(self, *, Bucket, **_kwargs):  # noqa: N803, ANN001
+        self.calls.append(Bucket)
         if Bucket == "missing-legacy":
             raise ClientError(
                 {
@@ -249,12 +319,53 @@ def test_filtered_resource_is_not_published_or_saved() -> None:
 
 
 def test_cleanup_treats_absent_legacy_bucket_as_empty() -> None:
+    legacy_s3 = _MissingBucketS3()
+    missing_buckets: set[str] = set()
     removed = _cleanup_managed_storage(
         md5="a" * 32,
         primary_s3=_S3(),
-        legacy_s3=_MissingBucketS3(),
+        legacy_s3=legacy_s3,
         settings=_settings(),
         config={"yandex": {"cloud": {"bucket": {"obsolete": "missing-legacy"}}}},
+        missing_legacy_buckets=missing_buckets,
+    )
+    removed += _cleanup_managed_storage(
+        md5="b" * 32,
+        primary_s3=_S3(),
+        legacy_s3=legacy_s3,
+        settings=_settings(),
+        config={"yandex": {"cloud": {"bucket": {"obsolete": "missing-legacy"}}}},
+        missing_legacy_buckets=missing_buckets,
     )
 
     assert removed == 0
+    assert legacy_s3.calls.count("missing-legacy") == 1
+
+
+class _MutablePagedS3:
+    def __init__(self) -> None:
+        self.keys = ["abc-1", "abc-2", "abc-3"]
+        self.requests: list[dict] = []
+
+    def list_objects_v2(self, **request):  # noqa: ANN003
+        self.requests.append(dict(request))
+        assert "ContinuationToken" not in request
+        matches = [key for key in self.keys if key.startswith(request["Prefix"])]
+        page = matches[:2]
+        return {
+            "Contents": [{"Key": key} for key in page],
+            "IsTruncated": len(matches) > len(page),
+        }
+
+    def delete_object(self, *, Bucket, Key):  # noqa: N803, ANN001
+        _ = Bucket
+        self.keys.remove(Key)
+
+
+def test_cleanup_restarts_mutated_s3_listing_from_first_page_until_empty() -> None:
+    s3 = _MutablePagedS3()
+
+    removed = _delete_prefix(s3, "documents", "abc")
+
+    assert removed == 3
+    assert s3.keys == []

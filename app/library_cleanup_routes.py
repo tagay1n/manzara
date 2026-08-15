@@ -48,7 +48,15 @@ def register_library_cleanup_routes(
         status: str = "",
         limit: int = 100,
     ) -> JSONResponse:
-        allowed = {"", "planned", "running", "completed", "failed"}
+        allowed = {
+            "",
+            "planned",
+            "running",
+            "completed",
+            "failed",
+            "canceled",
+            "recovered",
+        }
         if status not in allowed:
             raise HTTPException(status_code=400, detail="Unsupported cleanup status")
         repo = repository()

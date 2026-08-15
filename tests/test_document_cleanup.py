@@ -30,6 +30,24 @@ def test_cleanup_reasons_detect_non_tatar_and_non_document_content() -> None:
     ) == []
 
 
+def test_cleanup_reasons_share_document_sync_format_policy() -> None:
+    assert cleanup_reasons(
+        language="tat",
+        mime_type="image/vnd.djvu",
+        source_path="/books/book.djvu",
+    ) == []
+    assert cleanup_reasons(
+        language="tat",
+        mime_type="application/octet-stream",
+        source_path="/books/book.docx",
+    ) == []
+    assert cleanup_reasons(
+        language="tat",
+        mime_type="video/x-ms-wmv",
+        source_path="/media/movie.wmv",
+    ) == ["non_document"]
+
+
 def test_isbn_cleanup_keeps_only_unambiguously_complete_document() -> None:
     decisions = build_isbn_cleanup_decisions(
         [
@@ -177,11 +195,41 @@ class _PlanningRepository:
                 "full": True,
                 "schema_org": {"name": "C", "isbn": "9780306406157"},
             },
+            {
+                "md5": "d" * 32,
+                "mime_type": "application/pdf",
+                "ya_path": "/books/d.pdf",
+                "ya_resource_id": "d-resource",
+                "language": "tat",
+                "full": True,
+                "schema_org": {"name": "D", "isbn": "9781861972712"},
+            },
+            {
+                "md5": "e" * 32,
+                "mime_type": "application/pdf",
+                "ya_path": "/books/e.pdf",
+                "ya_resource_id": "e-resource",
+                "language": "tat",
+                "full": False,
+                "schema_org": {"name": "E", "isbn": "9781861972712"},
+            },
+            {
+                "md5": "f" * 32,
+                "mime_type": "application/zip",
+                "ya_path": "/books/f.zip",
+                "ya_resource_id": "f-resource",
+                "language": "tat",
+                "full": True,
+                "schema_org": {"name": "F"},
+            },
         ]
 
     def enqueue_cleanup(self, payload):  # noqa: ANN001
         self.plans.append(dict(payload))
         return len(self.plans), True
+
+    def is_cleanup_suppressed(self, _payload):  # noqa: ANN001
+        return False
 
     def upsert_isbn_review(self, **payload):  # noqa: ANN003
         self.reviews.append(dict(payload))
@@ -196,10 +244,57 @@ def test_preparation_only_writes_plans_and_ambiguous_reviews() -> None:
         filtered_out_path="/filtered",
     )
 
-    assert summary["plans_created"] == 1
-    assert summary["isbn_reviews_created"] == 1
+    assert summary["plans_created"] == 2
+    assert summary["isbn_reviews_created"] == 2
+    assert summary["planned_by_reason"] == {
+        "duplicate_isbn": 0,
+        "non_document": 1,
+        "non_tatar": 1,
+    }
+    assert summary["planned_moves"] == {
+        "total": 2,
+        "by_isbn": 0,
+        "by_language": 1,
+        "by_non_document_format": 1,
+    }
+    assert summary["isbn_analysis"] == {
+        "duplicate_groups": 2,
+        "auto_resolved_groups": 0,
+        "books_planned_to_move": 0,
+        "review_groups": 2,
+        "books_awaiting_review": 4,
+    }
+    assert summary["isbn_auto_resolved_groups"] == 0
+    assert summary["isbn_review_groups"] == 2
+    assert summary["isbn_review_candidates"] == 4
     assert repository.plans[0]["reason"] == "non_tatar"
     assert repository.plans[0]["target_path"].startswith(
         "/filtered/non_tatar/"
     )
     assert repository.reviews[0]["isbn"] == "9780306406157"
+
+
+def test_preparation_does_not_recreate_explicitly_canceled_plan() -> None:
+    repository = _PlanningRepository()
+    repository.list_documents_for_planning = lambda: [
+        {
+            "md5": "f" * 32,
+            "mime_type": "application/zip",
+            "ya_path": "/books/f.zip",
+            "ya_resource_id": "f-resource",
+            "language": "tat",
+            "full": True,
+            "schema_org": {"name": "F"},
+        }
+    ]
+    repository.is_cleanup_suppressed = lambda _payload: True
+
+    summary = prepare_document_cleanup(
+        repository=repository,
+        filtered_out_path="/filtered",
+    )
+
+    assert summary["plans_created"] == 0
+    assert summary["plans_suppressed"] == 1
+    assert summary["planned_non_document"] == 0
+    assert repository.plans == []

@@ -263,7 +263,7 @@ def test_document_sync_summary_reports_unavailable_yandex_paths() -> None:
 def test_document_cleanup_preparation_summary_uses_structured_artifact() -> None:
     summary = build_structured_run_summary(
         task_id="library.prepare_document_cleanup",
-        panel_id="library",
+        panel_id="maintenance",
         status="completed",
         exit_code=0,
         error_text=None,
@@ -277,8 +277,25 @@ def test_document_cleanup_preparation_summary_uses_structured_artifact() -> None
             "plans_created": 3,
             "isbn_groups": 2,
             "isbn_reviews_created": 1,
+            "isbn_review_groups": 1,
+            "planned_moves": {
+                "total": 3,
+                "by_isbn": 1,
+                "by_language": 1,
+                "by_non_document_format": 1,
+            },
         },
     )
 
-    assert summary["message"] == "Document cleanup plans prepared; no storage was mutated."
-    assert {item["label"]: item["value"] for item in summary["highlights"]}["Plans"] == "3"
+    assert summary["message"] == (
+        "Cleanup plan prepared by ISBN, language, and document format; "
+        "no storage was mutated."
+    )
+    highlights = {item["label"]: item["value"] for item in summary["highlights"]}
+    assert highlights == {
+        "Scanned": "100",
+        "By ISBN": "1",
+        "By language": "1",
+        "Non-document": "1",
+        "ISBN reviews": "1",
+    }
