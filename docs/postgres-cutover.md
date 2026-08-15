@@ -27,7 +27,7 @@ Revision `20260731_0013` extends `document` with primary-storage verification ch
 
 These fields let document synchronization avoid repeated downloads and hashing when an S3 object is unchanged.
 
-Revision `20260804_0014` performs the approved direct replacement of the empty `shayan_s3_transfers` table with `shayan_webdav_transfers`. WebDAV checkpoints persist the stable target path, ETag, verified checksum, lifecycle status, and timestamps used for resumable Nextcloud archival. New non-destructive copies finish in `uploaded`; historical `moved` rows remain terminal for persisted-data compatibility.
+Revision `20260804_0014` historically introduced migration-only `shayan_webdav_transfers`; revision `20260815_0026` removes that completed migration state. Current Shayan-to-Hetzner checkpoints live on `shayan_manifest_entries` and persist the stable target path, ETag, verified checksum, lifecycle status, and timestamps used by the `Upload` task.
 
 ## Normal Operation
 

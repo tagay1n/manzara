@@ -58,7 +58,6 @@ nextcloud:
   password: "<REDACTED>"
   shayan:
     cartoons:
-      source_dir: /neurotatarlar/video/shayantv
       target_dir: /Безнең тәҗрибә/Мультфильмнар
 encryption_key: "<REDACTED>"
 

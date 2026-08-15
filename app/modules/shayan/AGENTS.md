@@ -9,9 +9,8 @@ These rules apply to `app/modules/shayan/`.
 
 ## Hetzner video archive
 
-- `shayan.transfer_yadisk_webdav` copies to Nextcloud WebDAV and retains the Yandex Disk source. Never delete, trash, or move source videos.
 - `shayan.upload_yadisk` is a stable historical task ID whose visible task is `Upload`; it sends newly downloaded local videos directly to the configured `nextcloud.shayan.<category>.target_dir`. It must not call Yandex Disk.
-- Existing manifest rows already uploaded to Yandex remain owned by the migration task. New direct uploads keep separate PostgreSQL checkpoints and delete the local source only after the final Hetzner object is independently verified.
+- Direct uploads keep PostgreSQL checkpoints and delete the local source only after the final Hetzner object is independently verified.
 - Use Nextcloud chunked upload v2 for video-sized files. Assemble at a deterministic temporary DAV path, independently stream-hash uploaded bytes, then move to the final path.
 - Staging components are short and MD5-based: `.manzara-<md5>.uploading`. Do not use `.part`; Hetzner Storage Share returns a server-side `500 TypeError` when probing those paths.
 - Emit bounded chunk byte progress using `task.progress`, never log parsing.

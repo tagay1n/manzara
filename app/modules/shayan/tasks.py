@@ -35,11 +35,6 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
         + '"$PY_BIN" -m app.modules.shayan.runtime.upload_webdav'
         + f" --output-path {output_path}"
     )
-    transfer_cmd = (
-        py_bootstrap
-        + '"$PY_BIN" -m app.modules.shayan.runtime.transfer_yadisk_webdav'
-    )
-
     return [
         {
             "task_id": "shayan.scan_changes",
@@ -81,20 +76,6 @@ def shayan_task_definitions(shayan: ShayanSettings) -> List[Dict[str, Any]]:
             "meaningful_result": {
                 "artifact_kind": "shayan.webdav_upload_summary",
                 "any_positive": ["uploaded", "reused"],
-            },
-        },
-        {
-            "task_id": "shayan.transfer_yadisk_webdav",
-            "panel_id": "shayan",
-            "title": "Migrate to Hetzner",
-            "task_type": "transfer",
-            "icon_idle": "CloudCog",
-            "icon_running": "Square",
-            "cwd": str(app_root),
-            "command": {"mode": "shell", "value": transfer_cmd},
-            "meaningful_result": {
-                "artifact_kind": "shayan.yadisk_webdav_transfer_summary",
-                "any_positive": ["copied", "reused"],
             },
         },
     ]

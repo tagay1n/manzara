@@ -319,20 +319,6 @@ def build_structured_run_summary(
                 summary["message"] = f"Upload completed: {uploaded} uploaded, {failed} failed."
             else:
                 summary["message"] = "Upload completed."
-        elif task_id.endswith(".transfer_yadisk_webdav"):
-            transfer_artifacts = artifacts if isinstance(artifacts, dict) else {}
-            copied = int(transfer_artifacts.get("copied") or 0)
-            reused = int(transfer_artifacts.get("reused") or 0)
-            failed = int(transfer_artifacts.get("failed") or 0)
-            if transfer_artifacts.get("kind") == "shayan.yadisk_webdav_transfer_summary":
-                summary["highlights"].append({"label": "Copied", "value": str(copied)})
-                summary["highlights"].append({"label": "Reused", "value": str(reused)})
-                summary["highlights"].append({"label": "Failed", "value": str(failed)})
-                summary["message"] = (
-                    f"Nextcloud copy completed: {copied} copied, {reused} reused, {failed} failed."
-                )
-            else:
-                summary["message"] = "Nextcloud copy completed."
         else:
             summary["message"] = "Task completed."
         return summary

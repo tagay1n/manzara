@@ -74,7 +74,7 @@ def test_existing_catalog_rows_are_migrated_to_backup(prepared_test_schema) -> N
 
         assert panels["shayan"] == "Shayan"
         assert panels["backup"] == "Backup"
-        assert tasks["shayan.transfer_yadisk_webdav"][1] == "Migrate to Hetzner"
+        assert "shayan.transfer_yadisk_webdav" not in tasks
         assert tasks["maintenance.pgbackrest_backup_full"] == ("backup", "Full backup")
         assert tasks["maintenance.pgbackrest_backup_incr"] == ("backup", "Incremental backup")
         assert workflow_panels == {"backup"}

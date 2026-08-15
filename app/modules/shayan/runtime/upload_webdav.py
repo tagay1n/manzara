@@ -11,7 +11,7 @@ import signal
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, Mapping, Sequence
 
-from app.modules.shayan.runtime.transfer_yadisk_webdav import (
+from app.modules.shayan.runtime.webdav import (
     GracefulStopRequested,
     NextcloudSettings,
     NextcloudWebDavClient,
@@ -273,7 +273,11 @@ def run_upload(
                 source_size = int(row.get("source_size") or 0)
                 source_md5 = str(row.get("source_md5") or "").strip().lower()
                 checkpoint_target = str(row.get("target_path") or "").strip()
-                if not source_md5 or source_size < 0 or checkpoint_target != target_path:
+                if (
+                    not source_md5
+                    or source_size < 0
+                    or checkpoint_target != target_path
+                ):
                     raise FileNotFoundError(f"local_file_missing:{local_path}")
 
             verify_row = {

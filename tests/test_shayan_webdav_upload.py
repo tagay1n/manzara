@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from app.modules.shayan.runtime.transfer_yadisk_webdav import (
+from app.modules.shayan.runtime.webdav import (
     NextcloudSettings,
     RemoteFile,
     temporary_remote_path,
@@ -56,7 +56,9 @@ class _FakeWebDav:
     def stat(self, path: str):  # noqa: ANN201
         if path.startswith("/Hetzner/") and path.count("/") == 2:
             self.preflighted.append(path)
-            return RemoteFile(path=path, size=0, etag="dir", md5=None, is_directory=True)
+            return RemoteFile(
+                path=path, size=0, etag="dir", md5=None, is_directory=True
+            )
         content = self.files.get(path)
         if content is None:
             return None

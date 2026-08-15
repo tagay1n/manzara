@@ -11,7 +11,9 @@ from app.modules.maintenance.tasks import maintenance_task_definitions
 from app.modules.library.tasks import library_task_definitions
 
 
-def test_shayan_tasks_include_storage_transfer_stage() -> None:
+def test_shayan_tasks_include_direct_hetzner_upload_without_obsolete_migration() -> (
+    None
+):
     settings = ShayanSettings(
         repo_path=Path("/tmp/shayan-repo"),
         output_path=Path("/tmp/shayan-output"),
@@ -26,14 +28,7 @@ def test_shayan_tasks_include_storage_transfer_stage() -> None:
     assert "app.modules.shayan.runtime.upload_webdav" in command
     assert "--output-path /tmp/shayan-output" in command
     assert "upload_yadisk" not in command
-
-    transfer = by_id["shayan.transfer_yadisk_webdav"]
-    assert transfer["task_type"] == "transfer"
-    assert transfer["title"] == "Migrate to Hetzner"
-    assert transfer["icon_idle"] == "CloudCog"
-    assert "app.modules.shayan.runtime.transfer_yadisk_webdav" in str(
-        transfer["command"]["value"]
-    )
+    assert "shayan.transfer_yadisk_webdav" not in by_id
 
 
 def test_maintenance_tasks_include_document_s3_sync() -> None:
@@ -71,7 +66,8 @@ def test_backup_tasks_have_a_dedicated_catalog_and_short_titles() -> None:
 
 def test_library_tasks_include_metadata_extraction() -> None:
     task = {
-        item["task_id"]: item for item in library_task_definitions(app_root=Path("/tmp/manzara"))
+        item["task_id"]: item
+        for item in library_task_definitions(app_root=Path("/tmp/manzara"))
     }["library.metadata_extract"]
 
     assert task["panel_id"] == "library"

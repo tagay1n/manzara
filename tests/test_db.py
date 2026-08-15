@@ -29,7 +29,11 @@ def _resolve_database_url() -> str:
         if value:
             return value
 
-    for candidate in (Path("config.local.yaml"), Path("config.yaml"), Path("config.example.yaml")):
+    for candidate in (
+        Path("config.local.yaml"),
+        Path("config.yaml"),
+        Path("config.example.yaml"),
+    ):
         if not candidate.exists():
             continue
         data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
@@ -41,7 +45,9 @@ def _resolve_database_url() -> str:
         if database_url:
             return database_url
 
-    raise RuntimeError("Tests require MANZARA_TEST_DATABASE_URL or an unmasked local config.")
+    raise RuntimeError(
+        "Tests require MANZARA_TEST_DATABASE_URL or an unmasked local config."
+    )
 
 
 @contextmanager
@@ -63,7 +69,6 @@ def _isolated_database() -> Database:
 
 def test_recover_active_runs_marks_running_as_failed(tmp_path: Path) -> None:
     with _isolated_database() as db:
-
         db.seed_tasks(
             [
                 {
@@ -91,12 +96,12 @@ def test_recover_active_runs_marks_running_as_failed(tmp_path: Path) -> None:
         assert "Recovered after Manzara restart" in (run["error_text"] or "")
 
 
-def test_run_progress_and_shayan_webdav_checkpoints_round_trip(tmp_path: Path) -> None:
+def test_run_progress_round_trip(tmp_path: Path) -> None:
     with _isolated_database() as db:
         db.seed_tasks(
             [
                 {
-                    "task_id": "shayan.transfer_yadisk_webdav",
+                    "task_id": "shayan.upload_yadisk",
                     "panel_id": "shayan",
                     "title": "Copy videos",
                     "task_type": "transfer",
@@ -107,36 +112,14 @@ def test_run_progress_and_shayan_webdav_checkpoints_round_trip(tmp_path: Path) -
                 }
             ]
         )
-        run_id = db.create_run(db.get_task("shayan.transfer_yadisk_webdav"))
+        run_id = db.create_run(db.get_task("shayan.upload_yadisk"))
         progress = {"current": 2, "total": 8, "percent": 25}
         db.update_run_progress(run_id, progress)
         assert db.get_run(run_id)["progress"] == progress
-        assert db.list_recent_runs_for_task("shayan.transfer_yadisk_webdav")[0]["progress"] == progress
-
-        db.upsert_shayan_webdav_transfer(
-            source_path="/videos/a.mkv",
-            category="cartoons",
-            source_md5="abc",
-            source_size=123,
-            target_path="/Manzara/Shayan/cartoons/a.mkv",
+        assert (
+            db.list_recent_runs_for_task("shayan.upload_yadisk")[0]["progress"]
+            == progress
         )
-        rows = db.list_shayan_webdav_transfer_candidates()
-        assert len(rows) == 1
-        assert rows[0]["status"] == "pending"
-
-        db.mark_shayan_webdav_transfer_state("/videos/a.mkv", status="uploaded")
-        assert db.list_shayan_webdav_transfer_candidates() == []
-
-        db.upsert_shayan_webdav_transfer(
-            source_path="/videos/a.mkv",
-            category="cartoons",
-            source_md5="changed",
-            source_size=124,
-            target_path="/Manzara/Shayan/cartoons/a.mkv",
-        )
-        refreshed = db.list_shayan_webdav_transfer_candidates()
-        assert len(refreshed) == 1
-        assert refreshed[0]["status"] == "pending"
 
 
 def test_shayan_direct_webdav_upload_checkpoints_round_trip(tmp_path: Path) -> None:
@@ -180,7 +163,6 @@ def test_shayan_direct_webdav_upload_checkpoints_round_trip(tmp_path: Path) -> N
 
 def test_recover_active_workflow_runs_marks_running_as_failed(tmp_path: Path) -> None:
     with _isolated_database() as db:
-
         db.seed_workflow_bundle(
             {
                 "workflow": {
