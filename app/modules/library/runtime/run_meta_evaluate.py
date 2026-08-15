@@ -18,6 +18,15 @@ class MetaEvalArgs:
     excerpt_chars: int
 
 
+def _bootstrap_import_paths() -> None:
+    repo_root = Path(__file__).resolve().parents[4]
+    runtime_root = Path(__file__).resolve().parent
+    for path in (repo_root, runtime_root):
+        value = str(path)
+        if value not in sys.path:
+            sys.path.insert(0, value)
+
+
 def _parse_args() -> MetaEvalArgs:
     parser = argparse.ArgumentParser(description="Run monocorpus metadata evaluate")
     parser.add_argument("--batch-size", type=int, default=300)
@@ -34,8 +43,7 @@ def _parse_args() -> MetaEvalArgs:
 
 
 def main() -> None:
-    runtime_root = Path(__file__).resolve().parent
-    sys.path.insert(0, str(runtime_root))
+    _bootstrap_import_paths()
     from metadata.evaluation import evaluate
 
     evaluate(_parse_args())
