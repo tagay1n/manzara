@@ -236,7 +236,7 @@ class PayloadBuilder:
             db=state.db,
             maintenance=state.settings.maintenance,
             tasks=tasks_by_panel.get("maintenance", []),
-            title=panel_titles.get("maintenance", "Maintenance"),
+            title=panel_titles.get("maintenance", "Yandex disk"),
         )
         backup_panel = ops.build_backup_panel(
             db=state.db,

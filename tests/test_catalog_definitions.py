@@ -9,6 +9,7 @@ def test_catalog_definitions_use_requested_names() -> None:
     panels = {item["panel_id"]: item for item in PANEL_DEFS}
 
     assert panels["shayan"]["title"] == "Shayan"
+    assert panels["maintenance"]["title"] == "Yandex disk"
     assert panels["backup"]["title"] == "Backup"
 
 

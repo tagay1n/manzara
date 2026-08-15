@@ -197,7 +197,7 @@ def build_maintenance_panel(
     maintenance: MaintenanceSettings,
     tasks: List[Dict[str, Any]],
     *,
-    title: str = "Maintenance",
+    title: str = "Yandex disk",
 ) -> Dict[str, Any]:
     """Build dashboard panel payload for maintenance tasks."""
     return _build_ops_panel(
@@ -205,7 +205,7 @@ def build_maintenance_panel(
         maintenance=maintenance,
         panel_id="maintenance",
         title=title,
-        description="Repository operations and health checks.",
+        description="Yandex Disk synchronization, migration, and cleanup.",
         tasks=tasks,
     )
 

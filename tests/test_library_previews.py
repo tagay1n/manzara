@@ -143,7 +143,8 @@ def test_library_cleanup_task_runs_as_importable_module(tmp_path: Path) -> None:
         item for item in tasks if item["task_id"] == "library.prepare_document_cleanup"
     )
 
-    assert task["panel_id"] == "library"
+    assert task["panel_id"] == "maintenance"
+    assert task["title"] == "Cleanup plan"
     assert "-m app.modules.library.runtime.run_prepare_document_cleanup" in task[
         "command"
     ]["value"]

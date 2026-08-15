@@ -73,6 +73,7 @@ def test_existing_catalog_rows_are_migrated_to_backup(prepared_test_schema) -> N
             }
 
         assert panels["shayan"] == "Shayan"
+        assert panels["maintenance"] == "Yandex disk"
         assert panels["backup"] == "Backup"
         assert "shayan.transfer_yadisk_webdav" not in tasks
         assert tasks["maintenance.pgbackrest_backup_full"] == ("backup", "Full backup")
