@@ -62,7 +62,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
         {
             "task_id": MAINTENANCE_MONOCORPUS_SYNC_TASK_ID,
             "panel_id": "maintenance",
-            "title": "Monocorpus sync",
+            "title": "Sync",
             "task_type": "sync",
             "icon_idle": "RefreshCw",
             "icon_running": "Square",
@@ -72,7 +72,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
         {
             "task_id": MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID,
             "panel_id": "maintenance",
-            "title": "Sync documents to S3",
+            "title": "Migrate to Backblaze S3",
             "task_type": "transfer",
             "icon_idle": "CloudUpload",
             "icon_running": "Square",
