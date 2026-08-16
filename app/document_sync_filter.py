@@ -21,6 +21,7 @@ NON_DOCUMENT_MIME_TYPES = frozenset(
         "application/x-download",
         "application/x-gzip",
         "application/x-javascript",
+        "application/x-ms-shortcut",
         "application/x-rar",
         "application/x-rar-compressed",
         "application/x-shockwave-flash",
@@ -66,6 +67,7 @@ DOCUMENT_MIME_BY_SUFFIX = {
     ".txt": "text/plain",
 }
 DOCUMENT_MIME_TYPES = frozenset(DOCUMENT_MIME_BY_SUFFIX.values())
+NON_DOCUMENT_SUFFIXES = frozenset({".eaf", ".lnk", ".musx"})
 NON_DOCUMENT_MIME_PREFIXES = ("audio/", "image/", "video/")
 
 
@@ -105,7 +107,7 @@ def classify_document(source_path: str, mime_type: str) -> DocumentFilterDecisio
         and suffix in {".htm", ".html"}
     ):
         return DocumentFilterDecision(False, normalized_mime, "ilbyak_html")
-    if suffix in {".eaf", ".musx"}:
+    if suffix in NON_DOCUMENT_SUFFIXES:
         return DocumentFilterDecision(False, normalized_mime, "non_document_suffix")
     if normalized_mime in DOCUMENT_MIME_TYPES:
         return DocumentFilterDecision(True, normalized_mime)
@@ -123,6 +125,7 @@ __all__ = [
     "DOCUMENT_MIME_BY_SUFFIX",
     "DOCUMENT_MIME_TYPES",
     "NON_DOCUMENT_MIME_TYPES",
+    "NON_DOCUMENT_SUFFIXES",
     "classify_document",
     "normalize_document_mime",
 ]

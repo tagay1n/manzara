@@ -45,6 +45,22 @@ def test_known_non_document_suffix_is_filtered() -> None:
     assert classify_document("disk:/documents/score.musx", "application/octet-stream").accepted is False
 
 
+def test_windows_shortcut_is_filtered_by_suffix_or_mime_type() -> None:
+    by_suffix = classify_document(
+        "disk:/documents/47 - Ярлык.lnk",
+        "application/pdf",
+    )
+    by_mime = classify_document(
+        "disk:/documents/shortcut.bin",
+        "application/x-ms-shortcut",
+    )
+
+    assert by_suffix.accepted is False
+    assert by_suffix.reason == "non_document_suffix"
+    assert by_mime.accepted is False
+    assert by_mime.reason == "non_document_mime"
+
+
 def test_djvu_is_kept_despite_image_mime_prefix() -> None:
     decision = classify_document("disk:/documents/book.djvu", "image/vnd.djvu")
 

@@ -298,3 +298,27 @@ def test_preparation_does_not_recreate_explicitly_canceled_plan() -> None:
     assert summary["plans_suppressed"] == 1
     assert summary["planned_non_document"] == 0
     assert repository.plans == []
+
+
+def test_preparation_queues_windows_shortcut_as_non_document() -> None:
+    repository = _PlanningRepository()
+    repository.list_documents_for_planning = lambda: [
+        {
+            "md5": "8" * 32,
+            "mime_type": "application/x-ms-shortcut",
+            "ya_path": "/library/2015/47/47 - Ярлык.lnk",
+            "ya_resource_id": "shortcut-resource",
+            "language": None,
+            "full": True,
+            "schema_org": None,
+        }
+    ]
+
+    summary = prepare_document_cleanup(
+        repository=repository,
+        filtered_out_path="/filtered",
+    )
+
+    assert summary["planned_non_document"] == 1
+    assert repository.plans[0]["reason"] == "non_document"
+    assert repository.plans[0]["source_path"].endswith("47 - Ярлык.lnk")
