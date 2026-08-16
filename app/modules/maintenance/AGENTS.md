@@ -12,7 +12,7 @@ These rules apply to `app/modules/maintenance/`.
 - Confirm new uploads with `HEAD`; size and submitted `source-md5` must match before the PostgreSQL checkpoint. Do not download a new upload just to verify it.
 - Use boto3 callbacks and `task.progress`. Graceful stop completes the current document and exits at the next document boundary.
 - Abort unfinished multipart uploads for the exact content-addressed key before retrying. Never treat an incomplete multipart upload as resumable.
-- The legacy document cache is read-only input and cache-only files are not discovered documents.
+- The shared document cache is verified input and persistent output for source downloads; cache-only files are not discovered documents.
 - Restricted documents use the private bucket and backend-generated short-lived signed URLs.
 - Persist `document_url` only after upload confirmation and restricted-object cleanup. Later runs trust it without remote probes. A content-addressed re-upload after a failed DB commit is acceptable.
 - Treat MD5 as application identity because `public.document` has no uniqueness constraint. Reject null/duplicate identities before remote work; use transactional update-then-insert and roll back if an update matches multiple rows. Do not alter the constraint without owner approval.

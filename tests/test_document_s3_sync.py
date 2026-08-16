@@ -550,6 +550,29 @@ def test_restricted_sync_uses_legacy_s3_before_yandex(tmp_path: Path) -> None:
     assert primary_s3.uploads == [("private-docs", key)]
     assert legacy_s3.deletes == [("legacy-public-docs", key)]
     assert yadisk.downloaded == []
+    assert (tmp_path / key).read_bytes() == content
+
+
+def test_sync_persists_yandex_download_in_shared_cache(tmp_path: Path) -> None:
+    content = b"downloaded-from-yandex"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    key = f"{digest}.pdf"
+    yadisk = FakeYaDisk({"/documents/book.pdf": content})
+
+    result = run_document_sync(
+        repository=FakeRepository(),
+        state_db=FakeStateDb(),
+        yadisk=yadisk,
+        primary_s3=FakeS3(),
+        legacy_s3=FakeS3(),
+        settings=settings(tmp_path),
+        workspace=tmp_path / "work",
+        run_id=101,
+        should_stop=lambda: False,
+    )
+
+    assert result["source_yandex"] == 1
+    assert (tmp_path / key).read_bytes() == content
 
 
 def test_sync_does_not_download_new_upload_for_readback(tmp_path: Path) -> None:

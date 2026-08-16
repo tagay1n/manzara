@@ -1,13 +1,19 @@
 gemini:
   models:
-    library_meta_evaluate: "gemini-3-flash-preview"
     library_normalization: "gemini-2.5-flash"
   model_pools:
     library_metadata_extraction:
+      - "gemini-3.7-flash"
+      - "gemini-3.6-flash"
+      - "gemini-3.5-flash"
+      - "gemini-3-flash-preview"
+    library_metadata_evaluation:
+      - "gemini-3.7-flash"
       - "gemini-3.6-flash"
       - "gemini-3.5-flash"
       - "gemini-3-flash-preview"
     library_collection_validation:
+      - "gemini-3.7-flash"
       - "gemini-3.6-flash"
       - "gemini-3.5-flash"
       - "gemini-3-flash-preview"

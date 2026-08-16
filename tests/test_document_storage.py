@@ -16,6 +16,7 @@ from app.document_storage import (
     document_object_key,
     find_valid_cache_file,
     load_document_storage_settings,
+    materialize_cached_document,
     resolve_document_download_url,
 )
 from app.modules.runtime_shared_utils import encrypt
@@ -90,6 +91,46 @@ def test_cache_candidate_must_match_md5_and_ignores_partial_files(tmp_path: Path
     valid = tmp_path / f"{digest}.docx"
     valid.write_bytes(content)
     assert find_valid_cache_file(tmp_path, digest) == valid
+
+
+def test_materialize_cached_document_reuses_verified_shared_file(
+    tmp_path: Path,
+) -> None:
+    content = b"shared-document"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    cached = tmp_path / f"{digest}.pdf"
+    cached.write_bytes(content)
+    downloads: list[Path] = []
+
+    result = materialize_cached_document(
+        cache_path=tmp_path,
+        expected_md5=digest,
+        extension=".pdf",
+        download=lambda target: downloads.append(target),
+    )
+
+    assert result == cached
+    assert downloads == []
+
+
+def test_materialize_cached_document_replaces_invalid_file_atomically(
+    tmp_path: Path,
+) -> None:
+    content = b"downloaded-document"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    cached = tmp_path / f"{digest}.pdf"
+    cached.write_bytes(b"corrupt")
+
+    result = materialize_cached_document(
+        cache_path=tmp_path,
+        expected_md5=digest,
+        extension="pdf",
+        download=lambda target: target.write_bytes(content),
+    )
+
+    assert result == cached
+    assert cached.read_bytes() == content
+    assert list(tmp_path.glob("*.download")) == []
 
 
 def test_multipart_etag_matches_boto3_default_chunks(tmp_path: Path) -> None:

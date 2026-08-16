@@ -9,6 +9,7 @@ import threading
 import time
 import zipfile
 from dataclasses import dataclass
+from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Iterable
 from urllib.parse import urlparse
@@ -18,8 +19,6 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - compatibility fallback
     import fitz  # type: ignore[no-redef]
 import requests
-from google.genai.errors import ClientError
-from google.genai.errors import ServerError
 from pydantic import BaseModel
 from prompts.metadata_evaluation import build_library_applicability_prompt
 from rich import print
@@ -28,20 +27,25 @@ from sqlalchemy import func, select
 from app.db import Database
 from app.document_storage import (
     load_document_storage_settings,
+    materialize_cached_document,
     resolve_document_download_url,
 )
-from app.gemini_config import DEFAULT_GEMINI_MODELS, load_gemini_models
+from app.gemini_config import load_required_gemini_model_pool
+from app.gemini_model_pool import (
+    GeminiModelPoolExhaustedError,
+    GeminiModelPoolOperationalError,
+    GeminiModelPoolResult,
+    GeminiModelPoolUnavailableError,
+    GeminiModelResponseError,
+    run_ordered_model_pool,
+)
+from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import (
-    GeminiAllKeysExhaustedError,
-    GeminiQuotaExceededError,
-    GeminiRequestRejectedError,
     GeminiRuntimeManager,
     GeminiRuntimeError,
-    GeminiServerPauseError,
 )
 from app.settings import load_settings
 from app.artifacts import flow_artifacts_dir
-from integrations.gemini import create_client, gemini_api, stream_text
 from integrations.s3 import create_document_session, create_session
 from dirs import Dirs
 from .fields import extract_flat_fields
@@ -52,7 +56,15 @@ from core.config import read_config
 from core.db import get_session
 from core.upstream_meta import load_upstream_metadata
 from .isbn_utils import canonicalize_isbn_values
-from .repository import count_docs_for_evaluation, fetch_docs_for_evaluation, mark_docs_as_non_applicable
+from .repository import (
+    clear_evaluation_state,
+    count_docs_for_evaluation,
+    fetch_docs_for_evaluation,
+    get_evaluation_attempted_models,
+    mark_docs_as_non_applicable,
+    mark_evaluation_terminal,
+    record_evaluation_model_failure,
+)
 from .url_utils import normalize_url_list
 
 
@@ -87,9 +99,12 @@ MANAGED_TERMSETS = {
 }
 
 
-def _resolve_meta_evaluate_model() -> str:
-    models = load_gemini_models()
-    return str(models.get("library_meta_evaluate") or "").strip() or DEFAULT_GEMINI_MODELS["library_meta_evaluate"]
+MODEL_POOL_ALIAS = "library_metadata_evaluation"
+
+
+def _run_id() -> int | None:
+    raw = str(os.environ.get("MANZARA_TASK_RUN_ID") or "").strip()
+    return int(raw) if raw.isdigit() and int(raw) > 0 else None
 
 
 class Evaluation(BaseModel):
@@ -123,14 +138,55 @@ class EvaluationTask:
     schema_org: dict | str | None
 
 
+def _parse_evaluation_response(
+    raw_response: str,
+    *,
+    doc: EvaluationTask,
+    config: dict,
+) -> Evaluation:
+    """Validate one response before it can become an evaluation result."""
+    if not str(raw_response or "").strip():
+        raise GeminiModelResponseError("metadata evaluation response is empty")
+    try:
+        evaluation = Evaluation.model_validate_json(raw_response)
+    except Exception as exc:  # noqa: BLE001
+        raise GeminiModelResponseError(
+            f"metadata evaluation response is invalid: {exc}"
+        ) from exc
+    evaluation.metadata_patch = _normalize_metadata_patch(
+        evaluation.metadata_patch,
+        doc,
+        config,
+    )
+    normalized_ddc, normalized_path = _normalize_library_classification(
+        evaluation.library_ddc,
+        evaluation.library_path,
+        applicable=evaluation.applicable,
+    )
+    evaluation.library_ddc = normalized_ddc
+    evaluation.library_path = normalized_path
+    evaluation.reason = _clean_text(evaluation.reason, max_len=300)
+    if not evaluation.reason:
+        raise GeminiModelResponseError(
+            "metadata evaluation has no usable decision reason"
+        )
+    if evaluation.applicable and (
+        not evaluation.library_ddc or not evaluation.library_path
+    ):
+        raise GeminiModelResponseError(
+            "applicable metadata evaluation has no usable classification"
+        )
+    return evaluation
+
+
 def evaluate(args) -> None:
     """Run batch evaluation and save results into `metadata.lib`."""
     config = read_config()
     settings = load_settings()
     state_db = Database(settings.database_url, schema=settings.database_schema)
     state_db.init_schema()
-    model_name = _resolve_meta_evaluate_model()
-    eval_method = f"{model_name}/v1"
+    models = load_required_gemini_model_pool(MODEL_POOL_ALIAS)
+    run_id = _run_id()
     gemini_manager = GeminiRuntimeManager(
         state_db,
         task_id="maintenance.monocorpus_meta_evaluate",
@@ -140,7 +196,7 @@ def evaluate(args) -> None:
     if args.dry_run:
         print("Running in dry-run mode: no DB/file state changes will be persisted.")
 
-    remaining = _count_remaining(config, channel)
+    remaining = _count_remaining(config, channel, models)
     print(f"Documents remaining for evaluation: {remaining}")
     excerpt_chars = max(0, args.excerpt_chars)
     stop_event = threading.Event()
@@ -149,7 +205,7 @@ def evaluate(args) -> None:
         workers: list[threading.Thread] = []
         try:
 
-            docs = _load_batch(config, args.batch_size, channel)
+            docs = _load_batch(config, args.batch_size, channel, models)
             if not docs:
                 print("No more documents to process")
                 break
@@ -176,8 +232,8 @@ def evaluate(args) -> None:
                     known_classifications=known_classifications,
                     stop_event=stop_event,
                     gemini_manager=gemini_manager,
-                    model_name=model_name,
-                    eval_method=eval_method,
+                    models=models,
+                    run_id=run_id,
                 )
                 thread = threading.Thread(target=worker, name=f"eval-{index + 1}")
                 thread.start()
@@ -220,12 +276,18 @@ def evaluate(args) -> None:
             continue
 
 
-def _load_batch(config: dict, batch_size: int, channel: "Channel") -> list[EvaluationTask]:
+def _load_batch(
+    config: dict,
+    batch_size: int,
+    channel: "Channel",
+    models: list[str],
+) -> list[EvaluationTask]:
     lang_codes = config["sup_langs"]["tt"]["codes"]
     rows = fetch_docs_for_evaluation(
         batch_size=batch_size,
         lang_codes=lang_codes,
-        excluded_md5s=channel.get_all_unprocessable_docs(),
+        excluded_md5s=set(),
+        model_pool=models,
     )
     return [
         EvaluationTask(
@@ -246,12 +308,17 @@ def _load_batch(config: dict, batch_size: int, channel: "Channel") -> list[Evalu
     ]
 
 
-def _count_remaining(config: dict, channel: "Channel") -> int:
+def _count_remaining(
+    config: dict,
+    channel: "Channel",
+    models: list[str],
+) -> int:
     """Count docs still pending evaluation for current language filters."""
     lang_codes = config["sup_langs"]["tt"]["codes"]
     return count_docs_for_evaluation(
         lang_codes=lang_codes,
-        excluded_md5s=channel.get_all_unprocessable_docs(),
+        excluded_md5s=set(),
+        model_pool=models,
     )
 
 
@@ -339,8 +406,8 @@ class LibraryApplicabilityWorker:
         known_classifications: list[dict[str, Any]] | None = None,
         stop_event: threading.Event | None = None,
         gemini_manager: GeminiRuntimeManager | None = None,
-        model_name: str | None = None,
-        eval_method: str | None = None,
+        models: list[str] | None = None,
+        run_id: int | None = None,
     ):
         self.tasks_queue = tasks_queue
         self.config = config
@@ -354,8 +421,10 @@ class LibraryApplicabilityWorker:
         if gemini_manager is None:
             raise ValueError("gemini_manager is required")
         self.gemini_manager = gemini_manager
-        self.model_name = str(model_name or "").strip() or DEFAULT_GEMINI_MODELS["library_meta_evaluate"]
-        self.eval_method = str(eval_method or "").strip() or f"{self.model_name}/v1"
+        self.models = [str(model) for model in (models or []) if str(model).strip()]
+        if not self.models:
+            raise ValueError("metadata evaluation models are required")
+        self.run_id = run_id
 
     def __call__(self) -> None:
         while True:
@@ -370,43 +439,47 @@ class LibraryApplicabilityWorker:
 
             try:
                 self.log(f"Evaluating {doc.md5}")
-                evaluation = self._evaluate(doc)
-                if not evaluation:
-                    self.log(f"Empty model response for {doc.md5}")
-                    self.channel.add_unprocessable_doc(doc.md5)
-                    continue
-                self._save_result(doc.md5, evaluation)
-            except GeminiQuotaExceededError as exc:
-                self.log(f"Gemini quota exhausted: {exc}")
+                result = self._evaluate(doc)
+                self._save_result(
+                    doc.md5,
+                    result.value,
+                    model_name=result.model_name,
+                )
+            except GeminiModelPoolExhaustedError as exc:
+                self.log(f"All evaluation models rejected {doc.md5}: {exc}")
+                if not self.dry_run:
+                    mark_evaluation_terminal(
+                        doc.md5,
+                        models=self.models,
+                        run_id=self.run_id,
+                        reason=str(exc),
+                    )
+                continue
+            except GeminiModelPoolUnavailableError as exc:
+                self.log(f"Gemini evaluation models unavailable: {exc}")
                 self.channel.set_fatal_error(str(exc))
                 self.stop_event.set()
                 self.tasks_queue.put(doc)
                 return
-            except GeminiAllKeysExhaustedError as exc:
-                self.log(f"Gemini keys exhausted: {exc}")
+            except GeminiModelPoolOperationalError as exc:
+                self.log(f"Gemini evaluation operational failure: {exc}")
                 self.channel.set_fatal_error(str(exc))
                 self.stop_event.set()
                 self.tasks_queue.put(doc)
-                return
-            except GeminiServerPauseError as exc:
-                self.log(f"Gemini server pause active: {exc}")
-                self.tasks_queue.put(doc)
-                continue
-            except GeminiRequestRejectedError as exc:
-                self.log(f"Gemini request rejected for {doc.md5}: {exc}")
-                self.channel.add_unprocessable_doc(doc.md5)
-                continue
-            except (ServerError, ClientError) as exc:
-                self.log(f"Gemini client/server error for {doc.md5}: {exc}")
-                self.channel.add_unprocessable_doc(doc.md5)
                 return
             except Exception as e:  # noqa: BLE001
                 import traceback
 
                 self.log(f"Unhandled error for {doc.md5}: {e}\n{traceback.format_exc()}")
-                self.channel.add_unprocessable_doc(doc.md5)
+                if not self.dry_run:
+                    mark_evaluation_terminal(
+                        doc.md5,
+                        models=self.models,
+                        run_id=self.run_id,
+                        reason=f"{type(e).__name__}: {e}",
+                    )
 
-    def _evaluate(self, doc: EvaluationTask) -> Evaluation | None:
+    def _evaluate(self, doc: EvaluationTask) -> GeminiModelPoolResult[Evaluation]:
         flattened_meta = extract_flat_fields(doc.schema_org)
         excerpt = self._load_content_excerpt(doc)
         upstream_metadata = self._load_upstream_metadata(doc)
@@ -437,52 +510,48 @@ class LibraryApplicabilityWorker:
         prompt = build_library_applicability_prompt(payload, content_excerpt=excerpt)
         self._dump_prompt(doc.md5, prompt)
 
-        def _call(api_key: str, _lease) -> Evaluation | None:
-            gemini_client = create_client(api_key)
-            response, uploaded_files = gemini_api(
-                prompt=prompt,
-                model=self.model_name,
-                client=gemini_client,
-                files=files,
-                schema=Evaluation,
-                timeout_sec=180,
+        def _call(model_name: str, api_key: str, _lease: Any) -> str:
+            raw_response = generate_structured_json(
+                api_key=api_key,
+                model_name=model_name,
+                contents=prompt,
+                response_schema=Evaluation,
+                files={Path(path): mime for path, mime in files.items()},
+                timeout_seconds=180,
             )
-            try:
-                raw_response = stream_text(response)
-                self.log(
-                    f"Raw eval response for {doc.md5}:\n"
-                    f"{_format_response_for_log(raw_response)}"
-                )
-                if not raw_response:
-                    return None
-                evaluation = Evaluation.model_validate_json(raw_response)
-                evaluation.metadata_patch = _normalize_metadata_patch(
-                    evaluation.metadata_patch,
-                    doc,
-                    self.config,
-                )
-                normalized_ddc, normalized_path = _normalize_library_classification(
-                    evaluation.library_ddc,
-                    evaluation.library_path,
-                    applicable=evaluation.applicable,
-                )
-                evaluation.library_ddc = normalized_ddc
-                evaluation.library_path = normalized_path
-                if evaluation.applicable and (not evaluation.library_ddc or not evaluation.library_path):
-                    self.log(f"Missing mandatory library classification for {doc.md5}")
-                    return None
-                return evaluation
-            finally:
-                for file in uploaded_files:
-                    try:
-                        gemini_client.files.delete(name=file.name)
-                    except Exception as exc:  # noqa: BLE001
-                        self.log(f"Failed to delete uploaded eval file {file.name}: {exc}")
+            self.log(
+                f"Raw eval response for {doc.md5} model={model_name}:\n"
+                f"{_format_response_for_log(raw_response)}"
+            )
+            return raw_response
 
-        return self.gemini_manager.run_with_key(
-            model_name=self.model_name,
-            call=_call,
-            max_attempts=2,
+        def _record_failure(model_name: str, kind: str, error: str) -> None:
+            self.log(
+                f"Evaluation model failed md5={doc.md5} model={model_name} "
+                f"kind={kind} error={error}"
+            )
+            if not self.dry_run:
+                record_evaluation_model_failure(
+                    doc.md5,
+                    model_name=model_name,
+                    kind=kind,
+                    error=error,
+                    models=self.models,
+                    run_id=self.run_id,
+                )
+
+        return run_ordered_model_pool(
+            manager=self.gemini_manager,
+            models=self.models,
+            request=_call,
+            parse=lambda raw: _parse_evaluation_response(
+                raw,
+                doc=doc,
+                config=self.config,
+            ),
+            record_failure=_record_failure,
+            run_id=self.run_id,
+            already_attempted=get_evaluation_attempted_models(doc.md5),
         )
 
     def _load_content_excerpt(self, doc: EvaluationTask) -> str | None:
@@ -522,15 +591,12 @@ class LibraryApplicabilityWorker:
     def _prepare_pdf_slice_for_eval(self, doc: EvaluationTask) -> str | None:
         if doc.mime_type != "application/pdf":
             return None
-        local_pdf = get_in_workdir(Dirs.ENTRY_POINT, file=f"{doc.md5}.pdf")
         try:
-            if not os.path.exists(local_pdf):
-                source_url = _resolve_doc_source_url(
-                    doc, self.config, self._get_document_s3client()
-                )
-                if not source_url:
-                    return None
-                _download_file(source_url, local_pdf)
+            local_pdf = _ensure_pdf_in_shared_cache(
+                doc,
+                self.config,
+                self._get_document_s3client(),
+            )
 
             slice_path = get_in_workdir(Dirs.DOC_SLICES, doc.md5, file="slice-for-eval.pdf")
             with fitz.open(local_pdf) as pdf_doc, fitz.open() as doc_slice:
@@ -553,7 +619,13 @@ class LibraryApplicabilityWorker:
             self._yandex_s3client = create_session(self.config)
         return self._yandex_s3client
 
-    def _save_result(self, md5: str, evaluation: Evaluation) -> None:
+    def _save_result(
+        self,
+        md5: str,
+        evaluation: Evaluation,
+        *,
+        model_name: str,
+    ) -> None:
         if self.dry_run:
             self.log(f"Dry-run: would persist evaluation for {md5}")
             return
@@ -561,7 +633,7 @@ class LibraryApplicabilityWorker:
             metadata = session.get(Metadata, md5)
             if metadata:
                 metadata.lib = bool(evaluation.applicable)
-                metadata.lib_eval_method = self.eval_method
+                metadata.lib_eval_method = f"{model_name}/v1"
                 if evaluation.applicable and evaluation.library_ddc and evaluation.library_path:
                     metadata.classification_id = _resolve_classification_id(
                         session,
@@ -596,6 +668,7 @@ class LibraryApplicabilityWorker:
                     metadata.schema_org = schema_org
                     self.log(f"Patched metadata for {md5}: {', '.join(applied)}")
                 session.commit()
+        clear_evaluation_state(md5)
 
     def log(self, message: str) -> None:
         print(f"{threading.current_thread().name} {time.strftime('%d-%m-%y %H:%M:%S')}: {message}")
@@ -1050,19 +1123,37 @@ def _resolve_doc_source_url(doc: EvaluationTask, config: dict, s3client: Any) ->
     )
 
 
+def _ensure_pdf_in_shared_cache(
+    doc: EvaluationTask,
+    config: dict,
+    s3client: Any,
+) -> str:
+    storage = load_document_storage_settings(config)
+
+    def download(destination: Path) -> None:
+        source_url = _resolve_doc_source_url(doc, config, s3client)
+        if not source_url:
+            raise ValueError(f"Document has no downloadable source: {doc.md5}")
+        _download_file(source_url, str(destination))
+
+    return str(
+        materialize_cached_document(
+            cache_path=storage.cache_path,
+            expected_md5=doc.md5,
+            extension=".pdf",
+            download=download,
+        )
+    )
+
+
 def _fallback_pdf_page_count(doc: EvaluationTask, config: dict) -> int | None:
     if doc.mime_type != "application/pdf":
         return None
-    local_pdf = get_in_workdir(Dirs.ENTRY_POINT, file=f"{doc.md5}.pdf")
-    if not os.path.exists(local_pdf):
-        source_url = _resolve_doc_source_url(
-            doc,
-            config,
-            create_document_session(config),
-        )
-        if not source_url:
-            return None
-        _download_file(source_url, local_pdf)
+    local_pdf = _ensure_pdf_in_shared_cache(
+        doc,
+        config,
+        create_document_session(config),
+    )
     with fitz.open(local_pdf) as pdf:
         count = int(pdf.page_count)
         return count if count > 0 else None

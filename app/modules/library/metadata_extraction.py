@@ -18,7 +18,7 @@ from sqlalchemy.engine import Engine
 
 from app.document_storage import (
     DocumentStorageSettings,
-    download_verified_primary_document,
+    download_cached_primary_document,
     verify_primary_document_object,
 )
 from app.gemini_model_pool import GeminiModelResponseError
@@ -449,7 +449,7 @@ def prepare_metadata_request(
     storage: DocumentStorageSettings,
     primary_s3: Any,
 ) -> MetadataRequest:
-    """Prepare one text or Backblaze-only PDF request."""
+    """Prepare one text or shared-cache-backed PDF request."""
     if candidate.content_url:
         verify_primary_document_object(
             settings=storage,
@@ -463,13 +463,13 @@ def prepare_metadata_request(
     if candidate.mime_type != "application/pdf":
         raise ValueError(f"Unsupported metadata source MIME: {candidate.mime_type}")
     doc_dir = workspace / candidate.md5
-    source = download_verified_primary_document(
+    source = download_cached_primary_document(
         settings=storage,
         s3=primary_s3,
         document_url=candidate.document_url,
         expected_md5=candidate.md5,
         expected_size=candidate.primary_storage_size,
-        destination=doc_dir / f"{candidate.md5}.pdf",
+        extension=".pdf",
     )
     slice_path = doc_dir / "slice-for-meta.pdf"
     page_count = create_pdf_slice(source, slice_path)

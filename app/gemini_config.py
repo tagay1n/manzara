@@ -13,7 +13,6 @@ import yaml
 
 _REDACTED_SENTINEL = "<REDACTED>"
 DEFAULT_GEMINI_MODELS: Dict[str, str] = {
-    "library_meta_evaluate": "gemini-3-flash-preview",
     "library_normalization": "gemini-2.5-flash",
 }
 DEFAULT_GEMINI_MODEL_POOLS: Dict[str, List[str]] = {

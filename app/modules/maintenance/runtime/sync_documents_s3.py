@@ -26,6 +26,8 @@ from app.document_storage import (
     document_object_key,
     find_valid_cache_entry,
     load_document_storage_settings,
+    materialize_cached_document,
+    normalized_extension,
     object_url,
     parse_object_url,
 )
@@ -295,14 +297,18 @@ def _verify_by_download(
     bucket: str,
     key: str,
     md5: str,
-    workspace: Path,
+    cache_path: Path,
+    extension: str,
 ) -> Path | None:
-    candidate = workspace / f"verify-{md5}.bin"
-    _download_s3(s3, bucket, key, candidate)
-    if calculate_md5(candidate) == md5:
-        return candidate
-    candidate.unlink(missing_ok=True)
-    return None
+    try:
+        return materialize_cached_document(
+            cache_path=cache_path,
+            expected_md5=md5,
+            extension=extension,
+            download=lambda candidate: _download_s3(s3, bucket, key, candidate),
+        )
+    except ValueError:
+        return None
 
 
 def _acquire_source(
@@ -315,35 +321,44 @@ def _acquire_source(
     primary_s3: Any,
     legacy_s3: Any,
     settings: DocumentStorageSettings,
-    workspace: Path,
 ) -> tuple[Path, str]:
     if cache_file:
         return cache_file, "cache"
-    location = _existing_object_location(existing, settings)
-    if location:
-        storage_name, bucket, key = location
-        if storage_name != "primary" or (bucket, key) != target_location:
-            source_s3 = primary_s3 if storage_name == "primary" else legacy_s3
-            candidate = workspace / f"source-{resource['source_md5']}.bin"
-            try:
-                _download_s3(source_s3, bucket, key, candidate)
-                if calculate_md5(candidate) == resource["source_md5"]:
-                    return candidate, f"{storage_name}_s3"
-            except Exception as exc:
-                print(
-                    f"document sync: legacy source unavailable "
-                    f"storage={storage_name} bucket={bucket} key={key} "
-                    f"error={type(exc).__name__}: {exc}; falling back to Yandex Disk",
-                    flush=True,
-                )
+    source_kind = "yandex"
+
+    def download(candidate: Path) -> None:
+        nonlocal source_kind
+        location = _existing_object_location(existing, settings)
+        if location:
+            storage_name, bucket, key = location
+            if storage_name != "primary" or (bucket, key) != target_location:
+                source_s3 = primary_s3 if storage_name == "primary" else legacy_s3
+                try:
+                    _download_s3(source_s3, bucket, key, candidate)
+                    if calculate_md5(candidate) == resource["source_md5"]:
+                        source_kind = f"{storage_name}_s3"
+                        return
+                except Exception as exc:
+                    print(
+                        f"document sync: legacy source unavailable "
+                        f"storage={storage_name} bucket={bucket} key={key} "
+                        f"error={type(exc).__name__}: {exc}; falling back to Yandex Disk",
+                        flush=True,
+                    )
                 candidate.unlink(missing_ok=True)
-    candidate = workspace / f"source-{resource['source_md5']}.bin"
-    candidate.unlink(missing_ok=True)
-    yadisk.download(resource["source_path"], str(candidate))
-    if calculate_md5(candidate) != resource["source_md5"]:
-        candidate.unlink(missing_ok=True)
-        raise RuntimeError("Yandex Disk download MD5 mismatch")
-    return candidate, "yandex"
+        source_kind = "yandex"
+        yadisk.download(resource["source_path"], str(candidate))
+
+    source = materialize_cached_document(
+        cache_path=settings.cache_path,
+        expected_md5=str(resource["source_md5"]),
+        extension=normalized_extension(
+            str(resource["source_path"]),
+            resource.get("mime_type"),
+        ),
+        download=download,
+    )
+    return source, source_kind
 
 
 def _confirm_upload(
@@ -641,10 +656,13 @@ def run_document_sync(
                         bucket=bucket,
                         key=key,
                         md5=md5,
-                        workspace=workspace,
+                        cache_path=settings.cache_path,
+                        extension=normalized_extension(
+                            str(resource["source_path"]),
+                            resource.get("mime_type"),
+                        ),
                     )
                     if verified_path:
-                        temporary_paths.append(verified_path)
                         verified_head = remote
                         counters["verified"] += 1
 
@@ -662,7 +680,6 @@ def run_document_sync(
                     primary_s3=primary_s3,
                     legacy_s3=legacy_s3,
                     settings=settings,
-                    workspace=workspace,
                 )
                 if source_file.parent == workspace:
                     temporary_paths.append(source_file)

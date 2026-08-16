@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from pathlib import Path
 
 from app.gemini_runtime import GeminiAllKeysExhaustedError
 from app.gemini_runtime import GeminiServerPauseError
+from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
+from app.modules.library import metadata_extraction as extraction
 from app.modules.library.metadata_extraction import (
     MetadataExtractionCandidate,
     MetadataRequest,
@@ -64,6 +68,73 @@ def _candidate() -> MetadataExtractionCandidate:
         primary_storage_size=12,
         attempts=(),
     )
+
+
+def _storage(cache_path: Path) -> DocumentStorageSettings:
+    connection = S3ConnectionSettings(
+        endpoint_url="https://s3.example.test",
+        region_name="test",
+        access_key_id="key",
+        secret_access_key="secret",
+    )
+    return DocumentStorageSettings(
+        cache_path=cache_path,
+        source_path="/documents",
+        restricted_path="/documents/private",
+        filtered_out_path="/documents/filtered",
+        primary=connection,
+        legacy=connection,
+        public_bucket="public",
+        private_bucket="private",
+        legacy_public_bucket="legacy-public",
+        legacy_private_bucket="legacy-private",
+        upstream_bucket="upstream",
+        encryption_key="unused",
+    )
+
+
+def test_metadata_extraction_reuses_shared_verified_pdf_cache(
+    monkeypatch, tmp_path: Path
+) -> None:
+    content = b"shared-pdf"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    cache_path = tmp_path / "0_entry_point"
+    cache_path.mkdir()
+    cached = cache_path / f"{digest}.pdf"
+    cached.write_bytes(content)
+    candidate = MetadataExtractionCandidate(
+        md5=digest,
+        mime_type="application/pdf",
+        document_url=f"https://s3.example.test/public/{digest}.pdf",
+        content_url=None,
+        upstream_meta_url=None,
+        primary_storage_size=len(content),
+        attempts=(),
+    )
+    seen_sources: list[Path] = []
+
+    def create_slice(source: Path, destination: Path) -> int:
+        seen_sources.append(source)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"slice")
+        return 1
+
+    class NoRemoteAccess:
+        def __getattr__(self, name):  # noqa: ANN001
+            raise AssertionError(f"unexpected remote access: {name}")
+
+    monkeypatch.setattr(extraction, "create_pdf_slice", create_slice)
+    monkeypatch.setattr(extraction, "load_upstream_metadata", lambda *_args: None)
+
+    request = extraction.prepare_metadata_request(
+        candidate,
+        workspace=tmp_path / "run",
+        storage=_storage(cache_path),
+        primary_s3=NoRemoteAccess(),
+    )
+
+    assert seen_sources == [cached]
+    assert list(request.files) == [tmp_path / "run" / digest / "slice-for-meta.pdf"]
 
 
 def test_runtime_persists_success_and_emits_structured_progress(

@@ -15,13 +15,21 @@ These rules apply to `app/modules/library/`.
 
 ## Metadata extraction
 
-- `library.metadata_extract` selects only documents with a verified primary-storage checkpoint and reads bytes only from configured Backblaze buckets. Do not add Yandex Disk, legacy S3, local-cache, or compatibility source branches.
+- `library.metadata_extract` selects only documents with a verified primary-storage checkpoint. Reuse an MD5-verified document from the shared source cache first; on a miss, populate that cache only from configured Backblaze storage. Do not add Yandex Disk, legacy S3, or compatibility source branches.
 - Preserve the adopted prompt, Schema.org validation, PDF edge-page slicing, and normalization unless the owner requests a prompt/version change.
 - Models come only from `gemini.model_pools.library_metadata_extraction`; there are no code defaults.
 - Persist content-level model failures after every attempt and resume with the next untried model. Quota, service, storage, and stop conditions are retryable and never terminally exclude a document.
 - If only one document's remaining models are exhausted, defer it and continue. Stop with `all_keys_exhausted` only when every configured model is unavailable; expose deferrals and unresolved count in progress/artifacts.
 - Metadata is usable only with a non-placeholder title plus another bibliographic/content signal. Boilerplate-only, title-only, or title-missing responses advance to the next model.
 - Never overwrite usable `metadata.schema_org`. Replace objectively poor metadata only with validated usable output; preserve it if all models fail. Never erase language with null, upload metadata ZIPs, or mutate storage URLs.
+
+## Metadata evaluation
+
+- Evaluation models come only from `gemini.model_pools.library_metadata_evaluation` and run in configured order through the shared Gemini runtime.
+- Preserve valid positive and negative evaluations. Reopen only missing evaluation results, missing evaluation methods, applicable rows without a classification, or non-applicable rows that still retain a classification.
+- Persist content-level failures per document and model. Resume with the next untried model; a changed model set reopens terminal failures without retrying models that already failed.
+- A usable response has a concise decision reason and, when applicable, a normalized DDC plus category path. Empty, malformed, or incomplete responses advance to the next model.
+- Quota and service failures never become permanent document exclusions. Uploaded Gemini files use shared best-effort cleanup.
 
 ## Collections
 

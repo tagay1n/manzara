@@ -5,9 +5,10 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote, unquote, urlparse
 
 
@@ -225,6 +226,82 @@ def find_valid_cache_file(cache_path: Path, md5: str) -> Path | None:
     return entry[0] if entry else None
 
 
+def materialize_cached_document(
+    *,
+    cache_path: Path,
+    expected_md5: str,
+    extension: str,
+    download: Callable[[Path], None],
+) -> Path:
+    """Reuse or atomically populate one MD5-verified shared cache file."""
+    digest = str(expected_md5 or "").strip().lower()
+    if len(digest) != 32 or any(char not in "0123456789abcdef" for char in digest):
+        raise ValueError(f"Invalid document MD5: {expected_md5!r}")
+    suffix = str(extension or "").strip().lower()
+    if suffix and not suffix.startswith("."):
+        suffix = "." + suffix
+    if not _SAFE_EXTENSION.fullmatch(suffix):
+        suffix = ".bin"
+
+    cache_path = Path(cache_path)
+    cache_path.mkdir(parents=True, exist_ok=True)
+    destination = cache_path / f"{digest}{suffix}"
+    if destination.is_file() and calculate_md5(destination) == digest:
+        return destination
+    if cached := find_valid_cache_file(cache_path, digest):
+        return cached
+
+    temporary_handle = tempfile.NamedTemporaryFile(
+        dir=cache_path,
+        prefix=f".{digest}.",
+        suffix=".download",
+        delete=False,
+    )
+    temporary = Path(temporary_handle.name)
+    temporary_handle.close()
+    try:
+        download(temporary)
+        actual_md5 = calculate_md5(temporary)
+        if actual_md5 != digest:
+            raise ValueError(
+                f"Downloaded document MD5 mismatch: expected={digest} actual={actual_md5}"
+            )
+        if cached := find_valid_cache_file(cache_path, digest):
+            return cached
+        temporary.replace(destination)
+        return destination
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def download_cached_primary_document(
+    *,
+    settings: DocumentStorageSettings,
+    s3: Any,
+    document_url: str,
+    expected_md5: str,
+    expected_size: int | None = None,
+    extension: str,
+) -> Path:
+    """Reuse shared cache or download a verified primary-storage document into it."""
+
+    def download(destination: Path) -> None:
+        location = verify_primary_document_object(
+            settings=settings,
+            s3=s3,
+            document_url=document_url,
+            expected_size=expected_size,
+        )
+        s3.download_file(location[0], location[1], str(destination))
+
+    return materialize_cached_document(
+        cache_path=settings.cache_path,
+        expected_md5=expected_md5,
+        extension=extension,
+        download=download,
+    )
+
+
 def normalized_extension(source_path: str, mime_type: str | None) -> str:
     """Choose a safe stable extension from source path and normalized MIME."""
     suffix = PurePosixPath(str(source_path or "")).suffix.lower()
@@ -383,10 +460,12 @@ __all__ = [
     "calculate_md5",
     "calculate_multipart_etag",
     "document_object_key",
+    "download_cached_primary_document",
     "download_verified_primary_document",
     "find_valid_cache_file",
     "find_valid_cache_entry",
     "load_document_storage_settings",
+    "materialize_cached_document",
     "normalized_extension",
     "object_url",
     "parse_object_url",

@@ -37,10 +37,6 @@ def test_load_gemini_models_merges_overrides(monkeypatch, tmp_path: Path) -> Non
     models = gemini_config.load_gemini_models()
 
     assert models["library_normalization"] == "gemini-2.5-flash-lite"
-    assert (
-        models["library_meta_evaluate"]
-        == gemini_config.DEFAULT_GEMINI_MODELS["library_meta_evaluate"]
-    )
 
 
 def test_load_collection_validation_model_pool(monkeypatch, tmp_path: Path) -> None:
@@ -104,3 +100,30 @@ def test_required_model_pool_preserves_configured_order(monkeypatch, tmp_path: P
     assert gemini_config.load_required_gemini_model_pool(
         "library_metadata_extraction"
     ) == ["model-first", "model-second"]
+
+
+def test_required_metadata_evaluation_pool_preserves_order(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.local.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gemini": {
+                    "model_pools": {
+                        "library_metadata_evaluation": [
+                            "model-newest",
+                            "model-fallback",
+                        ]
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
+
+    assert gemini_config.load_required_gemini_model_pool(
+        "library_metadata_evaluation"
+    ) == ["model-newest", "model-fallback"]
