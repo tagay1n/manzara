@@ -94,7 +94,7 @@ def _walk_files(
             continue
         for resource in reversed(children):
             resource_type = str(_resource_value(resource, "type", "") or "")
-            path = str(_resource_value(resource, "path", "") or "").strip()
+            path = str(_resource_value(resource, "path", "") or "")
             if resource_type == "dir":
                 if path:
                     stack.append(path)

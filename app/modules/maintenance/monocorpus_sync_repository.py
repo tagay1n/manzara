@@ -168,7 +168,6 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
             "library_collection_proposal_items",
             "library_collection_items",
             "library_collection_document_features",
-            "document_crh",
             "isbn_keep_many",
             "metadata",
         )

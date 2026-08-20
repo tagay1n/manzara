@@ -12,6 +12,7 @@ from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
 from app.modules.maintenance.runtime.sync_documents_s3 import (
     _result_exit_code,
     _validate_primary_buckets,
+    _walk_files,
     run_document_sync,
 )
 
@@ -185,6 +186,24 @@ class FakeS3:
         identity = (str(Bucket), str(Key))
         self.aborted_uploads.append((*identity, str(UploadId)))
         self.incomplete_uploads[identity].remove(str(UploadId))
+
+
+def test_yandex_walk_preserves_trailing_whitespace_in_paths() -> None:
+    expected_paths = {
+        "/documents/ascii-space /book .pdf",
+        "/documents/non-breaking-space\N{NO-BREAK SPACE}/book\N{NO-BREAK SPACE}.pdf",
+    }
+    yadisk = FakeYaDisk({path: path.encode() for path in expected_paths})
+
+    resources = list(
+        _walk_files(
+            yadisk,
+            "/documents",
+            should_stop=lambda: False,
+        )
+    )
+
+    assert {resource["source_path"] for resource in resources} == expected_paths
 
 
 class FakeRepository:
