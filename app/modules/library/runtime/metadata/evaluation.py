@@ -44,6 +44,7 @@ from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import (
     GeminiRuntimeManager,
     GeminiRuntimeError,
+    GeminiStopRequestedError,
 )
 from app.settings import load_settings
 from app.artifacts import flow_artifacts_dir
@@ -122,6 +123,8 @@ class _EvaluationProgress:
             succeeded=0,
             rules_skipped=0,
             terminal=0,
+            quota_deferred=0,
+            service_deferred=0,
         )
         self.model_attempts: Counter[str] = Counter()
         self.model_successes: Counter[str] = Counter()
@@ -156,6 +159,10 @@ class _EvaluationProgress:
     def _publish_locked(self) -> None:
         if self.run_id is None:
             return
+        resolved = sum(
+            int(self.counters.get(key, 0))
+            for key in ("succeeded", "rules_skipped", "terminal")
+        )
         payload = {
             "current": self.current,
             "total": self.total,
@@ -164,7 +171,7 @@ class _EvaluationProgress:
                 if self.total == 0
                 else round((self.current / self.total) * 100, 2)
             ),
-            "remaining": max(0, self.total - self.current),
+            "remaining": max(0, self.total - resolved),
             **dict(self.counters),
             "model_attempts": dict(self.model_attempts),
             "model_successes": dict(self.model_successes),
@@ -365,7 +372,7 @@ def _load_batch(
     rows = fetch_docs_for_evaluation(
         batch_size=batch_size,
         lang_codes=lang_codes,
-        excluded_md5s=set(),
+        excluded_md5s=channel.get_deferred_docs(),
         model_pool=models,
     )
     return [
@@ -544,14 +551,34 @@ class LibraryApplicabilityWorker:
                         self.progress.record_completed("terminal")
                 continue
             except GeminiModelPoolUnavailableError as exc:
-                self.log(f"Gemini evaluation models unavailable: {exc}")
+                globally_exhausted = set(exc.unavailable_models) == set(self.models)
+                self.log(
+                    f"Gemini quota deferred md5={doc.md5} "
+                    f"global={globally_exhausted} reason={exc}"
+                )
+                self.channel.defer_document(doc.md5)
+                if self.progress is not None and not self.dry_run:
+                    self.progress.record_completed("quota_deferred")
+                if globally_exhausted:
+                    self.stop_event.set()
+                    return
+                continue
+            except GeminiModelPoolOperationalError as exc:
+                self.log(
+                    f"Gemini evaluation operational failure md5={doc.md5} "
+                    f"retryable={exc.retryable} error={exc}"
+                )
+                if exc.retryable:
+                    self.channel.defer_document(doc.md5)
+                    if self.progress is not None and not self.dry_run:
+                        self.progress.record_completed("service_deferred")
+                    continue
                 self.channel.set_fatal_error(str(exc))
                 self.stop_event.set()
                 self.tasks_queue.put(doc)
                 return
-            except GeminiModelPoolOperationalError as exc:
-                self.log(f"Gemini evaluation operational failure: {exc}")
-                self.channel.set_fatal_error(str(exc))
+            except GeminiStopRequestedError:
+                self.log(f"Stop requested while evaluating md5={doc.md5}")
                 self.stop_event.set()
                 self.tasks_queue.put(doc)
                 return
@@ -775,6 +802,15 @@ class Channel:
         self.dry_run = dry_run
         self.unprocessable_docs = self._load_file(UNPROCESSABLES_DIR, "unprocessables_eval.txt")
         self.fatal_error: str | None = None
+        self.deferred_docs: set[str] = set()
+
+    def defer_document(self, md5: str) -> None:
+        with self.lock:
+            self.deferred_docs.add(str(md5))
+
+    def get_deferred_docs(self) -> set[str]:
+        with self.lock:
+            return set(self.deferred_docs)
 
     def get_all_unprocessable_docs(self) -> set[str]:
         return self.unprocessable_docs

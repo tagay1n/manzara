@@ -11,6 +11,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.gemini_model_pool import GeminiModelResponseError
+from app.gemini_model_pool import GeminiModelPoolOperationalError
+from app.gemini_model_pool import GeminiModelPoolResult
+from app.gemini_model_pool import GeminiModelPoolUnavailableError
 from app.modules.library.runtime.run_meta_evaluate import _bootstrap_import_paths
 
 
@@ -18,6 +21,7 @@ _bootstrap_import_paths()
 
 from metadata.evaluation import (  # noqa: E402
     Channel,
+    Evaluation,
     EvaluationTask,
     LibraryApplicabilityWorker,
     _parse_evaluation_response,
@@ -195,7 +199,118 @@ def test_evaluation_progress_matches_metadata_extraction_contract() -> None:
         "succeeded": 1,
         "rules_skipped": 1,
         "terminal": 0,
+        "quota_deferred": 0,
+        "service_deferred": 0,
         "model_attempts": {"model-first": 1},
         "model_successes": {"model-first": 1},
     }
     assert db.events[-1][0] == "task.progress"
+
+
+def test_worker_defers_retryable_service_error_and_continues(monkeypatch) -> None:
+    class _Db:
+        def __init__(self) -> None:
+            self.progress: list[dict] = []
+
+        def update_run_progress(self, _run_id, payload):  # noqa: ANN001
+            self.progress.append(payload)
+
+        def insert_event(self, _event_type, **_kwargs):  # noqa: ANN001
+            pass
+
+    first = _document()
+    second = _document()
+    second.md5 = "b" * 32
+    tasks = Queue()
+    tasks.put(first)
+    tasks.put(second)
+    channel = Channel(dry_run=False)
+    db = _Db()
+    progress = evaluation_module._EvaluationProgress(db, run_id=42, total=2)
+    saved: list[str] = []
+
+    worker = LibraryApplicabilityWorker(
+        tasks_queue=tasks,
+        config={"sup_langs": {"tt": {"codes": ["tt-Cyrl"]}}},
+        channel=channel,
+        dry_run=False,
+        excerpt_chars=0,
+        gemini_manager=object(),
+        models=["model-first"],
+        progress=progress,
+    )
+
+    def evaluate(doc):  # noqa: ANN001
+        if doc.md5 == first.md5:
+            raise GeminiModelPoolOperationalError("503 pause", retryable=True)
+        return GeminiModelPoolResult(
+            model_name="model-first",
+            value=Evaluation(
+                applicable=False,
+                reason="not a library document",
+            ),
+            unavailable_models=(),
+        )
+
+    monkeypatch.setattr(worker, "_evaluate", evaluate)
+    monkeypatch.setattr(
+        worker,
+        "_save_result",
+        lambda md5, _evaluation, *, model_name: saved.append(md5),
+    )
+
+    worker()
+
+    assert saved == [second.md5]
+    assert channel.get_fatal_error() is None
+    assert channel.get_deferred_docs() == {first.md5}
+    assert db.progress[-1]["current"] == 2
+    assert db.progress[-1]["succeeded"] == 1
+    assert db.progress[-1]["service_deferred"] == 1
+    assert db.progress[-1]["remaining"] == 1
+
+
+def test_worker_stops_cleanly_when_all_models_are_quota_unavailable(
+    monkeypatch,
+) -> None:
+    class _Db:
+        def __init__(self) -> None:
+            self.progress: list[dict] = []
+
+        def update_run_progress(self, _run_id, payload):  # noqa: ANN001
+            self.progress.append(payload)
+
+        def insert_event(self, _event_type, **_kwargs):  # noqa: ANN001
+            pass
+
+    doc = _document()
+    tasks = Queue()
+    tasks.put(doc)
+    channel = Channel(dry_run=False)
+    db = _Db()
+    progress = evaluation_module._EvaluationProgress(db, run_id=42, total=1)
+    worker = LibraryApplicabilityWorker(
+        tasks_queue=tasks,
+        config={"sup_langs": {"tt": {"codes": ["tt-Cyrl"]}}},
+        channel=channel,
+        dry_run=False,
+        excerpt_chars=0,
+        gemini_manager=object(),
+        models=["model-first", "model-second"],
+        progress=progress,
+    )
+    monkeypatch.setattr(
+        worker,
+        "_evaluate",
+        lambda _doc: (_ for _ in ()).throw(
+            GeminiModelPoolUnavailableError(["model-first", "model-second"])
+        ),
+    )
+
+    worker()
+
+    assert channel.get_fatal_error() is None
+    assert channel.get_deferred_docs() == {doc.md5}
+    assert worker.stop_event.is_set()
+    assert db.progress[-1]["quota_deferred"] == 1
+    assert db.progress[-1]["remaining"] == 1
