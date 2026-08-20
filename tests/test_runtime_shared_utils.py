@@ -39,6 +39,29 @@ def test_encrypt_decrypt_round_trip() -> None:
     assert shared_utils.decrypt(encrypted, config) == source
 
 
+def test_get_engine_uses_manzara_schema_before_public(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("MANZARA_DB_SCHEMA", "runtime_state")
+    monkeypatch.setattr(
+        shared_utils,
+        "read_config",
+        lambda: {"database_url": "postgresql://example.test/database"},
+    )
+
+    def create_engine(database_url, **kwargs):  # noqa: ANN001, ANN003
+        captured.update(database_url=database_url, **kwargs)
+        return object()
+
+    monkeypatch.setattr(shared_utils, "create_engine", create_engine)
+
+    shared_utils.get_engine()
+
+    assert captured["connect_args"] == {
+        "options": "-csearch_path=runtime_state,public"
+    }
+
+
 def test_library_utils_export_shared_common_functions() -> None:
     from app.modules.library.runtime import utils as library_utils
 

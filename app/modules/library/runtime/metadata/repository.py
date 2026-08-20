@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import Sequence
 
 from sqlalchemy import and_
-from sqlalchemy import func
 from sqlalchemy import select
 
 from models import Document, LibraryMetadataEvaluationState, Metadata
@@ -45,8 +44,6 @@ def fetch_docs_for_evaluation(
     predicate = (
         (
             Metadata.lib.is_(None)
-            | Metadata.lib_eval_method.is_(None)
-            | (func.btrim(Metadata.lib_eval_method) == "")
             | and_(
                 Metadata.lib.is_(True),
                 Metadata.classification_id.is_(None),

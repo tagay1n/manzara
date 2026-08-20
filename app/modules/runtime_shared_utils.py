@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Any
 import zipfile
@@ -25,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 REDACTED_SENTINEL = "<REDACTED>"
 ENTRY_POINT_DIR = "0_entry_point"
 UPSTREAM_METADATA_DIR = "misc/upstream_metadata"
+_SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def read_config(config_file: str = "config.yaml"):
@@ -75,10 +77,14 @@ def _contains_redacted(node: Any) -> bool:
 def get_engine(echo: bool = False):
     """Create a SQLAlchemy engine from the configured database URL."""
     config = read_config()
+    schema = str(os.environ.get("MANZARA_DB_SCHEMA") or "monocorpus").strip()
+    if not _SCHEMA_RE.fullmatch(schema):
+        raise ValueError(f"Invalid database schema: {schema!r}")
     return create_engine(
         config["database_url"],
         echo=echo,
         json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
+        connect_args={"options": f"-csearch_path={schema},public"},
     )
 
 
