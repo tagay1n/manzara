@@ -113,8 +113,9 @@ def test_evaluation_replaces_invalid_pdf_in_configured_shared_cache(
     assert len(downloads) == 1
 
 
-def test_worker_advances_to_next_model_after_incomplete_response(
+def test_worker_advances_to_next_model_after_incomplete_response_and_logs_attempts(
     monkeypatch,
+    capsys,
 ) -> None:
     class _Manager:
         def run_with_key(self, *, model_name, call, run_id, max_attempts):  # noqa: ANN001
@@ -159,3 +160,42 @@ def test_worker_advances_to_next_model_after_incomplete_response(
 
     assert result.model_name == "model-second"
     assert calls == ["model-first", "model-second"]
+    output = capsys.readouterr().out
+    assert "Gemini request" in output
+    assert f"md5={_document().md5}" in output
+    assert "model=model-first" in output
+    assert "model=model-second" in output
+
+
+def test_evaluation_progress_matches_metadata_extraction_contract() -> None:
+    class _Db:
+        def __init__(self) -> None:
+            self.progress: list[dict] = []
+            self.events: list[tuple[str, dict]] = []
+
+        def update_run_progress(self, _run_id, payload):  # noqa: ANN001
+            self.progress.append(payload)
+
+        def insert_event(self, event_type, **kwargs):  # noqa: ANN001
+            self.events.append((event_type, kwargs))
+
+    db = _Db()
+    progress = evaluation_module._EvaluationProgress(db, run_id=42, total=2)
+
+    progress.publish()
+    progress.record_model_attempt("model-first")
+    progress.record_completed("succeeded", model_name="model-first")
+    progress.record_completed("rules_skipped")
+
+    assert db.progress[-1] == {
+        "current": 2,
+        "total": 2,
+        "percent": 100.0,
+        "remaining": 0,
+        "succeeded": 1,
+        "rules_skipped": 1,
+        "terminal": 0,
+        "model_attempts": {"model-first": 1},
+        "model_successes": {"model-first": 1},
+    }
+    assert db.events[-1][0] == "task.progress"

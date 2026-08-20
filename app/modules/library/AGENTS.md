@@ -30,6 +30,7 @@ These rules apply to `app/modules/library/`.
 - Persist content-level failures per document and model. Resume with the next untried model; a changed model set reopens terminal failures without retrying models that already failed.
 - A usable response has a concise decision reason and, when applicable, a normalized DDC plus category path. Empty, malformed, or incomplete responses advance to the next model.
 - Quota and service failures never become permanent document exclusions. Uploaded Gemini files use shared best-effort cleanup.
+- Publish persisted progress with processed/total counts, rule skips, terminal outcomes, and per-model attempts/successes. Log the document MD5 and resolved model before every Gemini request.
 
 ## Collections
 

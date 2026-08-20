@@ -8,6 +8,7 @@ import re
 import threading
 import time
 import zipfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
@@ -100,11 +101,82 @@ MANAGED_TERMSETS = {
 
 
 MODEL_POOL_ALIAS = "library_metadata_evaluation"
+TASK_ID = "maintenance.monocorpus_meta_evaluate"
+PANEL_ID = "library"
 
 
 def _run_id() -> int | None:
     raw = str(os.environ.get("MANZARA_TASK_RUN_ID") or "").strip()
     return int(raw) if raw.isdigit() and int(raw) > 0 else None
+
+
+class _EvaluationProgress:
+    """Publish evaluation progress using the shared task progress contract."""
+
+    def __init__(self, db: Database, *, run_id: int | None, total: int) -> None:
+        self.db = db
+        self.run_id = run_id
+        self.total = max(0, int(total))
+        self.current = 0
+        self.counters: Counter[str] = Counter(
+            succeeded=0,
+            rules_skipped=0,
+            terminal=0,
+        )
+        self.model_attempts: Counter[str] = Counter()
+        self.model_successes: Counter[str] = Counter()
+        self.lock = threading.Lock()
+
+    def publish(self) -> None:
+        with self.lock:
+            self._publish_locked()
+
+    def record_model_attempt(self, model_name: str) -> None:
+        with self.lock:
+            self.model_attempts[str(model_name)] += 1
+            self._publish_locked()
+
+    def record_completed(
+        self,
+        outcome: str,
+        *,
+        model_name: str | None = None,
+        count: int = 1,
+    ) -> None:
+        amount = max(0, int(count))
+        if amount == 0:
+            return
+        with self.lock:
+            self.current += amount
+            self.counters[str(outcome)] += amount
+            if model_name:
+                self.model_successes[str(model_name)] += amount
+            self._publish_locked()
+
+    def _publish_locked(self) -> None:
+        if self.run_id is None:
+            return
+        payload = {
+            "current": self.current,
+            "total": self.total,
+            "percent": (
+                100.0
+                if self.total == 0
+                else round((self.current / self.total) * 100, 2)
+            ),
+            "remaining": max(0, self.total - self.current),
+            **dict(self.counters),
+            "model_attempts": dict(self.model_attempts),
+            "model_successes": dict(self.model_successes),
+        }
+        self.db.update_run_progress(self.run_id, payload)
+        self.db.insert_event(
+            "task.progress",
+            task_id=TASK_ID,
+            run_id=self.run_id,
+            panel_id=PANEL_ID,
+            payload={"status": "running", "progress": payload},
+        )
 
 
 class Evaluation(BaseModel):
@@ -189,8 +261,8 @@ def evaluate(args) -> None:
     run_id = _run_id()
     gemini_manager = GeminiRuntimeManager(
         state_db,
-        task_id="maintenance.monocorpus_meta_evaluate",
-        panel_id="library",
+        task_id=TASK_ID,
+        panel_id=PANEL_ID,
     )
     channel = Channel(dry_run=args.dry_run)
     if args.dry_run:
@@ -198,6 +270,8 @@ def evaluate(args) -> None:
 
     remaining = _count_remaining(config, channel, models)
     print(f"Documents remaining for evaluation: {remaining}")
+    progress = _EvaluationProgress(state_db, run_id=run_id, total=remaining)
+    progress.publish()
     excerpt_chars = max(0, args.excerpt_chars)
     stop_event = threading.Event()
     while not stop_event.is_set():
@@ -211,10 +285,14 @@ def evaluate(args) -> None:
                 break
 
             docs, non_applicables = _early_skip(docs)
-            if not docs:
-                continue
             if not args.dry_run:
                 _save_non_applicable(non_applicables)
+                progress.record_completed(
+                    "rules_skipped",
+                    count=len(non_applicables),
+                )
+            if not docs:
+                continue
 
             known_classifications = _load_known_classifications()
 
@@ -234,6 +312,7 @@ def evaluate(args) -> None:
                     gemini_manager=gemini_manager,
                     models=models,
                     run_id=run_id,
+                    progress=progress,
                 )
                 thread = threading.Thread(target=worker, name=f"eval-{index + 1}")
                 thread.start()
@@ -408,6 +487,7 @@ class LibraryApplicabilityWorker:
         gemini_manager: GeminiRuntimeManager | None = None,
         models: list[str] | None = None,
         run_id: int | None = None,
+        progress: _EvaluationProgress | None = None,
     ):
         self.tasks_queue = tasks_queue
         self.config = config
@@ -425,6 +505,7 @@ class LibraryApplicabilityWorker:
         if not self.models:
             raise ValueError("metadata evaluation models are required")
         self.run_id = run_id
+        self.progress = progress
 
     def __call__(self) -> None:
         while True:
@@ -445,6 +526,11 @@ class LibraryApplicabilityWorker:
                     result.value,
                     model_name=result.model_name,
                 )
+                if self.progress is not None and not self.dry_run:
+                    self.progress.record_completed(
+                        "succeeded",
+                        model_name=result.model_name,
+                    )
             except GeminiModelPoolExhaustedError as exc:
                 self.log(f"All evaluation models rejected {doc.md5}: {exc}")
                 if not self.dry_run:
@@ -454,6 +540,8 @@ class LibraryApplicabilityWorker:
                         run_id=self.run_id,
                         reason=str(exc),
                     )
+                    if self.progress is not None:
+                        self.progress.record_completed("terminal")
                 continue
             except GeminiModelPoolUnavailableError as exc:
                 self.log(f"Gemini evaluation models unavailable: {exc}")
@@ -478,6 +566,8 @@ class LibraryApplicabilityWorker:
                         run_id=self.run_id,
                         reason=f"{type(e).__name__}: {e}",
                     )
+                    if self.progress is not None:
+                        self.progress.record_completed("terminal")
 
     def _evaluate(self, doc: EvaluationTask) -> GeminiModelPoolResult[Evaluation]:
         flattened_meta = extract_flat_fields(doc.schema_org)
@@ -511,6 +601,9 @@ class LibraryApplicabilityWorker:
         self._dump_prompt(doc.md5, prompt)
 
         def _call(model_name: str, api_key: str, _lease: Any) -> str:
+            self.log(f"Gemini request md5={doc.md5} model={model_name}")
+            if self.progress is not None:
+                self.progress.record_model_attempt(model_name)
             raw_response = generate_structured_json(
                 api_key=api_key,
                 model_name=model_name,
