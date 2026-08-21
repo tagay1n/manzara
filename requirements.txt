@@ -7,6 +7,9 @@ alembic==1.18.4
 boto3==1.42.75
 cryptography==46.0.5
 google-genai==1.68.0
+gspread==6.2.1
+google-api-python-client==2.189.0
+google-auth-oauthlib==1.2.4
 huggingface_hub==1.7.2
 isbnlib==3.10.14
 pydantic==2.12.5

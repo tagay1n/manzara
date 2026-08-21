@@ -46,6 +46,25 @@ def test_maintenance_tasks_include_document_s3_sync() -> None:
     )
 
 
+def test_maintenance_tasks_include_dump_state() -> None:
+    tasks = maintenance_task_definitions(
+        MaintenanceSettings(
+            monocorpus_repo_path=Path("/tmp/monocorpus"),
+            pgbackrest_stanza="monocorpus",
+        )
+    )
+
+    task = {item["task_id"]: item for item in tasks}["maintenance.dump_state"]
+    assert task["panel_id"] == "backup"
+    assert task["title"] == "Upload to GSheets"
+    assert "app.modules.maintenance.runtime.dump_state" in str(
+        task["command"]["value"]
+    )
+    assert "--legacy-credentials-dir /tmp/monocorpus/_artifacts/credentials" in str(
+        task["command"]["value"]
+    )
+
+
 def test_backup_tasks_have_a_dedicated_catalog_and_short_titles() -> None:
     tasks = maintenance_task_definitions(
         MaintenanceSettings(
