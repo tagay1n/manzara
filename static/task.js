@@ -206,6 +206,37 @@ function renderSummaryArtifacts(summary) {
   `;
 }
 
+function renderRunProgress(run) {
+  if (!isActiveStatus(run?.status)) return "";
+  const progress = run?.progress && typeof run.progress === "object" ? run.progress : {};
+  const current = Number(progress.current);
+  const total = Number(progress.total);
+  const determinate = Number.isFinite(current)
+    && current >= 0
+    && Number.isFinite(total)
+    && total > 0;
+  if (!determinate) {
+    return '<div class="task-run-progress"><div class="progress-wrap"><div class="progress-indeterminate"></div></div></div>';
+  }
+  const suppliedPercent = Number(progress.percent);
+  const percent = Math.max(0, Math.min(
+    100,
+    Number.isFinite(suppliedPercent) ? suppliedPercent : (current / total) * 100,
+  ));
+  const roundedPercent = Math.round(percent);
+  return `
+    <div class="task-run-progress">
+      <div class="progress-meta">
+        <span>${escapeHtml(String(current))} / ${escapeHtml(String(total))}</span>
+        <span>${escapeHtml(String(roundedPercent))}%</span>
+      </div>
+      <div class="progress-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(String(roundedPercent))}" aria-label="Run progress: ${escapeHtml(String(current))} of ${escapeHtml(String(total))}, ${escapeHtml(String(roundedPercent))}%">
+        <div class="progress-determinate" style="width: ${percent}%"></div>
+      </div>
+    </div>
+  `;
+}
+
 function toggleButtonModel(task, run) {
   const status = run?.status || "idle";
   if (status === "stopping_graceful") {
@@ -259,6 +290,7 @@ function renderRunResult(run) {
     .filter(Boolean)
     .join("");
   return `
+    ${renderRunProgress(run)}
     <div class="run-result-grid">
       <div><span class="meta-k">Run</span><span class="meta-v">#${run.run_id}</span></div>
       <div><span class="meta-k">Status</span><span class="meta-v">${escapeHtml(run.status)}</span></div>

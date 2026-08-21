@@ -113,7 +113,7 @@ Runtime control behavior:
 - Shayan Yandex upload keeps resumable state in `shayan_manifest_entries` (`yadisk_status`, `yadisk_uploaded_payload_hash`, `yadisk_remote_path`, `yadisk_last_error`, timestamps).
 - Shayan Yandex-to-Nextcloud transfer checkpoints each video in `shayan_webdav_transfers`. It uses Nextcloud chunked upload v2, assembles into deterministic temporary DAV paths, and independently verifies content before the final DAV move. Verified rows remain `uploaded`, making subsequent runs skip them without uploading again. The task emits chunk-level byte progress over SSE, stops gracefully at file boundaries, and restarts only an interrupted current chunk upload. It never deletes, trashes, or moves source videos on Yandex Disk.
 - Long-running tasks can persist `runs.progress_json`; `task.progress` SSE events update determinate progress bars without frontend-owned domain state.
-- Document synchronization keeps Yandex Disk as a non-destructive, non-publishing auxiliary source while Backblaze B2 S3 is primary. It verifies existing objects, copies missing/corrupt objects, independently reads back new uploads, checkpoints verification on `document`, and reports live byte progress and structured run artifacts.
+- Document storage upload uses PostgreSQL's null-`document_url` rows as its queue, reuses verified cache entries, downloads cache misses by persisted Yandex path, verifies Backblaze objects, and checkpoints storage state on `document` with live progress and structured artifacts.
 - Document cleanup is split into preparation and execution. `library.prepare_document_cleanup` only writes PostgreSQL plans/reviews. `maintenance.monocorpus_sync` applies persisted plans, synchronizes Yandex catalog entries, publishes missing links only for unrestricted documents, and records duplicate-MD5 removals before executing them.
 
 Library data tooling currently includes:
@@ -222,17 +222,17 @@ DELETE FROM monocorpus.library_metadata_extraction_state
 WHERE md5 = '<document-md5>';
 ```
 
-`maintenance.sync_documents_s3` recursively discovers files only from the configured Yandex Disk root. Discovery and transfer are one sequential streaming pipeline: each first-seen MD5 is checked and synchronized immediately, without waiting for a complete Yandex listing or Backblaze bucket inventory. A persisted `document_url` that resolves to the expected Backblaze bucket/key is the resumability checkpoint: later runs trust it and make no per-object Backblaze request. When that checkpoint is absent, required bytes use a hash-valid cache file first, a verified Backblaze object second, a verified legacy Yandex S3 object third, and Yandex Disk last. Verified downloads populate the shared cache for reuse; cache-only files remain ignored during discovery.
+`maintenance.monocorpus_sync` recursively traverses the configured Yandex Disk root, applies persisted cleanup plans, handles duplicate resources, publishes missing links for ordinary unrestricted documents, and inserts or updates Yandex catalog fields in PostgreSQL. It never downloads document bytes or uploads them to Backblaze. Cleanup execution may still delete managed S3 derivatives after the guarded Yandex action is verified.
 
-Legacy S3 objects are verified rather than blindly replaced. Plain ETags and reproducible boto3 multipart ETags are checked first; otherwise the object is downloaded once and hashed. A newly uploaded Backblaze object is not downloaded again: a post-upload `HEAD` must confirm its expected size and submitted `source-md5` metadata before PostgreSQL is updated. Restricted-object cleanup also finishes before the Backblaze link is committed. If upload succeeds but that database commit fails, the next run may safely upload the same content-addressed key again.
+`maintenance.sync_documents_s3`, displayed as **Upload to Backblaze S3**, reads only PostgreSQL rows whose `document_url` is null or blank. It never lists Yandex directories, discovers or inserts documents, or publishes Yandex links. A hash-valid shared cache file is reused first; on a cache miss, the task downloads the exact persisted `ya_path` from Yandex and verifies its MD5. An unavailable Yandex download is logged and skipped, leaving the row pending for a later run. The task never downloads source bytes from Backblaze or legacy S3.
+
+If the expected content-addressed Backblaze object already exists, matching size plus `source-md5` metadata or a plain MD5 ETag allows the task to commit the checkpoint without re-uploading. A new upload is not downloaded again: a post-upload `HEAD` must confirm its expected size and submitted `source-md5` metadata before PostgreSQL is updated. Restricted-object cleanup also finishes before the Backblaze link is committed. The task updates only `document_url`, `primary_storage_size`, `primary_storage_etag`, and `primary_storage_verified_at` on the still-pending row.
 
 Objects use flat content-addressed keys (`<md5>.<extension>`), independent of the Yandex folder hierarchy. Existing valid object keys are retained. Revision `20260731_0013` adds `primary_storage_size`, `primary_storage_etag`, and `primary_storage_verified_at` to the existing `document` table; normal application startup applies it automatically.
 
-The task never publishes, deletes, trashes, or moves Yandex Disk files. After a restricted file is safely copied to the Backblaze private bucket, an obsolete public S3 copy is deleted and absence is verified before PostgreSQL stores the private link. Boto3 upload callbacks emit byte-level SSE progress. Stop requests finish the current document; the next run skips files with persisted Backblaze links and restarts only work whose checkpoint was not committed. Per-file failures are logged, processing continues, and those failures remain visible in the final reconciliation report. The task has no default schedule: run it manually from the Maintenance flow or explicitly configure a schedule on `/schedules`.
+The upload task never publishes, deletes, trashes, moves, or traverses Yandex Disk files. After a restricted file is safely copied to the Backblaze private bucket, an obsolete public S3 copy is deleted and absence is verified before PostgreSQL stores the private link. Boto3 callbacks emit byte-level SSE progress. Stop requests finish the current document; rows without a committed link remain pending. Per-item skips and failures are logged, processing continues, and the run completes with a visible queue report. Setup, authentication, configuration, duplicate-identity, and database-wide errors remain fatal. The task has no default schedule.
 
-Every finished run emits a structured reconciliation artifact used by the web run summary. It compares Yandex source files and canonical MD5 documents with PostgreSQL rows, reporting database rows before/after, synced and unsynced source documents, database-only rows, duplicate source paths, item failures, and whether the two sides are fully synchronized. Exact database-only reconciliation is calculated only when traversal reaches the end. A stopped run reports discovery as incomplete and database-only as not evaluated. Differences complete as a visible report rather than failing the task; discovery or task-level errors that prevent a trustworthy report still fail normally.
-
-The first run can be I/O-intensive because unverifiable legacy S3 objects may need one download for a content hash. Later runs reuse PostgreSQL verification checkpoints when object size and ETag are unchanged.
+Every finished upload emits a structured queue artifact used by the web run summary: pending before/after, processed, uploaded, recovered existing objects, cache/Yandex sources, skipped downloads, failures, bytes uploaded, and stop state.
 
 Backblaze references: [S3-compatible endpoint and supported calls](https://www.backblaze.com/docs/en/cloud-storage-call-the-s3-compatible-api), [application key capabilities](https://www.backblaze.com/docs/cloud-storage-s3-compatible-app-keys).
 
@@ -438,10 +438,11 @@ Coverage notes:
     - stop after one file and confirm the next run resumes without uploading the verified file again
   - `maintenance.sync_documents_s3` against real Yandex/Backblaze services:
     - confirm a cached document uploads without a Yandex download
+    - confirm a cache miss downloads only the persisted PostgreSQL `ya_path` and performs no Yandex traversal or publishing
     - confirm the uploaded Backblaze object passes the size and `source-md5` metadata `HEAD` check before PostgreSQL is updated, without a read-back download
-    - confirm an unchanged document with a persisted Backblaze link is skipped without per-object Backblaze requests on the next run
+    - confirm an existing verified Backblaze object is checkpointed without re-uploading
+    - confirm an unavailable Yandex path is reported as skipped and remains pending
     - confirm a restricted document is private, its stored URL is encrypted, and any legacy public copy is absent
-    - confirm migration does not create a Yandex Disk public link
     - confirm byte-level upload progress reaches the task card through SSE
     - request graceful stop and confirm the current document finishes before the run stops
     - force-stop one multipart upload and confirm the next run aborts its unfinished parts before retrying that document

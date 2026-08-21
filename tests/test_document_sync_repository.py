@@ -34,7 +34,7 @@ class _Connection:
     def execute(self, statement, _parameters=None):  # noqa: ANN001
         sql = str(statement)
         self.engine.statements.append(sql)
-        if sql.lstrip().startswith("SELECT"):
+        if sql.lstrip().startswith(("SELECT", "WITH")):
             return _Result(rows=self.engine.rows)
         rowcount = self.engine.rowcounts.pop(0) if self.engine.rowcounts else 0
         return _Result(rowcount)
@@ -80,49 +80,43 @@ def _repository(*rowcounts: int) -> PostgresDocumentSyncRepository:
     return repository
 
 
-def test_repository_updates_existing_md5_without_on_conflict() -> None:
+def test_repository_updates_only_storage_checkpoint_for_pending_md5() -> None:
     repository = _repository(1)
 
-    created = repository.save_verified_document(_payload())
+    updated = repository.save_storage_checkpoint("a" * 32, _payload())
 
-    assert created is False
+    assert updated is True
     assert len(repository.engine.statements) == 1
     update_sql = repository.engine.statements[0]
     assert update_sql.lstrip().startswith("UPDATE document")
-    assert '"full" = :full' in update_sql
+    assert "document_url = :document_url" in update_sql
+    assert "primary_storage_verified_at = :primary_storage_verified_at" in update_sql
+    assert "mime_type" not in update_sql
     assert "WHERE md5 = :md5" in update_sql
-    assert "ON CONFLICT" not in update_sql
+    assert "document_url IS NULL" in update_sql
 
 
-def test_repository_inserts_only_when_md5_does_not_exist() -> None:
-    repository = _repository(0, 1)
-
-    created = repository.save_verified_document(_payload())
-
-    assert created is True
-    assert len(repository.engine.statements) == 2
-    assert repository.engine.statements[1].lstrip().startswith("INSERT INTO document")
-    assert 'language, "full", sharing_restricted' in repository.engine.statements[1]
-
-
-def test_repository_rejects_ambiguous_duplicate_md5_and_does_not_insert() -> None:
+def test_repository_rejects_ambiguous_checkpoint_update() -> None:
     repository = _repository(2)
 
     with pytest.raises(RuntimeError, match="matched 2 rows"):
-        repository.save_verified_document(_payload())
+        repository.save_storage_checkpoint("a" * 32, _payload())
 
     assert len(repository.engine.statements) == 1
 
 
-def test_repository_quotes_reserved_full_column_in_select() -> None:
+def test_repository_selects_only_pending_documents_in_stable_order() -> None:
     repository = _repository()
 
-    repository.list_documents()
+    repository.list_pending_documents()
 
-    assert 'language, "full", sharing_restricted' in repository.engine.statements[0]
+    assert "md5, mime_type, ya_path, sharing_restricted" in repository.engine.statements[0]
+    assert "document_url IS NULL" in repository.engine.statements[0]
+    assert "BTRIM(document_url) = ''" in repository.engine.statements[0]
+    assert "ORDER BY ya_path NULLS LAST, md5" in repository.engine.statements[0]
 
 
-def test_repository_rejects_duplicate_md5_during_initial_read() -> None:
+def test_repository_rejects_duplicate_pending_md5_during_initial_read() -> None:
     repository = _repository()
     repository.engine.rows = [
         {"md5": "a" * 32},
@@ -130,4 +124,4 @@ def test_repository_rejects_duplicate_md5_during_initial_read() -> None:
     ]
 
     with pytest.raises(RuntimeError, match="Duplicate document MD5"):
-        repository.list_documents()
+        repository.list_pending_documents()

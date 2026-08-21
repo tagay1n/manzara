@@ -905,6 +905,11 @@ test("task page renders running control state and toggles task endpoint", async 
         finished_at: null,
         exit_code: null,
         error_text: null,
+        progress: {
+          current: 3,
+          total: 12,
+          percent: 25,
+        },
       },
     ],
     global: {
@@ -948,6 +953,10 @@ test("task page renders running control state and toggles task endpoint", async 
   const toggleBtn = harness.elements.get("task-toggle-btn");
   assert.equal(toggleBtn.classList.contains("active"), true);
   assert.match(toggleBtn.innerHTML, /square/);
+  assert.match(harness.elements.get("run-result").innerHTML, /task-run-progress/);
+  assert.match(harness.elements.get("run-result").innerHTML, /3 \/ 12/);
+  assert.match(harness.elements.get("run-result").innerHTML, /25%/);
+  assert.match(harness.elements.get("run-result").innerHTML, /role="progressbar"/);
 
   toggleBtn.dispatch("click");
   await harness.flush();

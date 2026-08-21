@@ -41,6 +41,7 @@ def test_maintenance_tasks_include_document_s3_sync() -> None:
     task = {item["task_id"]: item for item in tasks}["maintenance.sync_documents_s3"]
     assert task["panel_id"] == "maintenance"
     assert task["task_type"] == "transfer"
+    assert task["title"] == "Upload to Backblaze S3"
     assert "app.modules.maintenance.runtime.sync_documents_s3" in str(
         task["command"]["value"]
     )

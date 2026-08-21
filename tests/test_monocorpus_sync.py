@@ -74,6 +74,9 @@ class _YaDisk:
     def publish(self, path):  # noqa: ANN001
         self.published.append(str(path))
 
+    def download(self, *_args, **_kwargs):
+        raise AssertionError("catalog Sync must not download document bytes")
+
     def remove(self, path, permanently=False):  # noqa: ANN001
         assert permanently is True
         self.timeline.append(("remove", str(path)))
@@ -191,6 +194,9 @@ def test_missing_cleanup_source_and_target_is_canceled_without_deleting_state() 
 class _S3:
     def list_objects_v2(self, **_kwargs):
         return {"Contents": [], "IsTruncated": False}
+
+    def upload_file(self, *_args, **_kwargs):
+        raise AssertionError("catalog Sync must not upload document bytes")
 
 
 class _MissingBucketS3(_S3):

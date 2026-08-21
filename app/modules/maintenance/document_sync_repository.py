@@ -1,4 +1,4 @@
-"""PostgreSQL persistence for primary document-storage synchronization."""
+"""PostgreSQL source and checkpoints for primary document uploads."""
 
 from __future__ import annotations
 
@@ -6,11 +6,9 @@ from typing import Any, Mapping
 
 from sqlalchemy import create_engine, text
 
-from app.document_storage import object_url
-
 
 class PostgresDocumentSyncRepository:
-    """Own document storage reads and verification checkpoints."""
+    """Own the pending document queue and verified storage checkpoints."""
 
     def __init__(self, database_url: str, *, schema: str) -> None:
         self.engine = create_engine(
@@ -21,103 +19,98 @@ class PostgresDocumentSyncRepository:
     def dispose(self) -> None:
         self.engine.dispose()
 
-    def list_documents(self) -> dict[str, dict[str, Any]]:
+    def list_pending_documents(self) -> list[dict[str, Any]]:
+        """Return null-URL rows while detecting any ambiguous MD5 identity."""
         with self.engine.connect() as conn:
             rows = conn.execute(
                 text(
                     """
-                    SELECT md5, mime_type, ya_path, ya_public_url, ya_public_key,
-                           ya_resource_id, language, "full", sharing_restricted,
-                           document_url, content_url, upstream_meta_url,
-                           primary_storage_size, primary_storage_etag,
-                           primary_storage_verified_at
+                    WITH duplicate_md5 AS (
+                        SELECT md5
+                        FROM document
+                        WHERE md5 IS NOT NULL
+                        GROUP BY md5
+                        HAVING COUNT(*) > 1
+                    )
+                    SELECT md5, mime_type, ya_path, sharing_restricted,
+                           document_url, primary_storage_size,
+                           primary_storage_etag, primary_storage_verified_at
                     FROM document
+                    WHERE document_url IS NULL
+                       OR BTRIM(document_url) = ''
+                       OR md5 IN (SELECT md5 FROM duplicate_md5)
+                    ORDER BY ya_path NULLS LAST, md5
                     """
                 )
             ).mappings().all()
-        documents: dict[str, dict[str, Any]] = {}
+
+        seen: set[str] = set()
+        pending: list[dict[str, Any]] = []
         for row in rows:
-            md5 = str(row.get("md5") or "").strip().lower()
+            item = dict(row)
+            md5 = str(item.get("md5") or "").strip().lower()
             if not md5:
-                raise RuntimeError("Document row has no MD5; refusing synchronization")
-            if md5 in documents:
+                raise RuntimeError("Pending document row has no MD5")
+            if md5 in seen:
                 raise RuntimeError(
-                    f"Duplicate document MD5 {md5}; refusing synchronization"
+                    f"Duplicate document MD5 {md5}; refusing upload"
                 )
-            documents[md5] = dict(row)
-        return documents
+            seen.add(md5)
+            if not str(item.get("document_url") or "").strip():
+                item["md5"] = md5
+                pending.append(item)
+        return pending
 
-    def list_upstream_metadata(
+    def count_pending_documents(self) -> int:
+        with self.engine.connect() as conn:
+            return int(
+                conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*)
+                        FROM document
+                        WHERE document_url IS NULL OR BTRIM(document_url) = ''
+                        """
+                    )
+                ).scalar_one()
+            )
+
+    def save_storage_checkpoint(
         self,
-        s3: Any,
-        bucket: str,
-        endpoint_url: str,
-    ) -> dict[str, str]:
-        paginator = s3.get_paginator("list_objects_v2")
-        return {
-            key.removesuffix(".zip"): object_url(endpoint_url, bucket, key)
-            for page in paginator.paginate(Bucket=bucket)
-            for item in page.get("Contents", [])
-            if (key := str(item.get("Key") or "")).endswith(".zip")
+        md5: str,
+        payload: Mapping[str, Any],
+    ) -> bool:
+        """Commit a verified primary-storage checkpoint to one pending row."""
+        values = {
+            "md5": str(md5).strip().lower(),
+            "document_url": payload.get("document_url"),
+            "primary_storage_size": payload.get("primary_storage_size"),
+            "primary_storage_etag": payload.get("primary_storage_etag"),
+            "primary_storage_verified_at": payload.get(
+                "primary_storage_verified_at"
+            ),
         }
-
-    def save_verified_document(self, payload: Mapping[str, Any]) -> bool:
         with self.engine.begin() as conn:
             updated = conn.execute(
                 text(
                     """
                     UPDATE document SET
-                        mime_type = :mime_type,
-                        ya_path = :ya_path,
-                        ya_public_url = :ya_public_url,
-                        ya_public_key = :ya_public_key,
-                        ya_resource_id = :ya_resource_id,
-                        "full" = :full,
-                        sharing_restricted = :sharing_restricted,
                         document_url = :document_url,
-                        upstream_meta_url = COALESCE(
-                            document.upstream_meta_url,
-                            :upstream_meta_url
-                        ),
                         primary_storage_size = :primary_storage_size,
                         primary_storage_etag = :primary_storage_etag,
                         primary_storage_verified_at = :primary_storage_verified_at
                     WHERE md5 = :md5
+                      AND (document_url IS NULL OR BTRIM(document_url) = '')
                     """
                 ),
-                dict(payload),
+                values,
             )
             if updated.rowcount > 1:
                 raise RuntimeError(
-                    f"Document MD5 {payload['md5']} matched {updated.rowcount} rows; "
-                    "refusing ambiguous update"
+                    f"Document MD5 {values['md5']} matched {updated.rowcount} rows; "
+                    "refusing ambiguous checkpoint"
                 )
-            if updated.rowcount == 1:
-                return False
-            inserted = conn.execute(
-                text(
-                    """
-                    INSERT INTO document (
-                        md5, mime_type, ya_path, ya_public_url, ya_public_key,
-                        ya_resource_id, language, "full", sharing_restricted,
-                        document_url, upstream_meta_url, primary_storage_size,
-                        primary_storage_etag, primary_storage_verified_at
-                    ) VALUES (
-                        :md5, :mime_type, :ya_path, :ya_public_url, :ya_public_key,
-                        :ya_resource_id, NULL, :full, :sharing_restricted,
-                        :document_url, :upstream_meta_url, :primary_storage_size,
-                        :primary_storage_etag, :primary_storage_verified_at
-                    )
-                    """
-                ),
-                dict(payload),
-            )
-            if inserted.rowcount != 1:
-                raise RuntimeError(
-                    f"Document MD5 {payload['md5']} insert affected "
-                    f"{inserted.rowcount} rows"
-                )
-        return True
+            return updated.rowcount == 1
 
 
 __all__ = ["PostgresDocumentSyncRepository"]

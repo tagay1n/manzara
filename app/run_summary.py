@@ -117,6 +117,45 @@ def build_structured_run_summary(
 
     if task_id == "maintenance.sync_documents_s3":
         sync_artifacts = artifacts if isinstance(artifacts, dict) else {}
+        if sync_artifacts.get("kind") == "maintenance.document_s3_upload_summary":
+            pending_before = int(sync_artifacts.get("pending_before") or 0)
+            uploaded = int(sync_artifacts.get("uploaded") or 0)
+            recovered = int(sync_artifacts.get("recovered_existing") or 0)
+            source_cache = int(sync_artifacts.get("source_cache") or 0)
+            source_yandex = int(sync_artifacts.get("source_yandex") or 0)
+            skipped = int(sync_artifacts.get("skipped_download") or 0)
+            failed = int(sync_artifacts.get("failed") or 0)
+            pending_after = int(sync_artifacts.get("pending_after") or 0)
+            raw_checkpointed = sync_artifacts.get("checkpointed")
+            checkpointed = (
+                int(raw_checkpointed)
+                if raw_checkpointed is not None
+                else uploaded + recovered
+            )
+            summary["highlights"].extend(
+                [
+                    {"label": "Pending before", "value": str(pending_before)},
+                    {"label": "Uploaded", "value": str(uploaded)},
+                    {"label": "Recovered", "value": str(recovered)},
+                    {"label": "From cache", "value": str(source_cache)},
+                    {"label": "From Yandex", "value": str(source_yandex)},
+                    {"label": "Skipped", "value": str(skipped)},
+                    {"label": "Failed", "value": str(failed)},
+                    {"label": "Pending after", "value": str(pending_after)},
+                ]
+            )
+            if status == "failed":
+                summary["message"] = "Backblaze upload failed before the queue completed."
+            elif sync_artifacts.get("stopped"):
+                summary["message"] = (
+                    f"Backblaze upload stopped safely with {pending_after} still pending."
+                )
+            else:
+                summary["message"] = (
+                    f"Backblaze upload completed: {checkpointed} checkpointed, "
+                    f"{skipped} skipped, {failed} failed, {pending_after} still pending."
+                )
+            return summary
         source_files = int(sync_artifacts.get("source_files") or 0)
         source_documents = int(sync_artifacts.get("source_documents") or 0)
         database_rows = int(sync_artifacts.get("database_rows_after") or 0)

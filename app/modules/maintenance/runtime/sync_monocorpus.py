@@ -6,7 +6,7 @@ import json
 import os
 import signal
 from pathlib import PurePosixPath
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from boto3 import Session
 from botocore.config import Config
@@ -21,15 +21,8 @@ from app.document_storage import (
 )
 from app.modules.maintenance.document_cleanup_executor import execute_yandex_cleanup
 from app.modules.maintenance.document_sync_lock import document_sync_lock
-from app.document_sync_filter import classify_document
+from app.document_sync_filter import classify_document, normalize_document_mime
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
-from app.modules.maintenance.runtime.sync_documents_s3 import (
-    _correct_mime,
-    _is_limited,
-    _is_restricted,
-    _resource_value,
-    _walk_files,
-)
 from app.run_artifact_channel import emit_run_artifact
 from app.runtime_config import load_runtime_config
 from app.settings import load_settings
@@ -37,6 +30,95 @@ from app.settings import load_settings
 
 TASK_ID = "maintenance.monocorpus_sync"
 PANEL_ID = "maintenance"
+
+
+def _resource_value(resource: Any, key: str, default: Any = None) -> Any:
+    if isinstance(resource, Mapping):
+        return resource.get(key, default)
+    try:
+        return resource[key]
+    except Exception:
+        return getattr(resource, key, default)
+
+
+def _correct_mime(mime_type: str, source_path: str) -> str:
+    return normalize_document_mime(source_path, mime_type)
+
+
+def _is_restricted(path: str, settings: DocumentStorageSettings) -> bool:
+    source = str(path).removeprefix("disk:").rstrip("/")
+    restricted = str(settings.restricted_path).removeprefix("disk:").rstrip("/")
+    return source == restricted or source.startswith(restricted + "/")
+
+
+def _is_limited(path: str) -> bool:
+    normalized = str(path).casefold()
+    return "/limited/" in normalized and (
+        "/milli_kitaphana/" in normalized or "/милли.китапханә/" in normalized
+    )
+
+
+def _walk_files(
+    yadisk: Any,
+    root: str,
+    *,
+    should_stop: Callable[[], bool],
+) -> Iterable[dict[str, Any]]:
+    stack = [str(root).rstrip("/")]
+    while stack and not should_stop():
+        current = stack.pop()
+        try:
+            children = list(
+                yadisk.listdir(
+                    current,
+                    fields=[
+                        "name",
+                        "path",
+                        "type",
+                        "size",
+                        "md5",
+                        "mime_type",
+                        "resource_id",
+                        "public_key",
+                        "public_url",
+                    ],
+                )
+            )
+        except PathNotFoundError as exc:
+            print(
+                f"monocorpus sync: warning skipped unavailable Yandex path={current} "
+                f"error={type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            continue
+        for resource in reversed(children):
+            resource_type = str(_resource_value(resource, "type", "") or "")
+            path = str(_resource_value(resource, "path", "") or "")
+            if resource_type == "dir":
+                if path:
+                    stack.append(path)
+                continue
+            if resource_type != "file" or not path:
+                continue
+            yield {
+                "source_path": path,
+                "source_size": int(_resource_value(resource, "size", 0) or 0),
+                "source_md5": str(
+                    _resource_value(resource, "md5", "") or ""
+                ).lower(),
+                "mime_type": _correct_mime(
+                    str(_resource_value(resource, "mime_type", "") or ""), path
+                ),
+                "resource_id": str(
+                    _resource_value(resource, "resource_id", "") or ""
+                ),
+                "public_key": str(
+                    _resource_value(resource, "public_key", "") or ""
+                ),
+                "public_url": str(
+                    _resource_value(resource, "public_url", "") or ""
+                ),
+            }
 
 
 def _run_id() -> int:

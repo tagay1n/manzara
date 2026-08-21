@@ -1,6 +1,6 @@
 # PostgreSQL Runtime and Migration Reference
 
-Last updated: 2026-08-04
+Last updated: 2026-08-21
 
 ## Current State
 
@@ -9,7 +9,7 @@ Last updated: 2026-08-04
 - `MANZARA_DATABASE_URL` selects the database.
 - `MANZARA_DB_SCHEMA` selects the Manzara operational schema and defaults to `monocorpus`.
 - Schema changes are Alembic-only. Application startup runs `upgrade head` before task and workflow definitions are seeded.
-- Current Alembic head: `20260804_0014`.
+- Current Alembic head: `20260821_0032`.
 
 The repository still contains the historical one-time import script, but it is not part of normal setup or startup. Do not run `scripts/migrate_sqlite_to_postgres.py` against an active database unless performing an explicitly planned legacy recovery.
 
@@ -25,7 +25,7 @@ Revision `20260731_0013` extends `document` with primary-storage verification ch
 - `primary_storage_etag`
 - `primary_storage_verified_at`
 
-These fields let document synchronization avoid repeated downloads and hashing when an S3 object is unchanged.
+These fields are committed with `document_url` after a Backblaze upload or verified-object recovery. Rows without `document_url` remain the upload queue.
 
 Revision `20260804_0014` historically introduced migration-only `shayan_webdav_transfers`; revision `20260815_0026` removes that completed migration state. Current Shayan-to-Hetzner checkpoints live on `shayan_manifest_entries` and persist the stable target path, ETag, verified checksum, lifecycle status, and timestamps used by the `Upload` task.
 

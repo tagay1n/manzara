@@ -47,7 +47,7 @@ def test_existing_maintenance_task_titles_are_renamed(prepared_test_schema) -> N
 
         assert titles == {
             "maintenance.monocorpus_sync": "Sync",
-            "maintenance.sync_documents_s3": "Migrate to Backblaze S3",
+            "maintenance.sync_documents_s3": "Upload to Backblaze S3",
         }
     finally:
         with engine.begin() as conn:

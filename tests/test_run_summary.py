@@ -192,6 +192,48 @@ def test_document_sync_summary_uses_structured_artifact() -> None:
     assert failed["highlights"]
 
 
+def test_document_upload_summary_uses_database_queue_artifact() -> None:
+    summary = build_structured_run_summary(
+        task_id="maintenance.sync_documents_s3",
+        panel_id="maintenance",
+        status="completed",
+        exit_code=0,
+        error_text=None,
+        stop_mode=None,
+        started_at=None,
+        finished_at=None,
+        log_lines=[],
+        artifacts={
+            "kind": "maintenance.document_s3_upload_summary",
+            "pending_before": 12,
+            "processed": 12,
+            "uploaded": 7,
+            "recovered_existing": 2,
+            "source_cache": 6,
+            "source_yandex": 5,
+            "skipped_download": 2,
+            "failed": 1,
+            "pending_after": 3,
+            "stopped": False,
+        },
+    )
+
+    assert summary["message"] == (
+        "Backblaze upload completed: 9 checkpointed, 2 skipped, 1 failed, "
+        "3 still pending."
+    )
+    assert {item["label"]: item["value"] for item in summary["highlights"]} == {
+        "Pending before": "12",
+        "Uploaded": "7",
+        "Recovered": "2",
+        "From cache": "6",
+        "From Yandex": "5",
+        "Skipped": "2",
+        "Failed": "1",
+        "Pending after": "3",
+    }
+
+
 def test_document_sync_summary_marks_incomplete_discovery_as_not_evaluated() -> None:
     summary = build_structured_run_summary(
         task_id="maintenance.sync_documents_s3",
