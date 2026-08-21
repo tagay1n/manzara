@@ -26,6 +26,10 @@ def test_metadata_extraction_state_table_is_migrated(prepared_test_schema) -> No
             "model_pool_json",
             "last_run_id",
             "terminal_reason",
+            "prompt_version",
+            "retry_after",
+            "operational_failure_count",
+            "last_operational_error",
             "created_at",
             "updated_at",
         }.issubset(columns)
@@ -93,7 +97,7 @@ def test_metadata_success_is_transactional_against_json_column(
             ).mappings().one()
         assert metadata["name"] == "Kitap"
         assert document["language"] == "tt-Cyrl"
-        assert document["meta_extraction_method"] == "model-one/prompt.v2"
+        assert document["meta_extraction_method"] == "model-one/prompt.v3"
     finally:
         if repository is not None:
             repository.dispose()

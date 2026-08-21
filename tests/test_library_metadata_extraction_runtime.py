@@ -6,6 +6,8 @@ import json
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from app.gemini_runtime import GeminiAllKeysExhaustedError
 from app.gemini_runtime import GeminiServerPauseError
 from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
@@ -35,6 +37,7 @@ class _Repository:
         self.saved: list[tuple[str, dict, str]] = []
         self.failures: list[tuple[str, str]] = []
         self.terminal: list[str] = []
+        self.operational_deferrals: list[tuple[str, str, int]] = []
 
     def list_candidates(self, *, limit=None):  # noqa: ANN001
         return [self.candidate] if limit is None or limit > 0 else []
@@ -49,6 +52,11 @@ class _Repository:
     def mark_terminal(self, md5, **_kwargs):  # noqa: ANN001
         self.terminal.append(md5)
 
+    def record_operational_deferral(
+        self, md5, *, error, retry_after_seconds, **_kwargs
+    ):  # noqa: ANN001
+        self.operational_deferrals.append((md5, error, retry_after_seconds))
+
 
 class _Manager:
     def __init__(self, *_args, **_kwargs) -> None:
@@ -56,6 +64,18 @@ class _Manager:
 
     def run_with_key(self, *, model_name, call, **_kwargs):  # noqa: ANN001
         return call("api-key", object())
+
+
+def test_operational_retry_cooldown_uses_validated_config() -> None:
+    assert runtime._operational_retry_cooldown_seconds({}) == 21_600
+    assert runtime._operational_retry_cooldown_seconds(
+        {"gemini": {"metadata_extraction_operational_retry_cooldown_seconds": 600}}
+    ) == 600
+
+    with pytest.raises(ValueError, match="integral"):
+        runtime._operational_retry_cooldown_seconds(
+            {"gemini": {"metadata_extraction_operational_retry_cooldown_seconds": True}}
+        )
 
 
 def _candidate() -> MetadataExtractionCandidate:
@@ -420,3 +440,6 @@ def test_runtime_defers_one_document_after_repeated_service_error_and_continues(
     assert summary["remaining"] == 1
     assert summary["succeeded"] == 1
     assert repository.saved[0][0] == "b" * 32
+    assert repository.operational_deferrals == [
+        ("a" * 32, "service paused", 21_600)
+    ]

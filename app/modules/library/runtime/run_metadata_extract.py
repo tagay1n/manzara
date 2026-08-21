@@ -52,6 +52,28 @@ from app.settings import load_settings
 TASK_ID = "library.metadata_extract"
 PANEL_ID = "library"
 MODEL_POOL_ALIAS = "library_metadata_extraction"
+DEFAULT_OPERATIONAL_RETRY_COOLDOWN_SECONDS = 21_600
+
+
+def _operational_retry_cooldown_seconds(config: Mapping[str, Any]) -> int:
+    gemini = config.get("gemini", {})
+    if not isinstance(gemini, Mapping):
+        raise ValueError("gemini config must be an object")
+    value = gemini.get(
+        "metadata_extraction_operational_retry_cooldown_seconds",
+        DEFAULT_OPERATIONAL_RETRY_COOLDOWN_SECONDS,
+    )
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            "gemini.metadata_extraction_operational_retry_cooldown_seconds "
+            "must be integral"
+        )
+    if not 60 <= value <= 604_800:
+        raise ValueError(
+            "gemini.metadata_extraction_operational_retry_cooldown_seconds "
+            "must be between 60 and 604800"
+        )
+    return value
 
 
 def _primary_s3_config() -> Config:
@@ -127,6 +149,9 @@ def run_metadata_extraction(
     run_id: int,
     should_stop: Callable[[], bool],
     limit: int | None = None,
+    operational_retry_cooldown_seconds: int = (
+        DEFAULT_OPERATIONAL_RETRY_COOLDOWN_SECONDS
+    ),
     request_json: Callable[..., str] = generate_structured_json,
 ) -> dict[str, Any]:
     """Process one fixed candidate snapshot and return a structured summary."""
@@ -282,6 +307,13 @@ def run_metadata_extraction(
                 flush=True,
             )
             if exc.retryable:
+                repository.record_operational_deferral(
+                    candidate.md5,
+                    models=models,
+                    run_id=run_id,
+                    error=str(exc),
+                    retry_after_seconds=operational_retry_cooldown_seconds,
+                )
                 counters["service_deferred"] += 1
                 processed += 1
             else:
@@ -389,6 +421,9 @@ def main() -> int:
             run_id=run_id,
             should_stop=lambda: bool(stop["requested"]),
             limit=args.limit,
+            operational_retry_cooldown_seconds=(
+                _operational_retry_cooldown_seconds(config)
+            ),
         )
         emit_run_artifact(summary)
         return 1 if summary["outcome"] == "gemini_unavailable" else 0

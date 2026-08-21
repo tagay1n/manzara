@@ -1,4 +1,5 @@
 gemini:
+  metadata_extraction_operational_retry_cooldown_seconds: 21600
   models:
     library_normalization: "gemini-2.5-flash"
   model_pools:
