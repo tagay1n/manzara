@@ -79,8 +79,10 @@ class PostgresDocumentSyncRepository:
         self,
         md5: str,
         payload: Mapping[str, Any],
+        *,
+        expected: Mapping[str, Any],
     ) -> bool:
-        """Commit a verified primary-storage checkpoint to one pending row."""
+        """Commit a checkpoint only while the source identity remains unchanged."""
         values = {
             "md5": str(md5).strip().lower(),
             "document_url": payload.get("document_url"),
@@ -88,6 +90,11 @@ class PostgresDocumentSyncRepository:
             "primary_storage_etag": payload.get("primary_storage_etag"),
             "primary_storage_verified_at": payload.get(
                 "primary_storage_verified_at"
+            ),
+            "expected_ya_path": expected.get("ya_path"),
+            "expected_mime_type": expected.get("mime_type"),
+            "expected_sharing_restricted": expected.get(
+                "sharing_restricted"
             ),
         }
         with self.engine.begin() as conn:
@@ -101,6 +108,10 @@ class PostgresDocumentSyncRepository:
                         primary_storage_verified_at = :primary_storage_verified_at
                     WHERE md5 = :md5
                       AND (document_url IS NULL OR BTRIM(document_url) = '')
+                      AND ya_path IS NOT DISTINCT FROM :expected_ya_path
+                      AND mime_type IS NOT DISTINCT FROM :expected_mime_type
+                      AND sharing_restricted IS NOT DISTINCT FROM
+                          :expected_sharing_restricted
                     """
                 ),
                 values,

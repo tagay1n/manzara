@@ -36,6 +36,7 @@ documents:
     bucket:
       public: manzara-documents
       private: manzara-documents-private
+      book_previews: ttpreviews
 
 yandex:
   disk:
@@ -57,7 +58,6 @@ yandex:
       upstream_metadata: upstream-metadata
       content_chunks: ttcontent-chunks
       image: ttimg
-      book_previews: ttbook-previews
 
 nextcloud:
   webdav_url: https://nx104082.your-storageshare.de/remote.php/dav/files/Admin

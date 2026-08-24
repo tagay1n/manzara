@@ -227,6 +227,7 @@ def _settings() -> DocumentStorageSettings:
         legacy=connection,
         public_bucket="public",
         private_bucket="private",
+        preview_bucket="ttpreviews",
         legacy_public_bucket="legacy-public",
         legacy_private_bucket="legacy-private",
         upstream_bucket="upstream",
@@ -375,3 +376,29 @@ def test_cleanup_restarts_mutated_s3_listing_from_first_page_until_empty() -> No
 
     assert removed == 3
     assert s3.keys == []
+
+
+class _ManagedPreviewS3(_MutablePagedS3):
+    def __init__(self, md5: str) -> None:
+        self.keys = [f"{md5}/1s.webp", f"{md5}/1l.webp", "other/1s.webp"]
+        self.requests = []
+
+
+def test_cleanup_removes_all_backblaze_preview_objects_for_document() -> None:
+    md5 = "a" * 32
+    primary_s3 = _ManagedPreviewS3(md5)
+
+    removed = _cleanup_managed_storage(
+        md5=md5,
+        primary_s3=primary_s3,
+        legacy_s3=_S3(),
+        settings=_settings(),
+        config={"yandex": {"cloud": {"bucket": {}}}},
+    )
+
+    assert removed == 2
+    assert primary_s3.keys == ["other/1s.webp"]
+    assert any(
+        request["Bucket"] == "ttpreviews" and request["Prefix"] == f"{md5}/"
+        for request in primary_s3.requests
+    )

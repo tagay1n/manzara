@@ -83,7 +83,15 @@ def _repository(*rowcounts: int) -> PostgresDocumentSyncRepository:
 def test_repository_updates_only_storage_checkpoint_for_pending_md5() -> None:
     repository = _repository(1)
 
-    updated = repository.save_storage_checkpoint("a" * 32, _payload())
+    updated = repository.save_storage_checkpoint(
+        "a" * 32,
+        _payload(),
+        expected={
+            "ya_path": "/book.pdf",
+            "mime_type": "application/pdf",
+            "sharing_restricted": False,
+        },
+    )
 
     assert updated is True
     assert len(repository.engine.statements) == 1
@@ -91,16 +99,27 @@ def test_repository_updates_only_storage_checkpoint_for_pending_md5() -> None:
     assert update_sql.lstrip().startswith("UPDATE document")
     assert "document_url = :document_url" in update_sql
     assert "primary_storage_verified_at = :primary_storage_verified_at" in update_sql
-    assert "mime_type" not in update_sql
+    assert "mime_type = :mime_type" not in update_sql
     assert "WHERE md5 = :md5" in update_sql
     assert "document_url IS NULL" in update_sql
+    assert "ya_path IS NOT DISTINCT FROM :expected_ya_path" in update_sql
+    assert "mime_type IS NOT DISTINCT FROM :expected_mime_type" in update_sql
+    assert "sharing_restricted IS NOT DISTINCT FROM" in update_sql
 
 
 def test_repository_rejects_ambiguous_checkpoint_update() -> None:
     repository = _repository(2)
 
     with pytest.raises(RuntimeError, match="matched 2 rows"):
-        repository.save_storage_checkpoint("a" * 32, _payload())
+        repository.save_storage_checkpoint(
+            "a" * 32,
+            _payload(),
+            expected={
+                "ya_path": "/book.pdf",
+                "mime_type": "application/pdf",
+                "sharing_restricted": False,
+            },
+        )
 
     assert len(repository.engine.statements) == 1
 

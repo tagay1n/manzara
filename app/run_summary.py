@@ -124,6 +124,7 @@ def build_structured_run_summary(
             source_cache = int(sync_artifacts.get("source_cache") or 0)
             source_yandex = int(sync_artifacts.get("source_yandex") or 0)
             skipped = int(sync_artifacts.get("skipped_download") or 0)
+            stale_cleaned = int(sync_artifacts.get("stale_upload_cleaned") or 0)
             failed = int(sync_artifacts.get("failed") or 0)
             pending_after = int(sync_artifacts.get("pending_after") or 0)
             raw_checkpointed = sync_artifacts.get("checkpointed")
@@ -140,6 +141,14 @@ def build_structured_run_summary(
                     {"label": "From cache", "value": str(source_cache)},
                     {"label": "From Yandex", "value": str(source_yandex)},
                     {"label": "Skipped", "value": str(skipped)},
+                ]
+            )
+            if stale_cleaned:
+                summary["highlights"].append(
+                    {"label": "Stale uploads cleaned", "value": str(stale_cleaned)}
+                )
+            summary["highlights"].extend(
+                [
                     {"label": "Failed", "value": str(failed)},
                     {"label": "Pending after", "value": str(pending_after)},
                 ]

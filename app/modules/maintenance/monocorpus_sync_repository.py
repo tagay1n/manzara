@@ -129,6 +129,26 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                 text(
                     """
                     UPDATE document SET
+                        document_url=CASE
+                            WHEN ya_path IS DISTINCT FROM :ya_path
+                              OR mime_type IS DISTINCT FROM :mime_type
+                              OR sharing_restricted IS DISTINCT FROM :sharing_restricted
+                            THEN NULL ELSE document_url END,
+                        primary_storage_size=CASE
+                            WHEN ya_path IS DISTINCT FROM :ya_path
+                              OR mime_type IS DISTINCT FROM :mime_type
+                              OR sharing_restricted IS DISTINCT FROM :sharing_restricted
+                            THEN NULL ELSE primary_storage_size END,
+                        primary_storage_etag=CASE
+                            WHEN ya_path IS DISTINCT FROM :ya_path
+                              OR mime_type IS DISTINCT FROM :mime_type
+                              OR sharing_restricted IS DISTINCT FROM :sharing_restricted
+                            THEN NULL ELSE primary_storage_etag END,
+                        primary_storage_verified_at=CASE
+                            WHEN ya_path IS DISTINCT FROM :ya_path
+                              OR mime_type IS DISTINCT FROM :mime_type
+                              OR sharing_restricted IS DISTINCT FROM :sharing_restricted
+                            THEN NULL ELSE primary_storage_verified_at END,
                         mime_type=:mime_type, ya_path=:ya_path,
                         ya_public_url=COALESCE(:ya_public_url, ya_public_url),
                         ya_public_key=COALESCE(:ya_public_key, ya_public_key),

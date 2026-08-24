@@ -212,6 +212,7 @@ def test_document_upload_summary_uses_database_queue_artifact() -> None:
             "source_cache": 6,
             "source_yandex": 5,
             "skipped_download": 2,
+            "stale_upload_cleaned": 1,
             "failed": 1,
             "pending_after": 3,
             "stopped": False,
@@ -229,6 +230,7 @@ def test_document_upload_summary_uses_database_queue_artifact() -> None:
         "From cache": "6",
         "From Yandex": "5",
         "Skipped": "2",
+        "Stale uploads cleaned": "1",
         "Failed": "1",
         "Pending after": "3",
     }

@@ -75,15 +75,19 @@ def _run_id() -> int:
 def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[PreviewGenerationSettings, dict[str, str]]:
     documents = _mapping(payload.get("documents"))
     document_storage = load_document_storage_settings(payload)
-    yandex = _mapping(payload.get("yandex"))
-    cloud = _mapping(yandex.get("cloud"))
-    buckets = _mapping(cloud.get("bucket"))
     artifacts_root = Path(
         os.environ.get("MANZARA_ARTIFACTS_ROOT", "~/.manzara")
     ).expanduser()
     settings = PreviewGenerationSettings(
         source_bucket=document_storage.public_bucket,
-        target_bucket=_required(buckets, "book_previews", "yandex.cloud.bucket"),
+        target_bucket=(
+            document_storage.preview_bucket
+            or _required(
+                _mapping(_mapping(documents.get("primary_storage")).get("bucket")),
+                "book_previews",
+                "documents.primary_storage.bucket",
+            )
+        ),
         cache_dir=Path(
             _required(documents, "cache_path", "documents")
         ).expanduser(),
@@ -95,16 +99,10 @@ def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[Prev
     credentials = {
         "source_access_key_id": document_storage.primary.access_key_id,
         "source_secret_access_key": document_storage.primary.secret_access_key,
-        "target_access_key_id": _required(
-            cloud, "aws_access_key_id", "yandex.cloud"
-        ),
-        "target_secret_access_key": _required(
-            cloud, "aws_secret_access_key", "yandex.cloud"
-        ),
-        "target_endpoint_url": str(
-            cloud.get("endpoint_url") or DEFAULT_S3_ENDPOINT
-        ),
-        "target_region_name": str(cloud.get("region_name") or "ru-central1"),
+        "target_access_key_id": document_storage.primary.access_key_id,
+        "target_secret_access_key": document_storage.primary.secret_access_key,
+        "target_endpoint_url": document_storage.primary.endpoint_url,
+        "target_region_name": document_storage.primary.region_name,
     }
     return settings, credentials
 
@@ -147,7 +145,11 @@ def run_generation(
     limit: int | None = None,
 ) -> dict[str, Any]:
     """Process candidates serially and return the structured run artifact."""
-    candidates = repository.list_candidates(recipe_version=PREVIEW_RECIPE_VERSION)
+    candidates = repository.list_candidates(
+        recipe_version=PREVIEW_RECIPE_VERSION,
+        endpoint_url=settings.source_endpoint_url,
+        public_bucket=settings.source_bucket,
+    )
     if limit is not None:
         candidates = candidates[: max(0, int(limit))]
     counters = {

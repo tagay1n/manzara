@@ -60,6 +60,7 @@ class DocumentStorageSettings:
     upstream_bucket: str
     encryption_key: str
     yadisk_token: str = ""
+    preview_bucket: str = ""
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -137,6 +138,7 @@ def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorag
         ),
         encryption_key=_required(payload, "encryption_key", "config"),
         yadisk_token=_required(disk, "oauth_token", "yandex.disk"),
+        preview_bucket=str(primary_buckets.get("book_previews") or "").strip(),
     )
 
 

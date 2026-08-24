@@ -164,19 +164,20 @@ Dependency policy:
 
 ### Library preview storage
 
-Create the `ttbook-previews` bucket manually in Yandex Object Storage and configure anonymous read access. Manzara validates that authenticated access works but does not create the bucket or change its public policy.
+Create the public `ttpreviews` bucket manually in the same Backblaze region as the primary document buckets. Enable SSE-B2, leave Object Lock disabled, and grant the Manzara application key permission to list, read, write, and delete its objects. Manzara validates access but does not create the bucket or change its policy.
 
 Keep these bucket entries in the local unmasked configuration:
 
 ```yaml
-yandex:
-  cloud:
+documents:
+  primary_storage:
     bucket:
-      document: ttdoc
-      book_previews: ttbook-previews
+      public: ttdocs
+      private: ttdocs-restricted
+      book_previews: ttpreviews
 ```
 
-The `library.generate_book_previews` task reuses and populates the persistent source cache at `~/.monocorpus/0_entry_point`. Temporary render files stay under `~/.manzara/library/book-previews`. Stop requests finish the current PDF, and the next run resumes missing variants from PostgreSQL and verified S3 objects.
+The `library.generate_book_previews` task selects only unrestricted Library-applicable PDFs whose URL belongs to the public Backblaze document bucket. It reuses and populates the persistent source cache at `~/.monocorpus/0_entry_point`; temporary render files stay under `~/.manzara/library/book-previews`. Preview keys are deterministic (`<md5>/1s.webp`, `<md5>/1l.webp`, and the applicable second/last variants). PostgreSQL stores document-level status, page count, and recipe version rather than duplicating S3 object metadata. Stop requests finish the current PDF, and the next run verifies and reuses existing objects before generating missing variants.
 
 ### Primary document storage
 
@@ -227,6 +228,8 @@ WHERE md5 = '<document-md5>';
 `maintenance.sync_documents_s3`, displayed as **Upload to Backblaze S3**, reads only PostgreSQL rows whose `document_url` is null or blank. It never lists Yandex directories, discovers or inserts documents, or publishes Yandex links. A hash-valid shared cache file is reused first; on a cache miss, the task downloads the exact persisted `ya_path` from Yandex and verifies its MD5. An unavailable Yandex download is logged and skipped, leaving the row pending for a later run. The task never downloads source bytes from Backblaze or legacy S3.
 
 If the expected content-addressed Backblaze object already exists, matching size plus `source-md5` metadata or a plain MD5 ETag allows the task to commit the checkpoint without re-uploading. A new upload is not downloaded again: a post-upload `HEAD` must confirm its expected size and submitted `source-md5` metadata before PostgreSQL is updated. Restricted-object cleanup also finishes before the Backblaze link is committed. The task updates only `document_url`, `primary_storage_size`, `primary_storage_etag`, and `primary_storage_verified_at` on the still-pending row.
+
+`Sync` and **Upload to Backblaze S3** may run concurrently. Each upload checkpoint also requires the row's Yandex path, MIME type, and restriction state to match the snapshot used for the upload. If `Sync` changes or deletes that row first, a newly uploaded object from the stale attempt is removed and the checkpoint is skipped. Catalog changes that affect storage identity clear the existing storage checkpoint so the next upload run places and verifies the object using the current catalog state.
 
 Objects use flat content-addressed keys (`<md5>.<extension>`), independent of the Yandex folder hierarchy. Existing valid object keys are retained. Revision `20260731_0013` adds `primary_storage_size`, `primary_storage_etag`, and `primary_storage_verified_at` to the existing `document` table; normal application startup applies it automatically.
 

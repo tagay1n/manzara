@@ -232,18 +232,6 @@ def _matching_remote(
     return head
 
 
-def _manifest_variant(key: str, head: dict[str, Any]) -> dict[str, Any]:
-    metadata = head.get("Metadata") if isinstance(head.get("Metadata"), dict) else {}
-    return {
-        "key": key,
-        "width": int(metadata.get("width") or 0),
-        "height": int(metadata.get("height") or 0),
-        "quality": int(metadata.get("quality") or 0),
-        "bytes": int(head.get("ContentLength") or 0),
-        "etag": str(head.get("ETag") or "").strip('"') or None,
-    }
-
-
 def process_book(
     candidate: dict[str, Any],
     *,
@@ -261,11 +249,11 @@ def process_book(
         recipe_version=PREVIEW_RECIPE_VERSION,
         run_id=run_id,
     )
-    manifest = dict(started.get("manifest") or {})
     page_count = int(started.get("source_page_count") or 0)
     uploaded = 0
     reused = 0
     downloaded = False
+    verified_objects = 0
     book_workspace = settings.workspace / md5
     book_workspace.mkdir(parents=True, exist_ok=True)
     try:
@@ -295,16 +283,6 @@ def process_book(
 
         for page in selected_pages:
             rendered: dict[str, RenderedVariant] | None = None
-            page_manifest = manifest.get(page.role)
-            if not isinstance(page_manifest, dict):
-                page_manifest = {"page_number": page.page_number, "variants": {}}
-                manifest[page.role] = page_manifest
-            page_manifest["page_number"] = page.page_number
-            variants_manifest = page_manifest.get("variants")
-            if not isinstance(variants_manifest, dict):
-                variants_manifest = {}
-                page_manifest["variants"] = variants_manifest
-
             for variant in ("small", "large"):
                 key = preview_object_key(md5, page.object_alias, variant)
                 expected_metadata = _expected_metadata(
@@ -320,7 +298,6 @@ def process_book(
                     metadata=expected_metadata,
                 )
                 if head is not None:
-                    variants_manifest[variant] = _manifest_variant(key, head)
                     reused += 1
                     log(
                         f"library previews: reuse md5={md5} role={page.role} "
@@ -359,7 +336,6 @@ def process_book(
                     )
                     if head is None:
                         raise RuntimeError(f"S3 verification failed after upload: {key}")
-                    variants_manifest[variant] = _manifest_variant(key, head)
                     uploaded += 1
                     log(
                         f"library previews: uploaded md5={md5} role={page.role} "
@@ -367,17 +343,17 @@ def process_book(
                         f"bytes={head.get('ContentLength') or 0}"
                     )
 
-                current_status = derive_preview_status(page_count, manifest)
+                verified_objects += 1
+                current_status = derive_preview_status(page_count, verified_objects)
                 repository.checkpoint(
                     md5,
                     recipe_version=PREVIEW_RECIPE_VERSION,
                     source_page_count=page_count,
                     status=current_status,
-                    manifest=manifest,
                     run_id=run_id,
                 )
 
-        status = derive_preview_status(page_count, manifest)
+        status = derive_preview_status(page_count, verified_objects)
         return BookPreviewResult(
             md5=md5,
             status=status,
@@ -386,13 +362,16 @@ def process_book(
             downloaded_source=downloaded,
         )
     except Exception as exc:
-        status = derive_preview_status(page_count, manifest) if page_count > 0 else "failed"
+        status = (
+            derive_preview_status(page_count, verified_objects)
+            if page_count > 0
+            else "failed"
+        )
         repository.checkpoint(
             md5,
             recipe_version=PREVIEW_RECIPE_VERSION,
             source_page_count=page_count if page_count > 0 else None,
             status=status,
-            manifest=manifest,
             run_id=run_id,
             error_text=str(exc),
         )

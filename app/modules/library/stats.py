@@ -14,6 +14,7 @@ from sqlalchemy.engine import Engine
 from app.modules.library.response_envelope import available_payload, unavailable_payload
 from app.modules.library.preview_repository import LibraryPreviewRepository
 from app.modules.library.previews import PREVIEW_RECIPE_VERSION
+from app.document_storage import load_document_storage_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _REDACTED_SENTINEL = "<REDACTED>"
@@ -133,13 +134,16 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
         engine.dispose()
 
         database_url, _ = get_runtime_database_url()
+        storage = load_document_storage_settings(_load_runtime_config()[0])
         preview_repository = LibraryPreviewRepository(
             database_url,
             schema=str(os.environ.get("MANZARA_DB_SCHEMA") or "monocorpus"),
         )
         try:
             preview_stats = preview_repository.get_stats(
-                recipe_version=PREVIEW_RECIPE_VERSION
+                recipe_version=PREVIEW_RECIPE_VERSION,
+                endpoint_url=storage.primary.endpoint_url,
+                public_bucket=storage.public_bucket,
             )
         finally:
             preview_repository.dispose()

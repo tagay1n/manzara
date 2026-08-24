@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -36,7 +35,13 @@ class LibraryPreviewRepository:
         """Release pooled database connections."""
         self._engine.dispose()
 
-    def list_candidates(self, *, recipe_version: str) -> list[dict[str, Any]]:
+    def list_candidates(
+        self,
+        *,
+        recipe_version: str,
+        endpoint_url: str,
+        public_bucket: str,
+    ) -> list[dict[str, Any]]:
         """Return applicable PDFs that are not ready for the current recipe."""
         with self._engine.connect() as conn:
             rows = conn.execute(
@@ -48,13 +53,14 @@ class LibraryPreviewRepository:
                         p.recipe_version,
                         p.source_page_count,
                         p.status,
-                        p.manifest_json,
                         p.error_text
                     FROM document d
                     JOIN metadata m ON m.md5 = d.md5
                     LEFT JOIN library_book_previews p ON p.md5 = d.md5
                     WHERE m.lib IS TRUE
                       AND LOWER(COALESCE(d.mime_type, '')) = 'application/pdf'
+                      AND d.sharing_restricted IS NOT TRUE
+                      AND d.document_url LIKE :public_prefix
                       AND (
                           p.md5 IS NULL
                           OR p.recipe_version <> :recipe_version
@@ -63,7 +69,12 @@ class LibraryPreviewRepository:
                     ORDER BY d.md5 ASC
                     """
                 ),
-                {"recipe_version": str(recipe_version)},
+                {
+                    "recipe_version": str(recipe_version),
+                    "public_prefix": (
+                        f"{str(endpoint_url).rstrip('/')}/{str(public_bucket)}/%"
+                    ),
+                },
             ).mappings().all()
         return [self._decode_row(row) for row in rows]
 
@@ -74,26 +85,21 @@ class LibraryPreviewRepository:
         recipe_version: str,
         run_id: int | None,
     ) -> dict[str, Any]:
-        """Mark one book processing, resetting a manifest only for a new recipe."""
+        """Mark one book processing and reset page count for a new recipe."""
         now = _utc_now()
         with self._engine.begin() as conn:
             row = conn.execute(
                 text(
                     """
                     INSERT INTO library_book_previews (
-                        md5, recipe_version, status, manifest_json, attempt_count,
+                        md5, recipe_version, status, attempt_count,
                         last_run_id, created_at, updated_at
                     )
                     VALUES (
-                        :md5, :recipe_version, 'processing', CAST('{}' AS JSONB), 1,
+                        :md5, :recipe_version, 'processing', 1,
                         :run_id, :now, :now
                     )
                     ON CONFLICT (md5) DO UPDATE SET
-                        manifest_json = CASE
-                            WHEN library_book_previews.recipe_version = EXCLUDED.recipe_version
-                                THEN library_book_previews.manifest_json
-                            ELSE CAST('{}' AS JSONB)
-                        END,
                         source_page_count = CASE
                             WHEN library_book_previews.recipe_version = EXCLUDED.recipe_version
                                 THEN library_book_previews.source_page_count
@@ -125,11 +131,10 @@ class LibraryPreviewRepository:
         recipe_version: str,
         source_page_count: int | None,
         status: str,
-        manifest: Mapping[str, Any],
         run_id: int | None,
         error_text: str | None = None,
     ) -> None:
-        """Persist one complete per-variant checkpoint snapshot."""
+        """Persist one document-level preview checkpoint."""
         normalized_status = str(status or "").strip()
         if normalized_status not in _STATUSES:
             raise ValueError(f"Invalid preview status: {normalized_status!r}")
@@ -143,7 +148,6 @@ class LibraryPreviewRepository:
                     SET recipe_version = :recipe_version,
                         source_page_count = :source_page_count,
                         status = :status,
-                        manifest_json = CAST(:manifest_json AS JSONB),
                         last_run_id = :run_id,
                         error_text = :error_text,
                         generated_at = :generated_at,
@@ -158,7 +162,6 @@ class LibraryPreviewRepository:
                         int(source_page_count) if source_page_count is not None else None
                     ),
                     "status": normalized_status,
-                    "manifest_json": json.dumps(dict(manifest), ensure_ascii=False),
                     "run_id": int(run_id) if run_id is not None else None,
                     "error_text": str(error_text or "").strip()[:4000] or None,
                     "generated_at": generated_at,
@@ -177,7 +180,9 @@ class LibraryPreviewRepository:
             ).mappings().one_or_none()
         return self._decode_row(row) if row else None
 
-    def is_eligible_pdf(self, md5: str) -> bool:
+    def is_eligible_pdf(
+        self, md5: str, *, endpoint_url: str, public_bucket: str
+    ) -> bool:
         """Return whether a document belongs to the preview source set."""
         with self._engine.connect() as conn:
             value = conn.execute(
@@ -190,14 +195,23 @@ class LibraryPreviewRepository:
                         WHERE d.md5 = :md5
                           AND m.lib IS TRUE
                           AND LOWER(COALESCE(d.mime_type, '')) = 'application/pdf'
+                          AND d.sharing_restricted IS NOT TRUE
+                          AND d.document_url LIKE :public_prefix
                     )
                     """
                 ),
-                {"md5": str(md5)},
+                {
+                    "md5": str(md5),
+                    "public_prefix": (
+                        f"{str(endpoint_url).rstrip('/')}/{str(public_bucket)}/%"
+                    ),
+                },
             ).scalar()
         return bool(value)
 
-    def get_stats(self, *, recipe_version: str) -> dict[str, Any]:
+    def get_stats(
+        self, *, recipe_version: str, endpoint_url: str, public_bucket: str
+    ) -> dict[str, Any]:
         """Aggregate current recipe coverage without counting stale rows."""
         with self._engine.connect() as conn:
             row = conn.execute(
@@ -209,40 +223,48 @@ class LibraryPreviewRepository:
                         JOIN metadata m ON m.md5 = d.md5
                         WHERE m.lib IS TRUE
                           AND LOWER(COALESCE(d.mime_type, '')) = 'application/pdf'
+                          AND d.sharing_restricted IS NOT TRUE
+                          AND d.document_url LIKE :public_prefix
                     ), current_rows AS (
                         SELECT p.*
                         FROM library_book_previews p
                         JOIN eligible e ON e.md5 = p.md5
                         WHERE p.recipe_version = :recipe_version
-                    ), page_objects AS (
-                        SELECT COUNT(*) AS count
-                        FROM current_rows p
-                        CROSS JOIN LATERAL jsonb_each(p.manifest_json) AS page(role, payload)
-                        WHERE jsonb_typeof(page.payload) = 'object'
-                          AND EXISTS (
-                              SELECT 1
-                              FROM jsonb_each(COALESCE(page.payload->'variants', '{}'::jsonb))
-                          )
-                    ), image_objects AS (
-                        SELECT COUNT(*) AS count
-                        FROM current_rows p
-                        CROSS JOIN LATERAL jsonb_each(p.manifest_json) AS page(role, payload)
-                        CROSS JOIN LATERAL jsonb_each(
-                            COALESCE(page.payload->'variants', '{}'::jsonb)
-                        ) AS variant(name, payload)
-                        WHERE COALESCE(variant.payload->>'key', '') <> ''
                     )
                     SELECT
                         (SELECT COUNT(*) FROM eligible) AS eligible,
                         COUNT(*) FILTER (WHERE status = 'ready') AS ready,
                         COUNT(*) FILTER (WHERE status = 'partial') AS partial,
                         COUNT(*) FILTER (WHERE status = 'failed') AS failed,
-                        (SELECT count FROM page_objects) AS generated_preview_pages,
-                        (SELECT count FROM image_objects) AS generated_image_objects
+                        COALESCE(SUM(
+                            CASE WHEN status = 'ready' THEN
+                                CASE
+                                    WHEN source_page_count = 1 THEN 1
+                                    WHEN source_page_count = 2 THEN 2
+                                    WHEN source_page_count > 2 THEN 3
+                                    ELSE 0
+                                END
+                            ELSE 0 END
+                        ), 0) AS generated_preview_pages,
+                        COALESCE(SUM(
+                            CASE WHEN status = 'ready' THEN
+                                CASE
+                                    WHEN source_page_count = 1 THEN 2
+                                    WHEN source_page_count = 2 THEN 4
+                                    WHEN source_page_count > 2 THEN 6
+                                    ELSE 0
+                                END
+                            ELSE 0 END
+                        ), 0) AS generated_image_objects
                     FROM current_rows
                     """
                 ),
-                {"recipe_version": str(recipe_version)},
+                {
+                    "recipe_version": str(recipe_version),
+                    "public_prefix": (
+                        f"{str(endpoint_url).rstrip('/')}/{str(public_bucket)}/%"
+                    ),
+                },
             ).mappings().one()
         eligible = int(row.get("eligible") or 0)
         ready = int(row.get("ready") or 0)
@@ -262,13 +284,6 @@ class LibraryPreviewRepository:
     @staticmethod
     def _decode_row(row: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(row)
-        manifest = payload.pop("manifest_json", {})
-        if isinstance(manifest, str):
-            try:
-                manifest = json.loads(manifest)
-            except json.JSONDecodeError:
-                manifest = {}
-        payload["manifest"] = manifest if isinstance(manifest, dict) else {}
         return payload
 
 

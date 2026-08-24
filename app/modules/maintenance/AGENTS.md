@@ -24,4 +24,4 @@ These rules apply to `app/modules/maintenance/`.
 - Any document Yandex move/removal requires a prior PostgreSQL `document_cleanup_queue` row and the guarded cleanup executor.
 - `maintenance.monocorpus_sync` applies persisted cleanup and synchronizes the catalog. Duplicate-MD5 resources may be queued and executed during traversal. It may publish ordinary unrestricted documents missing public URLs; it never publishes restricted documents.
 - A cleanup move completes only after the target is MD5-verified, managed S3 derivatives are removed, and dependent PostgreSQL state is deleted. Every phase is resumable and idempotent.
-- `maintenance.monocorpus_sync` and `maintenance.sync_documents_s3` share one PostgreSQL advisory lock and never overlap.
+- `maintenance.monocorpus_sync` and `maintenance.sync_documents_s3` may run concurrently. Upload checkpoints must validate that the pending row's source identity is unchanged and remove objects created by stale attempts.

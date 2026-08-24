@@ -26,7 +26,6 @@ from app.document_storage import (
     normalized_extension,
     object_url,
 )
-from app.modules.maintenance.document_sync_lock import document_sync_lock
 from app.modules.maintenance.document_sync_repository import (
     PostgresDocumentSyncRepository,
 )
@@ -234,6 +233,7 @@ def run_document_upload(
         "recovered_existing": 0,
         "checkpointed": 0,
         "checkpoint_raced": 0,
+        "stale_upload_cleaned": 0,
         "source_cache": 0,
         "source_yandex": 0,
         "skipped_download": 0,
@@ -279,6 +279,7 @@ def run_document_upload(
             bucket = settings.private_bucket if restricted else settings.public_bucket
             key = document_object_key(md5, source_path, row.get("mime_type"))
             remote = _head_object_or_none(primary_s3, bucket, key)
+            uploaded_this_attempt = False
             if _remote_matches(remote, md5=md5, size=size):
                 verified_head = remote or {}
                 counters["recovered_existing"] += 1
@@ -330,6 +331,7 @@ def run_document_upload(
                 counters["uploaded"] += 1
                 counters["reuploaded"] += int(was_present)
                 counters["bytes_uploaded"] += size
+                uploaded_this_attempt = True
 
             if restricted:
                 public_remote = _head_object_or_none(
@@ -362,19 +364,34 @@ def run_document_upload(
                     timezone.utc
                 ).isoformat(),
             }
-            if repository.save_storage_checkpoint(md5, checkpoint):
+            if repository.save_storage_checkpoint(
+                md5,
+                checkpoint,
+                expected={
+                    "ya_path": row.get("ya_path"),
+                    "mime_type": row.get("mime_type"),
+                    "sharing_restricted": row.get("sharing_restricted"),
+                },
+            ):
                 counters["checkpointed"] += 1
-            else:
-                counters["checkpoint_raced"] += 1
                 print(
-                    f"document upload: checkpoint skipped md5={md5} "
-                    "reason=row no longer pending",
+                    f"document upload: success md5={md5} target=s3://{bucket}/{key}",
                     flush=True,
                 )
-            print(
-                f"document upload: success md5={md5} target=s3://{bucket}/{key}",
-                flush=True,
-            )
+            else:
+                counters["checkpoint_raced"] += 1
+                if uploaded_this_attempt:
+                    primary_s3.delete_object(Bucket=bucket, Key=key)
+                    if not _public_object_removed(primary_s3, bucket, key):
+                        raise RuntimeError(
+                            "Stale uploaded object remains after checkpoint race"
+                        )
+                    counters["stale_upload_cleaned"] += 1
+                print(
+                    f"document upload: checkpoint skipped md5={md5} "
+                    "reason=row changed or is no longer pending",
+                    flush=True,
+                )
         except YandexDownloadUnavailable as exc:
             counters["skipped_download"] += 1
             print(
@@ -512,18 +529,15 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, request_stop)
     try:
-        with document_sync_lock(
-            app_settings.database_url, schema=app_settings.database_schema
-        ):
-            summary = run_document_upload(
-                repository=repository,
-                state_db=state_db,
-                yadisk=yadisk,
-                primary_s3=primary_s3,
-                settings=settings,
-                run_id=run_id,
-                should_stop=lambda: bool(stop_state["requested"]),
-            )
+        summary = run_document_upload(
+            repository=repository,
+            state_db=state_db,
+            yadisk=yadisk,
+            primary_s3=primary_s3,
+            settings=settings,
+            run_id=run_id,
+            should_stop=lambda: bool(stop_state["requested"]),
+        )
         emit_run_artifact(summary)
         return _result_exit_code(summary)
     finally:

@@ -671,7 +671,7 @@ def test_library_preview_endpoint_returns_variable_manifest(test_client, monkeyp
         def __init__(self, _database_url, *, schema):
             _ = schema
 
-        def is_eligible_pdf(self, requested_md5):
+        def is_eligible_pdf(self, requested_md5, **_kwargs):
             return requested_md5 == md5
 
         def get(self, requested_md5):
@@ -679,18 +679,8 @@ def test_library_preview_endpoint_returns_variable_manifest(test_client, monkeyp
             return {
                 "md5": md5,
                 "status": "ready",
-                "recipe_version": "pdf-three-page-webp-v1",
+                "recipe_version": "webp-v1",
                 "source_page_count": 2,
-                "manifest": {
-                    "first": {
-                        "page_number": 1,
-                        "variants": {"small": {"key": "prefix/1s.webp"}},
-                    },
-                    "last": {
-                        "page_number": 2,
-                        "variants": {"small": {"key": "prefix/ls.webp"}},
-                    },
-                },
             }
 
         def dispose(self):
@@ -698,8 +688,8 @@ def test_library_preview_endpoint_returns_variable_manifest(test_client, monkeyp
 
     monkeypatch.setattr("app.library_preview_routes.LibraryPreviewRepository", _Repository)
     monkeypatch.setattr(
-        "app.library_preview_routes.get_book_preview_bucket",
-        lambda: "ttbook-previews",
+        "app.library_preview_routes.get_book_preview_storage",
+        lambda: ("https://s3.test", "documents", "ttpreviews"),
     )
 
     response = client.get(f"/api/library/previews/{md5}")
@@ -708,7 +698,9 @@ def test_library_preview_endpoint_returns_variable_manifest(test_client, monkeyp
     payload = response.json()
     assert payload["expected_preview_count"] == 2
     assert [item["role"] for item in payload["previews"]] == ["first", "last"]
-    assert payload["previews"][1]["variants"]["small"]["url"].endswith("/prefix/ls.webp")
+    assert payload["previews"][1]["variants"]["small"]["url"].endswith(
+        f"/ttpreviews/{md5}/ls.webp"
+    )
 
 
 def test_library_preview_endpoint_rejects_non_applicable_document(test_client, monkeypatch) -> None:
@@ -718,13 +710,17 @@ def test_library_preview_endpoint_rejects_non_applicable_document(test_client, m
         def __init__(self, _database_url, *, schema):
             _ = schema
 
-        def is_eligible_pdf(self, _md5):
+        def is_eligible_pdf(self, _md5, **_kwargs):
             return False
 
         def dispose(self):
             return None
 
     monkeypatch.setattr("app.library_preview_routes.LibraryPreviewRepository", _Repository)
+    monkeypatch.setattr(
+        "app.library_preview_routes.get_book_preview_storage",
+        lambda: ("https://s3.test", "documents", "ttpreviews"),
+    )
 
     response = client.get("/api/library/previews/abcdef0123456789abcdef0123456789")
 

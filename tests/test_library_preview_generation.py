@@ -145,12 +145,10 @@ class _PreviewRepository:
 
     def start_attempt(self, md5: str, *, recipe_version: str, run_id: int | None):
         _ = run_id
-        manifest = dict(self.row.get("manifest", {})) if self.row else {}
         self.row = {
             "md5": md5,
             "recipe_version": recipe_version,
             "status": "processing",
-            "manifest": manifest,
         }
         return dict(self.row)
 
@@ -201,12 +199,13 @@ def test_process_book_uploads_only_expected_short_document_objects_and_resumes(t
         "1s.webp",
         "1l.webp",
     }
+    assert set(target_s3.objects) == {f"{digest}/1s.webp", f"{digest}/1l.webp"}
     assert repository.row is not None
     assert repository.row["recipe_version"] == PREVIEW_RECIPE_VERSION
     assert repository.checkpoints[-1] == "ready"
 
 
-def test_preview_settings_use_backblaze_source_and_yandex_target(
+def test_preview_settings_use_backblaze_for_source_and_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -219,7 +218,11 @@ def test_preview_settings_use_backblaze_source_and_yandex_target(
                 "region_name": "eu-central-003",
                 "access_key_id": "b2-id",
                 "secret_access_key": "b2-secret",
-                "bucket": {"public": "b2-docs", "private": "b2-private"},
+                "bucket": {
+                    "public": "b2-docs",
+                    "private": "b2-private",
+                    "book_previews": "ttpreviews",
+                },
             },
         },
         "yandex": {
@@ -240,7 +243,6 @@ def test_preview_settings_use_backblaze_source_and_yandex_target(
                     "document": "legacy-docs",
                     "document_private": "legacy-private",
                     "upstream_metadata": "upstream",
-                    "book_previews": "previews",
                 },
             },
         },
@@ -253,7 +255,9 @@ def test_preview_settings_use_backblaze_source_and_yandex_target(
     assert settings.source_endpoint_url == (
         "https://s3.eu-central-003.backblazeb2.com"
     )
-    assert settings.target_bucket == "previews"
+    assert settings.target_bucket == "ttpreviews"
     assert credentials["source_access_key_id"] == "b2-id"
-    assert credentials["target_access_key_id"] == "yc-id"
-    assert credentials["target_endpoint_url"] == "https://storage.yandexcloud.net"
+    assert credentials["target_access_key_id"] == "b2-id"
+    assert credentials["target_endpoint_url"] == (
+        "https://s3.eu-central-003.backblazeb2.com"
+    )

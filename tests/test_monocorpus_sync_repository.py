@@ -46,3 +46,28 @@ def test_document_cleanup_does_not_reference_retired_crh_tables() -> None:
     sql = "\n".join(repository.engine.statements)
     assert "_crh" not in sql
     assert "DELETE FROM document WHERE md5=:md5" in sql
+
+
+def test_catalog_update_clears_storage_checkpoint_when_source_identity_changes() -> None:
+    repository = MonocorpusSyncRepository.__new__(MonocorpusSyncRepository)
+    repository.engine = _Engine()
+
+    repository.save_discovered_document(
+        {
+            "md5": "a" * 32,
+            "mime_type": "application/pdf",
+            "ya_path": "/documents/book.pdf",
+            "ya_public_url": None,
+            "ya_public_key": None,
+            "ya_resource_id": None,
+            "full": True,
+            "sharing_restricted": False,
+        }
+    )
+
+    sql = repository.engine.statements[0]
+    assert "ya_path IS DISTINCT FROM :ya_path" in sql
+    assert "mime_type IS DISTINCT FROM :mime_type" in sql
+    assert "sharing_restricted IS DISTINCT FROM :sharing_restricted" in sql
+    assert "THEN NULL ELSE document_url END" in sql
+    assert "THEN NULL ELSE primary_storage_verified_at END" in sql

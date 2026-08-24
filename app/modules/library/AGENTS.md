@@ -11,7 +11,7 @@ These rules apply to `app/modules/library/`.
 
 - Preview state is PostgreSQL-backed and depends on page count: one page gets first; two pages get first/last; longer PDFs get first/second/last.
 - Missing roles for short PDFs are complete, not partial. Never duplicate page previews.
-- API and frontend consumers use manifest roles and actual page numbers, never infer semantics from compact S3 names.
+- Preview object roles are deterministic from page count and use compact S3 names; PostgreSQL stores document-level status, page count, and recipe version rather than a per-object manifest.
 
 ## Metadata extraction
 

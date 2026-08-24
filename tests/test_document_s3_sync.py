@@ -97,9 +97,10 @@ class FakeS3:
 
 
 class FakeRepository:
-    def __init__(self, documents: list[dict]) -> None:
+    def __init__(self, documents: list[dict], *, reject_checkpoint: bool = False) -> None:
         self.documents = [dict(document) for document in documents]
         self.saved: list[tuple[str, dict]] = []
+        self.reject_checkpoint = reject_checkpoint
 
     def list_pending_documents(self):
         return [
@@ -111,11 +112,15 @@ class FakeRepository:
     def count_pending_documents(self):
         return len(self.list_pending_documents())
 
-    def save_storage_checkpoint(self, md5, payload):  # noqa: ANN001
+    def save_storage_checkpoint(self, md5, payload, *, expected):  # noqa: ANN001
         matches = [document for document in self.documents if document["md5"] == md5]
         if len(matches) != 1:
             raise RuntimeError("ambiguous checkpoint")
+        if self.reject_checkpoint:
+            return False
         if str(matches[0].get("document_url") or "").strip():
+            return False
+        if any(matches[0].get(key) != expected.get(key) for key in expected):
             return False
         matches[0].update(dict(payload))
         self.saved.append((str(md5), dict(payload)))
@@ -315,6 +320,66 @@ def test_failed_post_upload_verification_leaves_row_pending(tmp_path: Path) -> N
     assert result["failed"] == 1
     assert result["pending_after"] == 1
     assert repository.saved == []
+
+
+def test_new_upload_is_removed_when_sync_changes_row_before_checkpoint(
+    tmp_path: Path,
+) -> None:
+    content = b"stale-upload"
+    row = document(content)
+    (tmp_path / f"{row['md5']}.pdf").write_bytes(content)
+    repository = FakeRepository([row], reject_checkpoint=True)
+    primary_s3 = FakeS3()
+
+    result = run_document_upload(
+        repository=repository,
+        state_db=FakeStateDb(),
+        yadisk=FakeYaDisk({}),
+        primary_s3=primary_s3,
+        settings=settings(tmp_path),
+        run_id=9,
+        should_stop=lambda: False,
+    )
+
+    key = f"{row['md5']}.pdf"
+    assert result["checkpoint_raced"] == 1
+    assert result["stale_upload_cleaned"] == 1
+    assert primary_s3.uploads == [("public-docs", key)]
+    assert primary_s3.deletes == [("public-docs", key)]
+    assert ("public-docs", key) not in primary_s3.objects
+    assert repository.saved == []
+
+
+def test_verified_existing_object_is_not_removed_after_checkpoint_race(
+    tmp_path: Path,
+) -> None:
+    content = b"existing-stale"
+    row = document(content)
+    key = f"{row['md5']}.pdf"
+    (tmp_path / key).write_bytes(content)
+    repository = FakeRepository([row], reject_checkpoint=True)
+    primary_s3 = FakeS3()
+    primary_s3.objects[("public-docs", key)] = {
+        "ContentLength": len(content),
+        "ETag": row["md5"],
+        "Metadata": {},
+        "Body": content,
+    }
+
+    result = run_document_upload(
+        repository=repository,
+        state_db=FakeStateDb(),
+        yadisk=FakeYaDisk({}),
+        primary_s3=primary_s3,
+        settings=settings(tmp_path),
+        run_id=10,
+        should_stop=lambda: False,
+    )
+
+    assert result["checkpoint_raced"] == 1
+    assert result["stale_upload_cleaned"] == 0
+    assert primary_s3.deletes == []
+    assert ("public-docs", key) in primary_s3.objects
 
 
 def test_restricted_upload_uses_private_bucket_and_removes_public_copy(

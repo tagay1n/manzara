@@ -20,7 +20,6 @@ from app.document_storage import (
     load_document_storage_settings,
 )
 from app.modules.maintenance.document_cleanup_executor import execute_yandex_cleanup
-from app.modules.maintenance.document_sync_lock import document_sync_lock
 from app.document_sync_filter import classify_document, normalize_document_mime
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
 from app.run_artifact_channel import emit_run_artifact
@@ -246,6 +245,10 @@ def _cleanup_managed_storage(
     deleted = 0
     for bucket in {settings.public_bucket, settings.private_bucket}:
         deleted += _delete_prefix(primary_s3, bucket, md5)
+    if settings.preview_bucket:
+        deleted += _delete_prefix(
+            primary_s3, settings.preview_bucket, f"{md5}/"
+        )
     for bucket in _managed_legacy_buckets(config):
         deleted += _delete_prefix(
             legacy_s3,
@@ -580,20 +583,17 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, request_stop)
     try:
-        with document_sync_lock(
-            app_settings.database_url, schema=app_settings.database_schema
-        ):
-            summary = run_monocorpus_sync(
-                repository=repository,
-                db=db,
-                yadisk=yadisk,
-                primary_s3=primary_s3,
-                legacy_s3=legacy_s3,
-                settings=settings,
-                config=config,
-                run_id=run_id,
-                should_stop=lambda: bool(stop_state["requested"]),
-            )
+        summary = run_monocorpus_sync(
+            repository=repository,
+            db=db,
+            yadisk=yadisk,
+            primary_s3=primary_s3,
+            legacy_s3=legacy_s3,
+            settings=settings,
+            config=config,
+            run_id=run_id,
+            should_stop=lambda: bool(stop_state["requested"]),
+        )
         emit_run_artifact(summary)
         return 0
     finally:
