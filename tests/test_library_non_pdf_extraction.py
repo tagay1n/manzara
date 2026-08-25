@@ -16,6 +16,7 @@ from app.modules.library.non_pdf_extraction import (
     EXTRACTOR_VERSION,
     ExtractedAsset,
     PreparedExtraction,
+    _decode_text,
     _run,
     _collect_assets,
     detect_document_format,
@@ -40,7 +41,7 @@ def test_task_catalog_includes_extract_non_pdf(tmp_path: Path) -> None:
     assert task["title"] == "Extract non-pdf"
     assert "run_extract_non_pdf" in task["command"]["value"]
     assert "--per-mime-limit 10" in task["command"]["value"]
-    assert EXTRACTOR_VERSION == "nonpdf.v5"
+    assert EXTRACTOR_VERSION == "nonpdf.v6"
 
 
 def test_migration_allows_schema_without_external_document_catalog() -> None:
@@ -307,6 +308,47 @@ def test_consecutive_and_grouped_images_all_render_as_html_figures(
     )["passed"] is True
 
 
+def test_images_mixed_with_text_are_split_into_html_figures(tmp_path: Path) -> None:
+    def image(url: str) -> dict:
+        return {"t": "Image", "c": [["", [], []], [], [url, ""]]}
+
+    ast = {
+        "pandoc-api-version": [1, 23, 1],
+        "meta": {},
+        "blocks": [
+            {
+                "t": "Para",
+                "c": [
+                    {
+                        "t": "Underline",
+                        "c": [{"t": "Str", "c": "Before"}],
+                    },
+                    {"t": "Space"},
+                    image("local-1.png"),
+                    {"t": "Space"},
+                    image("local-2.png"),
+                    {"t": "Space"},
+                    {"t": "Str", "c": "After"},
+                ],
+            }
+        ],
+    }
+    prepared = PreparedExtraction("rtf", tmp_path, ast, None, ())
+    urls = {
+        "local-1.png": "https://public.example/1.png",
+        "local-2.png": "https://public.example/2.png",
+    }
+
+    markdown = render_markdown(prepared, asset_urls=urls)
+
+    assert "Before" in markdown
+    assert "After" in markdown
+    assert markdown.count("<figure ") == 2
+    assert markdown.count("<img ") == 2
+    assert "![" not in markdown
+    assert "{.underline}" not in markdown
+
+
 def test_epub_local_document_links_become_plain_text(tmp_path: Path) -> None:
     ast = {
         "pandoc-api-version": [1, 23, 1],
@@ -343,6 +385,40 @@ def test_epub_local_document_links_become_plain_text(tmp_path: Path) -> None:
     assert "Chapter one" in markdown
     assert "chapter.xhtml" not in markdown
     assert "[Publisher](https://example.com/book)" in markdown
+
+
+def test_epub_heading_source_attributes_are_removed(tmp_path: Path) -> None:
+    ast = {
+        "pandoc-api-version": [1, 23, 1],
+        "meta": {},
+        "blocks": [
+            {
+                "t": "Header",
+                "c": [
+                    1,
+                    ["chapter.xhtml#p1", ["coverTtl"], [["pid", "1"]]],
+                    [{"t": "Str", "c": "Chapter"}],
+                ],
+            }
+        ],
+    }
+    prepared = PreparedExtraction("epub", tmp_path, ast, None, ())
+
+    markdown = render_markdown(prepared, asset_urls={})
+
+    assert markdown == "# Chapter\n"
+
+
+def test_text_decoder_selects_cp866_for_dos_cyrillic() -> None:
+    payload = "Program Demo; {Создаем новый тип данных}".encode("cp866")
+
+    assert _decode_text(payload) == "Program Demo; {Создаем новый тип данных}"
+
+
+def test_text_decoder_preserves_bom_marked_utf16() -> None:
+    payload = "Татарча текст".encode("utf-16")
+
+    assert _decode_text(payload) == "Татарча текст"
 
 
 def test_image_only_document_is_rejected_as_requiring_ocr(tmp_path: Path) -> None:
@@ -491,7 +567,7 @@ def test_candidate_queue_backfills_legacy_content_and_versions_unsupported() -> 
     repository.engine = _Engine()
 
     repository.list_candidates(
-        extractor_version="nonpdf.v5", limit=10, per_mime_limit=100
+        extractor_version="nonpdf.v6", limit=10, per_mime_limit=100
     )
 
     assert "AND d.content_url IS NULL" not in repository.engine.sql

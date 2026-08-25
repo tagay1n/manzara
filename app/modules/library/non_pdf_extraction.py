@@ -14,13 +14,14 @@ import shutil
 import signal
 import subprocess
 from typing import Any, Mapping
+import unicodedata
 import zipfile
 from xml.etree import ElementTree
 
 from PIL import Image
 
 
-EXTRACTOR_VERSION = "nonpdf.v5"
+EXTRACTOR_VERSION = "nonpdf.v6"
 _BROWSER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _TEXT_SUFFIXES = {
     ".txt", ".md", ".markdown", ".csv", ".tsv", ".xml", ".tex",
@@ -237,6 +238,7 @@ def render_markdown(
     else:
         ast = deepcopy(prepared.ast)
         ast = _strip_presentational_spans(ast)
+        _strip_heading_attributes(ast)
         ast = _strip_local_links(ast)
         blocks = ast.get("blocks") if isinstance(ast.get("blocks"), list) else []
         if not _has_non_image_inline_content(blocks):
@@ -407,18 +409,58 @@ def _convert_to_docx(
 def _decode_text(payload: bytes) -> str:
     if not payload:
         raise ValueError("Source document is empty")
-    encodings = ["utf-8-sig", "utf-16", "cp1251", "cp866"]
-    for encoding in encodings:
+    if payload.startswith((b"\xff\xfe", b"\xfe\xff")):
+        value = payload.decode("utf-16")
+        if _printable_ratio(value) >= 0.85:
+            return value
+    try:
+        value = payload.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    else:
+        if "\x00" not in value and _printable_ratio(value) >= 0.85:
+            return value
+    even_nuls = payload[0::2].count(0) / max(1, len(payload[0::2]))
+    odd_nuls = payload[1::2].count(0) / max(1, len(payload[1::2]))
+    if max(even_nuls, odd_nuls) >= 0.3:
+        encoding = "utf-16-be" if even_nuls > odd_nuls else "utf-16-le"
         try:
             value = payload.decode(encoding)
         except UnicodeDecodeError:
-            continue
-        if "\x00" not in value and _printable_ratio(value) >= 0.85:
+            pass
+        else:
+            if "\x00" not in value and _printable_ratio(value) >= 0.85:
+                return value
+    candidates: list[tuple[float, str]] = []
+    for encoding in ("cp1251", "cp866"):
+        value = payload.decode(encoding)
+        if _printable_ratio(value) >= 0.75:
+            candidates.append((_legacy_text_quality(value), value))
+    if candidates:
+        _score, value = max(candidates, key=lambda item: item[0])
+        if _printable_ratio(value) >= 0.85:
             return value
     value = payload.decode("latin-1")
     if _printable_ratio(value) < 0.75:
         raise ValueError("Could not determine a usable text encoding")
     return value
+
+
+def _legacy_text_quality(value: str) -> float:
+    score = 0.0
+    for char in value:
+        category = unicodedata.category(char)
+        if char.isalnum():
+            score += 2.0
+        elif char.isspace() or char in ".,;:!?()[]{}<>/\\'\"-_+=*#@%&|":
+            score += 1.0
+        elif "\u2500" <= char <= "\u259f" or category.startswith("S"):
+            score -= 2.0
+        elif category.startswith("C"):
+            score -= 3.0
+        else:
+            score -= 0.5
+    return score / max(1, len(value))
 
 
 def _printable_ratio(value: str) -> float:
@@ -490,9 +532,13 @@ def _strip_presentational_spans(value: Any) -> Any:
     if isinstance(value, list):
         normalized: list[Any] = []
         for item in value:
-            if isinstance(item, dict) and item.get("t") == "Span":
+            if isinstance(item, dict) and item.get("t") in {"Span", "Underline"}:
                 content = item.get("c") if isinstance(item.get("c"), list) else []
-                inlines = content[1] if len(content) > 1 else []
+                inlines = (
+                    content[1]
+                    if item.get("t") == "Span" and len(content) > 1
+                    else content
+                )
                 stripped = _strip_presentational_spans(inlines)
                 if isinstance(stripped, list):
                     normalized.extend(stripped)
@@ -505,6 +551,15 @@ def _strip_presentational_spans(value: Any) -> Any:
             for key, item in value.items()
         }
     return value
+
+
+def _strip_heading_attributes(value: Any) -> None:
+    for node in _walk(value):
+        if node.get("t") != "Header":
+            continue
+        content = node.get("c")
+        if isinstance(content, list) and len(content) > 1:
+            content[1] = ["", [], []]
 
 
 def _strip_local_links(value: Any) -> Any:
@@ -760,6 +815,14 @@ def _normalize_blocks(
                 )
             index += 1
             continue
+        if (
+            block.get("t") in {"Para", "Plain"}
+            and _images(block)
+            and _has_non_image_inline_content(block.get("c"))
+        ):
+            normalized.extend(_split_mixed_image_block(block))
+            index += 1
+            continue
         if _is_image_only_paragraph(block):
             block_images = _images(block)
             if len(block_images) == 1:
@@ -787,6 +850,31 @@ def _normalize_blocks(
         normalized.append(_normalize_block(block, ast=ast, workspace=workspace))
         index += 1
     return normalized
+
+
+def _split_mixed_image_block(block: Mapping[str, Any]) -> list[dict[str, Any]]:
+    content = block.get("c") if isinstance(block.get("c"), list) else []
+    split: list[dict[str, Any]] = []
+    text_inlines: list[dict[str, Any]] = []
+
+    def flush_text() -> None:
+        if _has_non_image_inline_content(text_inlines):
+            split.append({"t": str(block.get("t") or "Para"), "c": list(text_inlines)})
+        text_inlines.clear()
+
+    for inline in content:
+        if isinstance(inline, dict) and inline.get("t") == "Image":
+            flush_text()
+            split.append(
+                {
+                    "t": "RawBlock",
+                    "c": ["html", _figure_html({"t": "Para", "c": [inline]})],
+                }
+            )
+        elif isinstance(inline, dict):
+            text_inlines.append(inline)
+    flush_text()
+    return split
 
 
 __all__ = [
