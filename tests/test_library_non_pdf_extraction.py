@@ -39,8 +39,8 @@ def test_task_catalog_includes_extract_non_pdf(tmp_path: Path) -> None:
     assert task["panel_id"] == "library"
     assert task["title"] == "Extract non-pdf"
     assert "run_extract_non_pdf" in task["command"]["value"]
-    assert "--per-mime-limit 100" in task["command"]["value"]
-    assert EXTRACTOR_VERSION == "nonpdf.v4"
+    assert "--per-mime-limit 10" in task["command"]["value"]
+    assert EXTRACTOR_VERSION == "nonpdf.v5"
 
 
 def test_migration_allows_schema_without_external_document_catalog() -> None:
@@ -197,6 +197,13 @@ def test_fb2_embedded_image_enters_common_asset_pipeline(tmp_path: Path) -> None
     assert json.loads(
         (tmp_path / "workspace-fb2" / "detection.json").read_text()
     )["detected_format"] == "fb2"
+    markdown = render_markdown(
+        prepared,
+        asset_urls={
+            prepared.assets[0].source_ref: "https://public.example/cover.png"
+        },
+    )
+    assert markdown.count("Title") == 1
 
 
 def test_unsupported_embedded_media_is_dropped_without_failing_document(
@@ -484,7 +491,7 @@ def test_candidate_queue_backfills_legacy_content_and_versions_unsupported() -> 
     repository.engine = _Engine()
 
     repository.list_candidates(
-        extractor_version="nonpdf.v4", limit=10, per_mime_limit=100
+        extractor_version="nonpdf.v5", limit=10, per_mime_limit=100
     )
 
     assert "AND d.content_url IS NULL" not in repository.engine.sql

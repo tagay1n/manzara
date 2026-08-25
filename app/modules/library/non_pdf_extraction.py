@@ -20,7 +20,7 @@ from xml.etree import ElementTree
 from PIL import Image
 
 
-EXTRACTOR_VERSION = "nonpdf.v4"
+EXTRACTOR_VERSION = "nonpdf.v5"
 _BROWSER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _TEXT_SUFFIXES = {
     ".txt", ".md", ".markdown", ".csv", ".tsv", ".xml", ".tex",
@@ -430,6 +430,7 @@ def _printable_ratio(value: str) -> float:
 
 def _fb2_to_html(source: Path, *, workspace: Path) -> Path:
     root = ElementTree.parse(source).getroot()
+    parents = {child: parent for parent in root.iter() for child in parent}
     images_dir = workspace / "fb2-media"
     images_dir.mkdir(parents=True, exist_ok=True)
     image_paths: dict[str, Path] = {}
@@ -454,6 +455,13 @@ def _fb2_to_html(source: Path, *, workspace: Path) -> Path:
         if name == "title" and text_value:
             parts.append(f"<h2>{escape(text_value)}</h2>")
         elif name in {"p", "subtitle", "text-author"} and text_value:
+            parent = parents.get(node)
+            if (
+                name == "p"
+                and parent is not None
+                and parent.tag.rsplit("}", 1)[-1] == "title"
+            ):
+                continue
             parts.append(f"<p>{escape(text_value)}</p>")
         elif name == "image":
             href = next(

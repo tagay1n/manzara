@@ -30,7 +30,7 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
                 "mode": "shell",
                 "value": py_bootstrap
                 + '"$PY_BIN" -m app.modules.library.runtime.run_extract_non_pdf '
-                + "--per-mime-limit 100",
+                + "--per-mime-limit 10",
             },
         },
         {
