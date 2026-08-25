@@ -177,7 +177,11 @@ documents:
       book_previews: ttpreviews
 ```
 
-The `library.generate_book_previews` task selects only unrestricted Library-applicable PDFs whose URL belongs to the public Backblaze document bucket. It reuses and populates the persistent source cache at `~/.monocorpus/0_entry_point`; temporary render files stay under `~/.manzara/library/book-previews`. Preview keys are deterministic (`<md5>/1s.webp`, `<md5>/1l.webp`, and the applicable second/last variants). PostgreSQL stores document-level status, page count, and recipe version rather than duplicating S3 object metadata. Stop requests finish the current PDF, and the next run verifies and reuses existing objects before generating missing variants.
+The `library.generate_book_previews` task selects only unrestricted Library-applicable PDFs whose URL belongs to the public Backblaze document bucket. It reuses and populates the persistent source cache at `~/.monocorpus/0_entry_point`; render files are retained under `~/.manzara/library/book-previews` for inspection. Preview keys are deterministic (`<md5>/1s.webp`, `<md5>/1l.webp`, and the applicable second/last variants). PostgreSQL stores document-level status, page count, and recipe version rather than duplicating S3 object metadata. Stop requests finish the current PDF, and the next run verifies and reuses existing objects before generating missing variants.
+
+### Rich non-PDF content
+
+Create public Backblaze buckets configured as `documents.primary_storage.bucket.content` and `content_images`. The `library.extract_non_pdf` task writes `<md5>.zip` archives containing one `<md5>.md` file and stores referenced images as `<md5>/<ordinal>.<extension>`. It backfills legacy content, reads sources only from the verified shared cache or primary Backblaze storage, and retains all inspection files under `~/.manzara/library/non-pdf-extraction`. Pandoc and headless LibreOffice (`soffice`) must be installed. Manzara validates the buckets but never creates them or changes their public policy.
 
 ### Primary document storage
 
@@ -214,7 +218,7 @@ yandex:
       upstream_metadata: upstream-metadata
 ```
 
-`documents.primary_storage` is isolated from `yandex.cloud`: changing the document primary does not repoint upstream metadata, preview images, backups, or unrelated Yandex Object Storage consumers. Backblaze clients use SigV4 and path-style addressing. Library metadata evaluation reads signed private documents from Backblaze; preview generation reads source PDFs from Backblaze while keeping generated preview images in the configured Yandex preview bucket.
+`documents.primary_storage` is isolated from `yandex.cloud`: changing the document primary does not repoint upstream metadata, backups, or unrelated Yandex Object Storage consumers. Backblaze clients use SigV4 and path-style addressing. Library metadata evaluation reads signed private documents from Backblaze; preview generation reads source PDFs from Backblaze and writes generated previews to the configured public Backblaze preview bucket.
 
 `library.metadata_extract` requires a verified Backblaze checkpoint (`document_url`, size, and verification timestamp) before a document is eligible. It reuses MD5-verified source documents from the shared cache and populates cache misses only from Backblaze; it never falls back to Yandex Disk or legacy S3. A source read failure remains retryable. Metadata is accepted only when it contains a usable title and at least one independent bibliographic/content signal. Boilerplate-only, title-only, and title-missing responses advance to the next configured model. Existing usable metadata is immutable; low-quality historical metadata is replaced only after a validated better response and remains preserved if every model fails. Content-level failures are checkpointed per model in `library_metadata_extraction_state`; after every configured model fails, the document remains excluded until its state row is manually removed. If only the models remaining for one document have exhausted keys, that document is deferred while the batch continues; the task stops for quota only when every configured model is unavailable. Progress and run summaries distinguish quota, service, and source deferrals from terminal documents and show the unresolved remaining count:
 

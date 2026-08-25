@@ -12,6 +12,14 @@ These rules apply to `app/modules/library/`.
 - Preview state is PostgreSQL-backed and depends on page count: one page gets first; two pages get first/last; longer PDFs get first/second/last.
 - Missing roles for short PDFs are complete, not partial. Never duplicate page previews.
 - Preview object roles are deterministic from page count and use compact S3 names; PostgreSQL stores document-level status, page count, and recipe version rather than a per-object manifest.
+- Keep per-run and per-document preview workspaces under `~/.manzara` for owner inspection; never prune rendered preview files automatically.
+
+## Non-PDF content extraction
+
+- Extract every verified non-PDF source before language or Library classification. Reuse the shared MD5-verified cache and download misses only from primary Backblaze storage.
+- Rich Markdown preserves tables, LaTeX math, and monocorpus-style HTML figures. Referenced images live in the configured public Backblaze content-images bucket.
+- Keep converted documents, media, ASTs, logs, Markdown, and ZIP archives under the run workspace in `~/.manzara`; never prune them automatically.
+- Existing legacy content is replaced only after every new public object is verified and the source snapshot still matches.
 
 ## Metadata extraction
 

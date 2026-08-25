@@ -249,6 +249,12 @@ def _cleanup_managed_storage(
         deleted += _delete_prefix(
             primary_s3, settings.preview_bucket, f"{md5}/"
         )
+    if settings.content_bucket:
+        deleted += _delete_prefix(primary_s3, settings.content_bucket, md5)
+    if settings.content_images_bucket:
+        deleted += _delete_prefix(
+            primary_s3, settings.content_images_bucket, f"{md5}/"
+        )
     for bucket in _managed_legacy_buckets(config):
         deleted += _delete_prefix(
             legacy_s3,

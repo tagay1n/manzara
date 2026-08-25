@@ -202,6 +202,8 @@ def test_candidate_query_requires_verified_primary_storage() -> None:
     assert "schema_org IS NULL" in sql
     assert "library_metadata_extraction_state" in sql
     assert "ya_public_url" not in sql
+    assert "d.content_url IS NOT NULL" in sql
+    assert "LOWER(COALESCE(d.mime_type, '')) = 'application/pdf'" in sql
 
 
 def test_candidate_query_includes_existing_low_quality_metadata() -> None:

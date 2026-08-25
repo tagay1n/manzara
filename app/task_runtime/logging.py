@@ -209,6 +209,32 @@ class TaskLoggingMixin:
             payload["stopped"] = bool(artifacts.get("stopped"))
             payload["recipe_version"] = str(artifacts.get("recipe_version") or "")
             return payload
+        if kind == "library.non_pdf_extraction_summary":
+            for key in (
+                "processed",
+                "total",
+                "ready",
+                "failed",
+                "unsupported",
+                "downloaded_sources",
+                "reused_sources",
+                "uploaded_images",
+                "reused_images",
+                "uploaded_archives",
+                "reused_archives",
+                "checkpoint_raced",
+            ):
+                payload[key] = int(artifacts.get(key) or 0)
+            payload["stopped"] = bool(artifacts.get("stopped"))
+            payload["extractor_version"] = str(
+                artifacts.get("extractor_version") or ""
+            )
+            payload["formats"] = (
+                dict(artifacts.get("formats"))
+                if isinstance(artifacts.get("formats"), dict)
+                else {}
+            )
+            return payload
         return payload
 
 

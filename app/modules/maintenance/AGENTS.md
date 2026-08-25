@@ -4,7 +4,7 @@ These rules apply to `app/modules/maintenance/`.
 
 ## Document catalog and storage
 
-- Backblaze B2 via S3 is the primary document store and is configured only under `documents.primary_storage`. `yandex.cloud` remains legacy document/upstream/preview storage.
+- Backblaze B2 via S3 is the primary document, derived-content, embedded-image, and book-preview store and is configured only under `documents.primary_storage`. `yandex.cloud` remains legacy document/upstream storage.
 - `maintenance.monocorpus_sync` owns Yandex traversal, catalog discovery, ordinary unrestricted publishing, and guarded cleanup execution. It never downloads document bytes or uploads them to Backblaze.
 - `maintenance.sync_documents_s3` uses PostgreSQL rows with null/blank `document_url` as its only queue. It never lists Yandex directories, discovers documents, publishes links, or inserts document rows.
 - Upload source order is a hash-valid shared cache entry, then a direct download from the row's persisted `ya_path`. Do not download document bytes from Backblaze or legacy S3.

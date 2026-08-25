@@ -203,6 +203,8 @@ def test_process_book_uploads_only_expected_short_document_objects_and_resumes(t
     assert repository.row is not None
     assert repository.row["recipe_version"] == PREVIEW_RECIPE_VERSION
     assert repository.checkpoints[-1] == "ready"
+    assert (settings.workspace / digest / "1s.webp").is_file()
+    assert (settings.workspace / digest / "1l.webp").is_file()
 
 
 def test_preview_settings_use_backblaze_for_source_and_target(

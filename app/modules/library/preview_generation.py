@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
-import shutil
 from typing import Any
 
 import fitz
@@ -386,10 +385,6 @@ def process_book(
             downloaded_source=downloaded,
             error=str(exc),
         )
-    finally:
-        shutil.rmtree(book_workspace, ignore_errors=True)
-
-
 __all__ = [
     "RenderedVariant",
     "BookPreviewResult",

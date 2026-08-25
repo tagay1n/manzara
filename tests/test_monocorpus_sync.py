@@ -228,6 +228,8 @@ def _settings() -> DocumentStorageSettings:
         public_bucket="public",
         private_bucket="private",
         preview_bucket="ttpreviews",
+        content_bucket="ttcontent-b2",
+        content_images_bucket="ttcontent-images-b2",
         legacy_public_bucket="legacy-public",
         legacy_private_bucket="legacy-private",
         upstream_bucket="upstream",
@@ -400,5 +402,41 @@ def test_cleanup_removes_all_backblaze_preview_objects_for_document() -> None:
     assert primary_s3.keys == ["other/1s.webp"]
     assert any(
         request["Bucket"] == "ttpreviews" and request["Prefix"] == f"{md5}/"
+        for request in primary_s3.requests
+    )
+
+
+class _ManagedDerivedS3(_MutablePagedS3):
+    def __init__(self, md5: str) -> None:
+        self.keys = [
+            f"{md5}.zip",
+            f"{md5}/1.png",
+            f"{md5}/2.jpg",
+            "other.zip",
+        ]
+        self.requests = []
+
+
+def test_cleanup_removes_backblaze_content_and_embedded_images() -> None:
+    md5 = "b" * 32
+    primary_s3 = _ManagedDerivedS3(md5)
+
+    removed = _cleanup_managed_storage(
+        md5=md5,
+        primary_s3=primary_s3,
+        legacy_s3=_S3(),
+        settings=_settings(),
+        config={"yandex": {"cloud": {"bucket": {"metadata": "ttmeta"}}}},
+    )
+
+    assert removed == 3
+    assert primary_s3.keys == ["other.zip"]
+    assert any(
+        request["Bucket"] == "ttcontent-b2" and request["Prefix"] == md5
+        for request in primary_s3.requests
+    )
+    assert any(
+        request["Bucket"] == "ttcontent-images-b2"
+        and request["Prefix"] == f"{md5}/"
         for request in primary_s3.requests
     )

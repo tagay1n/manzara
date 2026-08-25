@@ -37,6 +37,8 @@ documents:
       public: manzara-documents
       private: manzara-documents-private
       book_previews: ttpreviews
+      content: ttcontent
+      content_images: ttcontent-images
 
 yandex:
   disk:

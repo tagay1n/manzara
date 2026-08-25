@@ -126,6 +126,37 @@ def test_library_preview_summary_uses_artifact_counts() -> None:
     }
 
 
+def test_non_pdf_extraction_summary_uses_artifact_counts() -> None:
+    summary = build_structured_run_summary(
+        task_id="library.extract_non_pdf",
+        panel_id="library",
+        status="completed",
+        exit_code=0,
+        error_text=None,
+        stop_mode=None,
+        started_at="2026-08-25T10:00:00+00:00",
+        finished_at="2026-08-25T10:10:00+00:00",
+        log_lines=[],
+        artifacts={
+            "kind": "library.non_pdf_extraction_summary",
+            "ready": 8,
+            "unsupported": 3,
+            "failed": 1,
+            "uploaded_images": 14,
+        },
+    )
+
+    assert summary["message"] == (
+        "Non-PDF extraction completed: 8 ready, 3 unsupported, 1 failed."
+    )
+    assert {item["label"]: item["value"] for item in summary["highlights"]} == {
+        "Ready": "8",
+        "Unsupported": "3",
+        "Failed": "1",
+        "Images uploaded": "14",
+    }
+
+
 def test_document_sync_summary_uses_structured_artifact() -> None:
     artifacts = {
         "kind": "maintenance.document_s3_sync_summary",

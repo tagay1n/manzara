@@ -36,6 +36,8 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
                 "bucket": {
                     "public": "manzara-documents",
                     "private": "manzara-documents-private",
+                    "content": "ttcontent",
+                    "content_images": "ttcontent-images",
                 },
             },
         },
@@ -72,6 +74,8 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
     assert settings.primary.access_key_id == "b2-key-id"
     assert settings.public_bucket == "manzara-documents"
     assert settings.private_bucket == "manzara-documents-private"
+    assert settings.content_bucket == "ttcontent"
+    assert settings.content_images_bucket == "ttcontent-images"
     assert settings.legacy.endpoint_url == "https://storage.yandexcloud.net"
     assert settings.legacy_public_bucket == "public-docs"
     assert settings.upstream_bucket == "upstream"
