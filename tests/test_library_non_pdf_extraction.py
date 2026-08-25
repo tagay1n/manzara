@@ -40,7 +40,7 @@ def test_task_catalog_includes_extract_non_pdf(tmp_path: Path) -> None:
     assert task["title"] == "Extract non-pdf"
     assert "run_extract_non_pdf" in task["command"]["value"]
     assert "--per-mime-limit 100" in task["command"]["value"]
-    assert EXTRACTOR_VERSION == "nonpdf.v3"
+    assert EXTRACTOR_VERSION == "nonpdf.v4"
 
 
 def test_migration_allows_schema_without_external_document_catalog() -> None:
@@ -300,6 +300,73 @@ def test_consecutive_and_grouped_images_all_render_as_html_figures(
     )["passed"] is True
 
 
+def test_epub_local_document_links_become_plain_text(tmp_path: Path) -> None:
+    ast = {
+        "pandoc-api-version": [1, 23, 1],
+        "meta": {},
+        "blocks": [
+            {
+                "t": "Para",
+                "c": [
+                    {
+                        "t": "Link",
+                        "c": [
+                            ["", [], []],
+                            [{"t": "Str", "c": "Chapter one"}],
+                            ["chapter.xhtml#start", ""],
+                        ],
+                    },
+                    {"t": "Space"},
+                    {
+                        "t": "Link",
+                        "c": [
+                            ["", [], []],
+                            [{"t": "Str", "c": "Publisher"}],
+                            ["https://example.com/book", ""],
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+    prepared = PreparedExtraction("epub", tmp_path, ast, None, ())
+
+    markdown = render_markdown(prepared, asset_urls={})
+
+    assert "Chapter one" in markdown
+    assert "chapter.xhtml" not in markdown
+    assert "[Publisher](https://example.com/book)" in markdown
+
+
+def test_image_only_document_is_rejected_as_requiring_ocr(tmp_path: Path) -> None:
+    ast = {
+        "pandoc-api-version": [1, 23, 1],
+        "meta": {},
+        "blocks": [
+            {
+                "t": "Para",
+                "c": [
+                    {
+                        "t": "Image",
+                        "c": [
+                            ["", [], []],
+                            [],
+                            ["page.jpeg", ""],
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    prepared = PreparedExtraction("doc", tmp_path, ast, None, ())
+
+    with pytest.raises(ValueError, match="OCR required"):
+        render_markdown(
+            prepared,
+            asset_urls={"page.jpeg": "https://public.example/page.jpeg"},
+        )
+
+
 class _AssetS3:
     def __init__(self) -> None:
         self.deleted: list[str] = []
@@ -417,7 +484,7 @@ def test_candidate_queue_backfills_legacy_content_and_versions_unsupported() -> 
     repository.engine = _Engine()
 
     repository.list_candidates(
-        extractor_version="nonpdf.v3", limit=10, per_mime_limit=100
+        extractor_version="nonpdf.v4", limit=10, per_mime_limit=100
     )
 
     assert "AND d.content_url IS NULL" not in repository.engine.sql

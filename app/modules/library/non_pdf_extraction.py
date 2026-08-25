@@ -20,7 +20,7 @@ from xml.etree import ElementTree
 from PIL import Image
 
 
-EXTRACTOR_VERSION = "nonpdf.v3"
+EXTRACTOR_VERSION = "nonpdf.v4"
 _BROWSER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _TEXT_SUFFIXES = {
     ".txt", ".md", ".markdown", ".csv", ".tsv", ".xml", ".tex",
@@ -237,8 +237,13 @@ def render_markdown(
     else:
         ast = deepcopy(prepared.ast)
         ast = _strip_presentational_spans(ast)
-        _rewrite_image_urls(ast, asset_urls)
+        ast = _strip_local_links(ast)
         blocks = ast.get("blocks") if isinstance(ast.get("blocks"), list) else []
+        if not _has_non_image_inline_content(blocks):
+            raise ValueError(
+                "Extracted document contains only images; OCR required for text content"
+            )
+        _rewrite_image_urls(ast, asset_urls)
         ast["blocks"] = _normalize_blocks(
             blocks, ast=ast, workspace=prepared.workspace
         )
@@ -489,6 +494,30 @@ def _strip_presentational_spans(value: Any) -> Any:
     if isinstance(value, dict):
         return {
             key: _strip_presentational_spans(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _strip_local_links(value: Any) -> Any:
+    if isinstance(value, list):
+        normalized: list[Any] = []
+        for item in value:
+            if isinstance(item, dict) and item.get("t") == "Link":
+                content = item.get("c") if isinstance(item.get("c"), list) else []
+                target = content[-1] if content else ["", ""]
+                href = str(target[0] if isinstance(target, list) and target else "")
+                if not href.lower().startswith(("http://", "https://", "mailto:")):
+                    label = content[1] if len(content) > 1 else []
+                    stripped = _strip_local_links(label)
+                    if isinstance(stripped, list):
+                        normalized.extend(stripped)
+                    continue
+            normalized.append(_strip_local_links(item))
+        return normalized
+    if isinstance(value, dict):
+        return {
+            key: _strip_local_links(item)
             for key, item in value.items()
         }
     return value
