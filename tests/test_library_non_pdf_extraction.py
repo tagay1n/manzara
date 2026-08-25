@@ -37,7 +37,7 @@ def test_task_catalog_includes_extract_non_pdf(tmp_path: Path) -> None:
     assert task["title"] == "Extract non-pdf"
     assert "run_extract_non_pdf" in task["command"]["value"]
     assert "--per-mime-limit 100" in task["command"]["value"]
-    assert EXTRACTOR_VERSION == "nonpdf.v2"
+    assert EXTRACTOR_VERSION == "nonpdf.v3"
 
 
 def test_migration_allows_schema_without_external_document_catalog() -> None:
@@ -70,6 +70,29 @@ def test_detection_prefers_source_bytes_over_wrong_mime_and_extension(
     assert detect_document_format(
         html, mime_type="application/msword", source_path="wrong.doc"
     ) == "html"
+
+
+def test_ole_detection_does_not_treat_thumbnail_cache_as_word_document(
+    tmp_path: Path,
+) -> None:
+    ole_header = bytes.fromhex("d0cf11e0a1b11ae1") + b"\x00" * 504
+    thumbnail_cache = tmp_path / "Thumbs.db"
+    thumbnail_cache.write_bytes(
+        ole_header + "256_a43e39b83acfaad6".encode("utf-16-le")
+    )
+    word = tmp_path / "mislabelled"
+    word.write_bytes(ole_header + "WordDocument".encode("utf-16-le"))
+
+    assert detect_document_format(
+        thumbnail_cache,
+        mime_type="application/cdfv2",
+        source_path="Thumbs.db",
+    ) == "compound"
+    assert detect_document_format(
+        word,
+        mime_type="application/cdfv2",
+        source_path="no-extension",
+    ) == "doc"
 
 
 def test_docx_preserves_math_table_figure_and_public_image_url(
@@ -232,20 +255,40 @@ def test_consecutive_and_grouped_images_all_render_as_html_figures(
                 "t": "Para",
                 "c": [image("local-3.png"), {"t": "Space"}, image("local-4.png")],
             },
-            {"t": "Para", "c": [{"t": "Str", "c": "Body text"}]},
+            {
+                "t": "Div",
+                "c": [
+                    ["container", [], []],
+                    [{"t": "Para", "c": [image("local-5.png")]}],
+                ],
+            },
+            {
+                "t": "Para",
+                "c": [
+                    {
+                        "t": "Span",
+                        "c": [
+                            ["page-anchor", ["style"], []],
+                            [{"t": "Str", "c": "Body text"}],
+                        ],
+                    }
+                ],
+            },
         ],
     }
     prepared = PreparedExtraction("docx", tmp_path, ast, None, ())
     urls = {
         f"local-{index}.png": f"https://public.example/{index}.png"
-        for index in range(1, 5)
+        for index in range(1, 6)
     }
 
     markdown = render_markdown(prepared, asset_urls=urls)
 
-    assert markdown.count("<figure ") == 3
-    assert markdown.count("<img ") == 4
+    assert markdown.count("<figure ") == 4
+    assert markdown.count("<img ") == 5
     assert "![" not in markdown
+    assert ":::" not in markdown
+    assert "{.style}" not in markdown
     for url in urls.values():
         assert url in markdown
     assert "Body text" in markdown
@@ -352,7 +395,7 @@ def test_candidate_queue_backfills_legacy_content_and_versions_unsupported() -> 
     repository.engine = _Engine()
 
     repository.list_candidates(
-        extractor_version="nonpdf.v2", limit=10, per_mime_limit=100
+        extractor_version="nonpdf.v3", limit=10, per_mime_limit=100
     )
 
     assert "AND d.content_url IS NULL" not in repository.engine.sql

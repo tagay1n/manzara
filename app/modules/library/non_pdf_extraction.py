@@ -18,7 +18,7 @@ from xml.etree import ElementTree
 from PIL import Image
 
 
-EXTRACTOR_VERSION = "nonpdf.v2"
+EXTRACTOR_VERSION = "nonpdf.v3"
 _BROWSER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _TEXT_SUFFIXES = {
     ".txt", ".md", ".markdown", ".csv", ".tsv", ".xml", ".tex",
@@ -90,11 +90,20 @@ def detect_document_format(path: Path, *, mime_type: str = "", source_path: str 
             if any(name.startswith("xl/") for name in names):
                 return "spreadsheet"
     if header.startswith(bytes.fromhex("d0cf11e0a1b11ae1")):
+        ole_markers = _find_ole_document_markers(source)
+        if "powerpoint" in ole_markers:
+            return "powerpoint"
+        if "spreadsheet" in ole_markers:
+            return "spreadsheet"
+        if "doc" in ole_markers:
+            return "doc"
         if suffix in {".ppt", ".pps"} or "powerpoint" in mime:
             return "powerpoint"
-        if suffix in {".xls"} or "excel" in mime:
+        if suffix == ".xls" or "excel" in mime:
             return "spreadsheet"
-        return "doc"
+        if suffix == ".doc" or mime in {"application/msword", "application/x-msword"}:
+            return "doc"
+        return "compound"
     sample = lowered[:4096]
     if b"<fictionbook" in sample or suffix == ".fb2" or "fictionbook" in mime:
         return "fb2"
@@ -122,6 +131,28 @@ def detect_document_format(path: Path, *, mime_type: str = "", source_path: str 
     }:
         return "text"
     return suffix.lstrip(".") or mime or "unknown"
+
+
+def _find_ole_document_markers(path: Path) -> set[str]:
+    markers = {
+        "doc": "WordDocument".encode("utf-16-le"),
+        "powerpoint": "PowerPoint Document".encode("utf-16-le"),
+        "spreadsheet": "Workbook".encode("utf-16-le"),
+        "spreadsheet-book": "Book".encode("utf-16-le"),
+    }
+    found: set[str] = set()
+    overlap = max(len(marker) for marker in markers.values()) - 1
+    previous = b""
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            sample = previous + chunk
+            for kind, marker in markers.items():
+                if marker in sample:
+                    found.add("spreadsheet" if kind == "spreadsheet-book" else kind)
+            if {"doc", "powerpoint", "spreadsheet"}.issubset(found):
+                break
+            previous = sample[-overlap:]
+    return found
 
 
 def prepare_extraction(
@@ -203,6 +234,7 @@ def render_markdown(
         content = str(prepared.text or "")
     else:
         ast = deepcopy(prepared.ast)
+        ast = _strip_presentational_spans(ast)
         _rewrite_image_urls(ast, asset_urls)
         blocks = ast.get("blocks") if isinstance(ast.get("blocks"), list) else []
         ast["blocks"] = _normalize_blocks(
@@ -407,6 +439,27 @@ def _walk(value: Any):
             yield from _walk(item)
 
 
+def _strip_presentational_spans(value: Any) -> Any:
+    if isinstance(value, list):
+        normalized: list[Any] = []
+        for item in value:
+            if isinstance(item, dict) and item.get("t") == "Span":
+                content = item.get("c") if isinstance(item.get("c"), list) else []
+                inlines = content[1] if len(content) > 1 else []
+                stripped = _strip_presentational_spans(inlines)
+                if isinstance(stripped, list):
+                    normalized.extend(stripped)
+                continue
+            normalized.append(_strip_presentational_spans(item))
+        return normalized
+    if isinstance(value, dict):
+        return {
+            key: _strip_presentational_spans(item)
+            for key, item in value.items()
+        }
+    return value
+
+
 def _collect_assets(ast: Mapping[str, Any], *, workspace: Path) -> tuple[ExtractedAsset, ...]:
     refs: list[str] = []
     for node in _walk(ast):
@@ -559,6 +612,7 @@ def _figure_html(value: Any, *, caption_override: str | None = None) -> str:
 def _normalize_block(
     block: dict[str, Any], *, ast: Mapping[str, Any], workspace: Path
 ) -> dict[str, Any]:
+    block = _normalize_block_children(block, ast=ast, workspace=workspace)
     if block.get("t") == "Figure":
         return {"t": "RawBlock", "c": ["html", _figure_html(block)]}
     if _is_image_only_paragraph(block):
@@ -579,6 +633,46 @@ def _normalize_block(
     return block
 
 
+def _normalize_block_children(
+    block: dict[str, Any], *, ast: Mapping[str, Any], workspace: Path
+) -> dict[str, Any]:
+    node_type = block.get("t")
+    content = block.get("c")
+    if node_type == "Div" and isinstance(content, list) and len(content) > 1:
+        if isinstance(content[1], list):
+            content[1] = _normalize_blocks(content[1], ast=ast, workspace=workspace)
+    elif node_type == "BlockQuote" and isinstance(content, list):
+        block["c"] = _normalize_blocks(content, ast=ast, workspace=workspace)
+    elif node_type == "BulletList" and isinstance(content, list):
+        block["c"] = [
+            _normalize_blocks(item, ast=ast, workspace=workspace)
+            if isinstance(item, list)
+            else item
+            for item in content
+        ]
+    elif node_type == "OrderedList" and isinstance(content, list) and len(content) > 1:
+        if isinstance(content[1], list):
+            content[1] = [
+                _normalize_blocks(item, ast=ast, workspace=workspace)
+                if isinstance(item, list)
+                else item
+                for item in content[1]
+            ]
+    elif node_type == "DefinitionList" and isinstance(content, list):
+        for definition in content:
+            if not isinstance(definition, list) or len(definition) < 2:
+                continue
+            groups = definition[1]
+            if isinstance(groups, list):
+                definition[1] = [
+                    _normalize_blocks(group, ast=ast, workspace=workspace)
+                    if isinstance(group, list)
+                    else group
+                    for group in groups
+                ]
+    return block
+
+
 def _normalize_blocks(
     blocks: list[dict[str, Any]], *, ast: Mapping[str, Any], workspace: Path
 ) -> list[dict[str, Any]]:
@@ -586,6 +680,15 @@ def _normalize_blocks(
     index = 0
     while index < len(blocks):
         block = blocks[index]
+        if block.get("t") == "Div":
+            content = block.get("c") if isinstance(block.get("c"), list) else []
+            children = content[1] if len(content) > 1 else []
+            if isinstance(children, list):
+                normalized.extend(
+                    _normalize_blocks(children, ast=ast, workspace=workspace)
+                )
+            index += 1
+            continue
         if _is_image_only_paragraph(block):
             block_images = _images(block)
             if len(block_images) == 1:
