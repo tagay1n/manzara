@@ -10,6 +10,7 @@ import zipfile
 from PIL import Image
 
 from app.modules.library.non_pdf_extraction import (
+    EXTRACTOR_VERSION,
     PreparedExtraction,
     _collect_assets,
     detect_document_format,
@@ -29,6 +30,7 @@ def test_task_catalog_includes_extract_non_pdf(tmp_path: Path) -> None:
     assert task["panel_id"] == "library"
     assert task["title"] == "Extract non-pdf"
     assert "run_extract_non_pdf" in task["command"]["value"]
+    assert EXTRACTOR_VERSION == "nonpdf.v2"
 
 
 def test_migration_allows_schema_without_external_document_catalog() -> None:
@@ -195,6 +197,44 @@ def test_unsupported_embedded_media_is_dropped_without_failing_document(
     drops = json.loads((tmp_path / "dropped-media.json").read_text())
     assert drops[0]["source_ref"] == str(media)
     assert "unsupported image encoding" in drops[0]["reason"]
+
+
+def test_consecutive_and_grouped_images_all_render_as_html_figures(
+    tmp_path: Path,
+) -> None:
+    def image(url: str) -> dict:
+        return {
+            "t": "Image",
+            "c": [["", [], []], [], [url, ""]],
+        }
+
+    ast = {
+        "pandoc-api-version": [1, 23, 1],
+        "meta": {},
+        "blocks": [
+            {"t": "Para", "c": [image("local-1.png")]},
+            {"t": "Para", "c": [image("local-2.png")]},
+            {
+                "t": "Para",
+                "c": [image("local-3.png"), {"t": "Space"}, image("local-4.png")],
+            },
+            {"t": "Para", "c": [{"t": "Str", "c": "Body text"}]},
+        ],
+    }
+    prepared = PreparedExtraction("docx", tmp_path, ast, None, ())
+    urls = {
+        f"local-{index}.png": f"https://public.example/{index}.png"
+        for index in range(1, 5)
+    }
+
+    markdown = render_markdown(prepared, asset_urls=urls)
+
+    assert markdown.count("<figure ") == 3
+    assert markdown.count("<img ") == 4
+    assert "![" not in markdown
+    for url in urls.values():
+        assert url in markdown
+    assert "Body text" in markdown
 
 
 class _Rows:

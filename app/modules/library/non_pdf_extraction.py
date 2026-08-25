@@ -18,7 +18,7 @@ from xml.etree import ElementTree
 from PIL import Image
 
 
-EXTRACTOR_VERSION = "nonpdf.v1"
+EXTRACTOR_VERSION = "nonpdf.v2"
 _BROWSER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _TEXT_SUFFIXES = {
     ".txt", ".md", ".markdown", ".csv", ".tsv", ".xml", ".tex",
@@ -186,7 +186,11 @@ def prepare_extraction(
     )
     del result
     ast = json.loads(ast_path.read_text(encoding="utf-8"))
-    assets = _collect_assets(ast, workspace=workspace)
+    # Only body blocks are rendered into the published Markdown. Avoid uploading
+    # images that occur solely in Pandoc metadata and can never be referenced.
+    assets = _collect_assets(
+        {"blocks": ast.get("blocks", [])}, workspace=workspace
+    )
     return PreparedExtraction(detected, workspace, ast, None, assets)
 
 
@@ -454,6 +458,28 @@ def _images(value: Any) -> list[dict[str, Any]]:
     return [node for node in _walk(value) if node.get("t") == "Image"]
 
 
+def _has_non_image_inline_content(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(_has_non_image_inline_content(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    node_type = value.get("t")
+    if node_type == "Image":
+        return False
+    if node_type == "Str":
+        return bool(str(value.get("c") or "").strip())
+    if node_type in {"Code", "Math", "RawInline", "Note"}:
+        return True
+    return _has_non_image_inline_content(value.get("c"))
+
+
+def _is_image_only_paragraph(block: Mapping[str, Any]) -> bool:
+    if block.get("t") not in {"Para", "Plain"}:
+        return False
+    content = block.get("c") if isinstance(block.get("c"), list) else []
+    return bool(_images(content)) and not _has_non_image_inline_content(content)
+
+
 def _figure_html(value: Any, *, caption_override: str | None = None) -> str:
     images = _images(value)
     if not images:
@@ -486,10 +512,8 @@ def _normalize_block(
 ) -> dict[str, Any]:
     if block.get("t") == "Figure":
         return {"t": "RawBlock", "c": ["html", _figure_html(block)]}
-    if block.get("t") in {"Para", "Plain"}:
-        content = block.get("c") if isinstance(block.get("c"), list) else []
-        if len(content) == 1 and isinstance(content[0], dict) and content[0].get("t") == "Image":
-            return {"t": "RawBlock", "c": ["html", _figure_html(block)]}
+    if _is_image_only_paragraph(block):
+        return {"t": "RawBlock", "c": ["html", _figure_html(block)]}
     if block.get("t") == "Table":
         table_ast = {
             "pandoc-api-version": ast.get("pandoc-api-version", [1, 22, 2, 1]),
@@ -513,20 +537,19 @@ def _normalize_blocks(
     index = 0
     while index < len(blocks):
         block = blocks[index]
-        if block.get("t") in {"Para", "Plain"}:
-            content = block.get("c") if isinstance(block.get("c"), list) else []
-            if (
-                len(content) == 1
-                and isinstance(content[0], dict)
-                and content[0].get("t") == "Image"
-            ):
-                image_alt = _inline_text(content[0])
+        if _is_image_only_paragraph(block):
+            block_images = _images(block)
+            if len(block_images) == 1:
+                image_alt = _inline_text(block_images[0])
                 caption = image_alt
                 if index + 1 < len(blocks):
                     following = blocks[index + 1]
                     following_text = _inline_text(following)
-                    if following.get("t") in {"Para", "Plain"} and (
-                        not image_alt or following_text == image_alt
+                    if (
+                        following.get("t") in {"Para", "Plain"}
+                        and not _images(following)
+                        and image_alt
+                        and following_text == image_alt
                     ):
                         caption = following_text
                         index += 1
