@@ -10,6 +10,8 @@ import zipfile
 from PIL import Image
 
 from app.modules.library.non_pdf_extraction import (
+    PreparedExtraction,
+    _collect_assets,
     detect_document_format,
     prepare_extraction,
     render_markdown,
@@ -27,6 +29,17 @@ def test_task_catalog_includes_extract_non_pdf(tmp_path: Path) -> None:
     assert task["panel_id"] == "library"
     assert task["title"] == "Extract non-pdf"
     assert "run_extract_non_pdf" in task["command"]["value"]
+
+
+def test_migration_allows_schema_without_external_document_catalog() -> None:
+    migration = Path(
+        "alembic/versions/20260825_0034_add_non_pdf_extraction_state.py"
+    ).read_text(encoding="utf-8")
+
+    assert "IF to_regclass" in migration
+    assert "ADD CONSTRAINT fk_library_non_pdf_extraction_document" in migration
+    create_table = migration.split("CREATE TABLE", 1)[1].split('"""', 1)[0]
+    assert "FOREIGN KEY (md5)" not in create_table
 
 
 def test_detection_prefers_source_bytes_over_wrong_mime_and_extension(
@@ -75,9 +88,11 @@ Inline $x^2 + y^2 = z^2$.
         text=True,
         check=True,
     )
+    wrongly_named = tmp_path / "cached.doc"
+    wrongly_named.write_bytes(docx.read_bytes())
 
     prepared = prepare_extraction(
-        docx,
+        wrongly_named,
         workspace=tmp_path / "workspace",
         mime_type="application/msword",
         source_path="incorrect.doc",
@@ -140,6 +155,46 @@ def test_fb2_embedded_image_enters_common_asset_pipeline(tmp_path: Path) -> None
     assert json.loads(
         (tmp_path / "workspace-fb2" / "detection.json").read_text()
     )["detected_format"] == "fb2"
+
+
+def test_unsupported_embedded_media_is_dropped_without_failing_document(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    media = tmp_path / "media.bin"
+    media.write_bytes(b"unsupported proprietary object")
+    ast = {
+        "pandoc-api-version": [1, 23, 1],
+        "meta": {},
+        "blocks": [
+            {"t": "Para", "c": [{"t": "Str", "c": "Readable text"}]},
+            {
+                "t": "Para",
+                "c": [
+                    {
+                        "t": "Image",
+                        "c": [["", [], []], [{"t": "Str", "c": "Object"}], [str(media), ""]],
+                    }
+                ],
+            },
+        ],
+    }
+
+    def fail_conversion(*_args, **_kwargs):
+        raise RuntimeError("unsupported image encoding")
+
+    monkeypatch.setattr(
+        "app.modules.library.non_pdf_extraction._browser_image", fail_conversion
+    )
+    assets = _collect_assets(ast, workspace=tmp_path)
+    prepared = PreparedExtraction("docx", tmp_path, ast, None, assets)
+    markdown = render_markdown(prepared, asset_urls={})
+
+    assert assets == ()
+    assert "Readable text" in markdown
+    assert str(media) not in markdown
+    drops = json.loads((tmp_path / "dropped-media.json").read_text())
+    assert drops[0]["source_ref"] == str(media)
+    assert "unsupported image encoding" in drops[0]["reason"]
 
 
 class _Rows:

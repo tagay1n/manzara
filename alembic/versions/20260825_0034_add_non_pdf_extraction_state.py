@@ -55,10 +55,27 @@ def upgrade() -> None:
             CONSTRAINT ck_library_non_pdf_extraction_status
                 CHECK (status IN ('processing', 'ready', 'failed', 'unsupported')),
             CONSTRAINT ck_library_non_pdf_extraction_attempts
-                CHECK (attempt_count >= 0),
-            CONSTRAINT fk_library_non_pdf_extraction_document
-                FOREIGN KEY (md5) REFERENCES {_table("document")} (md5) ON DELETE CASCADE
+                CHECK (attempt_count >= 0)
         )
+        """
+    )
+    # The document catalog is owned by the external Monocorpus schema and is not
+    # present in Manzara's isolated test/development schemas. Add referential
+    # cleanup only where that catalog table actually exists, matching the book
+    # preview checkpoint migration.
+    schema_literal = _schema().replace("'", "''")
+    op.execute(
+        f"""
+        DO $$
+        BEGIN
+            IF to_regclass('{schema_literal}.document') IS NOT NULL THEN
+                ALTER TABLE {table}
+                ADD CONSTRAINT fk_library_non_pdf_extraction_document
+                FOREIGN KEY (md5) REFERENCES {_table("document")} (md5)
+                ON DELETE CASCADE;
+            END IF;
+        END
+        $$
         """
     )
     op.execute(

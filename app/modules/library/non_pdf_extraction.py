@@ -157,16 +157,23 @@ def prepare_extraction(
         return PreparedExtraction(detected, workspace, None, text_value, ())
 
     pandoc_source = Path(source)
+    pandoc_format = detected
     if detected in {"doc", "rtf"}:
-        pandoc_source = _convert_to_docx(source, workspace=workspace)
+        pandoc_source = _convert_to_docx(
+            source, workspace=workspace, detected_format=detected
+        )
+        pandoc_format = "docx"
     elif detected == "fb2":
         pandoc_source = _fb2_to_html(source, workspace=workspace)
+        pandoc_format = "html"
     ast_path = workspace / "raw-ast.json"
     media_dir = workspace / "media"
     result = _run(
         [
             "pandoc",
             str(pandoc_source),
+            "-f",
+            pandoc_format,
             "-t",
             "json",
             "--extract-media",
@@ -247,16 +254,22 @@ def _run(
     return result
 
 
-def _convert_to_docx(source: Path, *, workspace: Path) -> Path:
+def _convert_to_docx(
+    source: Path, *, workspace: Path, detected_format: str
+) -> Path:
     converted = workspace / "converted"
     converted.mkdir(parents=True, exist_ok=True)
+    # LibreOffice primarily selects its input filter from the filename. Give it
+    # the byte-detected suffix instead of the unreliable catalog/cache suffix.
+    staged_source = workspace / f"source.{detected_format}"
+    shutil.copyfile(source, staged_source)
     profile = workspace / "libreoffice-profile"
     _run(
         [
             "soffice",
             f"-env:UserInstallation={profile.resolve().as_uri()}",
             "--headless", "--convert-to", "docx", "--outdir", str(converted),
-            str(source),
+            str(staged_source),
         ],
         workspace=workspace,
         label="libreoffice",
@@ -353,14 +366,33 @@ def _collect_assets(ast: Mapping[str, Any], *, workspace: Path) -> tuple[Extract
         if ref not in refs:
             refs.append(ref)
     assets: list[ExtractedAsset] = []
-    for ordinal, ref in enumerate(refs, start=1):
+    dropped: list[dict[str, str]] = []
+    for ref in refs:
         raw_path = Path(ref.removeprefix("file://"))
         if not raw_path.is_absolute():
             raw_path = workspace / raw_path
         if not raw_path.is_file():
+            dropped.append({"source_ref": ref, "reason": "embedded media is missing"})
             continue
-        browser_path = _browser_image(raw_path, workspace=workspace, ordinal=ordinal)
+        ordinal = len(assets) + 1
+        try:
+            browser_path = _browser_image(
+                raw_path, workspace=workspace, ordinal=ordinal
+            )
+        except Exception as exc:  # noqa: BLE001
+            dropped.append(
+                {
+                    "source_ref": ref,
+                    "reason": f"{type(exc).__name__}: {exc}"[:1000],
+                }
+            )
+            continue
         assets.append(ExtractedAsset(ref, browser_path, ordinal))
+    if dropped:
+        (workspace / "dropped-media.json").write_text(
+            json.dumps(dropped, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     return tuple(assets)
 
 
