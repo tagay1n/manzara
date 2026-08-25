@@ -15,14 +15,23 @@ import signal
 import subprocess
 from typing import Any, Mapping
 import unicodedata
+from urllib.parse import urlsplit
 import zipfile
 from xml.etree import ElementTree
 
 from PIL import Image
+import requests
 
 
-EXTRACTOR_VERSION = "nonpdf.v6"
+EXTRACTOR_VERSION = "nonpdf.v7"
 _BROWSER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_LEGACY_IMAGE_PREFIX = "https://storage.yandexcloud.net/ttimg/"
+_MARKDOWN_IMAGE_PATTERN = re.compile(
+    r"(?m)(?<!\\)!\[(?P<alt>[^\]\n]*)\]\((?P<url>https?://[^)\n]+)\)"
+)
+_HTML_IMAGE_SRC_PATTERN = re.compile(
+    r"(?is)(?P<prefix><img\b[^>]*?\bsrc=[\"'])(?P<url>[^\"']+)(?P<suffix>[\"'])"
+)
 _TEXT_SUFFIXES = {
     ".txt", ".md", ".markdown", ".csv", ".tsv", ".xml", ".tex",
     ".srt", ".json", ".yaml", ".yml", ".ini",
@@ -188,7 +197,12 @@ def prepare_extraction(
         text_value = _decode_text(source.read_bytes())
         if detected == "text" and not text_value.endswith("\n"):
             text_value += "\n"
-        return PreparedExtraction(detected, workspace, None, text_value, ())
+        assets = (
+            _collect_markdown_assets(text_value, workspace=workspace)
+            if detected == "markdown"
+            else ()
+        )
+        return PreparedExtraction(detected, workspace, None, text_value, assets)
 
     pandoc_source = Path(source)
     pandoc_format = detected
@@ -235,6 +249,8 @@ def render_markdown(
 ) -> str:
     if prepared.ast is None:
         content = str(prepared.text or "")
+        if prepared.detected_format == "markdown":
+            content = _rewrite_source_markdown_images(content, asset_urls)
     else:
         ast = deepcopy(prepared.ast)
         ast = _strip_presentational_spans(ast)
@@ -304,6 +320,13 @@ def validate_rendered_markdown(
     ]
     if local_refs:
         errors.append(f"found {len(local_refs)} local media references")
+    managed_urls = {str(url) for url in asset_urls.values() if str(url)}
+    html_image_urls = [
+        match.group("url") for match in _HTML_IMAGE_SRC_PATTERN.finditer(markdown)
+    ]
+    unmanaged_urls = [url for url in html_image_urls if url not in managed_urls]
+    if unmanaged_urls:
+        errors.append(f"found {len(unmanaged_urls)} unmanaged HTML image URLs")
     report = {
         "extractor_version": EXTRACTOR_VERSION,
         "detected_format": prepared.detected_format,
@@ -311,6 +334,7 @@ def validate_rendered_markdown(
         "referenced_asset_count": sum(url in markdown for url in expected_urls),
         "html_image_count": len(re.findall(r"<img\b", markdown)),
         "html_figure_count": len(re.findall(r"<figure\b", markdown)),
+        "unmanaged_html_image_count": len(unmanaged_urls),
         "errors": errors,
         "passed": not errors,
     }
@@ -468,6 +492,96 @@ def _printable_ratio(value: str) -> float:
         return 0.0
     printable = sum(char.isprintable() or char in "\n\r\t" for char in value)
     return printable / len(value)
+
+
+def _collect_markdown_assets(
+    markdown: str, *, workspace: Path
+) -> tuple[ExtractedAsset, ...]:
+    occurrences: list[tuple[int, str]] = []
+    for pattern in (_MARKDOWN_IMAGE_PATTERN, _HTML_IMAGE_SRC_PATTERN):
+        occurrences.extend(
+            (match.start(), str(match.group("url")))
+            for match in pattern.finditer(markdown)
+        )
+    refs: list[str] = []
+    for _position, ref in sorted(occurrences):
+        if ref.startswith(_LEGACY_IMAGE_PREFIX) and ref not in refs:
+            refs.append(ref)
+    return tuple(
+        ExtractedAsset(
+            ref,
+            _download_legacy_image(ref, workspace=workspace, ordinal=ordinal),
+            ordinal,
+        )
+        for ordinal, ref in enumerate(refs, start=1)
+    )
+
+
+def _download_legacy_image(url: str, *, workspace: Path, ordinal: int) -> Path:
+    if not url.startswith(_LEGACY_IMAGE_PREFIX):
+        raise ValueError(f"Legacy image URL is not allowed: {url}")
+    suffix = Path(urlsplit(url).path).suffix.lower()
+    if suffix not in _BROWSER_IMAGE_SUFFIXES:
+        suffix = ".bin"
+    destination = workspace / "remote-media" / f"{ordinal}{suffix}"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    with requests.get(
+        url,
+        stream=True,
+        allow_redirects=False,
+        timeout=(10, 60),
+    ) as response:
+        response.raise_for_status()
+        content_type = str(response.headers.get("Content-Type") or "").lower()
+        if content_type and not (
+            content_type.startswith("image/")
+            or content_type == "application/octet-stream"
+        ):
+            raise ValueError(f"Legacy image has non-image content type: {content_type}")
+        with destination.open("wb") as stream:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if size > 50 * 1024 * 1024:
+                    raise ValueError("Legacy image exceeds the 50 MiB limit")
+                stream.write(chunk)
+    if size <= 0:
+        raise ValueError("Legacy image download is empty")
+    with Image.open(destination) as image:
+        image.verify()
+    return _browser_image(destination, workspace=workspace, ordinal=ordinal)
+
+
+def _rewrite_source_markdown_images(
+    markdown: str, asset_urls: Mapping[str, str]
+) -> str:
+    def replace_markdown(match: re.Match[str]) -> str:
+        source = str(match.group("url"))
+        url = str(asset_urls.get(source) or "")
+        if not url:
+            return match.group(0)
+        alt = str(match.group("alt") or "")
+        return (
+            '<figure style="text-align: center; margin: 1em 0;">'
+            f'<img alt="{escape(alt, quote=True)}" '
+            f'src="{escape(url, quote=True)}" '
+            'style="max-width: 800px; width: 50%; height: auto;">'
+            "</figure>"
+        )
+
+    content = _MARKDOWN_IMAGE_PATTERN.sub(replace_markdown, markdown)
+
+    def replace_html_src(match: re.Match[str]) -> str:
+        source = str(match.group("url"))
+        url = str(asset_urls.get(source) or source)
+        return (
+            f'{match.group("prefix")}{escape(url, quote=True)}'
+            f'{match.group("suffix")}'
+        )
+
+    return _HTML_IMAGE_SRC_PATTERN.sub(replace_html_src, content)
 
 
 def _fb2_to_html(source: Path, *, workspace: Path) -> Path:

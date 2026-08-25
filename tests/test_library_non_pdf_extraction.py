@@ -41,7 +41,7 @@ def test_task_catalog_includes_extract_non_pdf(tmp_path: Path) -> None:
     assert task["title"] == "Extract non-pdf"
     assert "run_extract_non_pdf" in task["command"]["value"]
     assert "--per-mime-limit 10" in task["command"]["value"]
-    assert EXTRACTOR_VERSION == "nonpdf.v6"
+    assert EXTRACTOR_VERSION == "nonpdf.v7"
 
 
 def test_migration_allows_schema_without_external_document_catalog() -> None:
@@ -421,6 +421,64 @@ def test_text_decoder_preserves_bom_marked_utf16() -> None:
     assert _decode_text(payload) == "Татарча текст"
 
 
+def test_legacy_markdown_images_enter_backblaze_asset_pipeline(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    first = "https://storage.yandexcloud.net/ttimg/legacy-1.jpg"
+    second = "https://storage.yandexcloud.net/ttimg/legacy-2.jpg"
+    source = tmp_path / "book.md"
+    source.write_text(
+        f"# Book\n\n![Cover]({first})\n\n"
+        f'<figure><img alt="Map" src="{second}"></figure>\n',
+        encoding="utf-8",
+    )
+
+    def fake_download(url: str, *, workspace: Path, ordinal: int) -> Path:
+        assert url in {first, second}
+        path = workspace / "remote-media" / f"{ordinal}.jpg"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (3, 3), "green").save(path)
+        return path
+
+    monkeypatch.setattr(
+        "app.modules.library.non_pdf_extraction._download_legacy_image",
+        fake_download,
+    )
+    prepared = prepare_extraction(
+        source,
+        workspace=tmp_path / "workspace-markdown",
+        mime_type="text/plain",
+        source_path="book.md",
+    )
+    urls = {
+        prepared.assets[0].source_ref: "https://backblaze.example/1.jpg",
+        prepared.assets[1].source_ref: "https://backblaze.example/2.jpg",
+    }
+
+    markdown = render_markdown(prepared, asset_urls=urls)
+
+    assert len(prepared.assets) == 2
+    assert first not in markdown
+    assert second not in markdown
+    assert markdown.count("<img ") == 2
+    assert "https://backblaze.example/1.jpg" in markdown
+    assert "https://backblaze.example/2.jpg" in markdown
+    assert validate_rendered_markdown(
+        prepared, markdown, asset_urls=urls
+    )["passed"] is True
+
+
+def test_validation_rejects_unmanaged_external_html_image(tmp_path: Path) -> None:
+    prepared = PreparedExtraction("markdown", tmp_path, None, "Text\n", ())
+
+    with pytest.raises(ValueError, match="unmanaged HTML image"):
+        validate_rendered_markdown(
+            prepared,
+            '<figure><img src="https://external.example/image.jpg"></figure>\n',
+            asset_urls={},
+        )
+
+
 def test_image_only_document_is_rejected_as_requiring_ocr(tmp_path: Path) -> None:
     ast = {
         "pandoc-api-version": [1, 23, 1],
@@ -567,7 +625,7 @@ def test_candidate_queue_backfills_legacy_content_and_versions_unsupported() -> 
     repository.engine = _Engine()
 
     repository.list_candidates(
-        extractor_version="nonpdf.v6", limit=10, per_mime_limit=100
+        extractor_version="nonpdf.v7", limit=10, per_mime_limit=100
     )
 
     assert "AND d.content_url IS NULL" not in repository.engine.sql
