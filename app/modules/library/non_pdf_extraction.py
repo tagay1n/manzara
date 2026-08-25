@@ -7,9 +7,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from html import escape
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import signal
 import subprocess
 from typing import Any, Mapping
 import zipfile
@@ -320,23 +322,54 @@ def _run(
     workspace: Path,
     label: str,
     stdin: str | None = None,
+    timeout_seconds: int = 300,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
+    process = subprocess.Popen(
         command,
-        input=stdin,
+        stdin=subprocess.PIPE if stdin is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        capture_output=True,
-        check=False,
-        timeout=300,
+        start_new_session=True,
     )
-    (workspace / f"{label}.stdout.log").write_text(result.stdout, encoding="utf-8")
-    (workspace / f"{label}.stderr.log").write_text(result.stderr, encoding="utf-8")
-    if result.returncode != 0:
+    timed_out = False
+    try:
+        stdout, stderr = process.communicate(stdin, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _terminate_process_group(process)
+        stdout, stderr = process.communicate()
+    except BaseException:
+        _terminate_process_group(process)
+        process.communicate()
+        raise
+    (workspace / f"{label}.stdout.log").write_text(stdout, encoding="utf-8")
+    (workspace / f"{label}.stderr.log").write_text(stderr, encoding="utf-8")
+    if timed_out:
+        raise RuntimeError(f"{label} timed out after {timeout_seconds} seconds")
+    if process.returncode != 0:
         raise RuntimeError(
-            f"{label} failed with exit code {result.returncode}: "
-            f"{result.stderr.strip()[-1000:]}"
+            f"{label} failed with exit code {process.returncode}: "
+            f"{stderr.strip()[-1000:]}"
         )
-    return result
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
 
 
 def _convert_to_docx(
@@ -358,6 +391,7 @@ def _convert_to_docx(
         ],
         workspace=workspace,
         label="libreoffice",
+        timeout_seconds=900,
     )
     matches = sorted(converted.glob("*.docx"))
     if len(matches) != 1:

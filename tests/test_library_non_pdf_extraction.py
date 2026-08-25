@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
+import time
 import zipfile
 
 from PIL import Image
@@ -14,6 +16,7 @@ from app.modules.library.non_pdf_extraction import (
     EXTRACTOR_VERSION,
     ExtractedAsset,
     PreparedExtraction,
+    _run,
     _collect_assets,
     detect_document_format,
     prepare_extraction,
@@ -351,6 +354,25 @@ def test_publication_validation_rejects_an_unreferenced_asset(tmp_path: Path) ->
 
     report = json.loads((tmp_path / "validation.json").read_text())
     assert report["passed"] is False
+
+
+def test_converter_timeout_terminates_descendant_process_group(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="timed out"):
+        _run(
+            ["bash", "-c", "sleep 60 & child=$!; echo $child; wait"],
+            workspace=tmp_path,
+            label="timeout",
+            timeout_seconds=1,
+        )
+
+    child_pid = int((tmp_path / "timeout.stdout.log").read_text().strip())
+    for _attempt in range(20):
+        if not Path(f"/proc/{child_pid}").exists():
+            break
+        time.sleep(0.05)
+    assert not Path(f"/proc/{child_pid}").exists()
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
 
 
 class _Rows:
