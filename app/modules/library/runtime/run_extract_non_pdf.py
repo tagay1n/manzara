@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 import json
 import os
 from pathlib import Path
@@ -41,6 +41,7 @@ from app.modules.library.non_pdf_extraction import (  # noqa: E402
     prepare_extraction,
     render_markdown,
     require_converter_binaries,
+    validate_rendered_markdown,
 )
 from app.modules.library.non_pdf_repository import NonPdfExtractionRepository  # noqa: E402
 from app.run_artifact_channel import emit_run_artifact  # noqa: E402
@@ -55,6 +56,7 @@ PANEL_ID = "library"
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract rich non-PDF content")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--per-mime-limit", type=int, default=None)
     return parser.parse_args()
 
 
@@ -135,6 +137,10 @@ def _progress(current: int, total: int, counters: Mapping[str, int]) -> dict[str
     }
 
 
+def _mime_key(value: str) -> str:
+    return str(value or "").strip().lower() or "unknown"
+
+
 def _publish_progress(
     db: Database, run_id: int, current: int, total: int, counters: Mapping[str, int]
 ) -> None:
@@ -155,10 +161,9 @@ def _upload_assets(
     md5: str,
     s3: Any,
     storage: DocumentStorageSettings,
-) -> tuple[dict[str, str], int, int, list[str]]:
+) -> tuple[dict[str, str], int, int]:
     urls: dict[str, str] = {}
     uploaded = reused = 0
-    uploaded_keys: list[str] = []
     for asset in prepared.assets:
         key = f"{md5}/{asset.ordinal}{asset.path.suffix.lower()}"
         head = _matching_object(
@@ -195,14 +200,60 @@ def _upload_assets(
             if head is None:
                 raise RuntimeError(f"Embedded image verification failed: {key}")
             uploaded += 1
-            uploaded_keys.append(key)
         else:
             reused += 1
         url = object_url(storage.primary.endpoint_url, storage.content_images_bucket, key)
         if not _public_object_available(url):
             raise RuntimeError(f"Embedded image is not publicly readable: {key}")
         urls[asset.source_ref] = url
-    return urls, uploaded, reused, uploaded_keys
+    return urls, uploaded, reused
+
+
+def _expected_asset_urls(
+    prepared: PreparedExtraction,
+    *,
+    md5: str,
+    storage: DocumentStorageSettings,
+) -> dict[str, str]:
+    return {
+        asset.source_ref: object_url(
+            storage.primary.endpoint_url,
+            storage.content_images_bucket,
+            f"{md5}/{asset.ordinal}{asset.path.suffix.lower()}",
+        )
+        for asset in prepared.assets
+    }
+
+
+def _delete_stale_assets(
+    s3: Any,
+    *,
+    bucket: str,
+    md5: str,
+    expected_keys: set[str],
+) -> int:
+    prefix = f"{md5}/"
+    existing: list[str] = []
+    continuation: str | None = None
+    while True:
+        request: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
+        if continuation:
+            request["ContinuationToken"] = continuation
+        response = s3.list_objects_v2(**request)
+        existing.extend(
+            str(item.get("Key") or "")
+            for item in response.get("Contents", [])
+            if str(item.get("Key") or "")
+        )
+        if not response.get("IsTruncated"):
+            break
+        continuation = str(response.get("NextContinuationToken") or "")
+        if not continuation:
+            raise RuntimeError(f"Missing continuation token for image prefix {prefix}")
+    stale = sorted(set(existing) - set(expected_keys))
+    for key in stale:
+        s3.delete_object(Bucket=bucket, Key=key)
+    return len(stale)
 
 
 def _image_content_type(suffix: str) -> str:
@@ -222,22 +273,28 @@ def run_extraction(
     run_id: int,
     should_stop: Callable[[], bool],
     limit: int | None = None,
+    per_mime_limit: int | None = None,
 ) -> dict[str, Any]:
     candidates = repository.list_candidates(
-        extractor_version=EXTRACTOR_VERSION, limit=limit
+        extractor_version=EXTRACTOR_VERSION,
+        limit=limit,
+        per_mime_limit=per_mime_limit,
     )
     total = len(candidates)
     counters: Counter[str] = Counter(
         ready=0, failed=0, unsupported=0, downloaded_sources=0,
         reused_sources=0, uploaded_images=0, reused_images=0,
         uploaded_archives=0, reused_archives=0, checkpoint_raced=0,
+        deleted_stale_images=0,
     )
     formats: Counter[str] = Counter()
+    mime_outcomes: defaultdict[str, Counter[str]] = defaultdict(Counter)
     _publish_progress(db, run_id, 0, total, counters)
     print(
         f"non-pdf extraction: start run_id={run_id} version={EXTRACTOR_VERSION} "
         f"candidates={total} content_bucket={storage.content_bucket} "
-        f"images_bucket={storage.content_images_bucket}",
+        f"images_bucket={storage.content_images_bucket} "
+        f"per_mime_limit={per_mime_limit}",
         flush=True,
     )
     processed = 0
@@ -272,12 +329,20 @@ def run_extraction(
             )
             detected = prepared.detected_format
             formats[detected] += 1
-            image_urls, uploaded_images, reused_images, uploaded_image_keys = _upload_assets(
+            image_urls = _expected_asset_urls(
+                prepared, md5=candidate.md5, storage=storage
+            )
+            markdown = render_markdown(prepared, asset_urls=image_urls)
+            validate_rendered_markdown(
+                prepared, markdown, asset_urls=image_urls
+            )
+            uploaded_urls, uploaded_images, reused_images = _upload_assets(
                 prepared, md5=candidate.md5, s3=s3, storage=storage
             )
+            if uploaded_urls != image_urls:
+                raise RuntimeError("Uploaded image URL manifest changed after validation")
             counters["uploaded_images"] += uploaded_images
             counters["reused_images"] += reused_images
-            markdown = render_markdown(prepared, asset_urls=image_urls)
             archive_path = _write_content_archive(
                 candidate.md5, markdown, doc_workspace / f"{candidate.md5}.zip"
             )
@@ -289,7 +354,6 @@ def run_extraction(
                 source_md5=candidate.md5,
                 extractor_version=EXTRACTOR_VERSION,
             )
-            uploaded_this_attempt = False
             if head is None:
                 s3.upload_file(
                     str(archive_path),
@@ -305,7 +369,6 @@ def run_extraction(
                         },
                     },
                 )
-                uploaded_this_attempt = True
                 head = _matching_object(
                     s3,
                     bucket=storage.content_bucket,
@@ -328,7 +391,18 @@ def run_extraction(
                 run_id=run_id,
                 content_url=url,
             ):
+                expected_image_keys = {
+                    f"{candidate.md5}/{asset.ordinal}{asset.path.suffix.lower()}"
+                    for asset in prepared.assets
+                }
+                counters["deleted_stale_images"] += _delete_stale_assets(
+                    s3,
+                    bucket=storage.content_images_bucket,
+                    md5=candidate.md5,
+                    expected_keys=expected_image_keys,
+                )
                 counters["ready"] += 1
+                mime_outcomes[_mime_key(candidate.mime_type)]["ready"] += 1
                 print(
                     f"non-pdf extraction: ready md5={candidate.md5} "
                     f"format={detected} images={len(prepared.assets)} url={url}",
@@ -336,12 +410,7 @@ def run_extraction(
                 )
             else:
                 counters["checkpoint_raced"] += 1
-                if uploaded_this_attempt:
-                    s3.delete_object(Bucket=storage.content_bucket, Key=key)
-                for image_key in uploaded_image_keys:
-                    s3.delete_object(
-                        Bucket=storage.content_images_bucket, Key=image_key
-                    )
+                mime_outcomes[_mime_key(candidate.mime_type)]["checkpoint_raced"] += 1
                 print(
                     f"non-pdf extraction: checkpoint skipped md5={candidate.md5} "
                     "reason=source or content row changed",
@@ -351,6 +420,7 @@ def run_extraction(
             detected = exc.detected_format
             formats[detected] += 1
             counters["unsupported"] += 1
+            mime_outcomes[_mime_key(candidate.mime_type)]["unsupported"] += 1
             repository.mark_outcome(
                 candidate.md5,
                 extractor_version=EXTRACTOR_VERSION,
@@ -365,6 +435,7 @@ def run_extraction(
             )
         except Exception as exc:  # noqa: BLE001
             counters["failed"] += 1
+            mime_outcomes[_mime_key(candidate.mime_type)]["failed"] += 1
             repository.mark_outcome(
                 candidate.md5,
                 extractor_version=EXTRACTOR_VERSION,
@@ -389,10 +460,15 @@ def run_extraction(
     summary = {
         "kind": "library.non_pdf_extraction_summary",
         "extractor_version": EXTRACTOR_VERSION,
+        "per_mime_limit": per_mime_limit,
         "processed": processed,
         "total": total,
         **dict(counters),
         "formats": dict(sorted(formats.items())),
+        "mime_outcomes": {
+            mime: dict(sorted(outcomes.items()))
+            for mime, outcomes in sorted(mime_outcomes.items())
+        },
         "stopped": bool(should_stop()),
     }
     print(
@@ -444,6 +520,7 @@ def main() -> int:
             run_id=run_id,
             should_stop=lambda: bool(stop["requested"]),
             limit=args.limit,
+            per_mime_limit=args.per_mime_limit,
         )
         emit_run_artifact(summary)
         return 0

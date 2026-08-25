@@ -422,6 +422,8 @@ def build_structured_run_summary(
         unsupported = int(content_artifacts.get("unsupported") or 0)
         failed = int(content_artifacts.get("failed") or 0)
         images = int(content_artifacts.get("uploaded_images") or 0)
+        stale_images = int(content_artifacts.get("deleted_stale_images") or 0)
+        per_mime_limit = content_artifacts.get("per_mime_limit")
         if content_artifacts.get("kind") == "library.non_pdf_extraction_summary":
             summary["highlights"].extend(
                 [
@@ -429,8 +431,13 @@ def build_structured_run_summary(
                     {"label": "Unsupported", "value": str(unsupported)},
                     {"label": "Failed", "value": str(failed)},
                     {"label": "Images uploaded", "value": str(images)},
+                    {"label": "Stale images removed", "value": str(stale_images)},
                 ]
             )
+            if per_mime_limit is not None:
+                summary["highlights"].append(
+                    {"label": "Per MIME cap", "value": str(per_mime_limit)}
+                )
             summary["message"] = (
                 f"Non-PDF extraction completed: {ready} ready, "
                 f"{unsupported} unsupported, {failed} failed."

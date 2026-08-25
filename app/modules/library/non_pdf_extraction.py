@@ -233,6 +233,55 @@ def render_markdown(
     return content
 
 
+def validate_rendered_markdown(
+    prepared: PreparedExtraction,
+    markdown: str,
+    *,
+    asset_urls: Mapping[str, str],
+) -> dict[str, Any]:
+    """Reject incomplete image publication and retain a compact QA report."""
+    errors: list[str] = []
+    expected_urls: list[str] = []
+    for asset in prepared.assets:
+        url = str(asset_urls.get(asset.source_ref) or "")
+        if not url:
+            errors.append(f"missing public URL for asset {asset.ordinal}")
+            continue
+        expected_urls.append(url)
+        quoted = re.escape(url)
+        if not re.search(rf'<img\b[^>]*\bsrc=["\']{quoted}["\']', markdown):
+            errors.append(f"asset {asset.ordinal} is not rendered as an HTML image")
+    markdown_images = re.findall(
+        r"(?m)(?<!\\)!\[[^\]\n]*\]\([^)\n]+\)", markdown
+    )
+    if markdown_images:
+        errors.append(f"found {len(markdown_images)} Markdown image expressions")
+    local_refs = [
+        asset.source_ref
+        for asset in prepared.assets
+        if asset.source_ref and asset.source_ref in markdown
+    ]
+    if local_refs:
+        errors.append(f"found {len(local_refs)} local media references")
+    report = {
+        "extractor_version": EXTRACTOR_VERSION,
+        "detected_format": prepared.detected_format,
+        "asset_count": len(prepared.assets),
+        "referenced_asset_count": sum(url in markdown for url in expected_urls),
+        "html_image_count": len(re.findall(r"<img\b", markdown)),
+        "html_figure_count": len(re.findall(r"<figure\b", markdown)),
+        "errors": errors,
+        "passed": not errors,
+    }
+    (prepared.workspace / "validation.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if errors:
+        raise ValueError("Rendered Markdown validation failed: " + "; ".join(errors))
+    return report
+
+
 def _run(
     command: list[str],
     *,
@@ -569,5 +618,5 @@ def _normalize_blocks(
 __all__ = [
     "EXTRACTOR_VERSION", "ExtractedAsset", "PreparedExtraction",
     "UnsupportedDocumentFormat", "detect_document_format", "prepare_extraction",
-    "render_markdown", "require_converter_binaries",
+    "render_markdown", "require_converter_binaries", "validate_rendered_markdown",
 ]

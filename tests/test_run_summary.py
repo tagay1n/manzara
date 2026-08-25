@@ -143,6 +143,8 @@ def test_non_pdf_extraction_summary_uses_artifact_counts() -> None:
             "unsupported": 3,
             "failed": 1,
             "uploaded_images": 14,
+            "deleted_stale_images": 2,
+            "per_mime_limit": 100,
         },
     )
 
@@ -154,6 +156,8 @@ def test_non_pdf_extraction_summary_uses_artifact_counts() -> None:
         "Unsupported": "3",
         "Failed": "1",
         "Images uploaded": "14",
+        "Stale images removed": "2",
+        "Per MIME cap": "100",
     }
 
 

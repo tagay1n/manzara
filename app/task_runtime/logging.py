@@ -223,6 +223,7 @@ class TaskLoggingMixin:
                 "uploaded_archives",
                 "reused_archives",
                 "checkpoint_raced",
+                "deleted_stale_images",
             ):
                 payload[key] = int(artifacts.get(key) or 0)
             payload["stopped"] = bool(artifacts.get("stopped"))
@@ -232,6 +233,12 @@ class TaskLoggingMixin:
             payload["formats"] = (
                 dict(artifacts.get("formats"))
                 if isinstance(artifacts.get("formats"), dict)
+                else {}
+            )
+            payload["per_mime_limit"] = artifacts.get("per_mime_limit")
+            payload["mime_outcomes"] = (
+                dict(artifacts.get("mime_outcomes"))
+                if isinstance(artifacts.get("mime_outcomes"), dict)
                 else {}
             )
             return payload

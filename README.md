@@ -181,7 +181,7 @@ The `library.generate_book_previews` task selects only unrestricted Library-appl
 
 ### Rich non-PDF content
 
-Create public Backblaze buckets configured as `documents.primary_storage.bucket.content` and `content_images`. The `library.extract_non_pdf` task writes `<md5>.zip` archives containing one `<md5>.md` file and stores referenced images as `<md5>/<ordinal>.<extension>`. It backfills legacy content, reads sources only from the verified shared cache or primary Backblaze storage, and retains all inspection files under `~/.manzara/library/non-pdf-extraction`. Pandoc and headless LibreOffice (`soffice`) must be installed. Manzara validates the buckets but never creates them or changes their public policy.
+Create public Backblaze buckets configured as `documents.primary_storage.bucket.content` and `content_images`. The `library.extract_non_pdf` task writes `<md5>.zip` archives containing one `<md5>.md` file and stores referenced images as `<md5>/<ordinal>.<extension>`. During the QA phase its catalog command processes one deterministic cohort capped at 100 documents per normalized catalog MIME type; graceful restarts continue that same cohort. It backfills legacy content, reads sources only from the verified shared cache or primary Backblaze storage, validates that every uploaded image is represented in the final HTML figure markup, removes stale image objects after a successful checkpoint, and retains all inspection files under `~/.manzara/library/non-pdf-extraction`. Pandoc and headless LibreOffice (`soffice`) must be installed. Manzara validates the buckets but never creates them or changes their public policy.
 
 ### Primary document storage
 

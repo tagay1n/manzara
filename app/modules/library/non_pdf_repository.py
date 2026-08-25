@@ -40,17 +40,36 @@ class NonPdfExtractionRepository:
         self.engine.dispose()
 
     def list_candidates(
-        self, *, extractor_version: str, limit: int | None = None
+        self,
+        *,
+        extractor_version: str,
+        limit: int | None = None,
+        per_mime_limit: int | None = None,
     ) -> list[NonPdfCandidate]:
         sql = """
+            WITH eligible AS (
+                SELECT d.md5, d.mime_type, d.ya_path, d.document_url,
+                       d.primary_storage_size, d.content_url,
+                       COALESCE(NULLIF(LOWER(BTRIM(d.mime_type)), ''), 'unknown')
+                           AS mime_key,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY COALESCE(
+                               NULLIF(LOWER(BTRIM(d.mime_type)), ''), 'unknown'
+                           )
+                           ORDER BY d.md5
+                       ) AS mime_rank
+                FROM document d
+                WHERE d.document_url IS NOT NULL
+                  AND d.primary_storage_size IS NOT NULL
+                  AND d.primary_storage_verified_at IS NOT NULL
+                  AND LOWER(BTRIM(COALESCE(d.mime_type, '')))
+                      <> 'application/pdf'
+            )
             SELECT d.md5, d.mime_type, d.ya_path, d.document_url,
                    d.primary_storage_size, d.content_url
-            FROM document d
+            FROM eligible d
             LEFT JOIN library_non_pdf_extraction_state state ON state.md5 = d.md5
-            WHERE d.document_url IS NOT NULL
-              AND d.primary_storage_size IS NOT NULL
-              AND d.primary_storage_verified_at IS NOT NULL
-              AND LOWER(COALESCE(d.mime_type, '')) <> 'application/pdf'
+            WHERE (:per_mime_limit IS NULL OR d.mime_rank <= :per_mime_limit)
               AND (
                     state.md5 IS NULL
                     OR state.extractor_version IS DISTINCT FROM :extractor_version
@@ -58,9 +77,15 @@ class NonPdfExtractionRepository:
                   )
             ORDER BY
                 CASE WHEN d.content_url IS NULL THEN 0 ELSE 1 END,
-                d.md5
+                d.mime_key, d.mime_rank, d.md5
         """
-        params: dict[str, Any] = {"extractor_version": str(extractor_version)}
+        normalized_per_mime = (
+            None if per_mime_limit is None else max(0, int(per_mime_limit))
+        )
+        params: dict[str, Any] = {
+            "extractor_version": str(extractor_version),
+            "per_mime_limit": normalized_per_mime,
+        }
         if limit is not None:
             sql += " LIMIT :limit"
             params["limit"] = max(0, int(limit))

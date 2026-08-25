@@ -18,6 +18,8 @@ These rules apply to `app/modules/library/`.
 
 - Extract every verified non-PDF source before language or Library classification. Reuse the shared MD5-verified cache and download misses only from primary Backblaze storage.
 - Rich Markdown preserves tables, LaTeX math, and monocorpus-style HTML figures. Referenced images live in the configured public Backblaze content-images bucket.
+- During extraction QA, use a deterministic cohort capped per normalized catalog MIME type so restarts cannot expand the sample. Promote the task to the full catalog only after owner review.
+- Validate that every prepared image has a public HTML `<img>` reference before publishing a document archive. After a successful checkpoint, remove image objects outside that document's current expected key set.
 - Keep converted documents, media, ASTs, logs, Markdown, and ZIP archives under the run workspace in `~/.manzara`; never prune them automatically.
 - Existing legacy content is replaced only after every new public object is verified and the source snapshot still matches.
 

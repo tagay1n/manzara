@@ -8,17 +8,23 @@ import subprocess
 import zipfile
 
 from PIL import Image
+import pytest
 
 from app.modules.library.non_pdf_extraction import (
     EXTRACTOR_VERSION,
+    ExtractedAsset,
     PreparedExtraction,
     _collect_assets,
     detect_document_format,
     prepare_extraction,
     render_markdown,
+    validate_rendered_markdown,
 )
 from app.modules.library.non_pdf_repository import NonPdfExtractionRepository
-from app.modules.library.runtime.run_extract_non_pdf import _write_content_archive
+from app.modules.library.runtime.run_extract_non_pdf import (
+    _delete_stale_assets,
+    _write_content_archive,
+)
 from app.modules.library.tasks import library_task_definitions
 
 
@@ -30,6 +36,7 @@ def test_task_catalog_includes_extract_non_pdf(tmp_path: Path) -> None:
     assert task["panel_id"] == "library"
     assert task["title"] == "Extract non-pdf"
     assert "run_extract_non_pdf" in task["command"]["value"]
+    assert "--per-mime-limit 100" in task["command"]["value"]
     assert EXTRACTOR_VERSION == "nonpdf.v2"
 
 
@@ -114,6 +121,13 @@ Inline $x^2 + y^2 = z^2$.
     assert "```{=html}" not in markdown
     assert (tmp_path / "workspace" / "raw-ast.json").is_file()
     assert (tmp_path / "workspace" / "final.md").is_file()
+    report = validate_rendered_markdown(
+        prepared,
+        markdown,
+        asset_urls={prepared.assets[0].source_ref: "https://s3.example/images/a/1.png"},
+    )
+    assert report["passed"] is True
+    assert report["referenced_asset_count"] == 1
 
 
 def test_content_archive_contains_exact_md5_markdown_member(tmp_path: Path) -> None:
@@ -235,6 +249,65 @@ def test_consecutive_and_grouped_images_all_render_as_html_figures(
     for url in urls.values():
         assert url in markdown
     assert "Body text" in markdown
+    assert validate_rendered_markdown(
+        prepared, markdown, asset_urls=urls
+    )["passed"] is True
+
+
+class _AssetS3:
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
+    def list_objects_v2(self, **_request):
+        return {
+            "Contents": [
+                {"Key": "a" * 32 + "/1.png"},
+                {"Key": "a" * 32 + "/2.png"},
+                {"Key": "a" * 32 + "/old.png"},
+            ],
+            "IsTruncated": False,
+        }
+
+    def delete_object(self, *, Bucket, Key):  # noqa: ANN001, N803
+        del Bucket
+        self.deleted.append(Key)
+
+
+def test_stale_image_cleanup_keeps_only_current_manifest() -> None:
+    md5 = "a" * 32
+    s3 = _AssetS3()
+
+    deleted = _delete_stale_assets(
+        s3,
+        bucket="images",
+        md5=md5,
+        expected_keys={f"{md5}/1.png", f"{md5}/2.png"},
+    )
+
+    assert deleted == 1
+    assert s3.deleted == [f"{md5}/old.png"]
+
+
+def test_publication_validation_rejects_an_unreferenced_asset(tmp_path: Path) -> None:
+    asset = tmp_path / "image.png"
+    Image.new("RGB", (2, 2), "red").save(asset)
+    prepared = PreparedExtraction(
+        "docx",
+        tmp_path,
+        None,
+        "Text\n",
+        (ExtractedAsset("local.png", asset, 1),),
+    )
+
+    with pytest.raises(ValueError, match="not rendered as an HTML image"):
+        validate_rendered_markdown(
+            prepared,
+            "Text\n",
+            asset_urls={"local.png": "https://public.example/1.png"},
+        )
+
+    report = json.loads((tmp_path / "validation.json").read_text())
+    assert report["passed"] is False
 
 
 class _Rows:
@@ -278,10 +351,15 @@ def test_candidate_queue_backfills_legacy_content_and_versions_unsupported() -> 
     repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
     repository.engine = _Engine()
 
-    repository.list_candidates(extractor_version="nonpdf.v1", limit=10)
+    repository.list_candidates(
+        extractor_version="nonpdf.v2", limit=10, per_mime_limit=100
+    )
 
     assert "AND d.content_url IS NULL" not in repository.engine.sql
     assert "state.extractor_version IS DISTINCT FROM" in repository.engine.sql
     assert "state.status NOT IN ('ready', 'unsupported')" in repository.engine.sql
     assert "primary_storage_verified_at IS NOT NULL" in repository.engine.sql
     assert "CASE WHEN d.content_url IS NULL THEN 0 ELSE 1 END" in repository.engine.sql
+    assert "ROW_NUMBER() OVER" in repository.engine.sql
+    assert "d.mime_rank <=" in repository.engine.sql
+    assert repository.engine.params["per_mime_limit"] == 100
