@@ -420,6 +420,7 @@ def build_structured_run_summary(
         content_artifacts = artifacts if isinstance(artifacts, dict) else {}
         ready = int(content_artifacts.get("ready") or 0)
         unsupported = int(content_artifacts.get("unsupported") or 0)
+        deferred = int(content_artifacts.get("deferred") or 0)
         failed = int(content_artifacts.get("failed") or 0)
         images = int(content_artifacts.get("uploaded_images") or 0)
         stale_images = int(content_artifacts.get("deleted_stale_images") or 0)
@@ -429,6 +430,7 @@ def build_structured_run_summary(
                 [
                     {"label": "Ready", "value": str(ready)},
                     {"label": "Unsupported", "value": str(unsupported)},
+                    {"label": "Deferred", "value": str(deferred)},
                     {"label": "Failed", "value": str(failed)},
                     {"label": "Images uploaded", "value": str(images)},
                     {"label": "Stale images removed", "value": str(stale_images)},
@@ -440,7 +442,7 @@ def build_structured_run_summary(
                 )
             summary["message"] = (
                 f"Non-PDF extraction completed: {ready} ready, "
-                f"{unsupported} unsupported, {failed} failed."
+                f"{unsupported} unsupported, {deferred} deferred, {failed} failed."
             )
         else:
             summary["message"] = "Non-PDF extraction completed."

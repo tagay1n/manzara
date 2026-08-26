@@ -11,7 +11,8 @@ from sqlalchemy.engine import Engine
 
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_STATUSES = {"processing", "ready", "failed", "unsupported"}
+MAX_AUTOMATIC_ATTEMPTS = 3
+_STATUSES = {"processing", "ready", "failed", "unsupported", "deferred"}
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class NonPdfExtractionRepository:
         extractor_version: str,
         limit: int | None = None,
         per_mime_limit: int | None = None,
+        retry_known_failures: bool = False,
     ) -> list[NonPdfCandidate]:
         sql = """
             WITH eligible AS (
@@ -73,9 +75,29 @@ class NonPdfExtractionRepository:
               AND (
                     state.md5 IS NULL
                     OR state.extractor_version IS DISTINCT FROM :extractor_version
-                    OR state.status NOT IN ('ready', 'unsupported')
+                    OR state.status = 'processing'
+                    OR (
+                        state.status = 'failed'
+                        AND (
+                            :retry_known_failures
+                            OR state.attempt_count < :max_automatic_attempts
+                        )
+                    )
+                    OR (
+                        :retry_known_failures
+                        AND state.status = 'deferred'
+                    )
                   )
             ORDER BY
+                CASE
+                    WHEN state.md5 IS NULL THEN 0
+                    WHEN state.extractor_version IS DISTINCT FROM :extractor_version
+                        THEN 1
+                    WHEN state.status = 'processing' THEN 2
+                    WHEN state.status = 'failed' THEN 3
+                    WHEN state.status = 'deferred' THEN 4
+                    ELSE 5
+                END,
                 CASE WHEN d.content_url IS NULL THEN 0 ELSE 1 END,
                 d.mime_key, d.mime_rank, d.md5
         """
@@ -85,6 +107,8 @@ class NonPdfExtractionRepository:
         params: dict[str, Any] = {
             "extractor_version": str(extractor_version),
             "per_mime_limit": normalized_per_mime,
+            "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
+            "retry_known_failures": bool(retry_known_failures),
         }
         if limit is not None:
             sql += " LIMIT :limit"
@@ -128,7 +152,12 @@ class NonPdfExtractionRepository:
                             ELSE NULL
                         END,
                         status = 'processing',
-                        attempt_count = library_non_pdf_extraction_state.attempt_count + 1,
+                        attempt_count = CASE
+                            WHEN library_non_pdf_extraction_state.extractor_version
+                                 IS DISTINCT FROM EXCLUDED.extractor_version
+                            THEN 1
+                            ELSE library_non_pdf_extraction_state.attempt_count + 1
+                        END,
                         last_run_id = EXCLUDED.last_run_id,
                         error_text = NULL,
                         generated_at = NULL,
@@ -252,4 +281,8 @@ class NonPdfExtractionRepository:
         )
 
 
-__all__ = ["NonPdfCandidate", "NonPdfExtractionRepository"]
+__all__ = [
+    "MAX_AUTOMATIC_ATTEMPTS",
+    "NonPdfCandidate",
+    "NonPdfExtractionRepository",
+]

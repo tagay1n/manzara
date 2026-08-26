@@ -43,7 +43,10 @@ from app.modules.library.non_pdf_extraction import (  # noqa: E402
     require_converter_binaries,
     validate_rendered_markdown,
 )
-from app.modules.library.non_pdf_repository import NonPdfExtractionRepository  # noqa: E402
+from app.modules.library.non_pdf_repository import (  # noqa: E402
+    MAX_AUTOMATIC_ATTEMPTS,
+    NonPdfExtractionRepository,
+)
 from app.run_artifact_channel import emit_run_artifact  # noqa: E402
 from app.runtime_config import load_runtime_config  # noqa: E402
 from app.settings import load_settings  # noqa: E402
@@ -57,7 +60,27 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract rich non-PDF content")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--per-mime-limit", type=int, default=None)
+    parser.add_argument(
+        "--retry-known-failures",
+        action="store_true",
+        help="Explicitly retry deferred and exhausted failures",
+    )
     return parser.parse_args()
+
+
+_DEFERRED_FAILURE_MARKERS = (
+    "Extracted document contains only images; OCR required",
+    "Rendered Markdown validation failed:",
+    "LibreOffice produced 0 DOCX files",
+    "couldn't unpack docx container:",
+)
+
+
+def _failure_status(exc: Exception) -> str:
+    message = str(exc)
+    if any(marker in message for marker in _DEFERRED_FAILURE_MARKERS):
+        return "deferred"
+    return "failed"
 
 
 def _run_id() -> int:
@@ -274,15 +297,17 @@ def run_extraction(
     should_stop: Callable[[], bool],
     limit: int | None = None,
     per_mime_limit: int | None = None,
+    retry_known_failures: bool = False,
 ) -> dict[str, Any]:
     candidates = repository.list_candidates(
         extractor_version=EXTRACTOR_VERSION,
         limit=limit,
         per_mime_limit=per_mime_limit,
+        retry_known_failures=retry_known_failures,
     )
     total = len(candidates)
     counters: Counter[str] = Counter(
-        ready=0, failed=0, unsupported=0, downloaded_sources=0,
+        ready=0, failed=0, deferred=0, unsupported=0, downloaded_sources=0,
         reused_sources=0, uploaded_images=0, reused_images=0,
         uploaded_archives=0, reused_archives=0, checkpoint_raced=0,
         deleted_stale_images=0,
@@ -294,7 +319,8 @@ def run_extraction(
         f"non-pdf extraction: start run_id={run_id} version={EXTRACTOR_VERSION} "
         f"candidates={total} content_bucket={storage.content_bucket} "
         f"images_bucket={storage.content_images_bucket} "
-        f"per_mime_limit={per_mime_limit}",
+        f"per_mime_limit={per_mime_limit} "
+        f"retry_known_failures={retry_known_failures}",
         flush=True,
     )
     processed = 0
@@ -434,18 +460,19 @@ def run_extraction(
                 flush=True,
             )
         except Exception as exc:  # noqa: BLE001
-            counters["failed"] += 1
-            mime_outcomes[_mime_key(candidate.mime_type)]["failed"] += 1
+            status = _failure_status(exc)
+            counters[status] += 1
+            mime_outcomes[_mime_key(candidate.mime_type)][status] += 1
             repository.mark_outcome(
                 candidate.md5,
                 extractor_version=EXTRACTOR_VERSION,
                 detected_format=detected,
-                status="failed",
+                status=status,
                 run_id=run_id,
                 error_text=f"{type(exc).__name__}: {exc}",
             )
             print(
-                f"non-pdf extraction: failed md5={candidate.md5} "
+                f"non-pdf extraction: {status} md5={candidate.md5} "
                 f"format={detected or 'unknown'} error={type(exc).__name__}: {exc}",
                 flush=True,
             )
@@ -461,6 +488,8 @@ def run_extraction(
         "kind": "library.non_pdf_extraction_summary",
         "extractor_version": EXTRACTOR_VERSION,
         "per_mime_limit": per_mime_limit,
+        "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
+        "retry_known_failures": bool(retry_known_failures),
         "processed": processed,
         "total": total,
         **dict(counters),
@@ -521,6 +550,7 @@ def main() -> int:
             should_stop=lambda: bool(stop["requested"]),
             limit=args.limit,
             per_mime_limit=args.per_mime_limit,
+            retry_known_failures=args.retry_known_failures,
         )
         emit_run_artifact(summary)
         return 0

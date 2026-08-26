@@ -215,6 +215,7 @@ class TaskLoggingMixin:
                 "total",
                 "ready",
                 "failed",
+                "deferred",
                 "unsupported",
                 "downloaded_sources",
                 "reused_sources",
@@ -236,6 +237,12 @@ class TaskLoggingMixin:
                 else {}
             )
             payload["per_mime_limit"] = artifacts.get("per_mime_limit")
+            payload["max_automatic_attempts"] = int(
+                artifacts.get("max_automatic_attempts") or 0
+            )
+            payload["retry_known_failures"] = bool(
+                artifacts.get("retry_known_failures")
+            )
             payload["mime_outcomes"] = (
                 dict(artifacts.get("mime_outcomes"))
                 if isinstance(artifacts.get("mime_outcomes"), dict)

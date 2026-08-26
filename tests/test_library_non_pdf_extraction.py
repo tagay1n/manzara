@@ -27,6 +27,7 @@ from app.modules.library.non_pdf_extraction import (
 from app.modules.library.non_pdf_repository import NonPdfExtractionRepository
 from app.modules.library.runtime.run_extract_non_pdf import (
     _delete_stale_assets,
+    _failure_status,
     _write_content_archive,
 )
 from app.modules.library.tasks import library_task_definitions
@@ -40,7 +41,7 @@ def test_task_catalog_includes_extract_non_pdf(tmp_path: Path) -> None:
     assert task["panel_id"] == "library"
     assert task["title"] == "Extract non-pdf"
     assert "run_extract_non_pdf" in task["command"]["value"]
-    assert "--per-mime-limit 10" in task["command"]["value"]
+    assert "--per-mime-limit" not in task["command"]["value"]
     assert EXTRACTOR_VERSION == "nonpdf.v7"
 
 
@@ -53,6 +54,18 @@ def test_migration_allows_schema_without_external_document_catalog() -> None:
     assert "ADD CONSTRAINT fk_library_non_pdf_extraction_document" in migration
     create_table = migration.split("CREATE TABLE", 1)[1].split('"""', 1)[0]
     assert "FOREIGN KEY (md5)" not in create_table
+
+
+def test_retry_policy_migration_defers_deterministic_existing_failures() -> None:
+    migration = Path(
+        "alembic/versions/20260826_0035_add_non_pdf_deferred_status.py"
+    ).read_text(encoding="utf-8")
+
+    assert "'deferred'" in migration
+    assert "Extracted document contains only images; OCR required" in migration
+    assert "Rendered Markdown validation failed" in migration
+    assert "LibreOffice produced 0 DOCX files" in migration
+    assert "couldn''t unpack docx container" in migration
 
 
 def test_detection_prefers_source_bytes_over_wrong_mime_and_extension(
@@ -619,6 +632,9 @@ class _Engine:
     def connect(self):
         return _Connection(self)
 
+    def begin(self):
+        return _Connection(self)
+
 
 def test_candidate_queue_backfills_legacy_content_and_versions_unsupported() -> None:
     repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
@@ -630,9 +646,60 @@ def test_candidate_queue_backfills_legacy_content_and_versions_unsupported() -> 
 
     assert "AND d.content_url IS NULL" not in repository.engine.sql
     assert "state.extractor_version IS DISTINCT FROM" in repository.engine.sql
-    assert "state.status NOT IN ('ready', 'unsupported')" in repository.engine.sql
+    assert "state.status = 'processing'" in repository.engine.sql
+    assert "state.status = 'failed'" in repository.engine.sql
+    assert "state.attempt_count < :max_automatic_attempts" in repository.engine.sql
+    assert "state.status = 'deferred'" in repository.engine.sql
     assert "primary_storage_verified_at IS NOT NULL" in repository.engine.sql
+    assert "WHEN state.md5 IS NULL THEN 0" in repository.engine.sql
+    assert "WHEN state.status = 'failed' THEN 3" in repository.engine.sql
     assert "CASE WHEN d.content_url IS NULL THEN 0 ELSE 1 END" in repository.engine.sql
     assert "ROW_NUMBER() OVER" in repository.engine.sql
     assert "d.mime_rank <=" in repository.engine.sql
     assert repository.engine.params["per_mime_limit"] == 100
+    assert repository.engine.params["max_automatic_attempts"] == 3
+    assert repository.engine.params["retry_known_failures"] is False
+
+
+def test_candidate_queue_can_explicitly_retry_known_failures() -> None:
+    repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
+    repository.engine = _Engine()
+
+    repository.list_candidates(
+        extractor_version="nonpdf.v7", retry_known_failures=True
+    )
+
+    assert repository.engine.params["retry_known_failures"] is True
+
+
+def test_new_extractor_version_resets_automatic_attempt_budget() -> None:
+    repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
+    repository.engine = _Engine()
+
+    repository.start_attempt("a" * 32, extractor_version="nonpdf.v8", run_id=9)
+
+    assert "IS DISTINCT FROM EXCLUDED.extractor_version" in repository.engine.sql
+    assert "THEN 1" in repository.engine.sql
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (ValueError("Extracted document contains only images; OCR required"), "deferred"),
+        (ValueError("Rendered Markdown validation failed: bad image"), "deferred"),
+        (RuntimeError("LibreOffice produced 0 DOCX files"), "deferred"),
+        (
+            RuntimeError(
+                "pandoc-read failed: couldn't unpack docx container: "
+                "Content size mismatch"
+            ),
+            "deferred",
+        ),
+        (RuntimeError("libreoffice timed out after 900 seconds"), "failed"),
+        (RuntimeError("temporary S3 failure"), "failed"),
+    ],
+)
+def test_failure_status_separates_deterministic_and_retryable_errors(
+    error: Exception, expected: str
+) -> None:
+    assert _failure_status(error) == expected

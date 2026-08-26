@@ -141,6 +141,7 @@ def test_non_pdf_extraction_summary_uses_artifact_counts() -> None:
             "kind": "library.non_pdf_extraction_summary",
             "ready": 8,
             "unsupported": 3,
+            "deferred": 2,
             "failed": 1,
             "uploaded_images": 14,
             "deleted_stale_images": 2,
@@ -149,11 +150,13 @@ def test_non_pdf_extraction_summary_uses_artifact_counts() -> None:
     )
 
     assert summary["message"] == (
-        "Non-PDF extraction completed: 8 ready, 3 unsupported, 1 failed."
+        "Non-PDF extraction completed: 8 ready, 3 unsupported, 2 deferred, "
+        "1 failed."
     )
     assert {item["label"]: item["value"] for item in summary["highlights"]} == {
         "Ready": "8",
         "Unsupported": "3",
+        "Deferred": "2",
         "Failed": "1",
         "Images uploaded": "14",
         "Stale images removed": "2",
