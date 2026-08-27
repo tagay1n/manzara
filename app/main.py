@@ -93,8 +93,6 @@ from app.modules.maintenance.panel import (
     build_maintenance_panel,
 )
 from app.modules.maintenance.tasks import maintenance_task_definitions
-from app.modules.shayan.panel import build_shayan_panel
-from app.modules.shayan.tasks import shayan_task_definitions
 from app.payload_builder import PayloadBuilder
 from app.registry import build_startup_seed_registry
 from app.run_summary import build_default_run_summary
@@ -116,7 +114,6 @@ def _payload_builder_operations() -> PayloadBuilderOperations:
     return build_payload_builder_operations_with_overrides(
         {
             "build_default_run_summary": build_default_run_summary,
-            "build_shayan_panel": build_shayan_panel,
             "build_maintenance_panel": build_maintenance_panel,
             "build_backup_panel": build_backup_panel,
             "build_library_panel": build_library_panel,
@@ -218,7 +215,6 @@ def _build_startup_registry() -> Dict[str, list[Dict[str, Any]]]:
     registry = build_startup_seed_registry(
         state.settings,
         panel_defs=_PANEL_DEFS,
-        shayan_task_definitions=shayan_task_definitions,
         maintenance_task_definitions=maintenance_task_definitions,
         library_task_definitions=library_task_definitions,
         collection_task_definitions=collection_task_definitions,

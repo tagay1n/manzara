@@ -764,11 +764,11 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
     },
     flows: [
       {
-        panel_id: "shayan",
-        title: "Shayan",
+        panel_id: "maintenance",
+        title: "Operations",
         tasks: [
           {
-            task_id: "shayan.quick",
+            task_id: "maintenance.quick",
             slug: "quick",
             title: "Quick",
             task_type: "scan",
@@ -788,7 +788,7 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
     ids: ["global-status", "stop-all-btn", "task-flow-grid", "last-event"],
     apiResolver(path) {
       if (path === "/api/tasks") return JSON.parse(JSON.stringify(payload));
-      if (path === "/api/tasks/shayan.quick/toggle") return { action: "stop_graceful" };
+      if (path === "/api/tasks/maintenance.quick/toggle") return { action: "stop_graceful" };
       if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
       throw new Error(`unexpected path: ${path}`);
     },
@@ -804,14 +804,14 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /task-status-running is-active has-progress/);
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /3 \/ 12/);
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /25%/);
-  assert.match(harness.elements.get("task-flow-grid").innerHTML, /data-task-toggle-id="shayan.quick"/);
+  assert.match(harness.elements.get("task-flow-grid").innerHTML, /data-task-toggle-id="maintenance.quick"/);
 
   harness.elements.get("task-flow-grid").dispatch("click", {
-    target: { dataset: { taskToggleId: "shayan.quick" }, disabled: false },
+    target: { dataset: { taskToggleId: "maintenance.quick" }, disabled: false },
   });
   await harness.flush();
   assert.equal(
-    harness.apiCalls.filter((call) => call.path === "/api/tasks/shayan.quick/toggle").length,
+    harness.apiCalls.filter((call) => call.path === "/api/tasks/maintenance.quick/toggle").length,
     1,
   );
 
@@ -831,7 +831,7 @@ test("tasks page renders empty state when no tasks exist", async () => {
       active_tasks: 0,
       stop_all_state: "disabled",
     },
-    flows: [{ panel_id: "shayan", title: "Shayan", tasks: [] }],
+    flows: [{ panel_id: "maintenance", title: "Operations", tasks: [] }],
   };
   const harness = createHarness({
     source: TASKS_PAGE_SOURCE,
@@ -892,13 +892,13 @@ test("tasks page stop-all does not call API when force-stop confirmation is reje
 test("task page renders running control state and toggles task endpoint", async () => {
   const detailPayload = {
     task: {
-      task_id: "shayan.quick",
+      task_id: "maintenance.quick",
       slug: "quick",
       title: "Quick",
       task_type: "scan",
       icon_idle: "Play",
     },
-    panel: { title: "Shayan" },
+    panel: { title: "Operations" },
     stats: {
       total_runs: 1,
       status_counts: { completed: 0, failed: 0 },
@@ -948,7 +948,7 @@ test("task page renders running control state and toggles task endpoint", async 
       if (path === "/api/tasks/quick?limit=20") {
         return JSON.parse(JSON.stringify(detailPayload));
       }
-      if (path === "/api/tasks/shayan.quick/toggle") {
+      if (path === "/api/tasks/maintenance.quick/toggle") {
         return { action: "stop_graceful" };
       }
       throw new Error(`unexpected path: ${path}`);
@@ -969,7 +969,7 @@ test("task page renders running control state and toggles task endpoint", async 
   await harness.timer.runAllTimeouts();
   await harness.flush();
 
-  const toggleCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/shayan.quick/toggle");
+  const toggleCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/maintenance.quick/toggle");
   assert.equal(toggleCalls.length, 1);
   const detailCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/quick?limit=20");
   assert.ok(detailCalls.length >= 2);
@@ -983,11 +983,11 @@ test("tasks catalog presents conveyor steps in left-to-right execution order", a
     global: { active_tasks: 0, stop_all_state: "disabled" },
     flows: [
       {
-        panel_id: "shayan",
-        title: "Shayan",
+        panel_id: "maintenance",
+        title: "Operations",
         tasks: [
           {
-            task_id: "shayan.quick",
+            task_id: "maintenance.quick",
             slug: "quick",
             title: "Quick",
             task_type: "scan",
@@ -1002,9 +1002,9 @@ test("tasks catalog presents conveyor steps in left-to-right execution order", a
       items: [],
       available_tasks: [
         {
-          task_id: "shayan.quick",
-          panel_id: "shayan",
-          panel_title: "Shayan",
+          task_id: "maintenance.quick",
+          panel_id: "maintenance",
+          panel_title: "Operations",
           title: "Quick",
           task_type: "scan",
           icon_idle: "Play",
@@ -1042,7 +1042,7 @@ test("tasks catalog presents conveyor steps in left-to-right execution order", a
   });
 
   await harness.flush();
-  assert.match(harness.elements.get("task-flow-grid").innerHTML, /data-conveyor-task-id="shayan.quick"/);
+  assert.match(harness.elements.get("task-flow-grid").innerHTML, /data-conveyor-task-id="maintenance.quick"/);
   assert.match(harness.elements.get("conveyor-status").textContent, /left to right/i);
   assert.match(harness.elements.get("conveyor-stages").innerHTML, /Drag a task badge here/);
   assert.equal(harness.elements.get("conveyor-stages").classList.contains("is-empty"), true);
@@ -1053,7 +1053,7 @@ test("tasks catalog presents conveyor steps in left-to-right execution order", a
     target: {
       closest(selector) {
         return selector === "[data-conveyor-task-id]"
-          ? { dataset: { conveyorTaskId: "shayan.quick" } }
+          ? { dataset: { conveyorTaskId: "maintenance.quick" } }
           : null;
       },
     },
@@ -1073,7 +1073,7 @@ test("tasks catalog presents conveyor steps in left-to-right execution order", a
   const saves = harness.apiCalls.filter((call) => call.path === "/api/conveyor");
   assert.equal(saves.length, 1);
   assert.equal(stages.length, 1);
-  assert.equal(stages[0].items[0].task_id, "shayan.quick");
+  assert.equal(stages[0].items[0].task_id, "maintenance.quick");
   assert.match(harness.elements.get("conveyor-stages").innerHTML, /Step 1/);
   assert.match(harness.elements.get("conveyor-stages").innerHTML, /next sequential step/i);
   assert.equal(harness.elements.get("conveyor-stages").classList.contains("is-empty"), false);
@@ -1082,13 +1082,13 @@ test("tasks catalog presents conveyor steps in left-to-right execution order", a
 test("task page normalizes idle icon names for lucide glyph rendering", async () => {
   const detailPayload = {
     task: {
-      task_id: "shayan.scan_changes",
+      task_id: "maintenance.scan_test",
       slug: "scan",
       title: "Scan for changes",
       task_type: "scan",
       icon_idle: "RefreshCw",
     },
-    panel: { title: "Shayan" },
+    panel: { title: "Operations" },
     stats: {
       total_runs: 1,
       status_counts: { completed: 1, failed: 0 },
@@ -1146,13 +1146,13 @@ test("task page normalizes idle icon names for lucide glyph rendering", async ()
 test("task page renders structured run artifacts from backend summary", async () => {
   const detailPayload = {
     task: {
-      task_id: "shayan.scan_changes",
+      task_id: "maintenance.scan_test",
       slug: "scan",
       title: "Scan for changes",
       task_type: "scan",
       icon_idle: "RefreshCw",
     },
-    panel: { title: "Shayan" },
+    panel: { title: "Operations" },
     stats: {
       total_runs: 1,
       status_counts: { completed: 1, failed: 0 },
@@ -1170,7 +1170,7 @@ test("task page renders structured run artifacts from backend summary", async ()
           status: "completed",
           message: "Scan completed",
           artifacts: {
-            kind: "shayan.snapshot_diff",
+            kind: "library.test_artifact",
             episodes_added: 3,
             episodes_changed: 2,
             episodes_removed: 1,
@@ -1206,15 +1206,6 @@ test("task page renders structured run artifacts from backend summary", async ()
     apiResolver(path) {
       if (path === "/api/tasks/scan?limit=20") {
         return JSON.parse(JSON.stringify(detailPayload));
-      }
-      if (path.startsWith("/api/runs/51/shayan-changes?")) {
-        return {
-          run: { run_id: 51 },
-          items: [],
-          stats: { added: 0, changed: 0, removed: 0, total: 0 },
-          next_after_change_id: 0,
-          has_more: false,
-        };
       }
       throw new Error(`unexpected path: ${path}`);
     },
@@ -1225,118 +1216,21 @@ test("task page renders structured run artifacts from backend summary", async ()
   const html = harness.elements.get("run-result").innerHTML;
   assert.match(html, /Run artifacts/i);
   assert.match(html, /episodes_added/i);
-  assert.match(html, /snapshot_diff/i);
+  assert.match(html, /test_artifact/i);
   assert.doesNotMatch(html, /Detailed changes/i);
 });
 
-test("task page renders shayan detailed changes when endpoint has rows", async () => {
-  const detailPayload = {
-    task: {
-      task_id: "shayan.scan_changes",
-      slug: "scan",
-      title: "Scan for changes",
-      task_type: "scan",
-      icon_idle: "RefreshCw",
-    },
-    panel: { title: "Shayan" },
-    stats: {
-      total_runs: 1,
-      status_counts: { completed: 1, failed: 0 },
-      last_success_at: "2026-03-24T10:00:01Z",
-    },
-    runs: [
-      {
-        run_id: 51,
-        status: "completed",
-        started_at: "2026-03-24T10:00:00Z",
-        finished_at: "2026-03-24T10:00:01Z",
-        exit_code: 0,
-        error_text: null,
-        summary: {
-          status: "completed",
-          message: "Scan completed",
-          artifacts: {
-            kind: "shayan.snapshot_diff",
-            episodes_added: 3,
-            episodes_changed: 2,
-            episodes_removed: 1,
-          },
-        },
-      },
-    ],
-    global: {
-      active_tasks: 0,
-      stop_all_state: "disabled",
-    },
-  };
-
-  const harness = createHarness({
-    source: TASK_SOURCE,
-    ids: [
-      "global-status",
-      "stop-all-btn",
-      "task-toggle-btn",
-      "task-title",
-      "task-subtitle",
-      "task-stat-grid",
-      "task-run-list",
-      "run-result",
-      "last-event",
-      "close-logs",
-      "log-dialog",
-      "copy-logs",
-      "log-title",
-      "log-content",
-    ],
-    locationPathname: "/tasks/scan",
-    apiResolver(path) {
-      if (path === "/api/tasks/scan?limit=20") {
-        return JSON.parse(JSON.stringify(detailPayload));
-      }
-      if (path.startsWith("/api/runs/51/shayan-changes?")) {
-        return {
-          run: { run_id: 51 },
-          items: [
-            {
-              change_id: 1,
-              run_id: 51,
-              change_type: "added",
-              entry_key: "cartoons::alpha::s1::e2",
-              category: "cartoons",
-              program: "Alpha",
-              season: 1,
-              episode: 2,
-              title: "New episode",
-            },
-          ],
-          stats: { added: 1, changed: 0, removed: 0, total: 1 },
-          next_after_change_id: 1,
-          has_more: false,
-        };
-      }
-      throw new Error(`unexpected path: ${path}`);
-    },
-  });
-
-  await harness.flush();
-  await harness.flush();
-  const html = harness.elements.get("run-result").innerHTML;
-  assert.match(html, /Detailed changes/i);
-  assert.match(html, /Added \(1\)/i);
-  assert.match(html, /S01E02/i);
-  assert.match(html, /New episode/i);
-});
 
 test("task page applies toggle response run and enables logs immediately", async () => {
   const detailPayload = {
     task: {
-      task_id: "shayan.scan_changes",
+      task_id: "maintenance.scan_test",
       slug: "scan",
       title: "Scan for changes",
       task_type: "scan",
       icon_idle: "RefreshCw",
     },
-    panel: { title: "Shayan" },
+    panel: { title: "Operations" },
     stats: {
       total_runs: 0,
       status_counts: { completed: 0, failed: 0 },
@@ -1372,7 +1266,7 @@ test("task page applies toggle response run and enables logs immediately", async
       if (path === "/api/tasks/scan?limit=20") {
         return JSON.parse(JSON.stringify(detailPayload));
       }
-      if (path === "/api/tasks/shayan.scan_changes/toggle") {
+      if (path === "/api/tasks/maintenance.scan_test/toggle") {
         return {
           action: "start",
           run: {
@@ -1397,7 +1291,7 @@ test("task page applies toggle response run and enables logs immediately", async
   assert.match(harness.elements.get("run-result").innerHTML, /show-run-logs/i);
 
   const toggleCall = harness.apiCalls.find((call) => call.path.endsWith("/toggle"));
-  assert.equal(toggleCall?.path, "/api/tasks/shayan.scan_changes/toggle");
+  assert.equal(toggleCall?.path, "/api/tasks/maintenance.scan_test/toggle");
 });
 
 test("task page renders loading then error when task detail fetch fails", async () => {

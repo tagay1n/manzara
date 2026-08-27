@@ -12,7 +12,6 @@ def test_database_public_facade_is_composed_from_focused_repositories():
         "gemini",
         "normalization",
         "runs",
-        "shayan",
     ):
         assert (ROOT / "app" / "repositories" / f"{module}.py").is_file()
         assert f"app.repositories.{module}" in source
@@ -20,10 +19,9 @@ def test_database_public_facade_is_composed_from_focused_repositories():
 
 def test_flow_specific_agent_guidance_is_nested():
     root_guidance = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    assert "Shayan video archive policy" not in root_guidance
     assert "Library metadata extraction" not in root_guidance
     assert "Document storage policy" not in root_guidance
-    for flow in ("library", "maintenance", "shayan"):
+    for flow in ("library", "maintenance"):
         assert (ROOT / "app" / "modules" / flow / "AGENTS.md").is_file()
 
 

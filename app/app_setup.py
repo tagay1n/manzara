@@ -24,7 +24,6 @@ from app.library_document_routes import register_library_document_routes
 from app.library_entities_routes import register_library_entities_routes
 from app.library_normalization_routes import register_library_normalization_routes
 from app.library_preview_routes import register_library_preview_routes
-from app.modules.shayan.routes import register_shayan_routes
 from app.page_routes import register_page_routes
 from app.stream_routes import register_stream_routes
 
@@ -53,10 +52,6 @@ def register_app_routes(
         app,
         state_provider=state_provider,
         title_max_length=title_max_length,
-    )
-    register_shayan_routes(
-        app,
-        state_provider=state_provider,
     )
     register_library_preview_routes(app, state_provider=state_provider)
     register_library_document_routes(app, state_provider=state_provider)

@@ -6,8 +6,6 @@ const state = {
   eventCursor: 0,
   eventStreamController: null,
   selectedRunId: null,
-  selectedShayanChangeType: "added",
-  shayanChangesCache: {},
   logViewer: null,
   soundNotifier: null,
 };
@@ -91,107 +89,6 @@ function runSummaryMessage(run) {
   return `Run ${status}.`;
 }
 
-function isShayanScanDetailsEnabled(run) {
-  if (!run || !state.payload?.task) return false;
-  if (String(state.payload.task.task_id || "") !== "shayan.scan_changes") return false;
-  const summary = runSummary(run);
-  const artifacts = summary?.artifacts;
-  return artifacts && typeof artifacts === "object" && artifacts.kind === "shayan.snapshot_diff";
-}
-
-function shayanChangeCacheKey(runId, changeType) {
-  return `${String(runId || 0)}:${String(changeType || "")}`;
-}
-
-function getShayanChangeCache(runId, changeType) {
-  const key = shayanChangeCacheKey(runId, changeType);
-  if (!state.shayanChangesCache[key]) {
-    state.shayanChangesCache[key] = {
-      items: [],
-      nextAfterChangeId: 0,
-      hasMore: false,
-      loading: false,
-      loaded: false,
-      error: null,
-      stats: null,
-    };
-  }
-  return state.shayanChangesCache[key];
-}
-
-function formatEpisodeLabel(item) {
-  const season = Number(item?.season || 0);
-  const episode = Number(item?.episode || 0);
-  if (season > 0 && episode > 0) {
-    return `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`;
-  }
-  if (episode > 0) return `E${String(episode).padStart(2, "0")}`;
-  return "-";
-}
-
-function renderShayanChangesRows(items) {
-  if (!Array.isArray(items) || !items.length) {
-    return '<div class="run-row">No rows in this category.</div>';
-  }
-  return items
-    .map((item) => {
-      const program = String(item?.program || "-");
-      const category = String(item?.category || "-");
-      const title = String(item?.title || "-");
-      const episodeLabel = formatEpisodeLabel(item);
-      return `
-        <div class="shayan-change-row">
-          <div class="shayan-change-head">
-            <span class="task-run-status">${escapeHtml(category)}</span>
-            <span class="task-run-id">${escapeHtml(program)}</span>
-            <span class="task-run-time">${escapeHtml(episodeLabel)}</span>
-          </div>
-          <div class="shayan-change-title">${escapeHtml(title)}</div>
-          <div class="workflow-footnote">${escapeHtml(String(item?.entry_key || ""))}</div>
-        </div>
-      `;
-    })
-    .join("");
-}
-
-function renderShayanChangesSection(run) {
-  if (!isShayanScanDetailsEnabled(run)) return "";
-  const runId = Number(run?.run_id || 0);
-  if (!runId) return "";
-  const changeType = String(state.selectedShayanChangeType || "added");
-  const cache = getShayanChangeCache(runId, changeType);
-  if (!cache.loaded && !cache.error) return "";
-  const stats = cache.stats || {};
-  const counts = {
-    added: Number(stats.added || 0),
-    changed: Number(stats.changed || 0),
-    removed: Number(stats.removed || 0),
-  };
-  const total = Number(stats.total || (counts.added + counts.changed + counts.removed));
-  if (!cache.error && total <= 0) return "";
-  const listBody = cache.error
-    ? `<div class="run-row">Error: ${escapeHtml(cache.error)}</div>`
-    : renderShayanChangesRows(cache.items);
-  const loadMoreBtn = cache.hasMore
-    ? `<button class="small-btn" data-load-shayan-more="1">Load more</button>`
-    : "";
-
-  return `
-    <section class="shayan-change-section" data-shayan-run-id="${runId}">
-      <div class="shayan-change-header">
-        <div class="meta-k">Detailed changes</div>
-        <div class="workflow-footnote">Total: ${escapeHtml(String(total))}</div>
-      </div>
-      <div class="shayan-change-tabs">
-        <button class="small-btn ${changeType === "added" ? "active-tab" : ""}" data-shayan-change-type="added">Added (${counts.added})</button>
-        <button class="small-btn ${changeType === "changed" ? "active-tab" : ""}" data-shayan-change-type="changed">Changed (${counts.changed})</button>
-        <button class="small-btn ${changeType === "removed" ? "active-tab" : ""}" data-shayan-change-type="removed">Removed (${counts.removed})</button>
-      </div>
-      <div class="shayan-change-list">${listBody}</div>
-      <div class="run-result-actions">${loadMoreBtn}</div>
-    </section>
-  `;
-}
 
 function renderSummaryArtifacts(summary) {
   const artifacts = summary?.artifacts;
@@ -302,7 +199,6 @@ function renderRunResult(run) {
     <div class="workflow-footnote">${escapeHtml(runSummaryMessage(run))}</div>
     ${summaryRows ? `<div class="run-result-grid">${summaryRows}</div>` : ""}
     ${renderSummaryArtifacts(summary)}
-    ${renderShayanChangesSection(run)}
     ${
       errorText
         ? `<div class="run-error-box">${escapeHtml(errorText)}</div>`
@@ -314,50 +210,6 @@ function renderRunResult(run) {
   `;
 }
 
-async function loadShayanChanges(runId, changeType, { append = false } = {}) {
-  const keyType = String(changeType || "added");
-  const cache = getShayanChangeCache(runId, keyType);
-  if (cache.loading) return;
-  cache.loading = true;
-  cache.error = null;
-  const afterChangeId = append ? Number(cache.nextAfterChangeId || 0) : 0;
-  if (!append) {
-    cache.items = [];
-    cache.nextAfterChangeId = 0;
-    cache.hasMore = false;
-    cache.loaded = false;
-  }
-  renderTaskDetail(state.payload);
-  try {
-    const payload = await api(
-      `/api/runs/${encodeURIComponent(String(runId))}/shayan-changes?change_type=${encodeURIComponent(
-        keyType
-      )}&after_change_id=${encodeURIComponent(String(afterChangeId))}&limit=100`
-    );
-    const items = Array.isArray(payload?.items) ? payload.items : [];
-    cache.items = append ? [...cache.items, ...items] : items;
-    cache.nextAfterChangeId = Number(payload?.next_after_change_id || 0);
-    cache.hasMore = Boolean(payload?.has_more);
-    cache.stats = payload?.stats && typeof payload.stats === "object" ? payload.stats : null;
-    cache.loaded = true;
-  } catch (error) {
-    cache.error = error?.message || String(error);
-    cache.loaded = true;
-  } finally {
-    cache.loading = false;
-    renderTaskDetail(state.payload);
-  }
-}
-
-function ensureShayanChangesLoaded(run) {
-  if (!isShayanScanDetailsEnabled(run)) return;
-  const runId = Number(run?.run_id || 0);
-  if (!runId) return;
-  const changeType = String(state.selectedShayanChangeType || "added");
-  const cache = getShayanChangeCache(runId, changeType);
-  if (cache.loaded || cache.loading || cache.error) return;
-  loadShayanChanges(runId, changeType).catch((error) => console.error(error));
-}
 
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
@@ -400,7 +252,6 @@ function renderTaskDetail(payload) {
 
   renderGlobalState(payload);
   lucide.createIcons();
-  ensureShayanChangesLoaded(currentRun);
 }
 
 function renderTaskLoading() {
@@ -621,27 +472,7 @@ function attachUiHandlers() {
       return;
     }
 
-    const typeBtn = event.target.closest("[data-shayan-change-type]");
-    if (typeBtn) {
-      const nextType = String(typeBtn.dataset.shayanChangeType || "").trim();
-      if (!nextType) return;
-      state.selectedShayanChangeType = nextType;
-      const run = selectedRun();
-      renderTaskDetail(state.payload);
-      ensureShayanChangesLoaded(run);
-      return;
-    }
 
-    const moreBtn = event.target.closest("[data-load-shayan-more]");
-    if (moreBtn) {
-      const run = selectedRun();
-      if (!run) return;
-      const runId = Number(run.run_id || 0);
-      if (!runId) return;
-      loadShayanChanges(runId, state.selectedShayanChangeType, { append: true }).catch((error) =>
-        console.error(error)
-      );
-    }
   });
 
   document.getElementById("close-logs").addEventListener("click", () => {

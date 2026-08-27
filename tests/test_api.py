@@ -40,14 +40,14 @@ def test_dashboard_page_redirects_to_tasks_page(test_client) -> None:
 def test_flow_catalog_page_and_detail_api_are_removed(test_client) -> None:
     client, _main_app = test_client
 
-    assert client.get("/flows/shayan").status_code == 404
-    assert client.get("/api/flows/shayan").status_code == 404
+    assert client.get("/flows/retired").status_code == 404
+    assert client.get("/api/flows/retired").status_code == 404
 
 
 def test_html_pages_disable_browser_caching(test_client) -> None:
     client, _main_app = test_client
 
-    for path in ("/tasks", "/tasks/shayan.scan_changes"):
+    for path in ("/tasks", "/tasks/maintenance.scan_test"):
         response = client.get(path)
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-store"
@@ -69,7 +69,7 @@ def test_tasks_catalog_includes_global_conveyor_and_can_save_definition(test_cli
     assert catalog.status_code == 200
     conveyor = catalog.json()["conveyor"]
     assert conveyor["definition"]["revision"] == 0
-    assert any(task["task_id"] == "shayan.quick" for task in conveyor["available_tasks"])
+    assert any(task["task_id"] == "maintenance.quick" for task in conveyor["available_tasks"])
 
     response = client.put(
         "/api/conveyor",
@@ -79,7 +79,7 @@ def test_tasks_catalog_includes_global_conveyor_and_can_save_definition(test_cli
                 {
                     "stage_id": "stage-1",
                     "items": [
-                        {"item_id": "item-1", "task_id": "shayan.quick"},
+                        {"item_id": "item-1", "task_id": "maintenance.quick"},
                     ],
                 }
             ],
@@ -122,11 +122,11 @@ def test_conveyor_runs_sequential_rows_to_completion(test_client) -> None:
             "stages": [
                 {
                     "stage_id": "stage-1",
-                    "items": [{"item_id": "item-1", "task_id": "shayan.quick"}],
+                    "items": [{"item_id": "item-1", "task_id": "maintenance.quick"}],
                 },
                 {
                     "stage_id": "stage-2",
-                    "items": [{"item_id": "item-2", "task_id": "shayan.scan_changes"}],
+                    "items": [{"item_id": "item-2", "task_id": "maintenance.scan_test"}],
                 },
             ],
         },
@@ -166,7 +166,7 @@ def test_system_state_returns_lightweight_global_payload(test_client) -> None:
     }
 
 
-def test_dashboard_lists_shayan_tasks(test_client) -> None:
+def test_dashboard_lists_operational_tasks(test_client) -> None:
     client, _main_app = test_client
 
     response = client.get("/api/dashboard")
@@ -174,16 +174,13 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     payload = response.json()
 
     panels = {panel["panel_id"]: panel for panel in payload["panels"]}
-    assert "shayan" in panels
     assert "maintenance" in panels
     assert "backup" in panels
 
-    shayan = panels["shayan"]
-    task_ids = {task["task_id"] for task in shayan["tasks"]}
-    assert {"shayan.quick", "shayan.long", "shayan.ignore_sigint"} <= task_ids
-    assert {"shayan.scan_changes", "shayan.download_new"} <= task_ids
     maintenance = panels["maintenance"]
     maintenance_task_ids = {task["task_id"] for task in maintenance["tasks"]}
+    assert {"maintenance.quick", "maintenance.long", "maintenance.ignore_sigint"} <= maintenance_task_ids
+    assert {"maintenance.scan_test", "maintenance.download_test"} <= maintenance_task_ids
     assert "maintenance.monocorpus_sync" in maintenance_task_ids
     assert "maintenance.pgbackrest_backup_full" not in maintenance_task_ids
     assert "maintenance.pgbackrest_backup_incr" not in maintenance_task_ids
@@ -211,32 +208,31 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
 def test_rename_flow_and_task_title(test_client) -> None:
     client, main_app = test_client
 
-    flow_resp = client.patch("/api/flows/shayan/title", json={"title": "Shayan Flow"})
+    flow_resp = client.patch("/api/flows/maintenance/title", json={"title": "Operations"})
     assert flow_resp.status_code == 200
     assert flow_resp.json()["updated"] is True
-    assert flow_resp.json()["flow"]["title"] == "Shayan Flow"
+    assert flow_resp.json()["flow"]["title"] == "Operations"
 
-    task_resp = client.patch("/api/tasks/shayan.quick/title", json={"title": "Quick Runner"})
+    task_resp = client.patch("/api/tasks/maintenance.quick/title", json={"title": "Quick Runner"})
     assert task_resp.status_code == 200
     assert task_resp.json()["updated"] is True
     assert task_resp.json()["task"]["title"] == "Quick Runner"
 
     payload = client.get("/api/dashboard").json()
     panels = {panel["panel_id"]: panel for panel in payload["panels"]}
-    assert panels["shayan"]["title"] == "Shayan Flow"
-    quick_task = next(task for task in panels["shayan"]["tasks"] if task["task_id"] == "shayan.quick")
+    assert panels["maintenance"]["title"] == "Operations"
+    quick_task = next(task for task in panels["maintenance"]["tasks"] if task["task_id"] == "maintenance.quick")
     assert quick_task["title"] == "Quick Runner"
 
     # Simulate startup reseeding and verify user-renamed labels remain persisted.
     main_app.state.db.seed_panels(main_app._PANEL_DEFS)
-    main_app.state.db.seed_tasks(main_app.shayan_task_definitions(main_app.state.settings.shayan))
     main_app.state.db.seed_tasks(main_app.maintenance_task_definitions(main_app.state.settings.maintenance))
 
     payload_after_seed = client.get("/api/dashboard").json()
     panels_after_seed = {panel["panel_id"]: panel for panel in payload_after_seed["panels"]}
-    assert panels_after_seed["shayan"]["title"] == "Shayan Flow"
+    assert panels_after_seed["maintenance"]["title"] == "Operations"
     quick_task_after_seed = next(
-        task for task in panels_after_seed["shayan"]["tasks"] if task["task_id"] == "shayan.quick"
+        task for task in panels_after_seed["maintenance"]["tasks"] if task["task_id"] == "maintenance.quick"
     )
     assert quick_task_after_seed["title"] == "Quick Runner"
 
@@ -246,9 +242,9 @@ def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
 
     event = main_app.state.db.insert_event(
         "task.started",
-        task_id="shayan.quick",
+        task_id="maintenance.quick",
         run_id=999,
-        panel_id="shayan",
+        panel_id="maintenance",
         payload={"status": "starting"},
     )
 
@@ -257,37 +253,37 @@ def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
     payload = response.json()
     assert payload["event_cursor"] == event["event_id"]
     flow_ids = {flow["panel_id"] for flow in payload["flows"]}
-    assert {"shayan", "maintenance", "library"} <= flow_ids
+    assert {"maintenance", "library"} <= flow_ids
 
-    shayan = next(item for item in payload["flows"] if item["panel_id"] == "shayan")
-    task_ids = {task["task_id"] for task in shayan["tasks"]}
-    assert {"shayan.scan_changes", "shayan.download_new"} <= task_ids
-    assert any(task["task_id"] == "shayan.quick" and task["slug"] == "quick" for task in shayan["tasks"])
+    maintenance = next(item for item in payload["flows"] if item["panel_id"] == "maintenance")
+    task_ids = {task["task_id"] for task in maintenance["tasks"]}
+    assert {"maintenance.scan_test", "maintenance.download_test"} <= task_ids
+    assert any(task["task_id"] == "maintenance.quick" and task["slug"] == "quick" for task in maintenance["tasks"])
 
 
 def test_task_detail_endpoint_returns_run_history(test_client, wait_for_terminal_run) -> None:
     client, main_app = test_client
 
-    response = client.post("/api/tasks/shayan.quick/toggle")
+    response = client.post("/api/tasks/maintenance.quick/toggle")
     assert response.status_code == 200
     run_id = int(response.json()["run"]["run_id"])
     run = wait_for_terminal_run(main_app, run_id)
     assert run["status"] == "completed"
 
-    detail = client.get("/api/tasks/shayan.quick?limit=10")
+    detail = client.get("/api/tasks/maintenance.quick?limit=10")
     assert detail.status_code == 200
     payload = detail.json()
-    assert payload["task"]["task_id"] == "shayan.quick"
-    assert payload["panel"]["panel_id"] == "shayan"
+    assert payload["task"]["task_id"] == "maintenance.quick"
+    assert payload["panel"]["panel_id"] == "maintenance"
     assert payload["stats"]["total_runs"] >= 1
     assert len(payload["runs"]) >= 1
-    assert payload["runs"][0]["task_id"] == "shayan.quick"
+    assert payload["runs"][0]["task_id"] == "maintenance.quick"
 
 
 def test_task_detail_default_limit_is_twenty(test_client) -> None:
     client, main_app = test_client
     db = main_app.state.db
-    task = db.get_task("shayan.quick")
+    task = db.get_task("maintenance.quick")
     assert task is not None
 
     for idx in range(25):
@@ -300,8 +296,8 @@ def test_task_detail_default_limit_is_twenty(test_client) -> None:
             error_text=None,
         )
 
-    payload = client.get("/api/tasks/shayan.quick").json()
-    assert payload["task"]["task_id"] == "shayan.quick"
+    payload = client.get("/api/tasks/maintenance.quick").json()
+    assert payload["task"]["task_id"] == "maintenance.quick"
     assert len(payload["runs"]) == 20
 
 
@@ -309,132 +305,9 @@ def test_task_detail_endpoint_accepts_human_slug(test_client) -> None:
     client, _main_app = test_client
 
     payload = client.get("/api/tasks/quick").json()
-    assert payload["task"]["task_id"] == "shayan.quick"
+    assert payload["task"]["task_id"] == "maintenance.quick"
     assert payload["task"]["slug"] == "quick"
 
-
-def test_shayan_catalog_endpoint_returns_programs_and_episode_flags(test_client) -> None:
-    client, main_app = test_client
-    db = main_app.state.db
-
-    entry_1 = {
-        "category": "cartoons",
-        "program": "Show One",
-        "season": 1,
-        "episode": 1,
-        "title": "Pilot",
-        "file": "videos/cartoons/Show One/S01/S01E01.mkv",
-    }
-    entry_2 = {
-        "category": "shows",
-        "program": "Show Two",
-        "season": 2,
-        "episode": 3,
-        "title": "Episode 3",
-        "file": "videos/shows/Show Two/S02/S02E03.mkv",
-    }
-    db.create_shayan_snapshot({"ep-1": entry_1, "ep-2": entry_2})
-    db.replace_shayan_manifest_entries({"ep-1": entry_1})
-    with db._connect() as conn:
-        conn.execute(
-            """
-            UPDATE shayan_manifest_entries
-            SET
-                yadisk_status = 'uploaded',
-                yadisk_uploaded_payload_hash = payload_hash,
-                yadisk_remote_path = '/remote/videos/cartoons/Show One/S01/S01E01.mkv'
-            WHERE entry_key = ?
-            """,
-            ("ep-1",),
-        )
-
-    local_path = main_app.state.settings.shayan.output_path / "videos" / "cartoons" / "Show One" / "S01"
-    local_path.mkdir(parents=True, exist_ok=True)
-    (local_path / "S01E01.mkv").write_text("video-bytes", encoding="utf-8")
-
-    response = client.get("/api/shayan/catalog")
-    assert response.status_code == 200
-    payload = response.json()
-    assert int(payload["stats"]["programs"]) == 2
-    assert int(payload["stats"]["episodes"]) == 2
-    assert int(payload["stats"]["downloaded"]) == 1
-    assert int(payload["stats"]["uploaded"]) == 1
-
-    programs = payload["programs"]
-    show_one = next(item for item in programs if item["program"] == "Show One")
-    show_one_ep = show_one["episodes"][0]
-    assert show_one_ep["entry_key"] == "ep-1"
-    assert show_one_ep["downloaded"] is True
-    assert show_one_ep["uploaded"] is True
-    assert show_one_ep["season"] == 1
-    assert show_one_ep["episode"] == 1
-
-    show_two = next(item for item in programs if item["program"] == "Show Two")
-    show_two_ep = show_two["episodes"][0]
-    assert show_two_ep["entry_key"] == "ep-2"
-    assert show_two_ep["downloaded"] is False
-    assert show_two_ep["uploaded"] is False
-
-
-def test_shayan_redownload_episode_resets_manifest_and_requests_download(test_client) -> None:
-    client, main_app = test_client
-    db = main_app.state.db
-
-    entry = {
-        "category": "cartoons",
-        "program": "Show One",
-        "season": 1,
-        "episode": 1,
-        "title": "Pilot",
-        "file": "videos/cartoons/Show One/S01/S01E01.mkv",
-    }
-    db.create_shayan_snapshot({"ep-1": entry})
-    db.replace_shayan_manifest_entries({"ep-1": entry})
-    with db._connect() as conn:
-        conn.execute(
-            """
-            UPDATE shayan_manifest_entries
-            SET
-                yadisk_status = 'uploaded',
-                yadisk_uploaded_payload_hash = payload_hash,
-                yadisk_remote_path = '/remote/videos/cartoons/Show One/S01/S01E01.mkv'
-            WHERE entry_key = ?
-            """,
-            ("ep-1",),
-        )
-
-    local_dir = main_app.state.settings.shayan.output_path / "videos" / "cartoons" / "Show One" / "S01"
-    local_dir.mkdir(parents=True, exist_ok=True)
-    local_file = local_dir / "S01E01.mkv"
-    local_file.write_text("video-bytes", encoding="utf-8")
-
-    captured: dict[str, str] = {}
-
-    def _fake_start_task(task_id, *, sudo_password=None):
-        captured["task_id"] = str(task_id)
-        _ = sudo_password
-        return {"action": "captured", "run": None}
-
-    main_app.state.runner.start_task = _fake_start_task  # type: ignore[method-assign]
-
-    response = client.post("/api/shayan/episodes/ep-1/redownload")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["entry_key"] == "ep-1"
-    assert payload["manifest_deleted"] is True
-    assert payload["local_deleted"] is True
-    assert payload["download"]["action"] == "captured"
-    assert captured["task_id"] == "shayan.download_new"
-
-    assert local_file.exists() is False
-    assert "ep-1" not in db.list_shayan_manifest_entries()
-
-    catalog = client.get("/api/shayan/catalog").json()
-    show_one = next(item for item in catalog["programs"] if item["program"] == "Show One")
-    episode = show_one["episodes"][0]
-    assert episode["entry_key"] == "ep-1"
-    assert episode["downloaded"] is False
-    assert episode["uploaded"] is False
 
 
 def test_library_endpoint_returns_dataset_stats(test_client, monkeypatch) -> None:
@@ -1691,7 +1564,7 @@ def test_sudo_preflight_checks_exact_command_policy(test_client, monkeypatch) ->
 def test_toggle_task_start_and_complete(test_client, wait_for_terminal_run) -> None:
     client, main_app = test_client
 
-    response = client.post("/api/tasks/shayan.quick/toggle")
+    response = client.post("/api/tasks/maintenance.quick/toggle")
     assert response.status_code == 200
     run_id = int(response.json()["run"]["run_id"])
 
@@ -1766,7 +1639,7 @@ def test_task_artifact_event_and_summary_without_log_parsing(
 
 def test_run_logs_support_tail_and_backfill_pagination(test_client) -> None:
     client, main_app = test_client
-    task = main_app.state.db.get_task("shayan.quick")
+    task = main_app.state.db.get_task("maintenance.quick")
     assert task is not None
     run_id = main_app.state.db.create_run(task)
     main_app.state.db.mark_run_started(run_id, pid=99999)
@@ -1803,7 +1676,7 @@ def test_run_logs_support_tail_and_backfill_pagination(test_client) -> None:
 
 def test_run_logs_reject_conflicting_cursor_modes(test_client) -> None:
     client, main_app = test_client
-    task = main_app.state.db.get_task("shayan.quick")
+    task = main_app.state.db.get_task("maintenance.quick")
     assert task is not None
     run_id = main_app.state.db.create_run(task)
 
@@ -1812,66 +1685,6 @@ def test_run_logs_reject_conflicting_cursor_modes(test_client) -> None:
     assert "cannot be combined" in conflict.json()["detail"]
 
 
-def test_run_shayan_changes_endpoint_returns_paginated_rows(test_client) -> None:
-    client, main_app = test_client
-    task = main_app.state.db.get_task("shayan.scan_changes")
-    assert task is not None
-    run_id = main_app.state.db.create_run(task)
-    main_app.state.db.mark_run_started(run_id, pid=1234)
-    main_app.state.db.finish_run(run_id, "completed", 0, None)
-
-    main_app.state.db.replace_shayan_run_changes(
-        run_id,
-        [
-            {
-                "change_type": "added",
-                "entry_key": "a",
-                "category": "cartoons",
-                "program": "Alpha",
-                "season": 1,
-                "episode": 1,
-                "title": "One",
-                "old_payload": {},
-                "new_payload": {"title": "One"},
-            },
-            {
-                "change_type": "changed",
-                "entry_key": "b",
-                "category": "cartoons",
-                "program": "Beta",
-                "season": 1,
-                "episode": 2,
-                "title": "Two",
-                "old_payload": {"title": "Old"},
-                "new_payload": {"title": "Two"},
-            },
-            {
-                "change_type": "removed",
-                "entry_key": "c",
-                "category": "cartoons",
-                "program": "Gamma",
-                "season": 1,
-                "episode": 3,
-                "title": "Three",
-                "old_payload": {"title": "Three"},
-                "new_payload": {},
-            },
-        ],
-    )
-
-    first = client.get(f"/api/runs/{run_id}/shayan-changes?change_type=added&limit=1")
-    assert first.status_code == 200
-    first_payload = first.json()
-    assert first_payload["stats"]["added"] == 1
-    assert first_payload["stats"]["changed"] == 1
-    assert first_payload["stats"]["removed"] == 1
-    assert len(first_payload["items"]) == 1
-    assert first_payload["items"][0]["change_type"] == "added"
-    assert first_payload["has_more"] is False
-
-    invalid = client.get(f"/api/runs/{run_id}/shayan-changes?change_type=unknown")
-    assert invalid.status_code == 400
-    assert "change_type must be one of" in invalid.json()["detail"]
 
 def test_task_run_writes_artifact_log_with_uniform_format(
     test_client,
@@ -1883,13 +1696,13 @@ def test_task_run_writes_artifact_log_with_uniform_format(
     artifacts_root.mkdir(parents=True, exist_ok=True)
     main_app.state.runner._artifacts_root = artifacts_root
 
-    response = client.post("/api/tasks/shayan.quick/toggle")
+    response = client.post("/api/tasks/maintenance.quick/toggle")
     assert response.status_code == 200
     run_id = int(response.json()["run"]["run_id"])
     run = wait_for_terminal_run(main_app, run_id)
     assert run["status"] == "completed"
 
-    run_log_path = artifacts_root / "shayan.quick" / f"run-{run_id}.log"
+    run_log_path = artifacts_root / "maintenance.quick" / f"run-{run_id}.log"
     assert run_log_path.exists()
 
     lines = run_log_path.read_text(encoding="utf-8").splitlines()
@@ -1923,14 +1736,14 @@ def test_task_run_artifact_log_captures_startup_exception(
 
     monkeypatch.setattr(task_runtime.subprocess, "Popen", _boom)
 
-    response = client.post("/api/tasks/shayan.quick/toggle")
+    response = client.post("/api/tasks/maintenance.quick/toggle")
     assert response.status_code == 200
     run_id = int(response.json()["run"]["run_id"])
     run = wait_for_terminal_run(main_app, run_id)
     assert run["status"] == "failed"
     assert "popen-boom" in str(run.get("error_text") or "")
 
-    run_log_path = artifacts_root / "shayan.quick" / f"run-{run_id}.log"
+    run_log_path = artifacts_root / "maintenance.quick" / f"run-{run_id}.log"
     assert run_log_path.exists()
     log_text = run_log_path.read_text(encoding="utf-8")
     assert "source=runtime | exception=popen-boom" in log_text
@@ -2005,7 +1818,7 @@ def test_task_logs_are_redacted_in_db_and_artifact_files(
 def test_stream_stdout_failures_emit_actionable_log_line(test_client) -> None:
     _client, main_app = test_client
     runner = main_app.state.runner
-    task = main_app.state.db.get_task("shayan.quick")
+    task = main_app.state.db.get_task("maintenance.quick")
     assert task is not None
     run_id = main_app.state.db.create_run(task)
 
@@ -2035,7 +1848,7 @@ def test_stream_stdout_failures_emit_actionable_log_line(test_client) -> None:
 def test_stream_stdout_closed_file_error_is_ignored(test_client) -> None:
     _client, main_app = test_client
     runner = main_app.state.runner
-    task = main_app.state.db.get_task("shayan.quick")
+    task = main_app.state.db.get_task("maintenance.quick")
     assert task is not None
     run_id = main_app.state.db.create_run(task)
 
@@ -2091,15 +1904,15 @@ def test_task_completion_not_blocked_by_open_stdout_fd(test_client, wait_for_ter
 def test_toggle_task_graceful_then_force(test_client, wait_for_terminal_run) -> None:
     client, main_app = test_client
 
-    started = client.post("/api/tasks/shayan.ignore_sigint/toggle").json()
+    started = client.post("/api/tasks/maintenance.ignore_sigint/toggle").json()
     run_id = int(started["run"]["run_id"])
     _wait_for_status(main_app, run_id, {"running"})
 
-    graceful = client.post("/api/tasks/shayan.ignore_sigint/toggle")
+    graceful = client.post("/api/tasks/maintenance.ignore_sigint/toggle")
     assert graceful.status_code == 200
     assert graceful.json()["action"] == "stop_graceful"
 
-    force = client.post("/api/tasks/shayan.ignore_sigint/toggle")
+    force = client.post("/api/tasks/maintenance.ignore_sigint/toggle")
     assert force.status_code == 200
     assert force.json()["action"] in {"stop_force", "noop"}
 
@@ -2110,7 +1923,7 @@ def test_toggle_task_graceful_then_force(test_client, wait_for_terminal_run) -> 
 def test_stop_all_two_step_force(test_client, wait_for_terminal_run) -> None:
     client, main_app = test_client
 
-    started = client.post("/api/tasks/shayan.ignore_sigint/toggle").json()
+    started = client.post("/api/tasks/maintenance.ignore_sigint/toggle").json()
     run_id = int(started["run"]["run_id"])
     _wait_for_status(main_app, run_id, {"running"})
 
@@ -2131,9 +1944,9 @@ def test_events_stream_outputs_sse_frames(test_client) -> None:
 
     event = main_app.state.db.insert_event(
         "task.started",
-        task_id="shayan.quick",
+        task_id="maintenance.quick",
         run_id=1,
-        panel_id="shayan",
+        panel_id="maintenance",
         payload={"status": "starting"},
     )
 

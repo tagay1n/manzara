@@ -17,7 +17,6 @@ SLUG_SEPARATOR_PATTERN = re.compile(r"[\s_]+")
 SLUG_CLEAN_PATTERN = re.compile(r"[^\w-]+", flags=re.UNICODE)
 
 PANEL_DEFS: list[dict[str, Any]] = [
-    {"panel_id": "shayan", "title": "Shayan"},
     {"panel_id": "maintenance", "title": "Yandex disk"},
     {"panel_id": "backup", "title": "Backup"},
     {"panel_id": "library", "title": "Library"},

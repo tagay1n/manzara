@@ -169,12 +169,6 @@ class PayloadBuilder:
     ) -> Dict[str, Dict[str, Any]]:
         ops = self._ops()
         state = self._state()
-        shayan_panel = ops.build_shayan_panel(
-            db=state.db,
-            shayan=state.settings.shayan,
-            tasks=tasks_by_panel.get("shayan", []),
-            title=panel_titles.get("shayan", "Shayan"),
-        )
         maintenance_panel = ops.build_maintenance_panel(
             db=state.db,
             maintenance=state.settings.maintenance,
@@ -209,7 +203,6 @@ class PayloadBuilder:
             "tasks": tasks_by_panel.get("collections", []),
         }
         return {
-            "shayan": shayan_panel,
             "maintenance": maintenance_panel,
             "backup": backup_panel,
             "library": library_panel,
@@ -244,7 +237,6 @@ class PayloadBuilder:
             panel_titles=panel_titles,
         )
         ordered_panels = [
-            panel_payloads["shayan"],
             panel_payloads["maintenance"],
             panel_payloads["backup"],
             panel_payloads["library"],

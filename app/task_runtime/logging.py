@@ -165,35 +165,6 @@ class TaskLoggingMixin:
         if not kind:
             return {}
         payload: Dict[str, Any] = {"kind": kind}
-        if kind == "shayan.snapshot_diff":
-            payload["episodes_added"] = int(artifacts.get("episodes_added") or 0)
-            payload["episodes_changed"] = int(artifacts.get("episodes_changed") or 0)
-            payload["episodes_removed"] = int(artifacts.get("episodes_removed") or 0)
-            return payload
-        if kind == "shayan.download_summary":
-            payload["downloaded"] = int(artifacts.get("downloaded") or 0)
-            payload["failed"] = int(artifacts.get("failed") or 0)
-            payload["manifest_added"] = int(artifacts.get("manifest_added") or 0)
-            payload["manifest_changed"] = int(artifacts.get("manifest_changed") or 0)
-            return payload
-        if kind in {"shayan.upload_yadisk_summary", "shayan.webdav_upload_summary"}:
-            payload["uploaded"] = int(artifacts.get("uploaded") or 0)
-            payload["reused"] = int(artifacts.get("reused") or 0)
-            payload["failed"] = int(artifacts.get("failed") or 0)
-            payload["missing_local"] = int(artifacts.get("missing_local") or 0)
-            payload["deleted_local"] = int(artifacts.get("deleted_local") or 0)
-            payload["bytes_uploaded"] = int(artifacts.get("bytes_uploaded") or 0)
-            payload["stopped"] = bool(artifacts.get("stopped"))
-            if kind == "shayan.upload_yadisk_summary":
-                payload["hash_mismatch"] = int(artifacts.get("hash_mismatch") or 0)
-            return payload
-        if kind == "shayan.yadisk_webdav_transfer_summary":
-            payload["copied"] = int(artifacts.get("copied") or 0)
-            payload["reused"] = int(artifacts.get("reused") or 0)
-            payload["failed"] = int(artifacts.get("failed") or 0)
-            payload["bytes_copied"] = int(artifacts.get("bytes_copied") or 0)
-            payload["stopped"] = bool(artifacts.get("stopped"))
-            return payload
         if kind == "library.book_preview_summary":
             for key in (
                 "processed",

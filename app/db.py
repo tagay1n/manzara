@@ -6,7 +6,6 @@ from app.repositories.definitions import DefinitionsRepository
 from app.repositories.gemini import GeminiRepository
 from app.repositories.normalization import NormalizationRepository
 from app.repositories.runs import RunRepository
-from app.repositories.shayan import ShayanRepository
 from app.runtime_states import (
     TASK_RUN_ACTIVE_STATUSES as ACTIVE_STATUSES,
 )
@@ -17,7 +16,6 @@ class Database(
     ConveyorRepository,
     RunRepository,
     GeminiRepository,
-    ShayanRepository,
     NormalizationRepository,
     CoreRepository,
 ):

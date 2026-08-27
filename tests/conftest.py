@@ -16,59 +16,60 @@ from sqlalchemy import create_engine, text
 
 from app.db import ACTIVE_STATUSES, Database
 from app.modules.maintenance.config import MaintenanceSettings
-from app.modules.shayan.config import ShayanSettings
+from app.modules.maintenance.tasks import maintenance_task_definitions
 from app.settings import Settings
 
 
-def _test_task_defs(shayan: ShayanSettings):
+def _test_task_defs(maintenance: MaintenanceSettings):
     return [
+        *maintenance_task_definitions(maintenance),
         {
-            "task_id": "shayan.scan_changes",
-            "panel_id": "shayan",
-            "title": "Scan for changes",
+            "task_id": "maintenance.scan_test",
+            "panel_id": "maintenance",
+            "title": "Scan test",
             "task_type": "scan",
             "icon_idle": "RefreshCw",
             "icon_running": "Square",
-            "cwd": str(shayan.repo_path),
+            "cwd": str(maintenance.monocorpus_repo_path),
             "command": {
                 "mode": "shell",
                 "value": "python3 -c \"print('scan-ok')\"",
             },
         },
         {
-            "task_id": "shayan.download_new",
-            "panel_id": "shayan",
-            "title": "Download new",
+            "task_id": "maintenance.download_test",
+            "panel_id": "maintenance",
+            "title": "Download test",
             "task_type": "download",
             "icon_idle": "Play",
             "icon_running": "Square",
-            "cwd": str(shayan.repo_path),
+            "cwd": str(maintenance.monocorpus_repo_path),
             "command": {
                 "mode": "shell",
                 "value": "python3 -c \"print('download-ok')\"",
             },
         },
         {
-            "task_id": "shayan.quick",
-            "panel_id": "shayan",
+            "task_id": "maintenance.quick",
+            "panel_id": "maintenance",
             "title": "Quick",
             "task_type": "scan",
             "icon_idle": "Play",
             "icon_running": "Square",
-            "cwd": str(shayan.repo_path),
+            "cwd": str(maintenance.monocorpus_repo_path),
             "command": {
                 "mode": "shell",
                 "value": "python3 -c \"print('quick-ok')\"",
             },
         },
         {
-            "task_id": "shayan.long",
-            "panel_id": "shayan",
+            "task_id": "maintenance.long",
+            "panel_id": "maintenance",
             "title": "Long",
             "task_type": "download",
             "icon_idle": "Play",
             "icon_running": "Square",
-            "cwd": str(shayan.repo_path),
+            "cwd": str(maintenance.monocorpus_repo_path),
             "command": {
                 "mode": "shell",
                 "value": (
@@ -80,13 +81,13 @@ def _test_task_defs(shayan: ShayanSettings):
             },
         },
         {
-            "task_id": "shayan.ignore_sigint",
-            "panel_id": "shayan",
+            "task_id": "maintenance.ignore_sigint",
+            "panel_id": "maintenance",
             "title": "Ignore SIGINT",
             "task_type": "download",
             "icon_idle": "Play",
             "icon_running": "Square",
-            "cwd": str(shayan.repo_path),
+            "cwd": str(maintenance.monocorpus_repo_path),
             "command": {
                 "mode": "shell",
                 "value": (
@@ -214,18 +215,8 @@ def test_client(
     database_url, schema_name = prepared_test_schema
     _truncate_schema(database_url, schema_name)
 
-    shayan_repo = tmp_path / "shayan"
-    shayan_repo.mkdir(parents=True, exist_ok=True)
     monocorpus_repo = tmp_path / "monocorpus"
     monocorpus_repo.mkdir(parents=True, exist_ok=True)
-    artifacts = tmp_path / ".manzara" / "shayan"
-    artifacts.mkdir(parents=True, exist_ok=True)
-
-    shayan = ShayanSettings(
-        repo_path=shayan_repo,
-        output_path=tmp_path / "output",
-        artifacts_dir=artifacts,
-    )
     maintenance = MaintenanceSettings(
         monocorpus_repo_path=monocorpus_repo,
         pgbackrest_stanza="monocorpus",
@@ -233,11 +224,10 @@ def test_client(
     settings = Settings(
         database_url=database_url,
         database_schema=schema_name,
-        shayan=shayan,
         maintenance=maintenance,
     )
 
-    monkeypatch.setattr(main_app, "shayan_task_definitions", _test_task_defs)
+    monkeypatch.setattr(main_app, "maintenance_task_definitions", _test_task_defs)
     main_app.state = main_app.AppState(settings)
     monkeypatch.setattr(main_app.state.db, "init_schema", lambda: None)
 

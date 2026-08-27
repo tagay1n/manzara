@@ -270,7 +270,6 @@
     "task.stopped",
     "task.renamed",
     "flow.renamed",
-    "shayan.episode_redownload_requested",
     "library.collection_updated",
   ]);
 

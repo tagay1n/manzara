@@ -73,7 +73,7 @@ def test_recover_active_runs_marks_running_as_failed(tmp_path: Path) -> None:
             [
                 {
                     "task_id": "t1",
-                    "panel_id": "shayan",
+                    "panel_id": "maintenance",
                     "title": "Task",
                     "task_type": "scan",
                     "icon_idle": "Play",
@@ -101,8 +101,8 @@ def test_run_progress_round_trip(tmp_path: Path) -> None:
         db.seed_tasks(
             [
                 {
-                    "task_id": "shayan.upload_yadisk",
-                    "panel_id": "shayan",
+                    "task_id": "maintenance.progress_test",
+                    "panel_id": "maintenance",
                     "title": "Copy videos",
                     "task_type": "transfer",
                     "icon_idle": "CloudCog",
@@ -112,68 +112,29 @@ def test_run_progress_round_trip(tmp_path: Path) -> None:
                 }
             ]
         )
-        run_id = db.create_run(db.get_task("shayan.upload_yadisk"))
+        run_id = db.create_run(db.get_task("maintenance.progress_test"))
         progress = {"current": 2, "total": 8, "percent": 25}
         db.update_run_progress(run_id, progress)
         assert db.get_run(run_id)["progress"] == progress
         assert (
-            db.list_recent_runs_for_task("shayan.upload_yadisk")[0]["progress"]
+            db.list_recent_runs_for_task("maintenance.progress_test")[0]["progress"]
             == progress
         )
-
-
-def test_shayan_direct_webdav_upload_checkpoints_round_trip(tmp_path: Path) -> None:
-    with _isolated_database() as db:
-        local_path = tmp_path / "videos" / "cartoons" / "episode.mkv"
-        db.replace_shayan_manifest_entries(
-            {
-                "episode-1": {
-                    "file": str(local_path),
-                    "category": "cartoons",
-                }
-            }
-        )
-
-        candidates = db.list_shayan_manifest_webdav_upload_candidates()
-        assert len(candidates) == 1
-        payload_hash = str(candidates[0]["payload_hash"])
-        db.mark_shayan_manifest_webdav_upload_started(
-            "episode-1",
-            remote_path="/Hetzner/Cartoons/episode.mkv",
-            source_md5="abc123",
-            source_size=42,
-            payload_hash=payload_hash,
-        )
-        started = db.list_shayan_manifest_webdav_upload_candidates()[0]
-        assert started["webdav_status"] == "uploading"
-        assert started["source_md5"] == "abc123"
-        assert started["source_size"] == 42
-
-        db.mark_shayan_manifest_webdav_uploaded(
-            "episode-1",
-            remote_path="/Hetzner/Cartoons/episode.mkv",
-            payload_hash=payload_hash,
-            target_etag="etag-1",
-            target_checksum="abc123",
-        )
-
-        assert db.list_shayan_manifest_webdav_upload_candidates() == []
-        assert db.shayan_manifest_webdav_uploaded_count() == 1
 
 
 def test_prune_runtime_definitions_removes_stale_flow_rows(tmp_path: Path) -> None:
     with _isolated_database() as db:
         db.seed_panels(
             [
-                {"panel_id": "shayan", "title": "Shayan"},
+                {"panel_id": "maintenance", "title": "Maintenance"},
                 {"panel_id": "oscar", "title": "Oscar"},
             ]
         )
         db.seed_tasks(
             [
                 {
-                    "task_id": "shayan.keep",
-                    "panel_id": "shayan",
+                    "task_id": "maintenance.keep",
+                    "panel_id": "maintenance",
                     "title": "Keep",
                     "task_type": "scan",
                     "icon_idle": "Play",
@@ -208,8 +169,8 @@ def test_prune_runtime_definitions_removes_stale_flow_rows(tmp_path: Path) -> No
         )
 
         stats = db.prune_runtime_definitions(
-            panel_ids=["shayan"],
-            task_ids=["shayan.keep"],
+            panel_ids=["maintenance"],
+            task_ids=["maintenance.keep"],
         )
         assert stats["panels_removed"] >= 1
         assert stats["tasks_removed"] >= 1
@@ -219,5 +180,5 @@ def test_prune_runtime_definitions_removes_stale_flow_rows(tmp_path: Path) -> No
         assert db.get_task("oscar.drop") is None
         assert db.get_run(stale_run_id) is None
 
-        assert db.get_panel("shayan") is not None
-        assert db.get_task("shayan.keep") is not None
+        assert db.get_panel("maintenance") is not None
+        assert db.get_task("maintenance.keep") is not None

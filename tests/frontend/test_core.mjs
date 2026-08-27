@@ -437,7 +437,7 @@ test("task progress SSE updates the matching run without frontend shadow state",
   const root = {
     tasks: [
       {
-        task_id: "shayan.upload_yadisk",
+        task_id: "maintenance.upload_test",
         run: { run_id: 81, status: "running" },
       },
     ],
@@ -445,7 +445,7 @@ test("task progress SSE updates the matching run without frontend shadow state",
 
   const changed = core.applyTaskEventState(root, {
     type: "task.progress",
-    task_id: "shayan.upload_yadisk",
+    task_id: "maintenance.upload_test",
     run_id: 81,
     payload: {
       status: "running",
@@ -511,7 +511,7 @@ test("late task progress does not revert a stopping task to running", () => {
   const root = {
     tasks: [
       {
-        task_id: "shayan.upload_yadisk",
+        task_id: "maintenance.upload_test",
         run: { run_id: 82, status: "stopping_graceful" },
       },
     ],
@@ -519,7 +519,7 @@ test("late task progress does not revert a stopping task to running", () => {
 
   core.applyTaskEventState(root, {
     type: "task.progress",
-    task_id: "shayan.upload_yadisk",
+    task_id: "maintenance.upload_test",
     run_id: 82,
     payload: { status: "running", progress: { current: 4, total: 10, percent: 40 } },
   });

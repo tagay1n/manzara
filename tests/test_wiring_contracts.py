@@ -48,7 +48,6 @@ def test_collection_tasks_belong_to_dedicated_flow(tmp_path) -> None:
 
 def test_startup_seed_registry_contains_only_panels_and_tasks() -> None:
     settings = SimpleNamespace(
-        shayan=SimpleNamespace(),
         maintenance=SimpleNamespace(),
     )
     panel_defs = [{"panel_id": "x", "title": "X"}]
@@ -56,14 +55,13 @@ def test_startup_seed_registry_contains_only_panels_and_tasks() -> None:
     registry = build_startup_seed_registry(
         settings,
         panel_defs=panel_defs,
-        shayan_task_definitions=lambda _cfg: [{"task_id": "a"}],
-        maintenance_task_definitions=lambda _cfg: [{"task_id": "b"}],
-        library_task_definitions=lambda: [{"task_id": "c"}],
-        collection_task_definitions=lambda: [{"task_id": "d"}],
+        maintenance_task_definitions=lambda _cfg: [{"task_id": "a"}],
+        library_task_definitions=lambda: [{"task_id": "b"}],
+        collection_task_definitions=lambda: [{"task_id": "c"}],
     )
 
     assert registry.panel_defs == panel_defs
-    assert [item["task_id"] for item in registry.task_defs] == ["a", "b", "c", "d"]
+    assert [item["task_id"] for item in registry.task_defs] == ["a", "b", "c"]
     assert not hasattr(registry, "workflow_bundles")
 
 

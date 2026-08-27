@@ -5,16 +5,16 @@ Status: Draft, approved as design baseline
 
 ## 1) Dashboard Layout
 - Top header (global controls, system status, user/profile area).
-- Main content grid of source panels (first panel: Shayan).
+- Main content grid of operational panels.
 - Footer (version/build, last event timestamp, quick links).
 
-## 2) Panel Contract (example: Shayan)
+## 2) Panel Contract (example: Library)
 Each panel must show:
-- Source title (`Shayan`).
+- Source title (`Library`).
 - Current task status (`Idle`, `Running`, `Stopping`, `Failed`, `Completed`).
-- Key stat: downloaded files total.
-- Key stat: newly downloaded this run.
-- Key stat: failed episodes in latest run.
+- Key stat: documents total.
+- Key stat: completed work in the latest run.
+- Key stat: failures in the latest run.
 - Key stat: last successful run timestamp.
 - Key stat: last scan timestamp.
 - Task control (icon-only): scan for changes.

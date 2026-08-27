@@ -142,7 +142,7 @@ def _build_ops_panel(
     description: str,
     tasks: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Build dashboard payload for non-shayan operations panels."""
+    """Build a dashboard payload for an operations panel."""
     counts = db.run_count_by_status(panel_id)
     total_runs = _sum_counts(counts)
     last_run = _last_run_for_panel(db, panel_id)

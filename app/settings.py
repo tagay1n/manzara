@@ -13,7 +13,6 @@ from app.modules.maintenance.config import (
     MaintenanceSettings,
     load_maintenance_settings,
 )
-from app.modules.shayan.config import ShayanSettings, load_shayan_settings
 
 
 @dataclass(frozen=True)
@@ -22,7 +21,6 @@ class Settings:
 
     database_url: str
     database_schema: str
-    shayan: ShayanSettings
     maintenance: MaintenanceSettings
 
 
@@ -76,6 +74,5 @@ def load_settings() -> Settings:
     return Settings(
         database_url=database_url,
         database_schema=database_schema,
-        shayan=load_shayan_settings(),
         maintenance=load_maintenance_settings(),
     )

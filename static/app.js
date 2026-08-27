@@ -251,38 +251,6 @@ async function saveInlineEdit() {
 
 function renderPanel(panel) {
   const health = panelHealth(panel);
-  const isShayan = panel.panel_id === "shayan";
-  let workflowHtml = "";
-  if (isShayan) {
-    const scanActive = panel.tasks.some(
-      (task) => task.task_type === "scan" && isActiveStatus(task.run?.status || "idle")
-    );
-    const downloadActive = panel.tasks.some(
-      (task) =>
-        task.task_type === "download" && isActiveStatus(task.run?.status || "idle")
-    );
-
-    workflowHtml = `
-      <div class="workflow">
-        <div class="workflow-step ${scanActive ? "active" : ""}">
-          <span class="step-dot"></span>
-          <span class="step-label">Catalog Scan</span>
-        </div>
-        <div class="workflow-step ${downloadActive ? "active" : ""}">
-          <span class="step-dot"></span>
-          <span class="step-label">Download Sync</span>
-        </div>
-        <div class="workflow-step">
-          <span class="step-dot"></span>
-          <span class="step-label">Archive Review</span>
-        </div>
-        <div class="workflow-step">
-          <span class="step-dot"></span>
-          <span class="step-label">Distribution</span>
-        </div>
-      </div>
-    `;
-  }
 
   const tasksHtml = panel.tasks
     .map((task) => {
@@ -392,26 +360,19 @@ function renderPanel(panel) {
     })
     .join("");
 
-  const statsHtml = isShayan
-    ? `
-      <div class="stat"><div class="stat-label">Downloaded Files</div><div class="stat-value">${panel.stats.downloaded_files_total}</div></div>
-      <div class="stat"><div class="stat-label">New Last Run</div><div class="stat-value">${panel.stats.newly_downloaded_last_run}</div></div>
-      <div class="stat"><div class="stat-label">Failed Last Run</div><div class="stat-value">${panel.stats.failed_last_run}</div></div>
-      <div class="stat"><div class="stat-label">Last Success</div><div class="stat-value">${escapeHtml(formatDateTime(panel.stats.last_successful_run))}</div></div>
-    `
-    : (panel.stats_cards || [])
-        .map((item) => {
-          let value = item.value;
-          if (
-            typeof value === "string" &&
-            value.includes("T") &&
-            !Number.isNaN(Date.parse(value))
-          ) {
-            value = formatDateTime(value);
-          }
-          return `<div class="stat"><div class="stat-label">${escapeHtml(item.label)}</div><div class="stat-value">${escapeHtml(String(value ?? "-"))}</div></div>`;
-        })
-        .join("");
+  const statsHtml = (panel.stats_cards || [])
+    .map((item) => {
+      let value = item.value;
+      if (
+        typeof value === "string" &&
+        value.includes("T") &&
+        !Number.isNaN(Date.parse(value))
+      ) {
+        value = formatDateTime(value);
+      }
+      return `<div class="stat"><div class="stat-label">${escapeHtml(item.label)}</div><div class="stat-value">${escapeHtml(String(value ?? "-"))}</div></div>`;
+    })
+    .join("");
 
   const isFlowEditing = state.editMode === "flow" && state.editId === panel.panel_id;
   const panelTitleHtml = isFlowEditing
@@ -454,7 +415,6 @@ function renderPanel(panel) {
           <span class="panel-pill">Failed ${health.failed}</span>
         </div>
       </div>
-      ${workflowHtml}
       <div class="stats">
         ${statsHtml}
       </div>

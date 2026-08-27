@@ -9,15 +9,20 @@ Last updated: 2026-08-21
 - `MANZARA_DATABASE_URL` selects the database.
 - `MANZARA_DB_SCHEMA` selects the Manzara operational schema and defaults to `monocorpus`.
 - Schema changes are Alembic-only. Application startup runs `upgrade head` before panel and task definitions are seeded.
-- Current Alembic head: `20260827_0036`.
+- Current Alembic head: `20260827_0037`.
 
 The repository still contains the historical one-time import script, but it is not part of normal setup or startup. Do not run `scripts/migrate_sqlite_to_postgres.py` against an active database unless performing an explicitly planned legacy recovery.
 
 ## Schema Topology
 
-Manzara operational tables live in the configured schema. They include task/flow definitions, runs and logs, SSE events, conveyor state, normalization state, Gemini runtime state, Shayan state, and Library collection/preview state.
+Manzara operational tables live in the configured schema. They include task/flow definitions, runs and logs, SSE events, conveyor state, normalization state, Gemini runtime state, and Library collection/preview state.
 
 Revision `20260827_0036` removes the retired workflow scheduler, its five tables, and its historical SSE events. Conveyor and task-run history are retained.
+
+Revision `20260827_0037` drops the retired Shayan manifest, snapshot, and
+run-change tables. Before applying it to the owner database, all 2,561 manifest
+entries, 128 snapshots (195,908 snapshot entries), and local Shayan run
+artifacts were exported to the standalone `shayan-video-downloader` repository.
 
 The Monocorpus dataset tables, including `document`, may live in `public` in the same database. Connections include `public` in their search path. Migrations that extend shared dataset tables resolve the configured schema first and then the established `public` location when the configured schema is `monocorpus`.
 
@@ -29,7 +34,9 @@ Revision `20260731_0013` extends `document` with primary-storage verification ch
 
 These fields are committed with `document_url` after a Backblaze upload or verified-object recovery. Rows without `document_url` remain the upload queue.
 
-Revision `20260804_0014` historically introduced migration-only `shayan_webdav_transfers`; revision `20260815_0026` removes that completed migration state. Current Shayan-to-Hetzner checkpoints live on `shayan_manifest_entries` and persist the stable target path, ETag, verified checksum, lifecycle status, and timestamps used by the `Upload` task.
+Historical Shayan revisions remain in the Alembic chain so already-migrated
+databases retain a valid upgrade path; revision `20260827_0037` removes their
+retired runtime tables at head.
 
 ## Normal Operation
 

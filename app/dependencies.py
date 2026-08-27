@@ -71,7 +71,6 @@ from app.modules.maintenance.panel import (
     build_maintenance_panel,
 )
 from app.modules.maintenance.tasks import MONOCORPUS_META_EVALUATE_TASK_ID
-from app.modules.shayan.panel import build_shayan_panel
 from app.payload_builder import PayloadBuilder
 from app.run_summary import build_default_run_summary
 
@@ -79,7 +78,6 @@ from app.run_summary import build_default_run_summary
 @dataclass(frozen=True)
 class PayloadBuilderOperationsService:
     build_default_run_summary: Callable[[JSONDict], JSONDict]
-    build_shayan_panel: Callable[..., JSONDict]
     build_maintenance_panel: Callable[..., JSONDict]
     build_backup_panel: Callable[..., JSONDict]
     build_library_panel: Callable[..., JSONDict]
@@ -177,7 +175,6 @@ def build_payload_builder_operations() -> PayloadBuilderOperations:
     """Build operation set consumed by PayloadBuilder internals."""
     return PayloadBuilderOperationsService(
         build_default_run_summary=build_default_run_summary,
-        build_shayan_panel=build_shayan_panel,
         build_maintenance_panel=build_maintenance_panel,
         build_backup_panel=build_backup_panel,
         build_library_panel=build_library_panel,

@@ -342,56 +342,6 @@ def build_structured_run_summary(
                 summary["message"] = "Metadata extraction completed."
         return summary
 
-    if panel_id == "shayan" and status == "completed":
-        if task_id.endswith(".scan_changes"):
-            scan_artifacts = artifacts if isinstance(artifacts, dict) else {}
-            added = int(scan_artifacts.get("episodes_added") or 0)
-            changed = int(scan_artifacts.get("episodes_changed") or 0)
-            removed = int(scan_artifacts.get("episodes_removed") or 0)
-            if scan_artifacts.get("kind") == "shayan.snapshot_diff":
-                summary["highlights"].append({"label": "Added", "value": str(added)})
-                summary["highlights"].append({"label": "Changed", "value": str(changed)})
-                summary["highlights"].append({"label": "Removed", "value": str(removed)})
-                summary["message"] = f"Scan completed: +{added} ~{changed} -{removed}."
-            else:
-                summary["message"] = "Scan completed."
-        elif task_id.endswith(".download_new"):
-            download_artifacts = artifacts if isinstance(artifacts, dict) else {}
-            downloaded = int(download_artifacts.get("downloaded") or 0)
-            failed = int(download_artifacts.get("failed") or 0)
-            if download_artifacts.get("kind") == "shayan.download_summary":
-                summary["highlights"].append({"label": "Downloaded", "value": str(downloaded)})
-                summary["highlights"].append({"label": "Failed", "value": str(failed)})
-                summary["message"] = f"Download completed: {downloaded} downloaded, {failed} failed."
-            else:
-                summary["message"] = "Download completed."
-        elif task_id.endswith(".upload_yadisk"):
-            upload_artifacts = artifacts if isinstance(artifacts, dict) else {}
-            uploaded = int(upload_artifacts.get("uploaded") or 0)
-            failed = int(upload_artifacts.get("failed") or 0)
-            missing_local = int(upload_artifacts.get("missing_local") or 0)
-            deleted_local = int(upload_artifacts.get("deleted_local") or 0)
-            hash_mismatch = int(upload_artifacts.get("hash_mismatch") or 0)
-            reused = int(upload_artifacts.get("reused") or 0)
-            if upload_artifacts.get("kind") in {
-                "shayan.upload_yadisk_summary",
-                "shayan.webdav_upload_summary",
-            }:
-                summary["highlights"].append({"label": "Uploaded", "value": str(uploaded)})
-                if upload_artifacts.get("kind") == "shayan.webdav_upload_summary":
-                    summary["highlights"].append({"label": "Reused", "value": str(reused)})
-                summary["highlights"].append({"label": "Failed", "value": str(failed)})
-                summary["highlights"].append({"label": "Missing local", "value": str(missing_local)})
-                summary["highlights"].append({"label": "Deleted local", "value": str(deleted_local)})
-                if upload_artifacts.get("kind") == "shayan.upload_yadisk_summary":
-                    summary["highlights"].append({"label": "Hash mismatch", "value": str(hash_mismatch)})
-                summary["message"] = f"Upload completed: {uploaded} uploaded, {failed} failed."
-            else:
-                summary["message"] = "Upload completed."
-        else:
-            summary["message"] = "Task completed."
-        return summary
-
     if task_id == "library.generate_book_previews" and status == "completed":
         preview_artifacts = artifacts if isinstance(artifacts, dict) else {}
         ready = int(preview_artifacts.get("ready") or 0)

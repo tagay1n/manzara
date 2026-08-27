@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -15,28 +14,6 @@ from alembic.config import Config
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
-
-def _json_hash(payload: Any) -> str:
-    normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
-def _normalize_shayan_entries(raw: Any) -> Dict[str, Any]:
-    if not isinstance(raw, dict):
-        return {}
-    source = raw
-    entries = source.get("entries")
-    if isinstance(entries, dict):
-        source = entries
-
-    normalized: Dict[str, Any] = {}
-    for key, value in source.items():
-        entry_key = str(key or "").strip()
-        if not entry_key:
-            continue
-        normalized[entry_key] = value if isinstance(value, dict) else {"value": value}
-    return normalized
-
 
 def utc_now() -> str:
     """Return current UTC timestamp in ISO format."""

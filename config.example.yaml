@@ -48,13 +48,6 @@ yandex:
       content_chunks: ttcontent-chunks
       image: ttimg
 
-nextcloud:
-  webdav_url: https://nx104082.your-storageshare.de/remote.php/dav/files/Admin
-  username: Admin
-  password: "<REDACTED>"
-  shayan:
-    cartoons:
-      target_dir: /Безнең тәҗрибә/Мультфильмнар
 encryption_key: "<REDACTED>"
 
 database_url: "<REDACTED>"

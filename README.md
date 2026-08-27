@@ -14,13 +14,9 @@ Current architecture:
 - FastAPI backend
 - PostgreSQL state store (tasks, runs, logs, events, and conveyor state)
 - Schema management via Alembic migrations (no runtime DDL bootstrap)
-- Modular flows in one monorepo (`shayan`, `maintenance`, `library`)
+- Modular Library and maintenance flows in one monorepo
 - Live updates via SSE (`/api/events/stream`)
 - S3-compatible primary storage for documents, with Yandex Disk retained as an auxiliary source
-
-Transitional note:
-- Shayan flow now keeps persistent state in PostgreSQL (`shayan_manifest_entries`, `shayan_snapshots`, `shayan_snapshot_entries`).
-- Legacy `~/.manzara/shayan/status.json` and `~/.manzara/shayan/snapshots/latest.json` are used only for one-time migration when DB state is empty; they are not runtime source of truth after cutover.
 
 ## UI Reference
 
@@ -58,10 +54,6 @@ Routing note:
 - `/dashboard` redirects to `/tasks` (dashboard page is currently disabled)
 
 Flow tasks (seeded at startup):
-- `shayan.scan_changes`
-- `shayan.download_new`
-- `shayan.upload_yadisk`
-- `shayan.transfer_yadisk_webdav`
 - `maintenance.pgbackrest_backup_full`
 - `maintenance.pgbackrest_backup_incr`
 - `maintenance.sync_documents_s3`
@@ -83,9 +75,6 @@ Runtime control behavior:
 - High-frequency `task.log` SSE events do not reload page datasets; relevant lifecycle/artifact events use targeted, coalesced reconciliation.
 - Each run also writes a dedicated artifact log file under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...` when overridden)
 - Task pages render run history with backend-provided structured summaries (`runs.summary_json`)
-- Shayan scan/download run summaries include structured task artifacts (for example scan added/changed/removed counts) in `runs.summary_json.artifacts`.
-- Shayan Yandex upload keeps resumable state in `shayan_manifest_entries` (`yadisk_status`, `yadisk_uploaded_payload_hash`, `yadisk_remote_path`, `yadisk_last_error`, timestamps).
-- Shayan Yandex-to-Nextcloud transfer checkpoints each video in `shayan_webdav_transfers`. It uses Nextcloud chunked upload v2, assembles into deterministic temporary DAV paths, and independently verifies content before the final DAV move. Verified rows remain `uploaded`, making subsequent runs skip them without uploading again. The task emits chunk-level byte progress over SSE, stops gracefully at file boundaries, and restarts only an interrupted current chunk upload. It never deletes, trashes, or moves source videos on Yandex Disk.
 - Long-running tasks can persist `runs.progress_json`; `task.progress` SSE events update determinate progress bars without frontend-owned domain state.
 - Document storage upload uses PostgreSQL's null-`document_url` rows as its queue, reuses verified cache entries, downloads cache misses by persisted Yandex path, verifies Backblaze objects, and checkpoints storage state on `document` with live progress and structured artifacts.
 - Document cleanup is split into preparation and execution. `library.prepare_document_cleanup` only writes PostgreSQL plans/reviews. `maintenance.monocorpus_sync` applies persisted plans, synchronizes Yandex catalog entries, publishes missing links only for unrestricted documents, and records duplicate-MD5 removals before executing them.
@@ -122,7 +111,6 @@ Library data tooling currently includes:
 
 - Python 3.10+
 - Access to local repositories:
-  - Shayan downloader repo (default: `/home/tans1q/projects/shayan-video-downloader`)
   - Monocorpus repo (default: `/home/tans1q/projects/monocorpus`)
 
 ## Setup
@@ -232,34 +220,10 @@ Environment variables:
 - `MANZARA_DB_SCHEMA` (default: `monocorpus`)
 - `MANZARA_CONFIG_PATH` (optional explicit YAML config path for embedded runtimes)
 - `MANZARA_ARTIFACTS_ROOT` (default: `~/.manzara`; shared artifact root)
-- `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
-- `SHAYAN_OUTPUT_PATH` (default: `~/.manzara/shayan`)
-- `SHAYAN_YADISK_OAUTH_TOKEN` (optional override; defaults to `yandex.disk.oauth_token` in YAML)
 - `MONOCORPUS_REPO_PATH` (default: `/home/tans1q/projects/monocorpus`)
 - `PG_BACKREST_STANZA` (default: `monocorpus`)
 - `PG_BACKREST_S3_BUCKET` (default: `tt-monocorpus-postgres-backups`; used for S3 backup verification)
 - `PG_BACKREST_S3_ENDPOINT` (default: `https://storage.yandexcloud.net`)
-
-YAML configuration for direct Shayan uploads and Yandex-to-Hetzner migration:
-
-```yaml
-yandex:
-  disk:
-    oauth_token: "<token>"
-
-nextcloud:
-  webdav_url: "https://nx104082.your-storageshare.de/remote.php/dav/files/Admin"
-  username: "Admin"
-  password: "<password-or-app-password>"
-  shayan:
-    cartoons:
-      source_dir: "/neurotatarlar/video/shayantv"
-      target_dir: "/Безнең тәҗрибә/Мультфильмнар"
-```
-
-Use a revocable app password created under Nextcloud Personal settings -> Security in `nextcloud.password`; providers may reject the regular account password for WebDAV. Never commit either credential. The `Upload` task sends newly downloaded local files directly to the category's `target_dir`, preserving the hierarchy below `videos/<category>/`, and deletes a local file only after independent verification on Hetzner. The `Migrate to Hetzner` task uses `source_dir` to discover existing Yandex files, preserves the hierarchy relative to that source, and retains the Yandex source unchanged. Categories without a `target_dir` are not uploaded; migration additionally requires `source_dir`.
-
-Both tasks run a logged WebDAV preflight. A `401` fails once with an actionable credential error; a `429` waits and retries the same request, honoring `Retry-After` or using an interruptible backoff. Read-only `PROPFIND` probes retry transient `500`/`502`/`503`/`504` responses. Uploads use 64 MiB chunks through Nextcloud's v2 endpoint, assemble into a short deterministic `.manzara-<md5>.uploading` staging path, and stream the staged file back to verify its MD5 before the final WebDAV `MOVE`. Do not change the staging suffix to `.part`: Hetzner Storage Share returns a server-side `500 TypeError` for those probes. A stored `OC-Checksum` value alone is never accepted as upload proof.
 
 Embedded runtimes read YAML config in this order:
 1. `MANZARA_CONFIG_PATH` (if set)
@@ -401,11 +365,6 @@ Coverage notes:
     - approve selected proposal items and confirm only that explicit action creates canonical memberships; rerun discovery and confirm approved memberships and rejected decisions remain unchanged
     - confirm proposal, progress, and final summary changes arrive through SSE without parsing task logs
   - `library.generate_book_previews` against a real PDF source and preview bucket
-  - `shayan.transfer_yadisk_webdav` against the real Nextcloud account:
-    - confirm password authentication and target quota before transfer
-    - confirm chunk-level byte progress reaches the task card through SSE
-    - confirm a video reaches the expected hierarchy, is hash-verified, and remains on Yandex Disk
-    - stop after one file and confirm the next run resumes without uploading the verified file again
   - `maintenance.sync_documents_s3` against real Yandex/Backblaze services:
     - confirm a cached document uploads without a Yandex download
     - confirm a cache miss downloads only the persisted PostgreSQL `ya_path` and performs no Yandex traversal or publishing

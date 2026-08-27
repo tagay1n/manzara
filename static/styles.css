@@ -1693,106 +1693,6 @@ button {
   gap: 8px;
 }
 
-.shayan-program-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.shayan-program {
-  border: 1px solid #223a62;
-  border-radius: 10px;
-  background: rgba(14, 28, 52, 0.62);
-  overflow: hidden;
-}
-
-.shayan-program > summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.shayan-program > summary::-webkit-details-marker {
-  display: none;
-}
-
-.shayan-program-title {
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.shayan-program-meta {
-  color: #9db9df;
-  font-size: 11px;
-}
-
-.shayan-program-body {
-  border-top: 1px solid #223a62;
-  padding: 8px;
-}
-
-.shayan-episodes-table-wrap {
-  overflow: auto;
-}
-
-.shayan-episodes-table {
-  width: 100%;
-  border-collapse: collapse;
-  min-width: 660px;
-}
-
-.shayan-episodes-table th,
-.shayan-episodes-table td {
-  border: 1px solid #243f69;
-  padding: 7px 8px;
-  font-size: 12px;
-}
-
-.shayan-episodes-table thead th {
-  color: #8fb3e1;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  text-align: left;
-  background: rgba(10, 20, 38, 0.84);
-}
-
-.shayan-episodes-table tbody tr:hover {
-  background: rgba(23, 43, 76, 0.5);
-}
-
-.flag-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  border: 1px solid #2b4a78;
-  font-size: 11px;
-  color: #9db9df;
-  background: rgba(12, 23, 41, 0.82);
-}
-
-.flag-chip.is-true {
-  border-color: #2f8f64;
-  color: #90e2b7;
-  background: rgba(18, 63, 43, 0.52);
-}
-
-.flag-chip.is-false {
-  border-color: #6f4a58;
-  color: #f0b5c2;
-  background: rgba(68, 32, 43, 0.42);
-}
-
-.shayan-episode-actions {
-  display: flex;
-  justify-content: flex-end;
-}
 
 .task-list-item {
   border: 1px solid #233c65;
@@ -2146,27 +2046,6 @@ button {
   overflow: auto;
 }
 
-.shayan-change-section {
-  border: 1px solid #2a4876;
-  border-radius: 8px;
-  background: rgba(12, 24, 46, 0.75);
-  padding: 10px;
-  display: grid;
-  gap: 10px;
-}
-
-.shayan-change-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.shayan-change-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
 
 .small-btn.active-tab {
   border-color: #46d59c;
@@ -2174,31 +2053,6 @@ button {
   background: rgba(14, 72, 52, 0.85);
 }
 
-.shayan-change-list {
-  display: grid;
-  gap: 8px;
-}
-
-.shayan-change-row {
-  border: 1px solid #27456f;
-  border-radius: 8px;
-  background: rgba(10, 20, 38, 0.9);
-  padding: 8px;
-  display: grid;
-  gap: 6px;
-}
-
-.shayan-change-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.shayan-change-title {
-  font-weight: 600;
-  color: #d8e8ff;
-}
 
 .small-btn {
   border: 1px solid #305686;
@@ -2820,7 +2674,6 @@ pre,
 .task-list-item,
 .run-row,
 .library-stat-card,
-.shayan-program,
 .db-backup-row {
   border-color: var(--line-soft);
   background: rgba(21, 27, 37, 0.62);
