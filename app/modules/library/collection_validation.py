@@ -15,7 +15,7 @@ from google.genai import types
 from sqlalchemy import text
 
 from app.db import Database
-from app.gemini_config import load_gemini_model_pools
+from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_runtime import (
     GeminiAllKeysExhaustedError,
     GeminiQuotaExceededError,
@@ -223,9 +223,7 @@ def validate_collection_proposals(
     excerpt_loader: Callable[[str], str | None] | None = None,
     call_gemini: Callable[[str, str, str], dict[str, Any]] = _gemini_call,
 ) -> dict[str, Any]:
-    models = load_gemini_model_pools().get("library_collection_validation") or []
-    if not models:
-        raise RuntimeError("gemini.model_pools.library_collection_validation is empty")
+    models = load_required_gemini_model_pool()
     manager = GeminiRuntimeManager(
         db,
         task_id=TASK_ID,

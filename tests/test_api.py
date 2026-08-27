@@ -864,19 +864,19 @@ def test_gemini_reset_key_and_reset_all_clear_exhaustion(test_client, monkeypatc
 
     _ = client.get("/api/gemini/state")
     db = main_app.state.db
-    db.ensure_gemini_model_state("acc-a:key-1", "gemini-2.5-flash")
-    db.ensure_gemini_model_state("acc-a:key-2", "gemini-2.5-flash")
+    db.ensure_gemini_model_state("acc-a:key-1", "gemini-test")
+    db.ensure_gemini_model_state("acc-a:key-2", "gemini-test")
     now_ts = "2026-03-25T00:00:00+00:00"
     db.mark_gemini_error(
         "acc-a:key-1",
-        "gemini-2.5-flash",
+        "gemini-test",
         now_ts=now_ts,
         error_text="quota",
         exhausted=True,
     )
     db.mark_gemini_error(
         "acc-a:key-2",
-        "gemini-2.5-flash",
+        "gemini-test",
         now_ts=now_ts,
         error_text="quota",
         exhausted=True,
@@ -886,7 +886,7 @@ def test_gemini_reset_key_and_reset_all_clear_exhaustion(test_client, monkeypatc
     assert one.status_code == 200
     assert one.json()["rows_changed"] >= 1
 
-    rows_after_one = db.list_gemini_model_states(model_name="gemini-2.5-flash")
+    rows_after_one = db.list_gemini_model_states(model_name="gemini-test")
     by_key = {str(item["key_id"]): bool(item.get("exhausted")) for item in rows_after_one if item.get("model_name")}
     assert by_key["acc-a:key-1"] is False
     assert by_key["acc-a:key-2"] is True
@@ -895,7 +895,7 @@ def test_gemini_reset_key_and_reset_all_clear_exhaustion(test_client, monkeypatc
     assert all_resp.status_code == 200
     assert all_resp.json()["rows_changed"] >= 1
 
-    rows_after_all = db.list_gemini_model_states(model_name="gemini-2.5-flash")
+    rows_after_all = db.list_gemini_model_states(model_name="gemini-test")
     assert all(bool(item.get("exhausted")) is False for item in rows_after_all if item.get("model_name"))
 
 
@@ -962,12 +962,12 @@ def test_gemini_400_rejection_does_not_exhaust_or_pause_key(test_client, monkeyp
 
     with pytest.raises(GeminiRequestRejectedError):
         manager.run_with_key(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-test",
             call=_raise_400,
             max_attempts=2,
         )
 
-    rows = main_app.state.db.list_gemini_model_states(model_name="gemini-2.5-flash")
+    rows = main_app.state.db.list_gemini_model_states(model_name="gemini-test")
     assert len(rows) == 1
     row = rows[0]
     assert bool(row.get("exhausted")) is False

@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from sqlalchemy import text
 
 from app.db import Database
-from app.gemini_config import DEFAULT_GEMINI_MODELS, load_gemini_models
+from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_runtime import (
     GeminiAllKeysExhaustedError,
     GeminiQuotaExceededError,
@@ -23,8 +23,7 @@ ENTITY_TYPES = {"personality", "publisher"}
 
 
 def _resolve_normalization_model() -> str:
-    models = load_gemini_models()
-    return str(models.get("library_normalization") or "").strip() or DEFAULT_GEMINI_MODELS["library_normalization"]
+    return load_required_gemini_model_pool()[0]
 
 
 def _entity_config(entity_type: str) -> Dict[str, Any]:

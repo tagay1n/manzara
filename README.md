@@ -301,18 +301,11 @@ Gemini config (preferred shape):
 
 ```yaml
 gemini:
-  models:
-    library_meta_evaluate: "gemini-3-flash-preview"
-    library_normalization: "gemini-2.5-flash"
-  model_pools:
-    library_metadata_extraction:
-      - "gemini-3.6-flash"
-      - "gemini-3.5-flash"
-      - "gemini-3-flash-preview"
-    library_collection_validation:
-      - "gemini-3.6-flash"
-      - "gemini-3.5-flash"
-      - "gemini-3-flash-preview"
+  model_pool:
+    - "gemini-3.7-flash"
+    - "gemini-3.6-flash"
+    - "gemini-3.5-flash"
+    - "gemini-3-flash-preview"
   accounts:
     account_a:
       - "AIza..."
@@ -322,12 +315,10 @@ gemini:
 ```
 
 Model policy:
-- Task flows should resolve Gemini model names from `gemini.models` aliases (not hardcoded in task logic).
-- Current default aliases are:
-  - `library_meta_evaluate`
-  - `library_normalization`
-- Collection proposal validation load-balances one verdict per request across `gemini.model_pools.library_collection_validation`. Timeout or malformed responses reduce that model's batch size; quota/service/request errors follow the shared Gemini runtime policy.
-- Metadata extraction tries `gemini.model_pools.library_metadata_extraction` in order. The pool is mandatory and has no code default. Empty, malformed, timed-out, or rejected content moves to the next model; quota exhaustion rotates keys without marking the document failed. A `5xx` response or transient transport reset shares one bounded retry budget; repeated transport/service failure defers only the current document and the batch continues.
+- Every Gemini operation resolves models from the one ordered `gemini.model_pool`; model names are never hardcoded in task logic.
+- The shared pool is mandatory and has no code default. Normalization uses its first model; extraction, evaluation, and collection validation can advance through the configured order according to their response and retry policies.
+- Collection proposal validation load-balances one verdict per request across the shared pool. Timeout or malformed responses reduce that model's batch size; quota/service/request errors follow the shared Gemini runtime policy.
+- Metadata extraction tries the shared pool in order. Empty, malformed, timed-out, or rejected content moves to the next model; quota exhaustion rotates keys without marking the document failed. A `5xx` response or transient transport reset shares one bounded retry budget; repeated transport/service failure defers only the current document and the batch continues.
 
 Backup task note:
 - Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.

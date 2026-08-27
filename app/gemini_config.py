@@ -12,16 +12,6 @@ import yaml
 
 
 _REDACTED_SENTINEL = "<REDACTED>"
-DEFAULT_GEMINI_MODELS: Dict[str, str] = {
-    "library_normalization": "gemini-2.5-flash",
-}
-DEFAULT_GEMINI_MODEL_POOLS: Dict[str, List[str]] = {
-    "library_collection_validation": [
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3-flash-preview",
-    ],
-}
 
 
 @dataclass(frozen=True)
@@ -140,65 +130,20 @@ def load_gemini_keys() -> List[GeminiKey]:
     return list(_iter_new_shape(_load_config_payload()))
 
 
-def load_gemini_models() -> Dict[str, str]:
-    """Load Gemini model aliases used by task logic."""
-    payload = _load_config_payload()
-    overrides: Dict[str, str] = {}
-    gemini = payload.get("gemini")
-    if isinstance(gemini, dict):
-        models = gemini.get("models")
-        if isinstance(models, dict):
-            for raw_alias, raw_model in models.items():
-                alias = str(raw_alias or "").strip()
-                model = str(raw_model or "").strip()
-                if alias and model:
-                    overrides[alias] = model
-    return {
-        **DEFAULT_GEMINI_MODELS,
-        **overrides,
-    }
-
-
-def load_gemini_model_pools() -> Dict[str, List[str]]:
-    """Load ordered model pools used by load-balanced Gemini workflows."""
-    payload = _load_config_payload()
-    pools = {key: list(values) for key, values in DEFAULT_GEMINI_MODEL_POOLS.items()}
-    gemini = payload.get("gemini")
-    configured = gemini.get("model_pools") if isinstance(gemini, dict) else None
-    if not isinstance(configured, dict):
-        return pools
-    for raw_alias, raw_models in configured.items():
-        alias = str(raw_alias or "").strip()
-        if not alias or not isinstance(raw_models, list):
-            continue
-        models = [str(value or "").strip() for value in raw_models]
-        models = list(dict.fromkeys(value for value in models if value))
-        if models:
-            pools[alias] = models
-    return pools
-
-
 def load_configured_gemini_model_names() -> List[str]:
-    """Return every configured runtime model once, in configuration order."""
-    model_names = list(load_gemini_models().values())
-    for pool in load_gemini_model_pools().values():
-        model_names.extend(pool)
-    return list(dict.fromkeys(model_names))
-
-
-def load_required_gemini_model_pool(alias: str) -> List[str]:
-    """Load one explicitly configured ordered pool without implicit defaults."""
-    pool_name = str(alias or "").strip()
-    if not pool_name:
-        raise ValueError("Gemini model pool alias must not be empty")
+    """Return the shared configured runtime model pool without defaults."""
     payload = _load_config_payload()
     gemini = payload.get("gemini")
-    configured = gemini.get("model_pools") if isinstance(gemini, dict) else None
-    raw_models = configured.get(pool_name) if isinstance(configured, dict) else None
+    raw_models = gemini.get("model_pool") if isinstance(gemini, dict) else None
     if not isinstance(raw_models, list):
-        raise RuntimeError(f"gemini.model_pools.{pool_name} is required")
+        return []
     models = [str(value or "").strip() for value in raw_models]
-    models = list(dict.fromkeys(value for value in models if value))
+    return list(dict.fromkeys(value for value in models if value))
+
+
+def load_required_gemini_model_pool() -> List[str]:
+    """Load the one shared ordered model pool without implicit defaults."""
+    models = load_configured_gemini_model_names()
     if not models:
-        raise RuntimeError(f"gemini.model_pools.{pool_name} must not be empty")
+        raise RuntimeError("gemini.model_pool is required and must not be empty")
     return models

@@ -101,7 +101,6 @@ MANAGED_TERMSETS = {
 }
 
 
-MODEL_POOL_ALIAS = "library_metadata_evaluation"
 TASK_ID = "maintenance.monocorpus_meta_evaluate"
 PANEL_ID = "library"
 
@@ -264,7 +263,7 @@ def evaluate(args) -> None:
     settings = load_settings()
     state_db = Database(settings.database_url, schema=settings.database_schema)
     state_db.init_schema()
-    models = load_required_gemini_model_pool(MODEL_POOL_ALIAS)
+    models = load_required_gemini_model_pool()
     run_id = _run_id()
     gemini_manager = GeminiRuntimeManager(
         state_db,

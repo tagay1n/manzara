@@ -1,23 +1,10 @@
 gemini:
   metadata_extraction_operational_retry_cooldown_seconds: 21600
-  models:
-    library_normalization: "gemini-2.5-flash"
-  model_pools:
-    library_metadata_extraction:
-      - "gemini-3.7-flash"
-      - "gemini-3.6-flash"
-      - "gemini-3.5-flash"
-      - "gemini-3-flash-preview"
-    library_metadata_evaluation:
-      - "gemini-3.7-flash"
-      - "gemini-3.6-flash"
-      - "gemini-3.5-flash"
-      - "gemini-3-flash-preview"
-    library_collection_validation:
-      - "gemini-3.7-flash"
-      - "gemini-3.6-flash"
-      - "gemini-3.5-flash"
-      - "gemini-3-flash-preview"
+  model_pool:
+    - "gemini-3.7-flash"
+    - "gemini-3.6-flash"
+    - "gemini-3.5-flash"
+    - "gemini-3-flash-preview"
   accounts:
     tt:
       - "<REDACTED>"

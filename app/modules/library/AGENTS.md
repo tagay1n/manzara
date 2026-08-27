@@ -27,7 +27,7 @@ These rules apply to `app/modules/library/`.
 
 - `library.metadata_extract` selects only documents with a verified primary-storage checkpoint. Reuse an MD5-verified document from the shared source cache first; on a miss, populate that cache only from configured Backblaze storage. Do not add Yandex Disk, legacy S3, or compatibility source branches.
 - Preserve the adopted prompt, Schema.org validation, PDF edge-page slicing, and normalization unless the owner requests a prompt/version change.
-- Models come only from `gemini.model_pools.library_metadata_extraction`; there are no code defaults.
+- Models come only from the shared `gemini.model_pool`; there are no code defaults.
 - Persist content-level model failures after every attempt and resume with the next untried model. Quota, service, storage, and stop conditions are retryable and never terminally exclude a document.
 - If only one document's remaining models are exhausted, defer it and continue. Stop with `all_keys_exhausted` only when every configured model is unavailable; expose deferrals and unresolved count in progress/artifacts.
 - Metadata is usable only with a non-placeholder title plus another bibliographic/content signal. Boilerplate-only, title-only, or title-missing responses advance to the next model.
@@ -35,7 +35,7 @@ These rules apply to `app/modules/library/`.
 
 ## Metadata evaluation
 
-- Evaluation models come only from `gemini.model_pools.library_metadata_evaluation` and run in configured order through the shared Gemini runtime.
+- Evaluation models come only from the shared `gemini.model_pool` and run in configured order through the shared Gemini runtime.
 - Preserve valid positive and negative evaluations. Ignore `lib_eval_method` when selecting work: reopen only missing evaluation results, applicable rows without a classification, or non-applicable rows that still retain a classification. Continue recording the method for new decisions as provenance.
 - Persist content-level failures per document and model. Resume with the next untried model; a changed model set reopens terminal failures without retrying models that already failed.
 - A usable response has a concise decision reason and, when applicable, a normalized DDC plus category path. Empty, malformed, or incomplete responses advance to the next model.
@@ -52,6 +52,6 @@ These rules apply to `app/modules/library/`.
 - A document has at most one canonical collection; conflicts require owner resolution.
 - Only explicit owner approval creates collections/memberships. New collections require two approved documents; existing-collection attachments may contain one.
 - Keep `library.collection_apply` separate from proposal approval.
-- Validation uses `gemini.model_pools.library_collection_validation`, one verdict per batch, no consensus voting.
+- Validation uses the shared `gemini.model_pool`, one verdict per batch, no consensus voting.
 - Batches adapt by model: start at or below 20, retry timeout/malformed output twice, then reduce `20 -> 10 -> 5 -> 2 -> 1`. `400`, `429`, blackout, and `5xx` do not change size.
 - Validate response MD5 sets exactly. Missing, duplicated, unknown, or malformed results are response failures.

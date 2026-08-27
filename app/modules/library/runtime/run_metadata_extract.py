@@ -51,7 +51,6 @@ from app.settings import load_settings
 
 TASK_ID = "library.metadata_extract"
 PANEL_ID = "library"
-MODEL_POOL_ALIAS = "library_metadata_extraction"
 DEFAULT_OPERATIONAL_RETRY_COOLDOWN_SECONDS = 21_600
 
 
@@ -379,7 +378,7 @@ def main() -> int:
     run_id = _run_id()
     app_settings = load_settings()
     config = load_runtime_config()
-    models = load_required_gemini_model_pool(MODEL_POOL_ALIAS)
+    models = load_required_gemini_model_pool()
     storage = load_document_storage_settings(config)
     workspace = Path(
         os.environ.get("MANZARA_ARTIFACTS_ROOT", "~/.manzara")
