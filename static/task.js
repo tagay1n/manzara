@@ -382,11 +382,6 @@ function renderTaskDetail(payload) {
 
   document.getElementById("task-title").textContent = task.title;
   document.getElementById("task-subtitle").textContent = `${payload.panel.title} • ${task.task_id} • ${task.task_type}`;
-  const backLink = document.getElementById("task-back-link");
-  if (backLink && payload.panel?.slug) {
-    backLink.href = `/flows/${encodeURIComponent(payload.panel.slug)}`;
-    backLink.textContent = "Back to flow";
-  }
   document.getElementById("task-stat-grid").innerHTML = `
     <div class="stat"><div class="stat-label">Total Runs</div><div class="stat-value">${payload.stats.total_runs}</div></div>
     <div class="stat"><div class="stat-label">Completed</div><div class="stat-value">${payload.stats.status_counts.completed || 0}</div></div>

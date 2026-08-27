@@ -1688,46 +1688,9 @@ button {
 
 .task-list-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, 230px);
+  justify-content: start;
   gap: 8px;
-}
-
-.flow-task-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 10px;
-}
-
-.flow-task-runs {
-  margin-top: 8px;
-  display: grid;
-  gap: 6px;
-}
-
-.flow-task-run-row {
-  border: 1px solid #223a62;
-  border-radius: 8px;
-  background: rgba(14, 28, 52, 0.56);
-  padding: 7px;
-  display: grid;
-  gap: 6px;
-}
-
-.flow-task-run-head {
-  display: grid;
-  grid-template-columns: minmax(56px, auto) minmax(90px, auto) 1fr;
-  gap: 6px;
-}
-
-.flow-task-run-summary {
-  color: #a9bfdc;
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.flow-task-run-actions {
-  display: flex;
-  justify-content: flex-end;
 }
 
 .shayan-program-list {
@@ -1835,10 +1798,11 @@ button {
   border: 1px solid #233c65;
   border-radius: 10px;
   padding: 8px;
-  text-decoration: none;
   color: inherit;
   background: rgba(14, 28, 52, 0.64);
   display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: center;
   gap: 3px;
 }
 
@@ -1849,6 +1813,20 @@ button {
 .task-list-title {
   font-size: 13px;
   font-weight: 600;
+}
+
+.task-list-link {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.task-list-toggle {
+  width: 30px;
+  height: 30px;
+  justify-self: end;
 }
 
 .task-list-meta,
@@ -2836,13 +2814,11 @@ pre,
 }
 
 .task-list-grid {
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 6px;
 }
 
 .task-list-item,
 .run-row,
-.flow-task-run-row,
 .library-stat-card,
 .shayan-program,
 .db-backup-row {
@@ -2852,8 +2828,7 @@ pre,
 }
 
 .task-list-item:hover,
-.run-row:hover,
-.flow-task-run-row:hover {
+.run-row:hover {
   border-color: #344050;
   background: rgba(25, 32, 43, 0.8);
 }

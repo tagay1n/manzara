@@ -81,9 +81,6 @@ def test_route_payload_builders_bind_payload_builder_methods() -> None:
         def build_task_detail_payload(self, task_key: str, *, limit: int = 20):
             return {"task_key": task_key, "limit": limit}
 
-        def build_flow_detail_payload(self, flow_key: str, *, limit_per_task: int = 20):
-            return {"flow_key": flow_key, "limit_per_task": limit_per_task}
-
         def build_library_payload(self):
             return {"ok": "library"}
 
@@ -119,10 +116,6 @@ def test_route_payload_builders_bind_payload_builder_methods() -> None:
     assert builders.build_system_state_payload() == {"ok": "system"}
     assert builders.build_dashboard_payload() == {"ok": "dashboard"}
     assert builders.build_task_detail_payload("abc", limit=7) == {"task_key": "abc", "limit": 7}
-    assert builders.build_flow_detail_payload("flow", limit_per_task=9) == {
-        "flow_key": "flow",
-        "limit_per_task": 9,
-    }
     assert builders.build_classification_detail_payload(11, docs_page=2, docs_page_size=50) == {
         "classification_id": 11,
         "docs_page": 2,

@@ -5,7 +5,6 @@ import { readFileSync } from "node:fs";
 const PAGE_FILES = [
   "tasks.html",
   "task.html",
-  "flow.html",
   "database.html",
   "library.html",
   "library-classifications.html",
@@ -30,6 +29,13 @@ test("conveyor lays sequential steps left-to-right and parallel tasks vertically
   assert.match(
     STYLES_SOURCE,
     /\.conveyor-stage-items\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s,
+  );
+});
+
+test("task catalog uses compact fixed-width task columns", () => {
+  assert.match(
+    STYLES_SOURCE,
+    /\.task-list-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*230px\);/s,
   );
 });
 
@@ -72,7 +78,6 @@ test("frontend source does not use browser system dialogs", () => {
   const sources = [
     "app.js",
     "database.js",
-    "flow.js",
     "gemini.js",
     "library-classification.js",
     "library-classifications.js",
@@ -99,4 +104,9 @@ test("shared shell has no command palette", () => {
   const source = readFileSync(new URL("../../static/shell.js", import.meta.url), "utf-8");
   assert.doesNotMatch(source, /command-trigger|command-dialog|command-input/);
   assert.doesNotMatch(source, /ctrlKey|metaKey|Jump to page/);
+});
+
+test("task catalog does not link to removed flow pages", () => {
+  const source = readFileSync(new URL("../../static/tasks.js", import.meta.url), "utf-8");
+  assert.doesNotMatch(source, /href=["']\/flows\//);
 });

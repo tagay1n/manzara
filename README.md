@@ -43,7 +43,6 @@ Pages:
 - `/gemini` (masked key/runtime state, reset controls, and an expiring confirmed override for the active reset blackout)
 - `/tasks`
 - `/tasks/{task-slug-or-id}`
-- `/flows/{flow-slug-or-id}`
 - `/library`
 - `/library/classifications`
 - `/library/classifications/{classification_id}`
@@ -83,7 +82,7 @@ Runtime control behavior:
 - Run logs stream into DB and are visible in UI
 - High-frequency `task.log` SSE events do not reload page datasets; relevant lifecycle/artifact events use targeted, coalesced reconciliation.
 - Each run also writes a dedicated artifact log file under `~/.manzara/task_runs/<task_id>/run-<run_id>.log` (or `MANZARA_ARTIFACTS_ROOT/task_runs/...` when overridden)
-- Task and flow pages render run history with backend-provided structured summaries (`runs.summary_json`)
+- Task pages render run history with backend-provided structured summaries (`runs.summary_json`)
 - Shayan scan/download run summaries include structured task artifacts (for example scan added/changed/removed counts) in `runs.summary_json.artifacts`.
 - Shayan Yandex upload keeps resumable state in `shayan_manifest_entries` (`yadisk_status`, `yadisk_uploaded_payload_hash`, `yadisk_remote_path`, `yadisk_last_error`, timestamps).
 - Shayan Yandex-to-Nextcloud transfer checkpoints each video in `shayan_webdav_transfers`. It uses Nextcloud chunked upload v2, assembles into deterministic temporary DAV paths, and independently verifies content before the final DAV move. Verified rows remain `uploaded`, making subsequent runs skip them without uploading again. The task emits chunk-level byte progress over SSE, stops gracefully at file boundaries, and restarts only an interrupted current chunk upload. It never deletes, trashes, or moves source videos on Yandex Disk.
@@ -95,7 +94,7 @@ Library data tooling currently includes:
 - Classification views and merge/normalization previews
 - Personality and publisher views
 - Path-independent collection workflow:
-  - Operational tasks are grouped in the dedicated **Collections** flow at `/flows/collections`; the Library collections review page remains at `/library/collections`.
+  - Operational tasks are grouped in the dedicated **Collections** catalog on `/tasks`; the Library collections review page remains at `/library/collections`.
   - **Discover collections** indexes eligible `metadata.schema_org` records and writes proposals without mutating approved memberships.
   - Documents require a usable metadata title; `Legislation` and normalized legal-document genres from `LEGAL_GENRE_BLACKLIST` are excluded before clustering.
   - **Validate collection proposals** uses an adaptive Gemini model pool with strict per-MD5 JSON responses and resumable PostgreSQL attempts.
@@ -388,7 +387,7 @@ node --test tests/frontend/*.mjs
 Coverage notes:
 - API and task-control behavior is covered by `pytest`.
 - Backend runtime logging tests include secret redaction regression checks (including `Authorization: Bearer ...` and secret query params) and stream error visibility checks.
-- Shared frontend helpers, shell contracts, and page behavior are covered by `node:test` (`tests/frontend/*.mjs`, including tasks, task/flow detail, library pages, database, Gemini, and normalization pages).
+- Shared frontend helpers, shell contracts, and page behavior are covered by `node:test` (`tests/frontend/*.mjs`, including task detail, library pages, database, Gemini, and normalization pages).
 - Normalization interaction coverage includes queue pagination, stop-all force-confirmation guard, suggestions refresh payload checks, bulk queue actions, suggestion accept/reject, merge, history undo calls, cross-tab queue-open transitions, and evidence dialog fetch/render checks.
 - Runtime-heavy external flows still require manual smoke checks, especially:
   - `maintenance.monocorpus_meta_evaluate`
@@ -426,7 +425,6 @@ Core:
 - `GET /api/dashboard`
 - `GET /api/tasks`
 - `GET /api/tasks/{task_id_or_slug}`
-- `GET /api/flows/{flow_id_or_slug}`
 - `GET /api/database/state`
 - `GET /api/gemini/state`
 - `POST /api/tasks/{task_id}/toggle`

@@ -53,12 +53,6 @@ def register_page_routes(
 
         app.add_api_route(path, _serve, methods=["GET"])
 
-    async def _flow_detail(_request: Request, flow_id_or_slug: str) -> FileResponse:
-        _ = flow_id_or_slug
-        return _page_response(static_dir / "flow.html")
-
-    app.add_api_route("/flows/{flow_id_or_slug:path}", _flow_detail, methods=["GET"])
-
     async def _classification_detail(_request: Request, classification_id: int) -> FileResponse:
         _ = classification_id
         return _page_response(static_dir / "library-classification.html")

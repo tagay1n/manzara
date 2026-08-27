@@ -18,14 +18,12 @@ class PayloadBuilder:
         self,
         *,
         state_provider: Callable[[], Any],
-        panel_defs_provider: Callable[[], list[Dict[str, Any]]],
         normalization_entity_types: Iterable[str],
         slug_separator_pattern: re.Pattern[str],
         slug_clean_pattern: re.Pattern[str],
         ops_provider: Callable[[], PayloadBuilderOperations],
     ) -> None:
         self._state_provider = state_provider
-        self._panel_defs_provider = panel_defs_provider
         self._normalization_entity_types = {str(item) for item in normalization_entity_types}
         self._slug_separator_pattern = slug_separator_pattern
         self._slug_clean_pattern = slug_clean_pattern
@@ -95,47 +93,6 @@ class PayloadBuilder:
         resolved = state.db.get_task(task_id)
         if not resolved:
             raise HTTPException(status_code=404, detail="Task not found")
-        return resolved
-
-    def _flow_slug_maps(self) -> tuple[Dict[str, str], Dict[str, str]]:
-        """Return deterministic panel_id<->slug maps."""
-        state = self._state()
-        title_map = state.db.get_panel_title_map()
-        panel_ids = {str(item["panel_id"]) for item in self._panel_defs_provider()}
-        panel_ids.update(title_map.keys())
-
-        used: set[str] = set()
-        panel_to_slug: Dict[str, str] = {}
-        slug_to_panel: Dict[str, str] = {}
-        for panel_id in sorted(panel_ids):
-            display_title = str(title_map.get(panel_id, panel_id))
-            base = self._slugify(display_title) or self._slugify(panel_id) or "flow"
-            candidate = base
-            attempt = 1
-            while candidate in used:
-                if attempt == 1:
-                    candidate = f"{base}-{self._slugify(panel_id) or panel_id}"
-                else:
-                    candidate = f"{base}-{attempt}"
-                attempt += 1
-            used.add(candidate)
-            panel_to_slug[panel_id] = candidate
-            slug_to_panel[candidate] = panel_id
-        return panel_to_slug, slug_to_panel
-
-    def _resolve_flow_identifier(self, flow_key: str) -> Dict[str, Any]:
-        """Resolve flow by panel id or human slug."""
-        state = self._state()
-        panel = state.db.get_panel(flow_key)
-        if panel:
-            return panel
-        _, slug_to_panel = self._flow_slug_maps()
-        panel_id = slug_to_panel.get(flow_key)
-        if not panel_id:
-            raise HTTPException(status_code=404, detail="Flow not found")
-        resolved = state.db.get_panel(panel_id)
-        if not resolved:
-            raise HTTPException(status_code=404, detail="Flow not found")
         return resolved
 
     def _run_with_summary(self, run: Dict[str, Any]) -> Dict[str, Any]:
@@ -273,7 +230,6 @@ class PayloadBuilder:
         state, event_cursor = self._begin_snapshot()
         panel_titles = state.db.get_panel_title_map()
         task_slug_map, _ = self._task_slug_maps()
-        flow_slug_map, _ = self._flow_slug_maps()
 
         tasks = state.db.list_tasks_with_latest_run()
         tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
@@ -294,10 +250,6 @@ class PayloadBuilder:
             panel_payloads["library"],
             panel_payloads["collections"],
         ]
-        for panel in ordered_panels:
-            panel_id = str(panel.get("panel_id") or "")
-            panel["slug"] = flow_slug_map.get(panel_id, panel_id)
-
         active_runs = state.db.list_active_runs()
         recent_runs = state.db.list_recent_runs(20)
         for run in recent_runs:
@@ -321,7 +273,6 @@ class PayloadBuilder:
         state, event_cursor = self._begin_snapshot()
         panel_titles = state.db.get_panel_title_map()
         task_slug_map, _ = self._task_slug_maps()
-        flow_slug_map, _ = self._flow_slug_maps()
         tasks = state.db.list_tasks_with_latest_run()
         task_groups: Dict[str, Dict[str, Any]] = {}
         for task in tasks:
@@ -331,7 +282,6 @@ class PayloadBuilder:
                 {
                     "panel_id": panel_id,
                     "title": panel_titles.get(panel_id, panel_id),
-                    "slug": flow_slug_map.get(panel_id, panel_id),
                     "tasks": [],
                 },
             )
@@ -398,8 +348,6 @@ class PayloadBuilder:
             "panel_id": task["panel_id"],
             "title": str(task["panel_id"]),
         }
-        flow_slug_map, _ = self._flow_slug_maps()
-        panel["slug"] = flow_slug_map.get(str(panel.get("panel_id") or ""), str(panel.get("panel_id") or ""))
         runs = [self._run_with_summary(run) for run in state.db.list_recent_runs_for_task(task_id, limit=limit)]
         status_counts: Dict[str, int] = {}
         for run in runs:
@@ -432,84 +380,6 @@ class PayloadBuilder:
                 ),
             },
             "runs": runs,
-        }
-
-    def build_flow_detail_payload(self, flow_key: str, limit_per_task: int = 20) -> Dict[str, Any]:
-        """Compose one flow payload with panel stats and per-task run history."""
-        state, event_cursor = self._begin_snapshot()
-        panel = self._resolve_flow_identifier(flow_key)
-        panel_id = str(panel["panel_id"])
-        panel_titles = state.db.get_panel_title_map()
-        task_slug_map, _ = self._task_slug_maps()
-        flow_slug_map, _ = self._flow_slug_maps()
-
-        tasks_with_latest = state.db.list_tasks_with_latest_run()
-        tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
-        for task in tasks_with_latest:
-            current_panel_id = str(task["panel_id"])
-            tasks_by_panel.setdefault(current_panel_id, []).append(
-                self._task_with_latest_run_payload(task, task_slug_map=task_slug_map)
-            )
-
-        panel_payloads = self._build_panel_payloads(
-            tasks_by_panel=tasks_by_panel,
-            panel_titles=panel_titles,
-        )
-        flow_payload = dict(
-            panel_payloads.get(panel_id)
-            or {
-                "panel_id": panel_id,
-                "title": panel_titles.get(panel_id, panel_id),
-                "description": "",
-                "status_counts": {},
-                "stats_cards": [],
-                "tasks": [],
-            }
-        )
-        flow_payload["slug"] = flow_slug_map.get(panel_id, panel_id)
-
-        ops = self._ops()
-        task_items: list[Dict[str, Any]] = []
-        for task in tasks_by_panel.get(panel_id, []):
-            task_id = str(task["task_id"])
-            runs = [
-                self._run_with_summary(run)
-                for run in state.db.list_recent_runs_for_task(task_id, limit=limit_per_task)
-            ]
-            latest_run = runs[0] if runs else {
-                "run_id": None,
-                "status": "idle",
-                "stop_mode": None,
-                "started_at": None,
-                "finished_at": None,
-                "heartbeat_at": None,
-                "pid": None,
-                "exit_code": None,
-                "error_text": None,
-                "progress": {},
-                "summary": ops.build_default_run_summary({"status": "idle"}),
-            }
-            task_items.append(
-                {
-                    "task_id": task_id,
-                    "slug": task["slug"],
-                    "title": task["title"],
-                    "task_type": task["task_type"],
-                    "icon_idle": task["icon_idle"],
-                    "icon_running": task["icon_running"],
-                    "run": latest_run,
-                    "runs": runs,
-                }
-            )
-
-        active_runs = state.db.list_active_runs()
-
-        return {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "event_cursor": event_cursor,
-            "global": self._build_global_payload(active_runs=active_runs),
-            "flow": flow_payload,
-            "tasks": sorted(task_items, key=lambda item: str(item.get("title", "")).lower()),
         }
 
     def build_library_payload(self) -> Dict[str, Any]:

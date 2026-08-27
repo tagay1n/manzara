@@ -32,7 +32,6 @@ class RoutePayloadBuilders(Protocol):
     build_dashboard_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
     build_task_detail_payload: Callable[..., JSONDict]
-    build_flow_detail_payload: Callable[..., JSONDict]
     build_library_payload: Callable[[], JSONDict]
     build_database_state_payload: Callable[[], JSONDict]
     build_classification_detail_payload: Callable[..., JSONDict]
@@ -47,7 +46,6 @@ class CoreReadPayloadBuilders(Protocol):
     build_dashboard_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
     build_task_detail_payload: Callable[..., JSONDict]
-    build_flow_detail_payload: Callable[..., JSONDict]
     build_library_payload: Callable[[], JSONDict]
     build_database_state_payload: Callable[[], JSONDict]
 

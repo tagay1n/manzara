@@ -102,7 +102,6 @@ class RoutePayloadBuildersService:
     build_dashboard_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
     build_task_detail_payload: Callable[..., JSONDict]
-    build_flow_detail_payload: Callable[..., JSONDict]
     build_library_payload: Callable[[], JSONDict]
     build_database_state_payload: Callable[[], JSONDict]
     build_classification_detail_payload: Callable[..., JSONDict]
@@ -118,7 +117,6 @@ class CoreReadPayloadBuildersService:
     build_dashboard_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
     build_task_detail_payload: Callable[..., JSONDict]
-    build_flow_detail_payload: Callable[..., JSONDict]
     build_library_payload: Callable[[], JSONDict]
     build_database_state_payload: Callable[[], JSONDict]
 
@@ -284,7 +282,6 @@ def build_route_payload_builders(payload_builder: PayloadBuilder) -> RoutePayloa
         build_dashboard_payload=payload_builder.build_dashboard_payload,
         build_tasks_payload=payload_builder.build_tasks_payload,
         build_task_detail_payload=payload_builder.build_task_detail_payload,
-        build_flow_detail_payload=payload_builder.build_flow_detail_payload,
         build_library_payload=payload_builder.build_library_payload,
         build_database_state_payload=payload_builder.build_database_state_payload,
         build_classification_detail_payload=payload_builder.build_classification_detail_payload,
@@ -302,7 +299,6 @@ def build_core_read_payload_builders(payload_builders: RoutePayloadBuilders) -> 
         build_dashboard_payload=payload_builders.build_dashboard_payload,
         build_tasks_payload=payload_builders.build_tasks_payload,
         build_task_detail_payload=payload_builders.build_task_detail_payload,
-        build_flow_detail_payload=payload_builders.build_flow_detail_payload,
         build_library_payload=payload_builders.build_library_payload,
         build_database_state_payload=payload_builders.build_database_state_payload,
     )

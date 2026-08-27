@@ -207,7 +207,6 @@ settings = load_settings()
 state = AppState(settings)
 payload_builder = PayloadBuilder(
     state_provider=lambda: state,
-    panel_defs_provider=lambda: _PANEL_DEFS,
     normalization_entity_types=NORMALIZATION_ENTITY_TYPES,
     slug_separator_pattern=_SLUG_SEPARATOR_PATTERN,
     slug_clean_pattern=_SLUG_CLEAN_PATTERN,

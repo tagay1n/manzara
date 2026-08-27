@@ -44,17 +44,6 @@ def register_core_read_routes(
         payloads = payload_provider()
         return JSONResponse(payloads.build_task_detail_payload(task_id, limit=limit))
 
-    @app.get("/api/flows/{flow_id_or_slug}")
-    def get_flow_detail(
-        flow_id_or_slug: str,
-        limit_per_task: int = Query(20, ge=1, le=200),
-    ) -> JSONResponse:
-        """Return one flow with panel stats and per-task run history."""
-        payloads = payload_provider()
-        return JSONResponse(
-            payloads.build_flow_detail_payload(flow_id_or_slug, limit_per_task=limit_per_task)
-        )
-
     @app.get("/api/library")
     def get_library() -> JSONResponse:
         """Return library applicability dataset statistics."""

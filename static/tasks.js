@@ -35,29 +35,50 @@ function teardownSoundNotifier() {
   state.soundNotifier = null;
 }
 
+function taskToggleModel(status) {
+  if (status === "stopping_force") {
+    return { icon: "octagon-x", title: "Force stopping", disabled: true, cls: "red" };
+  }
+  if (status === "stopping_graceful") {
+    return { icon: "octagon-x", title: "Force stop now", disabled: false, cls: "red" };
+  }
+  if (status === "starting" || status === "running") {
+    return { icon: "square", title: "Request graceful stop", disabled: false, cls: "active" };
+  }
+  return { icon: "play", title: "Start task", disabled: false, cls: "" };
+}
+
 function renderTaskItem(task) {
   const status = task.run?.status || "idle";
-  const active = window.ManzaraCore.isActiveStatus(status);
+  const control = taskToggleModel(status);
   const taskPathKey = encodeURIComponent(task.slug || task.task_id);
   return `
-    <a href="/tasks/${taskPathKey}" class="task-list-item task-status-${window.ManzaraCore.cssName(status, "idle")}"
+    <article class="task-list-item task-status-${window.ManzaraCore.cssName(status, "idle")}"
       draggable="true" data-conveyor-task-id="${window.ManzaraCore.escapeHtml(task.task_id)}">
-      <div class="task-list-title">${window.ManzaraCore.escapeHtml(task.title)}</div>
-      <div class="task-list-meta">
-        <span>${window.ManzaraCore.escapeHtml(task.task_type)}</span>
-        ${window.ManzaraCore.renderTaskStatusBadge(task.run || { status }, { compact: true })}
-      </div>
-      <div class="task-list-time">${window.ManzaraCore.escapeHtml(formatDateTime(task.run?.started_at || task.run?.finished_at))}</div>
-    </a>
+      <a href="/tasks/${taskPathKey}" class="task-list-link">
+        <div class="task-list-title">${window.ManzaraCore.escapeHtml(task.title)}</div>
+        <div class="task-list-meta">
+          <span>${window.ManzaraCore.escapeHtml(task.task_type)}</span>
+          ${window.ManzaraCore.renderTaskStatusBadge(task.run || { status }, { compact: true })}
+        </div>
+        <div class="task-list-time">${window.ManzaraCore.escapeHtml(formatDateTime(task.run?.started_at || task.run?.finished_at))}</div>
+      </a>
+      <button class="icon-btn task-list-toggle ${control.cls}"
+        type="button" data-task-toggle-id="${window.ManzaraCore.escapeHtml(task.task_id)}"
+        title="${window.ManzaraCore.escapeHtml(control.title)}"
+        aria-label="${window.ManzaraCore.escapeHtml(control.title)}"
+        ${control.disabled ? "disabled" : ""}>
+        <i data-lucide="${control.icon}"></i>
+      </button>
+    </article>
   `;
 }
 
 function renderTaskFlow(flow) {
-  const flowPathKey = encodeURIComponent(flow.slug || flow.panel_id);
   return `
     <section class="task-flow-card">
       <div class="task-flow-head">
-        <h3><a class="task-title task-detail-link" href="/flows/${flowPathKey}">${window.ManzaraCore.escapeHtml(flow.title)}</a></h3>
+        <h3>${window.ManzaraCore.escapeHtml(flow.title)}</h3>
         <span class="panel-pill">Tasks ${flow.tasks.length}</span>
       </div>
       <div class="task-list-grid">
@@ -139,6 +160,21 @@ async function stopAll() {
   queueRefresh(0);
 }
 
+async function toggleTask(taskId, button) {
+  if (!taskId || button?.disabled) return;
+  if (button) button.disabled = true;
+  try {
+    const result = await api(`/api/tasks/${encodeURIComponent(taskId)}/toggle`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    window.ManzaraUI?.reportTaskActionResult?.(result);
+  } finally {
+    if (button) button.disabled = false;
+    queueRefresh(0);
+  }
+}
+
 function setupEventStream() {
   state.eventStreamController?.stop();
   state.eventStreamController = window.ManzaraCore.createSseController({
@@ -164,9 +200,18 @@ function setupEventStream() {
 }
 
 function attachUiHandlers() {
-
   document.getElementById("stop-all-btn").addEventListener("click", () => {
     stopAll().catch((error) => console.error(error));
+  });
+  document.getElementById("task-flow-grid").addEventListener("click", (event) => {
+    const directTarget = event.target?.dataset?.taskToggleId ? event.target : null;
+    const button = directTarget || event.target?.closest?.("[data-task-toggle-id]");
+    if (!button) return;
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    toggleTask(String(button.dataset.taskToggleId || ""), button).catch((error) => {
+      window.ManzaraUI.toast(error?.message || String(error), { tone: "error" });
+    });
   });
 }
 
