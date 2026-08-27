@@ -24,7 +24,6 @@ class Settings:
     database_schema: str
     shayan: ShayanSettings
     maintenance: MaintenanceSettings
-    scheduler_enabled: bool
 
 
 def _contains_redacted(node: Any) -> bool:
@@ -74,15 +73,9 @@ def load_settings() -> Settings:
     """Load runtime settings from env with practical local defaults."""
     database_url = _load_database_url()
     database_schema = str(os.environ.get("MANZARA_DB_SCHEMA", "monocorpus")).strip() or "monocorpus"
-    scheduler_enabled = os.environ.get("MANZARA_ENABLE_SCHEDULER", "1").strip() not in {
-        "0",
-        "false",
-        "False",
-    }
     return Settings(
         database_url=database_url,
         database_schema=database_schema,
         shayan=load_shayan_settings(),
         maintenance=load_maintenance_settings(),
-        scheduler_enabled=scheduler_enabled,
     )

@@ -14,7 +14,7 @@ import yaml
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
-from app.db import ACTIVE_STATUSES, ACTIVE_WORKFLOW_STATUSES, Database
+from app.db import ACTIVE_STATUSES, Database
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.shayan.config import ShayanSettings
 from app.settings import Settings
@@ -235,7 +235,6 @@ def test_client(
         database_schema=schema_name,
         shayan=shayan,
         maintenance=maintenance,
-        scheduler_enabled=False,
     )
 
     monkeypatch.setattr(main_app, "shayan_task_definitions", _test_task_defs)
@@ -271,26 +270,6 @@ def wait_for_terminal_run() -> callable:
         raise AssertionError(
             f"Run {run_id} did not reach terminal state; "
             f"last_run={run}; logs={logs}"
-        )
-
-    return _wait
-
-
-@pytest.fixture()
-def wait_for_terminal_workflow_run() -> callable:
-    """Wait helper for workflow completion in tests."""
-
-    def _wait(main_app, workflow_run_id: int, timeout_seconds: float = 15.0):
-        deadline = time.time() + timeout_seconds
-        while time.time() < deadline:
-            run = main_app.state.db.get_workflow_run(workflow_run_id)
-            if run and run["status"] not in ACTIVE_WORKFLOW_STATUSES:
-                return run
-            time.sleep(0.05)
-        run = main_app.state.db.get_workflow_run(workflow_run_id)
-        raise AssertionError(
-            f"Workflow run {workflow_run_id} did not reach terminal state; "
-            f"last_run={run}"
         )
 
     return _wait

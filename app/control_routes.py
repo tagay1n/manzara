@@ -1,10 +1,8 @@
-"""Control-plane API route registration for tasks/workflows/system actions."""
+"""Control-plane API route registration for tasks and system actions."""
 
 from __future__ import annotations
 
-import re
 from typing import Any, Callable, Dict, Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -15,9 +13,6 @@ from app.conveyor import (
     ConveyorRevisionConflict,
     ConveyorValidationError,
 )
-
-_TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-
 
 def _parse_title(payload: Dict[str, Any], *, title_max_length: int, field_name: str = "title") -> str:
     value = payload.get(field_name)
@@ -72,7 +67,7 @@ def register_control_routes(
     state_provider: Callable[[], Any],
     title_max_length: int,
 ) -> None:
-    """Register task/workflow/schedule/system control endpoints."""
+    """Register task, conveyor, and system control endpoints."""
 
     @app.post("/api/tasks/{task_id}/toggle")
     def toggle_task(task_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)) -> JSONResponse:
@@ -136,25 +131,6 @@ def register_control_routes(
         )
         return JSONResponse({"flow": updated, "updated": True})
 
-    @app.post("/api/workflows/{workflow_id}/run")
-    def run_workflow_now(
-        workflow_id: str,
-        payload: Optional[Dict[str, Any]] = Body(default=None),
-    ) -> JSONResponse:
-        """Trigger one workflow immediately."""
-        state = state_provider()
-        workflow = state.db.get_workflow(workflow_id)
-        if not workflow:
-            raise HTTPException(status_code=404, detail="Workflow not found")
-
-        sudo_password = _parse_optional_sudo_password(payload)
-        result = state.workflow_service.trigger_workflow(
-            workflow_id,
-            trigger_source="manual",
-            sudo_password=sudo_password,
-        )
-        return JSONResponse(result)
-
     @app.put("/api/conveyor")
     def save_conveyor(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
         """Replace the singleton conveyor definition using optimistic revisioning."""
@@ -194,128 +170,6 @@ def register_control_routes(
         """Gracefully stop the active conveyor and cancel its pending rows."""
         state = state_provider()
         return JSONResponse(state.conveyor_service.stop())
-
-    @app.get("/api/workflows/{workflow_id}")
-    def get_workflow(workflow_id: str) -> JSONResponse:
-        """Get one workflow with schedule and steps."""
-        state = state_provider()
-        workflow = state.db.get_workflow(workflow_id)
-        if not workflow:
-            raise HTTPException(status_code=404, detail="Workflow not found")
-
-        return JSONResponse(
-            {
-                "workflow": workflow,
-                "schedule": state.db.get_schedule_by_workflow(workflow_id),
-                "steps": state.db.list_workflow_steps(workflow_id),
-                "recent_runs": state.db.list_recent_workflow_runs(workflow_id, limit=10),
-            }
-        )
-
-    @app.patch("/api/schedules/{schedule_id}")
-    def update_schedule(schedule_id: str, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
-        """Patch schedule config and recalculate next run time."""
-        state = state_provider()
-        schedule = state.db.get_schedule(schedule_id)
-        if not schedule:
-            raise HTTPException(status_code=404, detail="Schedule not found")
-
-        updates: Dict[str, Any] = {}
-        schedule_type = str(schedule.get("schedule_type") or "weekly")
-
-        if "schedule_type" in payload:
-            parsed = str(payload["schedule_type"]).strip().lower()
-            if parsed not in {"weekly", "interval"}:
-                raise HTTPException(status_code=400, detail="schedule_type must be 'weekly' or 'interval'")
-            updates["schedule_type"] = parsed
-            schedule_type = parsed
-
-        if "enabled" in payload:
-            raw_enabled = payload["enabled"]
-            if isinstance(raw_enabled, bool):
-                updates["enabled"] = raw_enabled
-            elif isinstance(raw_enabled, (int, float)):
-                if isinstance(raw_enabled, float) and not raw_enabled.is_integer():
-                    raise HTTPException(status_code=400, detail="enabled must be a boolean-like value")
-                normalized_number = int(raw_enabled)
-                if normalized_number not in {0, 1}:
-                    raise HTTPException(status_code=400, detail="enabled must be a boolean-like value")
-                updates["enabled"] = bool(normalized_number)
-            elif isinstance(raw_enabled, str):
-                normalized = raw_enabled.strip().lower()
-                if normalized in {"1", "true", "yes", "on"}:
-                    updates["enabled"] = True
-                elif normalized in {"0", "false", "no", "off"}:
-                    updates["enabled"] = False
-                else:
-                    raise HTTPException(status_code=400, detail="enabled must be a boolean-like value")
-            else:
-                raise HTTPException(status_code=400, detail="enabled must be a boolean-like value")
-
-        if "day_of_week" in payload:
-            raw_day = payload["day_of_week"]
-            if isinstance(raw_day, bool) or (
-                isinstance(raw_day, float) and not raw_day.is_integer()
-            ):
-                raise HTTPException(status_code=400, detail="day_of_week must be an integer 1..7")
-            try:
-                day = int(raw_day)
-            except (TypeError, ValueError):
-                raise HTTPException(status_code=400, detail="day_of_week must be an integer 1..7")
-            if day < 1 or day > 7:
-                raise HTTPException(status_code=400, detail="day_of_week must be an integer 1..7")
-            updates["day_of_week"] = day
-
-        if "time_of_day" in payload:
-            value = str(payload["time_of_day"]).strip()
-            if not _TIME_PATTERN.match(value):
-                raise HTTPException(status_code=400, detail="time_of_day must match HH:MM (24h)")
-            updates["time_of_day"] = value
-
-        if "interval_minutes" in payload:
-            raw_interval = payload["interval_minutes"]
-            if raw_interval in {None, ""}:
-                updates["interval_minutes"] = None
-            else:
-                if isinstance(raw_interval, bool) or (
-                    isinstance(raw_interval, float) and not raw_interval.is_integer()
-                ):
-                    raise HTTPException(status_code=400, detail="interval_minutes must be an integer >= 1")
-                try:
-                    interval_minutes = int(raw_interval)
-                except (TypeError, ValueError):
-                    raise HTTPException(status_code=400, detail="interval_minutes must be an integer >= 1")
-                if interval_minutes < 1:
-                    raise HTTPException(status_code=400, detail="interval_minutes must be an integer >= 1")
-                updates["interval_minutes"] = interval_minutes
-
-        if "timezone" in payload:
-            timezone_name = str(payload["timezone"]).strip() or "UTC"
-            try:
-                ZoneInfo(timezone_name)
-            except ZoneInfoNotFoundError as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail="timezone must be a valid IANA timezone name",
-                ) from exc
-            updates["timezone"] = timezone_name
-
-        if schedule_type == "interval":
-            effective_interval = updates.get("interval_minutes", schedule.get("interval_minutes"))
-            if effective_interval is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="interval_minutes is required when schedule_type is 'interval'",
-                )
-
-        if not updates:
-            return JSONResponse({"schedule": schedule})
-
-        updated = state.workflow_service.configure_schedule(schedule_id, updates)
-        if not updated:
-            raise HTTPException(status_code=404, detail="Schedule not found")
-
-        return JSONResponse({"schedule": updated})
 
     @app.post("/api/system/stop-all")
     def stop_all() -> JSONResponse:

@@ -1,20 +1,17 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
-from app.repositories.core import _json_hash, _normalize_shayan_entries, utc_now
+from app.repositories.core import utc_now
 from app.runtime_states import (
     TASK_RUN_ACTIVE_STATUSES as ACTIVE_STATUSES,
     TASK_RUN_STATUS_FAILED,
     TASK_RUN_STATUS_RUNNING,
     TASK_RUN_STATUS_STARTING,
-    WORKFLOW_RUN_ACTIVE_STATUSES as ACTIVE_WORKFLOW_STATUSES,
-    WORKFLOW_RUN_STATUS_FAILED,
-    WORKFLOW_RUN_STATUS_RUNNING,
-    WORKFLOW_RUN_STATUS_STARTING,
     task_status_from_stop_mode,
 )
+
 
 class RunRepository:
     """PostgreSQL operations for the runs domain."""
@@ -562,27 +559,5 @@ class RunRepository:
                     WHERE status IN ({placeholders})
                     """,
                     (TASK_RUN_STATUS_FAILED, now, now, now, *ACTIVE_STATUSES),
-                )
-                return int(cur.rowcount or 0)
-
-
-    def recover_active_workflow_runs(self) -> int:
-        """Mark previously active workflow runs as failed after process restart."""
-        now = utc_now()
-        placeholders = ", ".join("?" for _ in ACTIVE_WORKFLOW_STATUSES)
-        with self._lock:
-            with self._connect() as conn:
-                cur = conn.execute(
-                    f"""
-                    UPDATE workflow_runs
-                    SET status = ?,
-                        finished_at = ?,
-                        error_text = COALESCE(
-                            error_text,
-                            'Recovered after Manzara restart; previous workflow state is unknown.'
-                        )
-                    WHERE status IN ({placeholders})
-                    """,
-                    (WORKFLOW_RUN_STATUS_FAILED, now, *ACTIVE_WORKFLOW_STATUSES),
                 )
                 return int(cur.rowcount or 0)

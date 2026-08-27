@@ -1,4 +1,4 @@
-"""Startup seed registry builders for panels, tasks, and workflows."""
+"""Startup seed registry builders for panels and tasks."""
 
 from __future__ import annotations
 
@@ -9,15 +9,7 @@ from app.contracts import JSONDict, StartupSeedRegistry
 from app.modules.maintenance.tasks import maintenance_task_definitions
 from app.modules.library.tasks import library_task_definitions
 from app.modules.library.collection_tasks import collection_task_definitions
-from app.modules.maintenance.workflow import (
-    library_personality_normalization_workflow_bundle,
-    library_publisher_normalization_workflow_bundle,
-    library_workflow_bundle,
-    maintenance_backup_full_workflow_bundle,
-    maintenance_backup_incr_workflow_bundle,
-)
 from app.modules.shayan.tasks import shayan_task_definitions
-from app.modules.shayan.workflow import shayan_workflow_bundle
 from app.settings import Settings
 
 
@@ -33,22 +25,8 @@ def build_startup_seed_registry(
     collection_task_definitions: Callable[
         [], list[JSONDict]
     ] = collection_task_definitions,
-    shayan_workflow_bundle: Callable[[Any], JSONDict] = shayan_workflow_bundle,
-    maintenance_backup_full_workflow_bundle: Callable[
-        [], JSONDict
-    ] = maintenance_backup_full_workflow_bundle,
-    maintenance_backup_incr_workflow_bundle: Callable[
-        [], JSONDict
-    ] = maintenance_backup_incr_workflow_bundle,
-    library_workflow_bundle: Callable[[], JSONDict] = library_workflow_bundle,
-    library_personality_normalization_workflow_bundle: Callable[
-        [], JSONDict
-    ] = library_personality_normalization_workflow_bundle,
-    library_publisher_normalization_workflow_bundle: Callable[
-        [], JSONDict
-    ] = library_publisher_normalization_workflow_bundle,
 ) -> StartupSeedRegistry:
-    """Build startup seed payloads with injectable task/workflow factories."""
+    """Build startup seed payloads with injectable task factories."""
     selected_panel_defs = [dict(item) for item in (panel_defs or PANEL_DEFS)]
     task_defs = [
         *shayan_task_definitions(settings.shayan),
@@ -56,16 +34,7 @@ def build_startup_seed_registry(
         *library_task_definitions(),
         *collection_task_definitions(),
     ]
-    workflow_bundles = [
-        shayan_workflow_bundle(settings.shayan),
-        maintenance_backup_full_workflow_bundle(),
-        maintenance_backup_incr_workflow_bundle(),
-        library_workflow_bundle(),
-        library_personality_normalization_workflow_bundle(),
-        library_publisher_normalization_workflow_bundle(),
-    ]
     return StartupSeedRegistry(
         panel_defs=selected_panel_defs,
         task_defs=task_defs,
-        workflow_bundles=workflow_bundles,
     )

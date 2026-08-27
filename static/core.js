@@ -9,13 +9,6 @@
     "task.artifact",
     "task.completed",
     "task.failed",
-    "workflow.started",
-    "workflow.step_started",
-    "workflow.step_completed",
-    "workflow.step_skipped",
-    "workflow.stopped",
-    "workflow.completed",
-    "workflow.failed",
     "conveyor.updated",
     "conveyor.started",
     "conveyor.stage_started",
@@ -27,10 +20,6 @@
     "conveyor.failed",
     "task.renamed",
     "flow.renamed",
-    "schedule.triggered",
-    "schedule.updated",
-    "schedule.skipped",
-    "schedule.skipped_overlap",
     "gemini.key.used",
     "gemini.key.success",
     "gemini.key.error",
@@ -43,7 +32,6 @@
     "gemini.blackout.overridden",
     "library.collections.updated",
     "system.stop_all_requested",
-    "system.workflow_recovery",
   ];
 
   function parseDate(value) {
@@ -89,8 +77,8 @@
     return `Last event: ${eventType} @ ${formatTime(payload?.ts, { includeZone: true })}`;
   }
 
-  function formatGlobalStatus(activeTasks, activeWorkflows) {
-    return `Tasks: ${Number(activeTasks || 0)} • Flows: ${Number(activeWorkflows || 0)}`;
+  function formatGlobalStatus(activeTasks) {
+    return `Tasks: ${Number(activeTasks || 0)}`;
   }
 
   function eventCursorFromSnapshot(payload) {
@@ -282,14 +270,6 @@
     "task.stopped",
     "task.renamed",
     "flow.renamed",
-    "workflow.started",
-    "workflow.completed",
-    "workflow.failed",
-    "workflow.stopped",
-    "schedule.updated",
-    "schedule.triggered",
-    "schedule.skipped",
-    "schedule.skipped_overlap",
     "shayan.episode_redownload_requested",
     "library.collection_updated",
   ]);
@@ -299,7 +279,6 @@
     if (RECONCILIATION_EVENTS.has(eventType)) return true;
     return (
       eventType.startsWith("gemini.")
-      || eventType.startsWith("workflow.")
       || eventType.startsWith("library.")
     );
   }

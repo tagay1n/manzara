@@ -1,7 +1,6 @@
 (() => {
   const RAIL_STORAGE_KEY = "manzara.ui.rail.expanded";
   const NAV_ITEMS = [
-    { id: "schedules", title: "Schedules", href: "/schedules", icon: "calendar-range" },
     { id: "tasks", title: "Tasks", href: "/tasks", icon: "list-checks" },
     { id: "database", title: "Database", href: "/database", icon: "database" },
     { id: "library", title: "Library", href: "/library", icon: "book-open" },
@@ -73,7 +72,7 @@
               <span id="stream-state" class="stream-state" data-state="connecting">
                 <span class="status-dot"></span><span>Connecting</span>
               </span>
-              <div id="global-status" class="status-pill">Tasks: 0 · Flows: 0</div>
+              <div id="global-status" class="status-pill">Tasks: 0</div>
               <button id="stop-all-btn" class="icon-btn quiet" type="button"
                       title="Stop all running tasks" aria-label="Stop all tasks" disabled>
                 <i data-lucide="square"></i>
@@ -303,7 +302,6 @@
     if (status) {
       status.textContent = window.ManzaraCore.formatGlobalStatus(
         global.active_tasks,
-        global.active_workflows,
       );
     }
     window.ManzaraCore.applyStopAllButton(
@@ -333,7 +331,6 @@
       || eventType === "task.completed"
       || eventType === "task.failed"
       || eventType === "task.stopped"
-      || eventType.startsWith("workflow.")
       || eventType === "system.stop_all_requested"
     ) {
       queueSystemRefresh();

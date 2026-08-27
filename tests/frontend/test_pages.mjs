@@ -9,7 +9,6 @@ const TASKS_PAGE_SOURCE = [CONVEYOR_SOURCE, TASKS_SOURCE].join("\n");
 const TASK_SOURCE = readFileSync(new URL("../../static/task.js", import.meta.url), "utf-8");
 const FLOW_SOURCE = readFileSync(new URL("../../static/flow.js", import.meta.url), "utf-8");
 const DASHBOARD_SOURCE = readFileSync(new URL("../../static/app.js", import.meta.url), "utf-8");
-const SCHEDULES_SOURCE = readFileSync(new URL("../../static/schedules.js", import.meta.url), "utf-8");
 const LIBRARY_SOURCE = readFileSync(new URL("../../static/library.js", import.meta.url), "utf-8");
 const DATABASE_SOURCE = readFileSync(new URL("../../static/database.js", import.meta.url), "utf-8");
 const GEMINI_SOURCE = readFileSync(new URL("../../static/gemini.js", import.meta.url), "utf-8");
@@ -567,8 +566,8 @@ function createHarness({
       formatDateTime(value) {
         return `DT:${String(value)}`;
       },
-      formatGlobalStatus(activeTasks, activeWorkflows) {
-        return `Tasks: ${Number(activeTasks || 0)} • Flows: ${Number(activeWorkflows || 0)}`;
+      formatGlobalStatus(activeTasks) {
+        return `Tasks: ${Number(activeTasks || 0)}`;
       },
       eventCursorFromSnapshot(payload) {
         const cursor = Number(payload?.event_cursor || 0);
@@ -762,7 +761,6 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
     event_cursor: 42,
     global: {
       active_tasks: 2,
-      active_workflows: 1,
       stop_all_state: "normal",
     },
     flows: [
@@ -800,7 +798,7 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
   assert.equal(Boolean(harness.sse.config), true);
   assert.equal(harness.sse.started, 1);
   assert.equal(harness.sse.config.initialCursor, 42);
-  assert.equal(harness.elements.get("global-status").textContent, "Tasks: 2 • Flows: 1");
+  assert.equal(harness.elements.get("global-status").textContent, "Tasks: 2");
   assert.equal(harness.elements.get("stop-all-btn").dataset.stopState, "normal");
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /\/tasks\/quick/);
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /task-status-running is-active has-progress/);
@@ -821,7 +819,6 @@ test("tasks page renders empty state when no tasks exist", async () => {
   const payload = {
     global: {
       active_tasks: 0,
-      active_workflows: 0,
       stop_all_state: "disabled",
     },
     flows: [{ panel_id: "shayan", title: "Shayan", tasks: [] }],
@@ -857,7 +854,6 @@ test("tasks page stop-all does not call API when force-stop confirmation is reje
   const payload = {
     global: {
       active_tasks: 1,
-      active_workflows: 0,
       stop_all_state: "armed",
     },
     flows: [],
@@ -915,7 +911,6 @@ test("task page renders running control state and toggles task endpoint", async 
     ],
     global: {
       active_tasks: 1,
-      active_workflows: 0,
       stop_all_state: "normal",
     },
   };
@@ -975,7 +970,7 @@ test("tasks catalog presents conveyor steps in left-to-right execution order", a
   let stages = [];
   const catalogPayload = {
     event_cursor: 9,
-    global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+    global: { active_tasks: 0, stop_all_state: "disabled" },
     flows: [
       {
         panel_id: "shayan",
@@ -1102,7 +1097,6 @@ test("task page normalizes idle icon names for lucide glyph rendering", async ()
     ],
     global: {
       active_tasks: 0,
-      active_workflows: 0,
       stop_all_state: "disabled",
     },
   };
@@ -1176,7 +1170,6 @@ test("task page renders structured run artifacts from backend summary", async ()
     ],
     global: {
       active_tasks: 0,
-      active_workflows: 0,
       stop_all_state: "disabled",
     },
   };
@@ -1263,7 +1256,6 @@ test("task page renders shayan detailed changes when endpoint has rows", async (
     ],
     global: {
       active_tasks: 0,
-      active_workflows: 0,
       stop_all_state: "disabled",
     },
   };
@@ -1343,7 +1335,6 @@ test("task page applies toggle response run and enables logs immediately", async
     runs: [],
     global: {
       active_tasks: 0,
-      active_workflows: 0,
       stop_all_state: "disabled",
     },
   };
@@ -1435,7 +1426,6 @@ test("flow page bootstraps, renders tasks and summaries, and refreshes on SSE", 
   const payload = {
     global: {
       active_tasks: 1,
-      active_workflows: 0,
       stop_all_state: "normal",
     },
     flow: {
@@ -1530,7 +1520,6 @@ test("flow page shows immediate starting state after task toggle click", async (
   const payload = {
     global: {
       active_tasks: 0,
-      active_workflows: 0,
       stop_all_state: "disabled",
     },
     flow: {
@@ -1615,7 +1604,6 @@ test("dashboard page renders empty state for panels and runs", async () => {
   const payload = {
     global: {
       active_tasks: 0,
-      active_workflows: 0,
       stop_all_state: "disabled",
     },
     panels: [],
@@ -1643,7 +1631,7 @@ test("dashboard page renders empty state for panels and runs", async () => {
   await harness.flush();
   assert.match(harness.elements.get("panel-grid").innerHTML, /No flows available yet/);
   assert.match(harness.elements.get("runs-list").innerHTML, /No runs yet/);
-  assert.equal(harness.elements.get("global-status").textContent, "Tasks: 0 • Flows: 0");
+  assert.equal(harness.elements.get("global-status").textContent, "Tasks: 0");
 });
 
 test("dashboard page renders error state when API fails", async () => {
@@ -1671,43 +1659,6 @@ test("dashboard page renders error state when API fails", async () => {
   await harness.flush();
   assert.match(harness.elements.get("panel-grid").innerHTML, /Error: dashboard unavailable/);
   assert.match(harness.elements.get("runs-list").innerHTML, /Error: dashboard unavailable/);
-});
-
-test("schedules page renders empty state when no workflows exist", async () => {
-  const payload = {
-    global: {
-      active_tasks: 0,
-      active_workflows: 0,
-      stop_all_state: "disabled",
-    },
-    workflows: [],
-  };
-  const harness = createHarness({
-    source: SCHEDULES_SOURCE,
-    ids: ["global-status", "stop-all-btn", "schedule-grid", "last-event"],
-    apiResolver(path) {
-      if (path === "/api/schedules") return JSON.parse(JSON.stringify(payload));
-      throw new Error(`unexpected path: ${path}`);
-    },
-  });
-  await harness.flush();
-  assert.match(harness.elements.get("schedule-grid").innerHTML, /No schedules available yet/);
-  assert.equal(harness.elements.get("global-status").textContent, "Tasks: 0 • Flows: 0");
-});
-
-test("schedules page renders error state when API fails", async () => {
-  const harness = createHarness({
-    source: SCHEDULES_SOURCE,
-    ids: ["global-status", "stop-all-btn", "schedule-grid", "last-event"],
-    apiResolver(path) {
-      if (path === "/api/schedules") {
-        throw new Error("schedules unavailable");
-      }
-      throw new Error(`unexpected path: ${path}`);
-    },
-  });
-  await harness.flush();
-  assert.match(harness.elements.get("schedule-grid").innerHTML, /Error: schedules unavailable/);
 });
 
 test("library page renders loading then API error state", async () => {
@@ -1741,7 +1692,7 @@ test("library page renders loading then API error state", async () => {
 test("library page renders preview coverage and applies live run progress without reload", async () => {
   const payload = {
     event_cursor: 71,
-    global: { active_tasks: 1, active_workflows: 0, stop_all_state: "normal" },
+    global: { active_tasks: 1, stop_all_state: "normal" },
     dataset: {
       available: true,
       config_source: "config.yaml",
@@ -1839,7 +1790,7 @@ test("database page renders loading then API error state", async () => {
 test("database page refreshes after a Backup catalog task finishes", async () => {
   const payload = {
     event_cursor: 80,
-    global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+    global: { active_tasks: 0, stop_all_state: "disabled" },
     database_state: {
       available: false,
       error: "metrics unavailable",
@@ -2010,7 +1961,7 @@ function createClassificationsResolver({ malicious = false } = {}) {
     }
     if (path === "/api/library") {
       return {
-        global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+        global: { active_tasks: 0, stop_all_state: "disabled" },
       };
     }
     throw new Error(`unexpected path: ${path}`);
@@ -2023,7 +1974,7 @@ function createPersonalitiesResolver({
   return (path) => {
     if (path === "/api/library/personalities") {
       return {
-        global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+        global: { active_tasks: 0, stop_all_state: "disabled" },
         overview: {
           available: true,
           config_source: "test",
@@ -2092,7 +2043,7 @@ function createPublishersResolver({
   return (path) => {
     if (path === "/api/library/publishers") {
       return {
-        global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+        global: { active_tasks: 0, stop_all_state: "disabled" },
         overview: {
           available: true,
           config_source: "test",
@@ -2161,7 +2112,7 @@ function createCollectionsResolver({
   return (path, options = {}) => {
     if (path === "/api/library/collections") {
       return {
-        global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+        global: { active_tasks: 0, stop_all_state: "disabled" },
         overview: {
           available: true,
           config_source: "test",
@@ -2366,7 +2317,7 @@ test("library classifications duplicates action posts merge request", async () =
       }
       if (path === "/api/library") {
         return {
-          global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+          global: { active_tasks: 0, stop_all_state: "disabled" },
         };
       }
       throw new Error(`unexpected path: ${path}`);
@@ -2651,7 +2602,7 @@ test("library classification detail escapes dangerous strings in stats", async (
     apiResolver(path) {
       if (path.startsWith("/api/library/classifications/42?")) {
         return {
-          global: { active_tasks: 0, active_workflows: 0, stop_all_state: "disabled" },
+          global: { active_tasks: 0, stop_all_state: "disabled" },
           detail: {
             available: true,
             config_source: "<script>cfg</script>",
@@ -2717,7 +2668,7 @@ function createNormalizationResolver({
   return (path) => {
     if (path === "/api/library/normalization/personality") {
       return {
-        global: { active_tasks: 1, active_workflows: 0, stop_all_state: stopAllState },
+        global: { active_tasks: 1, stop_all_state: stopAllState },
         dashboard: {
           available: true,
           config_source: "test",

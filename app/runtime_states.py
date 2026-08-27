@@ -1,4 +1,4 @@
-"""Shared runtime state machines for task and workflow runs."""
+"""Shared runtime state machines for task and conveyor runs."""
 
 from __future__ import annotations
 
@@ -51,38 +51,6 @@ TASK_RUN_TRANSITIONS: Mapping[str, Set[str]] = {
     TASK_RUN_STATUS_FAILED: set(),
 }
 
-WORKFLOW_RUN_STATUS_STARTING = "starting"
-WORKFLOW_RUN_STATUS_RUNNING = "running"
-WORKFLOW_RUN_STATUS_STOPPED = "stopped"
-WORKFLOW_RUN_STATUS_COMPLETED = "completed"
-WORKFLOW_RUN_STATUS_FAILED = "failed"
-
-WORKFLOW_RUN_ACTIVE_STATUSES = (
-    WORKFLOW_RUN_STATUS_STARTING,
-    WORKFLOW_RUN_STATUS_RUNNING,
-)
-
-WORKFLOW_RUN_TERMINAL_STATUSES = (
-    WORKFLOW_RUN_STATUS_STOPPED,
-    WORKFLOW_RUN_STATUS_COMPLETED,
-    WORKFLOW_RUN_STATUS_FAILED,
-)
-
-WORKFLOW_RUN_TRANSITIONS: Mapping[str, Set[str]] = {
-    WORKFLOW_RUN_STATUS_STARTING: {
-        WORKFLOW_RUN_STATUS_RUNNING,
-        WORKFLOW_RUN_STATUS_FAILED,
-    },
-    WORKFLOW_RUN_STATUS_RUNNING: {
-        WORKFLOW_RUN_STATUS_STOPPED,
-        WORKFLOW_RUN_STATUS_COMPLETED,
-        WORKFLOW_RUN_STATUS_FAILED,
-    },
-    WORKFLOW_RUN_STATUS_STOPPED: set(),
-    WORKFLOW_RUN_STATUS_COMPLETED: set(),
-    WORKFLOW_RUN_STATUS_FAILED: set(),
-}
-
 CONVEYOR_RUN_STATUS_STARTING = "starting"
 CONVEYOR_RUN_STATUS_RUNNING = "running"
 CONVEYOR_RUN_STATUS_STOPPED = "stopped"
@@ -130,15 +98,6 @@ def can_transition_task_run(current: str, target: str) -> bool:
     if current_value == target_value:
         return True
     return target_value in TASK_RUN_TRANSITIONS.get(current_value, set())
-
-
-def can_transition_workflow_run(current: str, target: str) -> bool:
-    """Return True when a workflow run status transition is allowed."""
-    current_value = str(current or "")
-    target_value = str(target or "")
-    if current_value == target_value:
-        return True
-    return target_value in WORKFLOW_RUN_TRANSITIONS.get(current_value, set())
 
 
 def can_transition_conveyor_run(current: str, target: str) -> bool:

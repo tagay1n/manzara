@@ -178,11 +178,6 @@ class PayloadBuilder:
             "run": self._task_run_payload(task),
         }
 
-    def _count_active_workflows(self, workflows: Optional[list[Dict[str, Any]]] = None) -> int:
-        state = self._state()
-        rows = workflows if workflows is not None else state.db.list_workflows_with_latest_run()
-        return len([row for row in rows if row.get("run_status") in {"starting", "running"}])
-
     @staticmethod
     def _resolve_stop_all_state(active_runs: list[Dict[str, Any]]) -> str:
         if not active_runs:
@@ -195,18 +190,12 @@ class PayloadBuilder:
         self,
         *,
         active_runs: Optional[list[Dict[str, Any]]] = None,
-        active_workflows: Optional[int] = None,
         include_failed_runs: bool = False,
     ) -> Dict[str, Any]:
         state = self._state()
         runs = active_runs if active_runs is not None else state.db.list_active_runs()
         payload: Dict[str, Any] = {
             "active_tasks": len(runs),
-            "active_workflows": (
-                active_workflows
-                if active_workflows is not None
-                else self._count_active_workflows()
-            ),
             "stop_all_state": self._resolve_stop_all_state(runs),
         }
         if include_failed_runs:
@@ -220,16 +209,13 @@ class PayloadBuilder:
         *,
         tasks_by_panel: Dict[str, list[Dict[str, Any]]],
         panel_titles: Dict[str, str],
-        workflows: list[Dict[str, Any]],
     ) -> Dict[str, Dict[str, Any]]:
         ops = self._ops()
         state = self._state()
-        shayan_workflows = [item for item in workflows if item.get("panel_id") == "shayan"]
         shayan_panel = ops.build_shayan_panel(
             db=state.db,
             shayan=state.settings.shayan,
             tasks=tasks_by_panel.get("shayan", []),
-            workflows=shayan_workflows,
             title=panel_titles.get("shayan", "Shayan"),
         )
         maintenance_panel = ops.build_maintenance_panel(
@@ -297,11 +283,9 @@ class PayloadBuilder:
                 self._task_with_latest_run_payload(task, task_slug_map=task_slug_map)
             )
 
-        workflows = state.db.list_workflows_with_latest_run()
         panel_payloads = self._build_panel_payloads(
             tasks_by_panel=tasks_by_panel,
             panel_titles=panel_titles,
-            workflows=workflows,
         )
         ordered_panels = [
             panel_payloads["shayan"],
@@ -315,8 +299,6 @@ class PayloadBuilder:
             panel["slug"] = flow_slug_map.get(panel_id, panel_id)
 
         active_runs = state.db.list_active_runs()
-        active_workflow_runs = self._count_active_workflows(workflows)
-
         recent_runs = state.db.list_recent_runs(20)
         for run in recent_runs:
             task_id = str(run.get("task_id") or "")
@@ -328,73 +310,10 @@ class PayloadBuilder:
             "event_cursor": event_cursor,
             "global": self._build_global_payload(
                 active_runs=active_runs,
-                active_workflows=active_workflow_runs,
                 include_failed_runs=True,
             ),
             "panels": ordered_panels,
             "recent_runs": recent_runs,
-            "scheduler": {
-                "enabled": state.settings.scheduler_enabled,
-            },
-        }
-
-    def build_schedules_payload(self) -> Dict[str, Any]:
-        """Compose schedules page payload from workflow/schedule state."""
-        state, event_cursor = self._begin_snapshot()
-        workflows = state.db.list_workflows_with_latest_run()
-        workflow_items: list[Dict[str, Any]] = []
-        for workflow in workflows:
-            schedule: Dict[str, Any] | None = None
-            if workflow.get("schedule_id"):
-                schedule = {
-                    "schedule_id": workflow.get("schedule_id"),
-                    "schedule_type": workflow.get("schedule_type"),
-                    "day_of_week": workflow.get("day_of_week"),
-                    "time_of_day": workflow.get("time_of_day"),
-                    "timezone": workflow.get("timezone"),
-                    "interval_minutes": workflow.get("interval_minutes"),
-                    "enabled": bool(workflow.get("schedule_enabled", False)),
-                    "overlap_policy": workflow.get("overlap_policy"),
-                    "catchup_policy": workflow.get("catchup_policy"),
-                    "next_run_at": workflow.get("next_run_at"),
-                    "last_run_at": workflow.get("last_run_at"),
-                }
-
-            workflow_items.append(
-                {
-                    "workflow_id": workflow["workflow_id"],
-                    "panel_id": workflow["panel_id"],
-                    "title": workflow["title"],
-                    "description": workflow.get("description") or "",
-                    "enabled": bool(workflow.get("enabled", True)),
-                    "run": {
-                        "workflow_run_id": workflow.get("workflow_run_id"),
-                        "status": workflow.get("run_status") or "idle",
-                        "trigger_source": workflow.get("trigger_source"),
-                        "started_at": workflow.get("started_at"),
-                        "finished_at": workflow.get("finished_at"),
-                        "error_text": workflow.get("error_text"),
-                    },
-                    "schedule": schedule,
-                }
-            )
-
-        active_runs = state.db.list_active_runs()
-        active_workflows = len(
-            [workflow for workflow in workflow_items if workflow["run"]["status"] in {"starting", "running"}]
-        )
-
-        return {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "event_cursor": event_cursor,
-            "global": self._build_global_payload(
-                active_runs=active_runs,
-                active_workflows=active_workflows,
-            ),
-            "scheduler": {
-                "enabled": state.settings.scheduler_enabled,
-            },
-            "workflows": workflow_items,
         }
 
     def build_tasks_payload(self) -> Dict[str, Any]:
@@ -532,11 +451,9 @@ class PayloadBuilder:
                 self._task_with_latest_run_payload(task, task_slug_map=task_slug_map)
             )
 
-        workflows = state.db.list_workflows_with_latest_run(panel_id=panel_id)
         panel_payloads = self._build_panel_payloads(
             tasks_by_panel=tasks_by_panel,
             panel_titles=panel_titles,
-            workflows=state.db.list_workflows_with_latest_run(),
         )
         flow_payload = dict(
             panel_payloads.get(panel_id)
@@ -587,29 +504,12 @@ class PayloadBuilder:
 
         active_runs = state.db.list_active_runs()
 
-        workflow_items = [
-            {
-                "workflow_id": row["workflow_id"],
-                "title": row["title"],
-                "description": row.get("description") or "",
-                "run": {
-                    "workflow_run_id": row.get("workflow_run_id"),
-                    "status": row.get("run_status") or "idle",
-                    "started_at": row.get("started_at"),
-                    "finished_at": row.get("finished_at"),
-                    "error_text": row.get("error_text"),
-                },
-            }
-            for row in workflows
-        ]
-
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
             "flow": flow_payload,
             "tasks": sorted(task_items, key=lambda item: str(item.get("title", "")).lower()),
-            "workflows": workflow_items,
         }
 
     def build_library_payload(self) -> Dict[str, Any]:

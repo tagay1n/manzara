@@ -100,7 +100,6 @@ class PayloadBuilderOperationsService:
 class RoutePayloadBuildersService:
     build_system_state_payload: Callable[[], JSONDict]
     build_dashboard_payload: Callable[[], JSONDict]
-    build_schedules_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
     build_task_detail_payload: Callable[..., JSONDict]
     build_flow_detail_payload: Callable[..., JSONDict]
@@ -117,7 +116,6 @@ class RoutePayloadBuildersService:
 class CoreReadPayloadBuildersService:
     build_system_state_payload: Callable[[], JSONDict]
     build_dashboard_payload: Callable[[], JSONDict]
-    build_schedules_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
     build_task_detail_payload: Callable[..., JSONDict]
     build_flow_detail_payload: Callable[..., JSONDict]
@@ -284,7 +282,6 @@ def build_route_payload_builders(payload_builder: PayloadBuilder) -> RoutePayloa
     return RoutePayloadBuildersService(
         build_system_state_payload=payload_builder.build_system_state_payload,
         build_dashboard_payload=payload_builder.build_dashboard_payload,
-        build_schedules_payload=payload_builder.build_schedules_payload,
         build_tasks_payload=payload_builder.build_tasks_payload,
         build_task_detail_payload=payload_builder.build_task_detail_payload,
         build_flow_detail_payload=payload_builder.build_flow_detail_payload,
@@ -303,7 +300,6 @@ def build_core_read_payload_builders(payload_builders: RoutePayloadBuilders) -> 
     return CoreReadPayloadBuildersService(
         build_system_state_payload=payload_builders.build_system_state_payload,
         build_dashboard_payload=payload_builders.build_dashboard_payload,
-        build_schedules_payload=payload_builders.build_schedules_payload,
         build_tasks_payload=payload_builders.build_tasks_payload,
         build_task_detail_payload=payload_builders.build_task_detail_payload,
         build_flow_detail_payload=payload_builders.build_flow_detail_payload,

@@ -93,22 +93,13 @@ from app.modules.maintenance.panel import (
     build_maintenance_panel,
 )
 from app.modules.maintenance.tasks import maintenance_task_definitions
-from app.modules.maintenance.workflow import (
-    library_personality_normalization_workflow_bundle,
-    library_publisher_normalization_workflow_bundle,
-    library_workflow_bundle,
-    maintenance_backup_full_workflow_bundle,
-    maintenance_backup_incr_workflow_bundle,
-)
 from app.modules.shayan.panel import build_shayan_panel
 from app.modules.shayan.tasks import shayan_task_definitions
-from app.modules.shayan.workflow import shayan_workflow_bundle
 from app.payload_builder import PayloadBuilder
 from app.registry import build_startup_seed_registry
 from app.run_summary import build_default_run_summary
 from app.settings import Settings, load_settings
 from app.tasks import TaskRunner
-from app.workflows import WorkflowService
 from app.conveyor import ConveyorService
 
 # Backward-compatible aliases used by tests and legacy references.
@@ -209,10 +200,6 @@ class AppState:
         self.db = Database(settings.database_url, schema=settings.database_schema)
         self.runner = TaskRunner(self.db)
         self.shutting_down = False
-        self.workflow_service = WorkflowService(
-            self.db,
-            self.runner,
-        )
         self.conveyor_service = ConveyorService(self.db, self.runner)
 
 
@@ -236,33 +223,25 @@ def _build_startup_registry() -> Dict[str, list[Dict[str, Any]]]:
         maintenance_task_definitions=maintenance_task_definitions,
         library_task_definitions=library_task_definitions,
         collection_task_definitions=collection_task_definitions,
-        shayan_workflow_bundle=shayan_workflow_bundle,
-        maintenance_backup_full_workflow_bundle=maintenance_backup_full_workflow_bundle,
-        maintenance_backup_incr_workflow_bundle=maintenance_backup_incr_workflow_bundle,
-        library_workflow_bundle=library_workflow_bundle,
-        library_personality_normalization_workflow_bundle=library_personality_normalization_workflow_bundle,
-        library_publisher_normalization_workflow_bundle=library_publisher_normalization_workflow_bundle,
     )
     return {
         "panel_defs": registry.panel_defs,
         "task_defs": registry.task_defs,
-        "workflow_bundles": registry.workflow_bundles,
     }
 
 
 def _startup() -> None:
-    """Initialize schema and seed known task/workflow definitions."""
+    """Initialize schema and seed known panel and task definitions."""
     registry = _build_startup_registry()
     startup_app(
         state=state,
         panel_defs=registry["panel_defs"],
         task_defs=registry["task_defs"],
-        workflow_bundles=registry["workflow_bundles"],
     )
 
 
 def _shutdown() -> None:
-    """Stop background scheduler worker on app shutdown."""
+    """Mark application state as shutting down."""
     shutdown_app(state=state)
 
 

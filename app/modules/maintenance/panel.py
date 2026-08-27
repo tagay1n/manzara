@@ -13,10 +13,6 @@ from app.modules.maintenance.tasks import (
     MAINTENANCE_PGBACKREST_FULL_TASK_ID,
     MAINTENANCE_PGBACKREST_INCR_TASK_ID,
 )
-from app.modules.maintenance.workflow import (
-    MAINTENANCE_BACKUP_FULL_SCHEDULE_ID,
-    MAINTENANCE_BACKUP_INCR_SCHEDULE_ID,
-)
 
 
 def _sum_counts(counts: Dict[str, int]) -> int:
@@ -34,10 +30,8 @@ def _backup_task_state(
     db: Database,
     *,
     task_id: str,
-    schedule_id: str,
 ) -> Dict[str, Any]:
     run = (db.list_recent_runs_for_task(task_id, limit=1) or [None])[0]
-    schedule = db.get_schedule(schedule_id)
     return {
         "task_id": task_id,
         "run": {
@@ -47,12 +41,6 @@ def _backup_task_state(
             "finished_at": run.get("finished_at") if run else None,
             "exit_code": run.get("exit_code") if run else None,
             "error_text": run.get("error_text") if run else None,
-        },
-        "schedule": {
-            "schedule_id": schedule.get("schedule_id") if schedule else schedule_id,
-            "enabled": bool(schedule.get("enabled")) if schedule else False,
-            "next_run_at": schedule.get("next_run_at") if schedule else None,
-            "last_run_at": schedule.get("last_run_at") if schedule else None,
         },
     }
 
@@ -103,12 +91,10 @@ def build_database_state_snapshot(db: Database) -> Dict[str, Any]:
             "full": _backup_task_state(
                 db,
                 task_id=MAINTENANCE_PGBACKREST_FULL_TASK_ID,
-                schedule_id=MAINTENANCE_BACKUP_FULL_SCHEDULE_ID,
             ),
             "incremental": _backup_task_state(
                 db,
                 task_id=MAINTENANCE_PGBACKREST_INCR_TASK_ID,
-                schedule_id=MAINTENANCE_BACKUP_INCR_SCHEDULE_ID,
             ),
         }
         return {
@@ -138,12 +124,10 @@ def build_database_state_snapshot(db: Database) -> Dict[str, Any]:
                 "full": _backup_task_state(
                     db,
                     task_id=MAINTENANCE_PGBACKREST_FULL_TASK_ID,
-                    schedule_id=MAINTENANCE_BACKUP_FULL_SCHEDULE_ID,
                 ),
                 "incremental": _backup_task_state(
                     db,
                     task_id=MAINTENANCE_PGBACKREST_INCR_TASK_ID,
-                    schedule_id=MAINTENANCE_BACKUP_INCR_SCHEDULE_ID,
                 ),
             },
         }
@@ -223,7 +207,7 @@ def build_backup_panel(
         maintenance=maintenance,
         panel_id="backup",
         title=title,
-        description="PostgreSQL backup operations and schedules.",
+        description="PostgreSQL backup operations.",
         tasks=tasks,
     )
 

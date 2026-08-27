@@ -40,10 +40,8 @@ function teardownSoundNotifier() {
 
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
-  const activeWorkflows = payload.global.active_workflows || 0;
   document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
-    active,
-    activeWorkflows
+    active
   );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);

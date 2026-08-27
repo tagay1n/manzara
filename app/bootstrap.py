@@ -12,23 +12,16 @@ def startup_app(
     state: Any,
     panel_defs: List[Dict[str, Any]],
     task_defs: List[Dict[str, Any]],
-    workflow_bundles: List[Dict[str, Any]],
 ) -> None:
-    """Initialize schema, seed runtime definitions, recover runs, and start scheduler."""
+    """Initialize schema, seed runtime definitions, and recover runs."""
     state.shutting_down = False
     db = state.db
     db.init_schema()
     db.seed_panels(panel_defs)
     db.seed_tasks(task_defs)
-    for bundle in workflow_bundles:
-        db.seed_workflow_bundle(bundle)
     db.prune_runtime_definitions(
         panel_ids=[str(item.get("panel_id") or "") for item in panel_defs],
         task_ids=[str(item.get("task_id") or "") for item in task_defs],
-        workflow_ids=[
-            str((bundle.get("workflow") or {}).get("workflow_id") or "")
-            for bundle in workflow_bundles
-        ],
     )
 
     try:
@@ -63,16 +56,6 @@ def startup_app(
             payload={"recovered_runs": recovered_runs},
         )
 
-    recovered_workflows = db.recover_active_workflow_runs()
-    if recovered_workflows > 0:
-        db.insert_event(
-            "system.workflow_recovery",
-            task_id=None,
-            run_id=None,
-            panel_id=None,
-            payload={"recovered_workflow_runs": recovered_workflows},
-        )
-
     recovered_conveyors = db.recover_active_conveyor_runs()
     if recovered_conveyors > 0:
         db.insert_event(
@@ -83,11 +66,7 @@ def startup_app(
             payload={"recovered_conveyor_runs": recovered_conveyors},
         )
 
-    if state.settings.scheduler_enabled:
-        state.workflow_service.start()
-
 
 def shutdown_app(*, state: Any) -> None:
-    """Stop scheduler and mark runtime as shutting down."""
+    """Mark runtime as shutting down."""
     state.shutting_down = True
-    state.workflow_service.stop()

@@ -29,12 +29,6 @@ def register_core_read_routes(
         payloads = payload_provider()
         return JSONResponse(payloads.build_dashboard_payload())
 
-    @app.get("/api/schedules")
-    def get_schedules() -> JSONResponse:
-        """Return workflows and schedule configuration state."""
-        payloads = payload_provider()
-        return JSONResponse(payloads.build_schedules_payload())
-
     @app.get("/api/tasks")
     def get_tasks() -> JSONResponse:
         """Return all tasks grouped by flow."""

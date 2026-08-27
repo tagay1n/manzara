@@ -12,7 +12,7 @@ English:
 
 Current architecture:
 - FastAPI backend
-- PostgreSQL state store (tasks, runs, logs, events, workflows, schedules)
+- PostgreSQL state store (tasks, runs, logs, events, and conveyor state)
 - Schema management via Alembic migrations (no runtime DDL bootstrap)
 - Modular flows in one monorepo (`shayan`, `maintenance`, `library`)
 - Live updates via SSE (`/api/events/stream`)
@@ -42,7 +42,6 @@ Current UI foundations:
 Pages:
 - `/database`
 - `/gemini` (masked key/runtime state, reset controls, and an expiring confirmed override for the active reset blackout)
-- `/schedules`
 - `/tasks`
 - `/tasks/{task-slug-or-id}`
 - `/flows/{flow-slug-or-id}`
@@ -78,29 +77,6 @@ Flow tasks (seeded at startup):
 - `library.prepare_document_cleanup`
 - `library.personality_suggestions_refresh`
 - `library.publisher_suggestions_refresh`
-
-Workflows (seeded at startup):
-- `shayan.weekly_sync` (scan -> conditional download)
-- `maintenance.pgbackrest_full_weekly`
-- `maintenance.pgbackrest_incr_3h` (stable historical ID; runs every 12 hours)
-- `library.meta_evaluate`
-- `library.personality_normalization_refresh`
-- `library.publisher_normalization_refresh`
-
-Scheduler policy:
-- Weekly and interval schedule types
-- Overlap policy: `skip`
-- Catch-up policy on downtime: `once`
-- Timezone field is stored per schedule (default `UTC`)
-
-Schedule update contract (`PATCH /api/schedules/{schedule_id}`):
-- `enabled` accepts:
-  - booleans (`true` / `false`)
-  - numeric `0` or `1`
-  - strings: `1,true,yes,on` and `0,false,no,off`
-- `day_of_week` must be an integer `1..7`
-- `interval_minutes` must be an integer `>= 1` (or `null`/empty when not used)
-- `timezone` must be a valid IANA timezone name (for example `UTC`, `Europe/Moscow`, `America/Los_Angeles`)
 
 Runtime control behavior:
 - Task toggle: `start -> graceful stop -> force stop`
@@ -237,7 +213,7 @@ If the expected content-addressed Backblaze object already exists, matching size
 
 Objects use flat content-addressed keys (`<md5>.<extension>`), independent of the Yandex folder hierarchy. Existing valid object keys are retained. Revision `20260731_0013` adds `primary_storage_size`, `primary_storage_etag`, and `primary_storage_verified_at` to the existing `document` table; normal application startup applies it automatically.
 
-The upload task never publishes, deletes, trashes, moves, or traverses Yandex Disk files. After a restricted file is safely copied to the Backblaze private bucket, an obsolete public S3 copy is deleted and absence is verified before PostgreSQL stores the private link. Boto3 callbacks emit byte-level SSE progress. Stop requests finish the current document; rows without a committed link remain pending. Per-item skips and failures are logged, processing continues, and the run completes with a visible queue report. Setup, authentication, configuration, duplicate-identity, and database-wide errors remain fatal. The task has no default schedule.
+The upload task never publishes, deletes, trashes, moves, or traverses Yandex Disk files. After a restricted file is safely copied to the Backblaze private bucket, an obsolete public S3 copy is deleted and absence is verified before PostgreSQL stores the private link. Boto3 callbacks emit byte-level SSE progress. Stop requests finish the current document; rows without a committed link remain pending. Per-item skips and failures are logged, processing continues, and the run completes with a visible queue report. Setup, authentication, configuration, duplicate-identity, and database-wide errors remain fatal.
 
 Every finished upload emits a structured queue artifact used by the web run summary: pending before/after, processed, uploaded, recovered existing objects, cache/Yandex sources, skipped downloads, failures, bytes uploaded, and stop state.
 
@@ -249,14 +225,13 @@ Backblaze references: [S3-compatible endpoint and supported calls](https://www.b
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload --timeout-graceful-shutdown 10
 ```
 
-On startup, Manzara applies pending Alembic migrations to `MANZARA_DB_SCHEMA` before seeding task/workflow definitions.
+On startup, Manzara applies pending Alembic migrations to `MANZARA_DB_SCHEMA` before seeding panel and task definitions.
 
 ## Configuration
 
 Environment variables:
 - `MANZARA_DATABASE_URL` (PostgreSQL URL; required unless available in local YAML config)
 - `MANZARA_DB_SCHEMA` (default: `monocorpus`)
-- `MANZARA_ENABLE_SCHEDULER` (default: `1`; set `0` to disable scheduler)
 - `MANZARA_CONFIG_PATH` (optional explicit YAML config path for embedded runtimes)
 - `MANZARA_ARTIFACTS_ROOT` (default: `~/.manzara`; shared artifact root)
 - `SHAYAN_REPO_PATH` (default: `/home/tans1q/projects/shayan-video-downloader`)
@@ -322,8 +297,7 @@ Model policy:
 
 Backup task note:
 - Maintenance backup tasks use `sudo -n -u postgres pgbackrest ...`.
-- Incremental backups run every 12 hours; full backups run weekly on Sunday at `02:00 UTC`.
-- Manual and scheduled runs are non-interactive. If sudo access is not configured, backup tasks fail.
+- Backup runs are non-interactive. If sudo access is not configured, backup tasks fail.
 - Success validation is S3-based:
   - capture S3 backup-label snapshot before run
   - snapshot bounded `backup.info` repository markers before run
@@ -413,9 +387,9 @@ node --test tests/frontend/*.mjs
 ```
 
 Coverage notes:
-- API/scheduler/task-control behavior is covered by `pytest`.
+- API and task-control behavior is covered by `pytest`.
 - Backend runtime logging tests include secret redaction regression checks (including `Authorization: Bearer ...` and secret query params) and stream error visibility checks.
-- Shared frontend helpers, shell contracts, and page behavior are covered by `node:test` (`tests/frontend/*.mjs`, including schedules, tasks, task/flow detail, library pages, database, Gemini, and normalization pages).
+- Shared frontend helpers, shell contracts, and page behavior are covered by `node:test` (`tests/frontend/*.mjs`, including tasks, task/flow detail, library pages, database, Gemini, and normalization pages).
 - Normalization interaction coverage includes queue pagination, stop-all force-confirmation guard, suggestions refresh payload checks, bulk queue actions, suggestion accept/reject, merge, history undo calls, cross-tab queue-open transitions, and evidence dialog fetch/render checks.
 - Runtime-heavy external flows still require manual smoke checks, especially:
   - `maintenance.monocorpus_meta_evaluate`
@@ -451,7 +425,6 @@ Core:
 - `GET /api/health`
 - `GET /api/system/state`
 - `GET /api/dashboard`
-- `GET /api/schedules`
 - `GET /api/tasks`
 - `GET /api/tasks/{task_id_or_slug}`
 - `GET /api/flows/{flow_id_or_slug}`
@@ -460,9 +433,6 @@ Core:
 - `POST /api/tasks/{task_id}/toggle`
 - `PATCH /api/tasks/{task_id}/title`
 - `PATCH /api/flows/{panel_id}/title`
-- `POST /api/workflows/{workflow_id}/run`
-- `GET /api/workflows/{workflow_id}`
-- `PATCH /api/schedules/{schedule_id}`
 - `POST /api/system/stop-all`
 - `POST /api/gemini/reset-key`
 - `POST /api/gemini/reset-all`

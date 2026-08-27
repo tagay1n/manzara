@@ -46,7 +46,7 @@ def test_collection_tasks_belong_to_dedicated_flow(tmp_path) -> None:
     assert {task["panel_id"] for task in tasks} == {"collections"}
 
 
-def test_startup_seed_registry_uses_injected_factories() -> None:
+def test_startup_seed_registry_contains_only_panels_and_tasks() -> None:
     settings = SimpleNamespace(
         shayan=SimpleNamespace(),
         maintenance=SimpleNamespace(),
@@ -60,24 +60,11 @@ def test_startup_seed_registry_uses_injected_factories() -> None:
         maintenance_task_definitions=lambda _cfg: [{"task_id": "b"}],
         library_task_definitions=lambda: [{"task_id": "c"}],
         collection_task_definitions=lambda: [{"task_id": "d"}],
-        shayan_workflow_bundle=lambda _cfg: {"workflow_id": "w1"},
-        maintenance_backup_full_workflow_bundle=lambda: {"workflow_id": "w2"},
-        maintenance_backup_incr_workflow_bundle=lambda: {"workflow_id": "w3"},
-        library_workflow_bundle=lambda: {"workflow_id": "w4"},
-        library_personality_normalization_workflow_bundle=lambda: {"workflow_id": "w5"},
-        library_publisher_normalization_workflow_bundle=lambda: {"workflow_id": "w6"},
     )
 
     assert registry.panel_defs == panel_defs
     assert [item["task_id"] for item in registry.task_defs] == ["a", "b", "c", "d"]
-    assert [item["workflow_id"] for item in registry.workflow_bundles] == [
-        "w1",
-        "w2",
-        "w3",
-        "w4",
-        "w5",
-        "w6",
-    ]
+    assert not hasattr(registry, "workflow_bundles")
 
 
 def test_route_payload_builders_bind_payload_builder_methods() -> None:
@@ -87,9 +74,6 @@ def test_route_payload_builders_bind_payload_builder_methods() -> None:
 
         def build_dashboard_payload(self):
             return {"ok": "dashboard"}
-
-        def build_schedules_payload(self):
-            return {"ok": "schedules"}
 
         def build_tasks_payload(self):
             return {"ok": "tasks"}

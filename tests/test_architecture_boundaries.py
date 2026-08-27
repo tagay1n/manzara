@@ -13,7 +13,6 @@ def test_database_public_facade_is_composed_from_focused_repositories():
         "normalization",
         "runs",
         "shayan",
-        "workflows",
     ):
         assert (ROOT / "app" / "repositories" / f"{module}.py").is_file()
         assert f"app.repositories.{module}" in source

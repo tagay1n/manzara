@@ -161,49 +161,6 @@ def test_shayan_direct_webdav_upload_checkpoints_round_trip(tmp_path: Path) -> N
         assert db.shayan_manifest_webdav_uploaded_count() == 1
 
 
-def test_recover_active_workflow_runs_marks_running_as_failed(tmp_path: Path) -> None:
-    with _isolated_database() as db:
-        db.seed_workflow_bundle(
-            {
-                "workflow": {
-                    "workflow_id": "wf1",
-                    "panel_id": "shayan",
-                    "title": "WF",
-                    "description": "test",
-                    "enabled": 1,
-                },
-                "steps": [],
-                "schedule": {
-                    "schedule_id": "wf1.schedule",
-                    "workflow_id": "wf1",
-                    "schedule_type": "weekly",
-                    "day_of_week": 1,
-                    "time_of_day": "03:00",
-                    "timezone": "UTC",
-                    "enabled": 0,
-                    "overlap_policy": "skip",
-                    "catchup_policy": "once",
-                },
-            }
-        )
-
-        workflow_run_id = db.create_workflow_run(
-            workflow_id="wf1",
-            schedule_id=None,
-            trigger_source="manual",
-            context={},
-        )
-        db.update_workflow_run(workflow_run_id, status="running")
-
-        recovered = db.recover_active_workflow_runs()
-        assert recovered == 1
-
-        run = db.get_workflow_run(workflow_run_id)
-        assert run["status"] == "failed"
-        assert run["finished_at"] is not None
-        assert "Recovered after Manzara restart" in (run["error_text"] or "")
-
-
 def test_prune_runtime_definitions_removes_stale_flow_rows(tmp_path: Path) -> None:
     with _isolated_database() as db:
         db.seed_panels(
@@ -237,60 +194,6 @@ def test_prune_runtime_definitions_removes_stale_flow_rows(tmp_path: Path) -> No
             ]
         )
 
-        db.seed_workflow_bundle(
-            {
-                "workflow": {
-                    "workflow_id": "shayan.wf",
-                    "panel_id": "shayan",
-                    "title": "Keep WF",
-                    "description": "",
-                    "enabled": 1,
-                },
-                "steps": [],
-                "schedule": {
-                    "schedule_id": "shayan.wf.schedule",
-                    "workflow_id": "shayan.wf",
-                    "schedule_type": "weekly",
-                    "day_of_week": 1,
-                    "time_of_day": "03:00",
-                    "timezone": "UTC",
-                    "enabled": 0,
-                    "overlap_policy": "skip",
-                    "catchup_policy": "once",
-                },
-            }
-        )
-        db.seed_workflow_bundle(
-            {
-                "workflow": {
-                    "workflow_id": "oscar.wf",
-                    "panel_id": "oscar",
-                    "title": "Drop WF",
-                    "description": "",
-                    "enabled": 1,
-                },
-                "steps": [
-                    {
-                        "step_order": 1,
-                        "step_type": "task",
-                        "task_id": "oscar.drop",
-                        "condition_json": {},
-                    }
-                ],
-                "schedule": {
-                    "schedule_id": "oscar.wf.schedule",
-                    "workflow_id": "oscar.wf",
-                    "schedule_type": "weekly",
-                    "day_of_week": 1,
-                    "time_of_day": "03:00",
-                    "timezone": "UTC",
-                    "enabled": 0,
-                    "overlap_policy": "skip",
-                    "catchup_policy": "once",
-                },
-            }
-        )
-
         stale_task = db.get_task("oscar.drop")
         assert stale_task is not None
         stale_run_id = db.create_run(stale_task)
@@ -304,37 +207,17 @@ def test_prune_runtime_definitions_removes_stale_flow_rows(tmp_path: Path) -> No
             payload={"error": "boom"},
         )
 
-        stale_workflow_run_id = db.create_workflow_run(
-            workflow_id="oscar.wf",
-            schedule_id="oscar.wf.schedule",
-            trigger_source="manual",
-            context={},
-        )
-        db.create_workflow_step_run(
-            stale_workflow_run_id,
-            step_order=1,
-            task_id="oscar.drop",
-            status="failed",
-            task_run_id=stale_run_id,
-            error_text="boom",
-        )
-
         stats = db.prune_runtime_definitions(
             panel_ids=["shayan"],
             task_ids=["shayan.keep"],
-            workflow_ids=["shayan.wf"],
         )
         assert stats["panels_removed"] >= 1
         assert stats["tasks_removed"] >= 1
-        assert stats["workflow_runs_removed"] >= 1
         assert stats["runs_removed"] >= 1
 
         assert db.get_panel("oscar") is None
         assert db.get_task("oscar.drop") is None
-        assert db.get_workflow("oscar.wf") is None
         assert db.get_run(stale_run_id) is None
-        assert db.get_workflow_run(stale_workflow_run_id) is None
 
         assert db.get_panel("shayan") is not None
         assert db.get_task("shayan.keep") is not None
-        assert db.get_workflow("shayan.wf") is not None

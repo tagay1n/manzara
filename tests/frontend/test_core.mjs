@@ -429,7 +429,7 @@ test("event routing ignores log noise and identifies lifecycle reconciliation", 
   assert.equal(core.eventNeedsReconciliation({ type: "task.progress" }), false);
   assert.equal(core.eventNeedsReconciliation({ type: "task.completed" }), true);
   assert.equal(core.eventNeedsReconciliation({ type: "task.artifact" }), true);
-  assert.equal(core.eventNeedsReconciliation({ type: "schedule.updated" }), true);
+  assert.equal(core.eventNeedsReconciliation({ type: "schedule.updated" }), false);
 });
 
 test("task progress SSE updates the matching run without frontend shadow state", () => {

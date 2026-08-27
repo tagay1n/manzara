@@ -30,7 +30,6 @@ class PayloadBuilderOperations(Protocol):
 class RoutePayloadBuilders(Protocol):
     build_system_state_payload: Callable[[], JSONDict]
     build_dashboard_payload: Callable[[], JSONDict]
-    build_schedules_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
     build_task_detail_payload: Callable[..., JSONDict]
     build_flow_detail_payload: Callable[..., JSONDict]
@@ -46,7 +45,6 @@ class RoutePayloadBuilders(Protocol):
 class CoreReadPayloadBuilders(Protocol):
     build_system_state_payload: Callable[[], JSONDict]
     build_dashboard_payload: Callable[[], JSONDict]
-    build_schedules_payload: Callable[[], JSONDict]
     build_tasks_payload: Callable[[], JSONDict]
     build_task_detail_payload: Callable[..., JSONDict]
     build_flow_detail_payload: Callable[..., JSONDict]
@@ -124,8 +122,7 @@ class EntitiesOperationsProvider(Protocol):
 
 @dataclass(frozen=True)
 class StartupSeedRegistry:
-    """Startup seed bundles for panels/tasks/workflows."""
+    """Startup seed bundles for panels and tasks."""
 
     panel_defs: list[JSONDict]
     task_defs: list[JSONDict]
-    workflow_bundles: list[JSONDict]

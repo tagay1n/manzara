@@ -64,10 +64,8 @@ function teardownSoundNotifier() {
 
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
-  const activeWorkflows = payload.global.active_workflows || 0;
   document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
-    active,
-    activeWorkflows
+    active
   );
   const stopBtn = document.getElementById("stop-all-btn");
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
@@ -75,12 +73,10 @@ function renderGlobalState(payload) {
 
 function renderBackupItem(title, item) {
   const run = item?.run || {};
-  const schedule = item?.schedule || {};
   return `
     <div class="db-backup-row">
       <div class="db-backup-title">${escapeHtml(title)}</div>
       <div class="db-backup-meta">Run: ${escapeHtml(run.status || "idle")} (${escapeHtml(formatDateTime(run.finished_at || run.started_at))})</div>
-      <div class="db-backup-meta">Schedule: ${schedule.enabled ? "enabled" : "disabled"} • Next: ${escapeHtml(formatDateTime(schedule.next_run_at))}</div>
     </div>
   `;
 }
@@ -225,7 +221,6 @@ function setupEventStream() {
         .includes(eventType);
       if (
         (["maintenance", "backup"].includes(String(payload?.panel_id || "")) && taskFinished)
-        || eventType.startsWith("schedule.")
       ) {
         queueRefresh(100);
       }

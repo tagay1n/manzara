@@ -6,7 +6,6 @@ const PAGE_FILES = [
   "tasks.html",
   "task.html",
   "flow.html",
-  "schedules.html",
   "database.html",
   "library.html",
   "library-classifications.html",
@@ -81,7 +80,6 @@ test("frontend source does not use browser system dialogs", () => {
     "library-normalization.js",
     "library-personalities.js",
     "library-publishers.js",
-    "schedules.js",
     "task.js",
     "tasks.js",
   ].map((file) => readFileSync(new URL(`../../static/${file}`, import.meta.url), "utf-8"));
@@ -89,4 +87,10 @@ test("frontend source does not use browser system dialogs", () => {
   const combined = sources.join("\n");
   assert.doesNotMatch(combined, /\bwindow\.(?:alert|confirm|prompt)\s*\(/);
   assert.doesNotMatch(combined, /(?:^|[^\w.])(?:alert|confirm|prompt)\s*\(/m);
+});
+
+test("shared shell has no legacy schedules navigation", () => {
+  const source = readFileSync(new URL("../../static/shell.js", import.meta.url), "utf-8");
+  assert.doesNotMatch(source, /href:\s*["']\/schedules["']/);
+  assert.doesNotMatch(source, /title:\s*["']Schedules["']/);
 });

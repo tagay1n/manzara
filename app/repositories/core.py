@@ -165,36 +165,6 @@ class CoreRepository:
         return payload
 
 
-    def _row_to_workflow(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        payload = dict(row)
-        payload["enabled"] = bool(payload.get("enabled", 0))
-        return payload
-
-
-    def _row_to_step(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        payload = dict(row)
-        payload["condition"] = json.loads(payload.pop("condition_json") or "{}")
-        return payload
-
-
-    def _row_to_schedule(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        payload = dict(row)
-        payload["enabled"] = bool(payload.get("enabled", 0))
-        return payload
-
-
-    def _row_to_workflow_run(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        payload = dict(row)
-        payload["context"] = json.loads(payload.pop("context_json") or "{}")
-        return payload
-
-
-    def _row_to_workflow_step_run(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        payload = dict(row)
-        payload["output"] = json.loads(payload.pop("output_json") or "{}")
-        return payload
-
-
     def _decode_summary(self, raw_summary: Any) -> Dict[str, Any]:
         text = str(raw_summary or "").strip()
         if not text:

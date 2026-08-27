@@ -234,7 +234,6 @@ button {
 
 .panel,
 .runs-card,
-.workflow-card,
 .task-flow-card {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -805,41 +804,6 @@ button {
   }
 }
 
-.workflow-stack {
-  display: grid;
-  gap: 10px;
-}
-
-.workflow-card {
-  padding: 10px;
-  display: grid;
-  gap: 9px;
-}
-
-.workflow-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.workflow-title {
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.workflow-description {
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.workflow-meta-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
 .meta-k {
   display: block;
   color: #7d97bf;
@@ -850,34 +814,6 @@ button {
   display: block;
   margin-top: 2px;
   font-size: 12px;
-}
-
-.workflow-controls {
-  display: grid;
-  grid-template-columns: 40px 40px minmax(72px, 96px) minmax(74px, 96px) 40px;
-  gap: 8px;
-  align-items: center;
-}
-
-.workflow-controls[data-schedule-type="interval"] {
-  grid-template-columns: 40px 40px minmax(96px, 132px) 40px;
-}
-
-.workflow-controls .icon-btn {
-  width: 40px;
-  height: 40px;
-}
-
-.schedule-day,
-.schedule-time,
-.schedule-interval {
-  height: 36px;
-  border: 1px solid #2f5485;
-  border-radius: 8px;
-  background: rgba(12, 24, 46, 0.92);
-  color: #d8e8ff;
-  font-size: 12px;
-  padding: 0 8px;
 }
 
 .workflow-footnote {
@@ -2685,16 +2621,6 @@ button {
     grid-template-columns: 1fr;
   }
 
-  .workflow-controls {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .workflow-controls .schedule-day,
-  .workflow-controls .schedule-time,
-  .workflow-controls .schedule-interval {
-    grid-column: span 3;
-  }
-
   .footer {
     flex-direction: column;
     gap: 4px;
@@ -2979,7 +2905,6 @@ kbd {
 
 .panel,
 .runs-card,
-.workflow-card,
 .task-flow-card {
   border-color: var(--line-soft);
   border-radius: var(--radius);
@@ -2988,7 +2913,6 @@ kbd {
 }
 
 .panel:hover,
-.workflow-card:hover,
 .task-flow-card:hover {
   border-color: var(--line);
 }
@@ -3003,8 +2927,7 @@ kbd {
   letter-spacing: -0.01em;
 }
 
-.task-flow-card,
-.workflow-card {
+.task-flow-card {
   padding: 12px;
 }
 
@@ -3072,7 +2995,6 @@ kbd {
 }
 
 .task-flow-head h3,
-.workflow-title,
 .task-list-title {
   color: var(--text);
 }
@@ -3250,9 +3172,6 @@ select,
 textarea,
 .filter-input,
 .filter-select,
-.schedule-day,
-.schedule-time,
-.schedule-interval,
 .inline-edit-input {
   border-color: var(--line);
   color: var(--text);
@@ -3618,8 +3537,7 @@ textarea:focus,
   }
 
   .library-overview-head,
-  .task-detail-head,
-  .workflow-card-head {
+  .task-detail-head {
     align-items: flex-start;
     flex-direction: column;
   }

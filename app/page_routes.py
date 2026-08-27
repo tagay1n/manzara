@@ -34,7 +34,6 @@ def register_page_routes(
     app.add_api_route("/dashboard", _dashboard_redirect, methods=["GET"])
 
     routes = [
-        ("/schedules", "schedules.html"),
         ("/tasks", "tasks.html"),
         ("/library", "library.html"),
         ("/database", "database.html"),

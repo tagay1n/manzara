@@ -1,20 +1,9 @@
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
-from app.repositories.core import _json_hash, _normalize_shayan_entries, utc_now
-from app.runtime_states import (
-    TASK_RUN_ACTIVE_STATUSES as ACTIVE_STATUSES,
-    TASK_RUN_STATUS_FAILED,
-    TASK_RUN_STATUS_RUNNING,
-    TASK_RUN_STATUS_STARTING,
-    WORKFLOW_RUN_ACTIVE_STATUSES as ACTIVE_WORKFLOW_STATUSES,
-    WORKFLOW_RUN_STATUS_FAILED,
-    WORKFLOW_RUN_STATUS_RUNNING,
-    WORKFLOW_RUN_STATUS_STARTING,
-    task_status_from_stop_mode,
-)
+from app.repositories.core import utc_now
+
 
 class GeminiRepository:
     """PostgreSQL operations for the gemini domain."""

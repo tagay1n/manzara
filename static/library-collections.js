@@ -20,7 +20,6 @@ const canReviewProposal = () => ["review_ready", "ai_dismissed"].includes(state.
 function renderGlobal(payload) {
   document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
     payload.global.active_tasks || 0,
-    payload.global.active_workflows || 0,
   );
   window.ManzaraCore.applyStopAllButton(
     document.getElementById("stop-all-btn"),

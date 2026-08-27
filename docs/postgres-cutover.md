@@ -8,14 +8,16 @@ Last updated: 2026-08-21
 - PostgreSQL is the only runtime state store. SQLite is not supported by application runtime or tests.
 - `MANZARA_DATABASE_URL` selects the database.
 - `MANZARA_DB_SCHEMA` selects the Manzara operational schema and defaults to `monocorpus`.
-- Schema changes are Alembic-only. Application startup runs `upgrade head` before task and workflow definitions are seeded.
-- Current Alembic head: `20260821_0032`.
+- Schema changes are Alembic-only. Application startup runs `upgrade head` before panel and task definitions are seeded.
+- Current Alembic head: `20260827_0036`.
 
 The repository still contains the historical one-time import script, but it is not part of normal setup or startup. Do not run `scripts/migrate_sqlite_to_postgres.py` against an active database unless performing an explicitly planned legacy recovery.
 
 ## Schema Topology
 
-Manzara operational tables live in the configured schema. They include task/flow definitions, runs and logs, SSE events, workflows and schedules, normalization state, Gemini runtime state, Shayan state, and Library collection/preview state.
+Manzara operational tables live in the configured schema. They include task/flow definitions, runs and logs, SSE events, conveyor state, normalization state, Gemini runtime state, Shayan state, and Library collection/preview state.
+
+Revision `20260827_0036` removes the retired workflow scheduler, its five tables, and its historical SSE events. Conveyor and task-run history are retained.
 
 The Monocorpus dataset tables, including `document`, may live in `public` in the same database. Connections include `public` in their search path. Migrations that extend shared dataset tables resolve the configured schema first and then the established `public` location when the configured schema is `monocorpus`.
 

@@ -11,14 +11,6 @@ import app.tasks as task_runtime
 import pytest
 from app.gemini_config import GeminiKey
 from app.gemini_runtime import GeminiRequestRejectedError, GeminiRuntimeManager
-from app.modules.maintenance.workflow import (
-    LIBRARY_WORKFLOW_ID,
-    MAINTENANCE_BACKUP_FULL_WORKFLOW_ID,
-    MAINTENANCE_BACKUP_INCR_SCHEDULE_ID,
-    MAINTENANCE_BACKUP_INCR_WORKFLOW_ID,
-    maintenance_backup_incr_workflow_bundle,
-)
-from app.modules.shayan.workflow import SHAYAN_WEEKLY_SCHEDULE_ID, SHAYAN_WEEKLY_WORKFLOW_ID
 
 
 def _wait_for_status(main_app, run_id: int, expected: set[str], timeout_seconds: float = 4.0):
@@ -163,7 +155,6 @@ def test_system_state_returns_lightweight_global_payload(test_client) -> None:
     assert isinstance(payload.get("event_cursor"), int)
     assert set(payload["global"]) >= {
         "active_tasks",
-        "active_workflows",
         "stop_all_state",
     }
 
@@ -184,8 +175,6 @@ def test_dashboard_lists_shayan_tasks(test_client) -> None:
     task_ids = {task["task_id"] for task in shayan["tasks"]}
     assert {"shayan.quick", "shayan.long", "shayan.ignore_sigint"} <= task_ids
     assert {"shayan.scan_changes", "shayan.download_new"} <= task_ids
-    assert shayan["workflows"][0]["workflow_id"] == SHAYAN_WEEKLY_WORKFLOW_ID
-
     maintenance = panels["maintenance"]
     maintenance_task_ids = {task["task_id"] for task in maintenance["tasks"]}
     assert "maintenance.monocorpus_sync" in maintenance_task_ids
@@ -243,141 +232,6 @@ def test_rename_flow_and_task_title(test_client) -> None:
         task for task in panels_after_seed["shayan"]["tasks"] if task["task_id"] == "shayan.quick"
     )
     assert quick_task_after_seed["title"] == "Quick Runner"
-
-
-def test_update_schedule_and_recompute_next_run(test_client) -> None:
-    client, _main_app = test_client
-
-    response = client.patch(
-        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
-        json={"enabled": True, "day_of_week": 5, "time_of_day": "10:45"},
-    )
-    assert response.status_code == 200
-    schedule = response.json()["schedule"]
-    assert schedule["enabled"] is True
-    assert int(schedule["day_of_week"]) == 5
-    assert schedule["time_of_day"] == "10:45"
-    assert schedule["next_run_at"] is not None
-
-
-def test_schedules_endpoint_returns_workflows(test_client) -> None:
-    client, _main_app = test_client
-
-    response = client.get("/api/schedules")
-    assert response.status_code == 200
-    payload = response.json()
-    assert "workflows" in payload
-    workflow_ids = {item["workflow_id"] for item in payload["workflows"]}
-    assert SHAYAN_WEEKLY_WORKFLOW_ID in workflow_ids
-    assert LIBRARY_WORKFLOW_ID in workflow_ids
-    assert MAINTENANCE_BACKUP_FULL_WORKFLOW_ID in workflow_ids
-    assert MAINTENANCE_BACKUP_INCR_WORKFLOW_ID in workflow_ids
-
-
-def test_update_interval_schedule_minutes(test_client) -> None:
-    client, _main_app = test_client
-
-    response = client.patch(
-        f"/api/schedules/{MAINTENANCE_BACKUP_INCR_SCHEDULE_ID}",
-        json={"schedule_type": "interval", "interval_minutes": 180, "enabled": True},
-    )
-    assert response.status_code == 200
-    schedule = response.json()["schedule"]
-    assert schedule["schedule_type"] == "interval"
-    assert int(schedule["interval_minutes"]) == 180
-    assert schedule["enabled"] is True
-    assert schedule["next_run_at"] is not None
-
-
-def test_incremental_backup_schedule_defaults_to_twelve_hours() -> None:
-    bundle = maintenance_backup_incr_workflow_bundle()
-
-    assert bundle["workflow"]["title"] == "Postgres incremental backup (every 12h)"
-    assert bundle["schedule"]["interval_minutes"] == 720
-
-
-def test_update_schedule_rejects_invalid_enabled_string(test_client) -> None:
-    client, _main_app = test_client
-
-    response = client.patch(
-        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
-        json={"enabled": "not-a-bool"},
-    )
-    assert response.status_code == 400
-    assert response.json()["detail"] == "enabled must be a boolean-like value"
-
-
-def test_update_schedule_rejects_non_integral_day_of_week(test_client) -> None:
-    client, _main_app = test_client
-
-    response = client.patch(
-        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
-        json={"day_of_week": 4.5},
-    )
-    assert response.status_code == 400
-    assert response.json()["detail"] == "day_of_week must be an integer 1..7"
-
-
-def test_update_schedule_rejects_non_integral_interval_minutes(test_client) -> None:
-    client, _main_app = test_client
-
-    response = client.patch(
-        f"/api/schedules/{MAINTENANCE_BACKUP_INCR_SCHEDULE_ID}",
-        json={"interval_minutes": 90.5},
-    )
-    assert response.status_code == 400
-    assert response.json()["detail"] == "interval_minutes must be an integer >= 1"
-
-
-def test_update_schedule_accepts_numeric_enabled_zero_and_one(test_client) -> None:
-    client, _main_app = test_client
-
-    disable_resp = client.patch(
-        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
-        json={"enabled": 0},
-    )
-    assert disable_resp.status_code == 200
-    assert disable_resp.json()["schedule"]["enabled"] is False
-
-    enable_resp = client.patch(
-        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
-        json={"enabled": 1},
-    )
-    assert enable_resp.status_code == 200
-    assert enable_resp.json()["schedule"]["enabled"] is True
-
-
-def test_update_schedule_rejects_numeric_enabled_outside_zero_one(test_client) -> None:
-    client, _main_app = test_client
-
-    response = client.patch(
-        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
-        json={"enabled": 2},
-    )
-    assert response.status_code == 400
-    assert response.json()["detail"] == "enabled must be a boolean-like value"
-
-
-def test_update_schedule_accepts_valid_iana_timezone(test_client) -> None:
-    client, _main_app = test_client
-
-    response = client.patch(
-        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
-        json={"timezone": "Europe/Moscow"},
-    )
-    assert response.status_code == 200
-    assert response.json()["schedule"]["timezone"] == "Europe/Moscow"
-
-
-def test_update_schedule_rejects_invalid_timezone(test_client) -> None:
-    client, _main_app = test_client
-
-    response = client.patch(
-        f"/api/schedules/{SHAYAN_WEEKLY_SCHEDULE_ID}",
-        json={"timezone": "Invalid/Timezone"},
-    )
-    assert response.status_code == 400
-    assert response.json()["detail"] == "timezone must be a valid IANA timezone name"
 
 
 def test_tasks_endpoint_groups_tasks_by_flow(test_client) -> None:
@@ -1823,30 +1677,6 @@ def test_library_classification_detail_endpoint(test_client, monkeypatch) -> Non
     assert payload["detail"]["linked_docs"]["items"][0]["md5"] == "abc"
 
 
-def test_workflow_run_skips_download_when_no_new(
-    test_client,
-    wait_for_terminal_workflow_run,
-) -> None:
-    client, main_app = test_client
-
-    response = client.post(f"/api/workflows/{SHAYAN_WEEKLY_WORKFLOW_ID}/run")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["action"] == "start"
-
-    workflow_run_id = int(payload["workflow_run"]["workflow_run_id"])
-    workflow_run = wait_for_terminal_workflow_run(main_app, workflow_run_id)
-    assert workflow_run["status"] == "completed"
-    assert int(workflow_run["context"].get("scan_new_items_count", -1)) == 0
-
-    step_runs = main_app.state.db.list_workflow_step_runs(workflow_run_id)
-    assert len(step_runs) == 2
-    assert step_runs[0]["task_id"] == "shayan.scan_changes"
-    assert step_runs[0]["status"] == "completed"
-    assert step_runs[1]["task_id"] == "shayan.download_new"
-    assert step_runs[1]["status"] == "skipped"
-
-
 def test_toggle_task_reports_sudo_password_required(test_client, monkeypatch) -> None:
     client, main_app = test_client
 
@@ -1891,30 +1721,6 @@ def test_sudo_preflight_checks_exact_command_policy(test_client, monkeypatch) ->
     assert "-l" in probe_cmd
     assert "--" in probe_cmd
     assert any("pgbackrest" in token for token in probe_cmd)
-
-
-def test_run_workflow_now_passes_sudo_password(test_client, monkeypatch) -> None:
-    client, main_app = test_client
-    captured = {}
-
-    def _trigger(workflow_id, *, trigger_source, schedule_id=None, sudo_password=None):
-        captured["workflow_id"] = workflow_id
-        captured["trigger_source"] = trigger_source
-        captured["schedule_id"] = schedule_id
-        captured["sudo_password"] = sudo_password
-        return {"action": "noop", "reason": "captured"}
-
-    monkeypatch.setattr(main_app.state.workflow_service, "trigger_workflow", _trigger)
-    response = client.post(
-        f"/api/workflows/{MAINTENANCE_BACKUP_FULL_WORKFLOW_ID}/run",
-        json={"sudo_password": "secret-pass"},
-    )
-    assert response.status_code == 200
-    assert response.json()["reason"] == "captured"
-    assert captured["workflow_id"] == MAINTENANCE_BACKUP_FULL_WORKFLOW_ID
-    assert captured["trigger_source"] == "manual"
-    assert captured["schedule_id"] is None
-    assert captured["sudo_password"] == "secret-pass"
 
 
 def test_toggle_task_start_and_complete(test_client, wait_for_terminal_run) -> None:

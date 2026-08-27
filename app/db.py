@@ -7,17 +7,14 @@ from app.repositories.gemini import GeminiRepository
 from app.repositories.normalization import NormalizationRepository
 from app.repositories.runs import RunRepository
 from app.repositories.shayan import ShayanRepository
-from app.repositories.workflows import WorkflowRepository
 from app.runtime_states import (
     TASK_RUN_ACTIVE_STATUSES as ACTIVE_STATUSES,
-    WORKFLOW_RUN_ACTIVE_STATUSES as ACTIVE_WORKFLOW_STATUSES,
 )
 
 
 class Database(
     DefinitionsRepository,
     ConveyorRepository,
-    WorkflowRepository,
     RunRepository,
     GeminiRepository,
     ShayanRepository,
@@ -27,4 +24,4 @@ class Database(
     """PostgreSQL facade preserving the historical ``app.db.Database`` API."""
 
 
-__all__ = ["ACTIVE_STATUSES", "ACTIVE_WORKFLOW_STATUSES", "Database", "utc_now"]
+__all__ = ["ACTIVE_STATUSES", "Database", "utc_now"]

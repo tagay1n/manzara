@@ -14,12 +14,8 @@ from app.runtime_states import (
     TASK_RUN_STATUS_RUNNING,
     TASK_RUN_STATUS_STOPPED,
     TASK_RUN_STATUS_STOPPING_FORCE,
-    WORKFLOW_RUN_STATUS_COMPLETED,
-    WORKFLOW_RUN_STATUS_FAILED,
-    WORKFLOW_RUN_STATUS_RUNNING,
     can_transition_conveyor_run,
     can_transition_task_run,
-    can_transition_workflow_run,
     resolve_task_terminal_status,
     task_status_from_stop_mode,
     task_terminal_event_type,
@@ -32,15 +28,6 @@ def test_task_transition_rules_cover_running_and_terminal_paths() -> None:
     assert can_transition_task_run(TASK_RUN_STATUS_STOPPING_FORCE, TASK_RUN_STATUS_STOPPED)
     assert can_transition_task_run(TASK_RUN_STATUS_RUNNING, TASK_RUN_STATUS_FAILED)
     assert not can_transition_task_run(TASK_RUN_STATUS_COMPLETED, TASK_RUN_STATUS_RUNNING)
-
-
-def test_workflow_transition_rules_cover_running_and_terminal_paths() -> None:
-    assert can_transition_workflow_run(WORKFLOW_RUN_STATUS_RUNNING, WORKFLOW_RUN_STATUS_COMPLETED)
-    assert can_transition_workflow_run(WORKFLOW_RUN_STATUS_RUNNING, WORKFLOW_RUN_STATUS_FAILED)
-    assert not can_transition_workflow_run(
-        WORKFLOW_RUN_STATUS_COMPLETED,
-        WORKFLOW_RUN_STATUS_RUNNING,
-    )
 
 
 def test_conveyor_transition_rules_cover_start_and_terminal_paths() -> None:
