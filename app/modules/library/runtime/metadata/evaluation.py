@@ -265,10 +265,12 @@ def evaluate(args) -> None:
     state_db.init_schema()
     models = load_required_gemini_model_pool()
     run_id = _run_id()
+    stop_event = threading.Event()
     gemini_manager = GeminiRuntimeManager(
         state_db,
         task_id=TASK_ID,
         panel_id=PANEL_ID,
+        should_stop=stop_event.is_set,
     )
     channel = Channel(dry_run=args.dry_run)
     if args.dry_run:
@@ -279,7 +281,6 @@ def evaluate(args) -> None:
     progress = _EvaluationProgress(state_db, run_id=run_id, total=remaining)
     progress.publish()
     excerpt_chars = max(0, args.excerpt_chars)
-    stop_event = threading.Event()
     while not stop_event.is_set():
         tasks_queue = None
         workers: list[threading.Thread] = []

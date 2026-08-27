@@ -37,7 +37,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
     )
     stanza = shlex.quote(settings.pgbackrest_stanza)
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
-    meta_eval_cmd = py_bootstrap + f'"$PY_BIN" "{meta_eval_runner}" --workers 1'
+    meta_eval_cmd = py_bootstrap + f'"$PY_BIN" "{meta_eval_runner}"'
     backup_full_cmd = (
         f"sudo -n -u postgres pgbackrest --stanza={stanza} --type=full backup"
     )
@@ -120,6 +120,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
         },
         {
             "task_id": MONOCORPUS_META_EVALUATE_TASK_ID,
+            "gemini_workers_default": 1,
             "panel_id": "library",
             "title": "Monocorpus meta evaluate",
             "task_type": "metadata",
@@ -130,6 +131,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
         },
         {
             "task_id": LIBRARY_PERSONALITY_SUGGESTIONS_REFRESH_TASK_ID,
+            "gemini_workers_default": 1,
             "panel_id": "library",
             "title": "Refresh personality suggestions",
             "task_type": "metadata",
@@ -140,6 +142,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
         },
         {
             "task_id": LIBRARY_PUBLISHER_SUGGESTIONS_REFRESH_TASK_ID,
+            "gemini_workers_default": 1,
             "panel_id": "library",
             "title": "Refresh publisher suggestions",
             "task_type": "metadata",

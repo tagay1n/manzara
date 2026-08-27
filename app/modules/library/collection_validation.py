@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import random
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
@@ -22,6 +22,7 @@ from app.gemini_runtime import (
     GeminiRequestRejectedError,
     GeminiRuntimeError,
     GeminiRuntimeManager,
+    GeminiServerPauseError,
     GeminiStopRequestedError,
 )
 from app.modules.library.collection_detection import (
@@ -215,13 +216,15 @@ def _publish_progress(
     )
 
 
-def validate_collection_proposals(
+def _validate_collection_proposals_worker(
     db: Database,
     *,
     run_id: int,
     should_stop: Callable[[], bool],
     excerpt_loader: Callable[[str], str | None] | None = None,
     call_gemini: Callable[[str, str, str], dict[str, Any]] = _gemini_call,
+    workers: int = 1,
+    recover_unfinished: bool = True,
 ) -> dict[str, Any]:
     models = load_required_gemini_model_pool()
     manager = GeminiRuntimeManager(
@@ -256,12 +259,13 @@ def validate_collection_proposals(
                 if recent["status"] == "malformed_or_timeout":
                     size = max(1, size // 2)
                 sizer.set_size(str(recent["model_name"]), size)
-            conn.execute(
-                text(
-                    "UPDATE library_collection_proposals SET status='queued_validation',updated_at=:now WHERE status='validating'"
-                ),
-                {"now": _now()},
-            )
+            if recover_unfinished:
+                conn.execute(
+                    text(
+                        "UPDATE library_collection_proposals SET status='queued_validation',updated_at=:now WHERE status='validating'"
+                    ),
+                    {"now": _now()},
+                )
 
         while not should_stop():
             with engine.begin() as conn:
@@ -301,7 +305,6 @@ def validate_collection_proposals(
                 adaptive_batch_sizes={model: sizer.size_for(model) for model in models},
             )
             model_order = list(models)
-            random.SystemRandom().shuffle(model_order)
             rotate_models: set[str] = set()
             while not should_stop():
                 with engine.connect() as conn:
@@ -353,6 +356,7 @@ def validate_collection_proposals(
                 parsed: dict[str, Any] | None = None
                 malformed_error: str | None = None
                 request_rejected = False
+                service_deferred = False
                 for content_attempt in range(2):
                     started = time.monotonic()
                     try:
@@ -427,6 +431,23 @@ def validate_collection_proposals(
                                 error=str(exc),
                             )
                         break
+                    except GeminiServerPauseError as exc:
+                        service_deferred = True
+                        malformed_error = str(exc)
+                        counters["service_deferred"] += 1
+                        with engine.begin() as conn:
+                            _set_search_path(conn)
+                            _record_attempt(
+                                conn,
+                                proposal_id=int(proposal["proposal_id"]),
+                                run_id=run_id,
+                                model=model,
+                                documents=batch,
+                                status="service_deferred",
+                                started=started,
+                                error=str(exc),
+                            )
+                        break
                     except GeminiStopRequestedError:
                         break
                     except (
@@ -452,6 +473,8 @@ def validate_collection_proposals(
                         if content_attempt == 0:
                             continue
                 if should_stop():
+                    break
+                if service_deferred:
                     break
                 if model in rotate_models or model in exhausted_models:
                     continue
@@ -583,6 +606,7 @@ def validate_collection_proposals(
         summary = {
             "kind": "library.collection_validation_summary",
             "stopped": bool(should_stop()),
+            "workers": int(workers),
             **dict(counters),
         }
         db.update_run_progress(
@@ -602,6 +626,83 @@ def validate_collection_proposals(
         return summary
     finally:
         engine.dispose()
+
+
+def validate_collection_proposals(
+    db: Database,
+    *,
+    run_id: int,
+    should_stop: Callable[[], bool],
+    excerpt_loader: Callable[[str], str | None] | None = None,
+    call_gemini: Callable[[str, str, str], dict[str, Any]] = _gemini_call,
+    workers: int = 1,
+) -> dict[str, Any]:
+    """Run proposal workers; row locking guarantees distinct proposal claims."""
+    worker_count = max(1, int(workers))
+    if worker_count == 1:
+        return _validate_collection_proposals_worker(
+            db,
+            run_id=run_id,
+            should_stop=should_stop,
+            excerpt_loader=excerpt_loader,
+            call_gemini=call_gemini,
+            workers=1,
+            recover_unfinished=True,
+        )
+    print(
+        f"library collection validation: worker pool requested={workers} started={worker_count}",
+        flush=True,
+    )
+    recovery_engine, _ = create_runtime_engine()
+    try:
+        with recovery_engine.begin() as conn:
+            _set_search_path(conn)
+            conn.execute(
+                text(
+                    "UPDATE library_collection_proposals SET status='queued_validation',updated_at=:now WHERE status='validating'"
+                ),
+                {"now": _now()},
+            )
+    finally:
+        recovery_engine.dispose()
+    with ThreadPoolExecutor(
+        max_workers=worker_count, thread_name_prefix="collection-worker"
+    ) as executor:
+        futures = [
+            executor.submit(
+                _validate_collection_proposals_worker,
+                db,
+                run_id=run_id,
+                should_stop=should_stop,
+                excerpt_loader=excerpt_loader,
+                call_gemini=call_gemini,
+                workers=1,
+                recover_unfinished=False,
+            )
+            for _index in range(worker_count)
+        ]
+        results = [future.result() for future in futures]
+    counters = Counter()
+    for result in results:
+        counters.update(
+            {
+                key: int(value)
+                for key, value in result.items()
+                if key not in {"kind", "stopped", "workers"}
+                and isinstance(value, int)
+            }
+        )
+    summary = {
+        "kind": "library.collection_validation_summary",
+        "stopped": bool(should_stop()),
+        "workers": worker_count,
+        **dict(counters),
+    }
+    db.update_run_progress(
+        run_id,
+        {"status": "stopped" if summary["stopped"] else "completed", **summary},
+    )
+    return summary
 
 
 __all__ = ["build_validation_prompt", "validate_collection_proposals"]

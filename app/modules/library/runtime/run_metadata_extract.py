@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -38,6 +39,7 @@ from app.gemini_model_pool import (
 )
 from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
+from app.gemini_workers import resolve_gemini_workers
 from app.modules.library.metadata_extraction import (
     MetadataExtractionRepository,
     parse_metadata_response,
@@ -94,6 +96,7 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Optional document limit for a controlled smoke run",
     )
+    parser.add_argument("--workers", type=int, default=None)
     return parser.parse_args()
 
 
@@ -152,9 +155,77 @@ def run_metadata_extraction(
         DEFAULT_OPERATIONAL_RETRY_COOLDOWN_SECONDS
     ),
     request_json: Callable[..., str] = generate_structured_json,
+    workers: int = 1,
+    _candidates: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Process one fixed candidate snapshot and return a structured summary."""
-    candidates = repository.list_candidates(limit=limit)
+    candidates = (
+        list(_candidates)
+        if _candidates is not None
+        else repository.list_candidates(limit=limit)
+    )
+    worker_count = max(1, min(int(workers), len(candidates) or 1))
+    if worker_count > 1 and _candidates is None:
+        partitions = [candidates[index::worker_count] for index in range(worker_count)]
+        print(
+            f"library metadata: worker pool requested={workers} started={worker_count}",
+            flush=True,
+        )
+        with ThreadPoolExecutor(
+            max_workers=worker_count, thread_name_prefix="metadata-worker"
+        ) as executor:
+            results = list(
+                executor.map(
+                    lambda partition: run_metadata_extraction(
+                        repository=repository,
+                        db=db,
+                        storage=storage,
+                        primary_s3=primary_s3,
+                        models=models,
+                        workspace=workspace,
+                        run_id=run_id,
+                        should_stop=should_stop,
+                        limit=None,
+                        operational_retry_cooldown_seconds=operational_retry_cooldown_seconds,
+                        request_json=request_json,
+                        workers=1,
+                        _candidates=partition,
+                    ),
+                    partitions,
+                )
+            )
+        counter_keys = (
+            "succeeded", "already_complete", "terminal", "source_deferred",
+            "quota_deferred", "service_deferred",
+        )
+        model_attempts = Counter()
+        model_successes = Counter()
+        for result in results:
+            model_attempts.update(result.get("model_attempts") or {})
+            model_successes.update(result.get("model_successes") or {})
+        outcomes = [str(result.get("outcome") or "completed") for result in results]
+        outcome = next((item for item in outcomes if item != "completed"), "completed")
+        summary = {
+            "kind": "library.metadata_extraction_summary",
+            "outcome": outcome,
+            "eligible": len(candidates),
+            "processed": sum(int(result.get("processed") or 0) for result in results),
+            "remaining": sum(int(result.get("remaining") or 0) for result in results),
+            **{
+                key: sum(int(result.get(key) or 0) for result in results)
+                for key in counter_keys
+            },
+            "model_attempts": dict(model_attempts),
+            "model_successes": dict(model_successes),
+            "stopped": outcome == "stopped",
+            "workers": worker_count,
+        }
+        _publish_progress(
+            db, run_id, current=summary["processed"], total=len(candidates),
+            counters=Counter({key: summary[key] for key in counter_keys}),
+            model_attempts=model_attempts, model_successes=model_successes,
+        )
+        return summary
     total = len(candidates)
     counters: Counter[str] = Counter(
         succeeded=0,
@@ -365,6 +436,7 @@ def run_metadata_extraction(
         "model_attempts": dict(model_attempts),
         "model_successes": dict(model_successes),
         "stopped": outcome == "stopped",
+        "workers": int(workers),
     }
     print(
         f"library metadata: final {json.dumps(summary, ensure_ascii=False, sort_keys=True)}",
@@ -375,6 +447,7 @@ def run_metadata_extraction(
 
 def main() -> int:
     args = _parse_args()
+    workers = resolve_gemini_workers(args.workers)
     run_id = _run_id()
     app_settings = load_settings()
     config = load_runtime_config()
@@ -420,6 +493,7 @@ def main() -> int:
             run_id=run_id,
             should_stop=lambda: bool(stop["requested"]),
             limit=args.limit,
+            workers=workers,
             operational_retry_cooldown_seconds=(
                 _operational_retry_cooldown_seconds(config)
             ),

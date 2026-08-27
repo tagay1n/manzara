@@ -48,6 +48,19 @@ function taskToggleModel(status) {
   return { icon: "play", title: "Start task", disabled: false, cls: "" };
 }
 
+function renderGeminiWorkers(task) {
+  const config = task.gemini_workers;
+  if (!config) return "";
+  const value = config.active ?? config.next_run ?? config.default;
+  if (!config.editable) {
+    return `<span class="gemini-worker-badge" title="Workers for active run">${window.ManzaraCore.escapeHtml(String(value))} workers</span>`;
+  }
+  const options = Array.from({ length: Number(config.max || 0) }, (_, index) => index + 1)
+    .map((count) => `<option value="${count}" ${count === Number(value) ? "selected" : ""}>${count} worker${count === 1 ? "" : "s"}</option>`)
+    .join("");
+  return `<label class="gemini-worker-control">Workers <select data-gemini-workers-task="${window.ManzaraCore.escapeHtml(task.task_id)}">${options}</select></label>`;
+}
+
 function renderTaskItem(task) {
   const status = task.run?.status || "idle";
   const control = taskToggleModel(status);
@@ -63,13 +76,16 @@ function renderTaskItem(task) {
         </div>
         <div class="task-list-time">${window.ManzaraCore.escapeHtml(formatDateTime(task.run?.started_at || task.run?.finished_at))}</div>
       </a>
-      <button class="icon-btn task-list-toggle ${control.cls}"
-        type="button" data-task-toggle-id="${window.ManzaraCore.escapeHtml(task.task_id)}"
-        title="${window.ManzaraCore.escapeHtml(control.title)}"
-        aria-label="${window.ManzaraCore.escapeHtml(control.title)}"
-        ${control.disabled ? "disabled" : ""}>
-        <i data-lucide="${control.icon}"></i>
-      </button>
+      <div class="task-list-actions">
+        ${renderGeminiWorkers(task)}
+        <button class="icon-btn task-list-toggle ${control.cls}"
+          type="button" data-task-toggle-id="${window.ManzaraCore.escapeHtml(task.task_id)}"
+          title="${window.ManzaraCore.escapeHtml(control.title)}"
+          aria-label="${window.ManzaraCore.escapeHtml(control.title)}"
+          ${control.disabled ? "disabled" : ""}>
+          <i data-lucide="${control.icon}"></i>
+        </button>
+      </div>
     </article>
   `;
 }
@@ -175,6 +191,20 @@ async function toggleTask(taskId, button) {
   }
 }
 
+async function setGeminiWorkers(taskId, workers, select) {
+  if (!taskId || select?.disabled) return;
+  if (select) select.disabled = true;
+  try {
+    await api(`/api/tasks/${encodeURIComponent(taskId)}/gemini-workers`, {
+      method: "PATCH",
+      body: JSON.stringify({ workers: Number(workers) }),
+    });
+  } finally {
+    if (select) select.disabled = false;
+    queueRefresh(0);
+  }
+}
+
 function setupEventStream() {
   state.eventStreamController?.stop();
   state.eventStreamController = window.ManzaraCore.createSseController({
@@ -204,12 +234,26 @@ function attachUiHandlers() {
     stopAll().catch((error) => console.error(error));
   });
   document.getElementById("task-flow-grid").addEventListener("click", (event) => {
+    if (event.target?.closest?.("[data-gemini-workers-task]")) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      return;
+    }
     const directTarget = event.target?.dataset?.taskToggleId ? event.target : null;
     const button = directTarget || event.target?.closest?.("[data-task-toggle-id]");
     if (!button) return;
     event.preventDefault?.();
     event.stopPropagation?.();
     toggleTask(String(button.dataset.taskToggleId || ""), button).catch((error) => {
+      window.ManzaraUI.toast(error?.message || String(error), { tone: "error" });
+    });
+  });
+  document.getElementById("task-flow-grid").addEventListener("change", (event) => {
+    const select = event.target?.closest?.("[data-gemini-workers-task]");
+    if (!select) return;
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    setGeminiWorkers(select.dataset.geminiWorkersTask, select.value, select).catch((error) => {
       window.ManzaraUI.toast(error?.message || String(error), { tone: "error" });
     });
   });

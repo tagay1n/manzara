@@ -108,9 +108,9 @@ class DefinitionsRepository:
                         INSERT INTO task_definitions (
                             task_id, panel_id, title, task_type,
                             icon_idle, icon_running, command_json, cwd,
-                            meaningful_result_json,
+                            meaningful_result_json, gemini_workers_default,
                             created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(task_id) DO UPDATE SET
                             panel_id=excluded.panel_id,
                             task_type=excluded.task_type,
@@ -119,6 +119,7 @@ class DefinitionsRepository:
                             command_json=excluded.command_json,
                             cwd=excluded.cwd,
                             meaningful_result_json=excluded.meaningful_result_json,
+                            gemini_workers_default=excluded.gemini_workers_default,
                             updated_at=excluded.updated_at
                         """,
                         (
@@ -131,10 +132,30 @@ class DefinitionsRepository:
                             json.dumps(item["command"]),
                             item["cwd"],
                             json.dumps(item.get("meaningful_result", {}), ensure_ascii=False),
+                            item.get("gemini_workers_default"),
                             now,
                             now,
                         ),
                     )
+
+    def set_task_gemini_workers_next(
+        self, task_id: str, workers: int
+    ) -> Optional[Dict[str, Any]]:
+        """Set the one-shot worker override for a supported task."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE task_definitions
+                    SET gemini_workers_next = ?, updated_at = ?
+                    WHERE task_id = ? AND gemini_workers_default IS NOT NULL
+                    """,
+                    (workers, now, task_id),
+                )
+                if int(cur.rowcount or 0) == 0:
+                    return None
+        return self.get_task(task_id)
 
 
     def seed_panels(self, panel_defs: List[Dict[str, Any]]) -> None:

@@ -28,15 +28,17 @@ def _bootstrap_import_paths() -> None:
 
 
 def _parse_args() -> MetaEvalArgs:
+    from app.gemini_workers import resolve_gemini_workers
+
     parser = argparse.ArgumentParser(description="Run monocorpus metadata evaluate")
     parser.add_argument("--batch-size", type=int, default=300)
-    parser.add_argument("--workers", type=int, default=5)
+    parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--excerpt-chars", type=int, default=500)
     parsed = parser.parse_args()
     return MetaEvalArgs(
         batch_size=parsed.batch_size,
-        workers=parsed.workers,
+        workers=resolve_gemini_workers(parsed.workers),
         dry_run=parsed.dry_run,
         excerpt_chars=parsed.excerpt_chars,
     )

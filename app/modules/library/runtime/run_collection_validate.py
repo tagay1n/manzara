@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db import Database  # noqa: E402
+from app.gemini_workers import resolve_gemini_workers  # noqa: E402
 from app.modules.library.collection_validation import validate_collection_proposals  # noqa: E402
 from app.run_artifact_channel import emit_run_artifact  # noqa: E402
 from app.settings import load_settings  # noqa: E402
@@ -40,9 +41,12 @@ def _excerpt(md5: str) -> str | None:
 
 
 def main() -> None:
-    argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description="Validate Library collection proposals with Gemini"
-    ).parse_args()
+    )
+    parser.add_argument("--workers", type=int, default=None)
+    args = parser.parse_args()
+    workers = resolve_gemini_workers(args.workers)
     stop = {"requested": False}
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("requested", True))
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
@@ -57,6 +61,7 @@ def main() -> None:
         run_id=run_id,
         should_stop=lambda: bool(stop["requested"]),
         excerpt_loader=_excerpt,
+        workers=workers,
     )
     emit_run_artifact(summary)
     print(

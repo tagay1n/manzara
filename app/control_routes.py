@@ -8,6 +8,7 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from app.gemini_runtime import GeminiRuntimeManager
+from app.gemini_workers import configured_gemini_account_count, validate_gemini_workers
 from app.conveyor import (
     ConveyorEditConflict,
     ConveyorRevisionConflict,
@@ -105,6 +106,39 @@ def register_control_routes(
             payload={"old_title": task["title"], "new_title": title},
         )
         return JSONResponse({"task": updated, "updated": True})
+
+    @app.patch("/api/tasks/{task_id}/gemini-workers")
+    def set_gemini_workers(
+        task_id: str, payload: Dict[str, Any] = Body(...)
+    ) -> JSONResponse:
+        """Set the one-shot worker count used by the next run."""
+        state = state_provider()
+        task = state.db.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task.get("gemini_workers_default") is None:
+            raise HTTPException(status_code=400, detail="Task does not use Gemini workers")
+        if state.db.get_active_run_for_task(task_id):
+            raise HTTPException(status_code=409, detail="Worker count is locked while task is active")
+        if "workers" not in payload:
+            raise HTTPException(status_code=400, detail="workers is required")
+        try:
+            workers = validate_gemini_workers(
+                payload["workers"], maximum=configured_gemini_account_count()
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        updated = state.db.set_task_gemini_workers_next(task_id, workers)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Task not found")
+        state.db.insert_event(
+            "task.gemini_workers.updated",
+            task_id=task_id,
+            run_id=None,
+            panel_id=task["panel_id"],
+            payload={"workers": workers},
+        )
+        return JSONResponse({"workers": workers, "updated": True})
 
     @app.patch("/api/flows/{panel_id}/title")
     def rename_flow(panel_id: str, payload: Dict[str, Any] = Body(...)) -> JSONResponse:

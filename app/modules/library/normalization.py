@@ -4,26 +4,24 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from difflib import SequenceMatcher
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from sqlalchemy import text
 
 from app.db import Database
 from app.gemini_config import load_required_gemini_model_pool
-from app.gemini_runtime import (
-    GeminiAllKeysExhaustedError,
-    GeminiQuotaExceededError,
-    GeminiRuntimeManager,
+from app.gemini_model_pool import (
+    GeminiModelPoolExhaustedError,
+    GeminiModelResponseError,
+    run_ordered_model_pool,
 )
+from app.gemini_runtime import GeminiRuntimeManager
 from app.modules.library.stats import create_runtime_engine
 
 ENTITY_TYPES = {"personality", "publisher"}
-
-
-def _resolve_normalization_model() -> str:
-    return load_required_gemini_model_pool()[0]
 
 
 def _entity_config(entity_type: str) -> Dict[str, Any]:
@@ -1103,18 +1101,12 @@ def _gemini_suggest(
             "Rules: choose link only when semantically same, otherwise create or reject."
         )
 
-        model_name = _resolve_normalization_model()
-        response = manager.run_with_key(
-            model_name=model_name,
-            call=lambda api_key, _lease: genai.Client(api_key=api_key).models.generate_content(
-                model=model_name,
-                contents=prompt,
-            ),
-            max_attempts=2,
-        )
-        raw_text = getattr(response, "text", None)
-        if not raw_text and hasattr(response, "candidates"):
-            candidates = getattr(response, "candidates", None) or []
+        def parse_response(response: Any) -> Dict[str, Any]:
+            raw_text = getattr(response, "text", None)
+            if not raw_text and hasattr(response, "candidates"):
+                candidates = getattr(response, "candidates", None) or []
+            else:
+                candidates = []
             for candidate in candidates:
                 content = getattr(candidate, "content", None)
                 parts = getattr(content, "parts", None) or []
@@ -1125,33 +1117,40 @@ def _gemini_suggest(
                         break
                 if raw_text:
                     break
+            parsed = _parse_first_json_blob(raw_text or "")
+            if not parsed:
+                raise GeminiModelResponseError("response is not a JSON object")
+            kind = str(parsed.get("suggestion_kind") or "").strip().lower()
+            if kind not in {"link", "create", "reject"}:
+                raise GeminiModelResponseError("invalid suggestion_kind")
+            confidence = max(0.0, min(1.0, float(parsed.get("confidence") or 0.0)))
+            target = parsed.get("target_canonical_id")
+            target_id = int(target) if isinstance(target, (int, float, str)) and str(target).strip() else None
+            if kind != "link":
+                target_id = None
+            return {
+                "suggestion_kind": kind,
+                "target_canonical_id": target_id,
+                "confidence": confidence,
+                "confidence_band": _confidence_band(confidence),
+                "rationale": str(parsed.get("rationale") or ""),
+            }
 
-        parsed = _parse_first_json_blob(raw_text or "")
-        if not parsed:
-            return None
-
-        kind = str(parsed.get("suggestion_kind") or "").strip().lower()
-        if kind not in {"link", "create", "reject"}:
-            return None
-        confidence = float(parsed.get("confidence") or 0.0)
-        confidence = max(0.0, min(1.0, confidence))
-        target = parsed.get("target_canonical_id")
-        target_id = int(target) if isinstance(target, (int, float, str)) and str(target).strip() else None
-        if kind != "link":
-            target_id = None
-
-        return {
-            "suggestion_kind": kind,
-            "target_canonical_id": target_id,
-            "confidence": confidence,
-            "confidence_band": _confidence_band(confidence),
-            "model": model_name,
-            "rationale": str(parsed.get("rationale") or ""),
-        }
-    except (GeminiQuotaExceededError, GeminiAllKeysExhaustedError):
-        raise
-    except Exception:
+        result = run_ordered_model_pool(
+            manager=manager,
+            models=load_required_gemini_model_pool(),
+            request=lambda model, api_key, _lease: genai.Client(api_key=api_key).models.generate_content(
+                model=model, contents=prompt
+            ),
+            parse=parse_response,
+            record_failure=lambda *_args: None,
+            run_id=None,
+        )
+        return {**result.value, "model": result.model_name}
+    except GeminiModelPoolExhaustedError:
         return None
+    except Exception:
+        raise
 
 
 def _heuristic_suggestions(
@@ -1161,6 +1160,7 @@ def _heuristic_suggestions(
     limit: int,
     use_gemini: bool,
     manager: Optional[GeminiRuntimeManager] = None,
+    workers: int = 1,
 ) -> List[Dict[str, Any]]:
     canonicals = db.list_normalization_canonicals(entity_type)
     queue = get_review_queue(
@@ -1180,6 +1180,12 @@ def _heuristic_suggestions(
 
     suggestions: List[Dict[str, Any]] = []
     gemini_budget = 20
+    gemini_jobs: List[tuple[int, Future[Optional[Dict[str, Any]]]]] = []
+    executor = (
+        ThreadPoolExecutor(max_workers=max(1, int(workers)), thread_name_prefix="normalization-worker")
+        if use_gemini and manager is not None
+        else None
+    )
 
     for item in unresolved[: max(1, int(limit))]:
         raw_name = str(item.get("raw_name") or "")
@@ -1226,8 +1232,10 @@ def _heuristic_suggestions(
             rationale = "Low-evidence alias, likely noise or formatting variant"
             model = "heuristic"
 
-        if use_gemini and gemini_budget > 0 and manager is not None:
-            gemini_pick = _gemini_suggest(
+        gemini_future = None
+        if use_gemini and gemini_budget > 0 and manager is not None and executor is not None:
+            gemini_future = executor.submit(
+                _gemini_suggest,
                 entity_type=entity_type,
                 raw_name=raw_name,
                 normalized_name=normalized_name,
@@ -1245,12 +1253,6 @@ def _heuristic_suggestions(
                 ],
                 manager=manager,
             )
-            if gemini_pick:
-                kind = str(gemini_pick.get("suggestion_kind") or kind)
-                target_id = gemini_pick.get("target_canonical_id")
-                confidence = float(gemini_pick.get("confidence") or confidence)
-                rationale = str(gemini_pick.get("rationale") or rationale)
-                model = str(gemini_pick.get("model") or _resolve_normalization_model())
             gemini_budget -= 1
 
         suggestion = {
@@ -1264,6 +1266,30 @@ def _heuristic_suggestions(
             "rationale": rationale,
         }
         suggestions.append(suggestion)
+        if gemini_future is not None:
+            gemini_jobs.append((len(suggestions) - 1, gemini_future))
+
+    try:
+        for index, future in gemini_jobs:
+            gemini_pick = future.result()
+            if not gemini_pick:
+                continue
+            suggestion = suggestions[index]
+            suggestion["suggestion_kind"] = str(
+                gemini_pick.get("suggestion_kind") or suggestion["suggestion_kind"]
+            )
+            target = gemini_pick.get("target_canonical_id")
+            suggestion["target_canonical_id"] = int(target) if target else None
+            confidence = float(gemini_pick.get("confidence") or suggestion["confidence"])
+            suggestion["confidence"] = round(confidence, 3)
+            suggestion["confidence_band"] = _confidence_band(confidence)
+            suggestion["rationale"] = str(
+                gemini_pick.get("rationale") or suggestion["rationale"]
+            )
+            suggestion["model"] = str(gemini_pick.get("model") or "gemini")
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
 
     return suggestions
 
@@ -1274,6 +1300,8 @@ def refresh_suggestions(
     *,
     limit: int = 120,
     use_gemini: bool = True,
+    workers: int = 1,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Regenerate open suggestion set from unresolved queue."""
     _entity_config(entity_type)
@@ -1285,6 +1313,7 @@ def refresh_suggestions(
             db,
             task_id=f"library.{entity_type}_suggestions_refresh",
             panel_id="library",
+            should_stop=should_stop,
         )
 
     suggestions = _heuristic_suggestions(
@@ -1293,6 +1322,7 @@ def refresh_suggestions(
         limit=limit,
         use_gemini=bool(use_gemini),
         manager=manager,
+        workers=workers,
     )
     db.replace_open_suggestions(entity_type, suggestions)
 
@@ -1309,6 +1339,7 @@ def refresh_suggestions(
             "limit": limit,
             "use_gemini": bool(use_gemini),
             "generated": len(suggestions),
+            "workers": int(workers),
             "bands": counts,
         },
     )
@@ -1317,6 +1348,7 @@ def refresh_suggestions(
         "generated": len(suggestions),
         "bands": counts,
         "event": event,
+        "workers": int(workers),
     }
 
 

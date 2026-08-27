@@ -37,6 +37,128 @@ class GeminiRepository:
                             now,
                         ),
                     )
+                    conn.execute(
+                        """
+                        INSERT INTO gemini_account_leases (
+                            account_id, created_at, updated_at
+                        ) VALUES (?, ?, ?)
+                        ON CONFLICT(account_id) DO NOTHING
+                        """,
+                        (str(item.get("account_id") or "default"), now, now),
+                    )
+
+    def list_gemini_account_leases(self) -> List[Dict[str, Any]]:
+        """List account leases in least-recently-used order."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT account_id, lease_token, task_id, run_id, worker_id,
+                          lease_expires_at, last_acquired_at, created_at, updated_at
+                   FROM gemini_account_leases
+                   ORDER BY last_acquired_at NULLS FIRST, account_id"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def try_claim_gemini_account(
+        self,
+        account_id: str,
+        *,
+        lease_token: str,
+        task_id: Optional[str],
+        run_id: Optional[int],
+        worker_id: str,
+        now_ts: str,
+        expires_at: str,
+    ) -> bool:
+        """Atomically claim an idle, expired, or orphaned account lease."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE gemini_account_leases
+                SET lease_token = ?, task_id = ?, run_id = ?, worker_id = ?,
+                    lease_expires_at = ?, last_acquired_at = ?, updated_at = ?
+                WHERE account_id = ?
+                  AND (
+                    lease_token IS NULL
+                    OR lease_expires_at IS NULL
+                    OR lease_expires_at <= ?
+                    OR (run_id IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM runs
+                        WHERE runs.run_id = gemini_account_leases.run_id
+                          AND runs.status IN (
+                            'starting', 'running', 'stopping_graceful', 'stopping_force'
+                          )
+                    ))
+                  )
+                """,
+                (
+                    lease_token, task_id, run_id, worker_id, expires_at,
+                    now_ts, now_ts, account_id, now_ts,
+                ),
+            )
+            return int(cur.rowcount or 0) > 0
+
+    def renew_gemini_account_lease(
+        self, account_id: str, lease_token: str, *, expires_at: str, now_ts: str
+    ) -> bool:
+        """Extend a lease only while its ownership token still matches."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """UPDATE gemini_account_leases
+                   SET lease_expires_at = ?, updated_at = ?
+                   WHERE account_id = ? AND lease_token = ?""",
+                (expires_at, now_ts, account_id, lease_token),
+            )
+            return int(cur.rowcount or 0) > 0
+
+    def release_gemini_account_lease(self, account_id: str, lease_token: str) -> bool:
+        """Release an account lease without disturbing a newer owner."""
+        now = utc_now()
+        with self._connect() as conn:
+            cur = conn.execute(
+                """UPDATE gemini_account_leases
+                   SET lease_token = NULL, task_id = NULL, run_id = NULL,
+                       worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+                   WHERE account_id = ? AND lease_token = ?""",
+                (now, account_id, lease_token),
+            )
+            return int(cur.rowcount or 0) > 0
+
+    def ensure_gemini_model_runtime(self, model_name: str) -> None:
+        now = utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO gemini_model_runtime (
+                       model_name, pause_until, last_pause_reason, created_at, updated_at
+                   ) VALUES (?, NULL, NULL, ?, ?)
+                   ON CONFLICT(model_name) DO NOTHING""",
+                (model_name, now, now),
+            )
+
+    def list_gemini_model_runtime(self) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT model_name, pause_until, last_pause_reason, created_at, updated_at
+                   FROM gemini_model_runtime ORDER BY model_name"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_gemini_model_pause(
+        self, model_name: str, pause_until: Optional[str], reason: Optional[str]
+    ) -> Dict[str, Any]:
+        now = utc_now()
+        with self._connect() as conn:
+            row = conn.execute(
+                """INSERT INTO gemini_model_runtime (
+                       model_name, pause_until, last_pause_reason, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(model_name) DO UPDATE SET
+                       pause_until=excluded.pause_until,
+                       last_pause_reason=excluded.last_pause_reason,
+                       updated_at=excluded.updated_at
+                   RETURNING model_name, pause_until, last_pause_reason, created_at, updated_at""",
+                (model_name, pause_until, reason, now, now),
+            ).fetchone()
+        return dict(row) if row else {}
 
 
     def ensure_gemini_model_state(self, key_id: str, model_name: str) -> None:

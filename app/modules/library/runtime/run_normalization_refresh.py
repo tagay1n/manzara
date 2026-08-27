@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ def _bootstrap_repo_root() -> None:
 _bootstrap_repo_root()
 
 from app.db import Database  # noqa: E402
+from app.gemini_workers import resolve_gemini_workers  # noqa: E402
 from app.modules.library.normalization import refresh_suggestions  # noqa: E402
 from app.settings import load_settings  # noqa: E402
 
@@ -41,11 +43,16 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable Gemini-assisted suggestions",
     )
+    parser.add_argument("--workers", type=int, default=None)
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
+    workers = resolve_gemini_workers(args.workers)
+    stop = {"requested": False}
+    signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("requested", True))
+    signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
     settings = load_settings()
     db = Database(settings.database_url, schema=settings.database_schema)
     db.init_schema()
@@ -54,6 +61,8 @@ def main() -> None:
         args.entity_type,
         limit=args.limit,
         use_gemini=not bool(args.no_gemini),
+        workers=workers,
+        should_stop=lambda: bool(stop["requested"]),
     )
     print(json.dumps(result, ensure_ascii=False))
 

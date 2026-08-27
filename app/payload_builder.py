@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 from fastapi import HTTPException
 
 from app.contracts import PayloadBuilderOperations
+from app.gemini_workers import configured_gemini_account_count
 
 
 class PayloadBuilder:
@@ -125,7 +126,7 @@ class PayloadBuilder:
         task_slug_map: Mapping[str, str],
     ) -> Dict[str, Any]:
         task_id = str(task["task_id"])
-        return {
+        payload = {
             "task_id": task["task_id"],
             "slug": task_slug_map.get(task_id, task_id),
             "title": task["title"],
@@ -133,6 +134,30 @@ class PayloadBuilder:
             "icon_idle": task["icon_idle"],
             "icon_running": task["icon_running"],
             "run": self._task_run_payload(task),
+        }
+        gemini_workers = self._gemini_workers_payload(task)
+        if gemini_workers is not None:
+            payload["gemini_workers"] = gemini_workers
+        return payload
+
+    @staticmethod
+    def _gemini_workers_payload(task: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+        default = task.get("gemini_workers_default")
+        if default is None:
+            return None
+        active = task.get("gemini_workers")
+        next_run = task.get("gemini_workers_next")
+        maximum = configured_gemini_account_count()
+        is_active = str(task.get("run_status") or "") in {
+            "starting", "running", "stopping_graceful", "stopping_force"
+        }
+        return {
+            "default": int(default),
+            "next_run": int(next_run or default),
+            "override_pending": next_run is not None,
+            "active": int(active) if is_active and active is not None else None,
+            "max": maximum,
+            "editable": bool(maximum >= 1 and not is_active),
         }
 
     @staticmethod
@@ -347,20 +372,32 @@ class PayloadBuilder:
             status_counts[key] = int(status_counts.get(key, 0)) + 1
 
         active_runs = state.db.list_active_runs()
+        latest_run = runs[0] if runs else {}
+        task_for_workers = dict(task)
+        task_for_workers.update(
+            {
+                "run_status": latest_run.get("status"),
+                "gemini_workers": latest_run.get("gemini_workers"),
+            }
+        )
+        task_payload = {
+            "task_id": task["task_id"],
+            "slug": task_slug_map.get(task_id, task_id),
+            "panel_id": task["panel_id"],
+            "title": task["title"],
+            "task_type": task["task_type"],
+            "icon_idle": task["icon_idle"],
+            "icon_running": task["icon_running"],
+            "cwd": task["cwd"],
+        }
+        workers_payload = self._gemini_workers_payload(task_for_workers)
+        if workers_payload is not None:
+            task_payload["gemini_workers"] = workers_payload
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
-            "task": {
-                "task_id": task["task_id"],
-                "slug": task_slug_map.get(task_id, task_id),
-                "panel_id": task["panel_id"],
-                "title": task["title"],
-                "task_type": task["task_type"],
-                "icon_idle": task["icon_idle"],
-                "icon_running": task["icon_running"],
-                "cwd": task["cwd"],
-            },
+            "task": task_payload,
             "panel": panel,
             "stats": {
                 "total_runs": len(runs),

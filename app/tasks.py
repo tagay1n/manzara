@@ -149,6 +149,10 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
             }
 
         run_id = self.db.create_run(task)
+        run = self.db.get_run(run_id) or {}
+        if run.get("gemini_workers") is not None:
+            task = dict(task)
+            task["gemini_workers"] = int(run["gemini_workers"])
         self.db.insert_event(
             "task.started",
             task_id=task_id,
@@ -323,6 +327,8 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
             proc_env["MANZARA_TASK_RUN_ID"] = str(run_id)
             proc_env["MANZARA_TASK_ID"] = str(task.get("task_id") or "")
             proc_env["MANZARA_PANEL_ID"] = str(task.get("panel_id") or "")
+            if task.get("gemini_workers") is not None:
+                proc_env["MANZARA_GEMINI_WORKERS"] = str(task["gemini_workers"])
             proc_env[RUN_ARTIFACT_PATH_ENV] = str(artifact_output_path)
 
             proc = subprocess.Popen(

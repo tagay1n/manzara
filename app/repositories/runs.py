@@ -33,16 +33,35 @@ class RunRepository:
 
 
     def create_run(self, task: Dict[str, Any]) -> int:
-        """Create a new run in starting state and return run id."""
+        """Create a run and atomically consume its one-shot worker override."""
         now = utc_now()
         with self._lock:
             with self._connect() as conn:
+                workers = None
+                if task.get("gemini_workers_default") is not None:
+                    row = conn.execute(
+                        """SELECT gemini_workers_default, gemini_workers_next
+                           FROM task_definitions WHERE task_id = ? FOR UPDATE""",
+                        (task["task_id"],),
+                    ).fetchone()
+                    if row:
+                        workers = int(
+                            row.get("gemini_workers_next")
+                            or row.get("gemini_workers_default")
+                            or 1
+                        )
+                        conn.execute(
+                            """UPDATE task_definitions SET gemini_workers_next = NULL,
+                               updated_at = ? WHERE task_id = ?""",
+                            (now, task["task_id"]),
+                        )
                 cur = conn.execute(
                     """
                     INSERT INTO runs (
                         task_id, panel_id, status, stop_mode,
-                        started_at, heartbeat_at, created_at, updated_at, summary_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        started_at, heartbeat_at, created_at, updated_at, summary_json,
+                        gemini_workers
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task["task_id"],
@@ -54,6 +73,7 @@ class RunRepository:
                         now,
                         now,
                         "{}",
+                        workers,
                     ),
                 )
                 return int(cur.lastrowid)
@@ -373,6 +393,8 @@ class RunRepository:
                     t.icon_running,
                     t.command_json,
                     t.cwd,
+                    t.gemini_workers_default,
+                    t.gemini_workers_next,
                     r.run_id,
                     r.status AS run_status,
                     r.stop_mode,
@@ -382,7 +404,8 @@ class RunRepository:
                     r.exit_code,
                     r.error_text,
                     r.summary_json,
-                    r.progress_json
+                    r.progress_json,
+                    r.gemini_workers
                 FROM task_definitions t
                 LEFT JOIN runs r
                     ON r.run_id = (
@@ -413,7 +436,8 @@ class RunRepository:
                 """
                 SELECT run_id, task_id, panel_id, status, stop_mode,
                        started_at, finished_at, heartbeat_at,
-                       pid, exit_code, error_text, summary_json, progress_json
+                       pid, exit_code, error_text, summary_json, progress_json,
+                       gemini_workers
                 FROM runs
                 ORDER BY run_id DESC
                 LIMIT ?
@@ -430,7 +454,8 @@ class RunRepository:
                 """
                 SELECT run_id, task_id, panel_id, status, stop_mode,
                        started_at, finished_at, heartbeat_at,
-                       pid, exit_code, error_text, summary_json, progress_json
+                       pid, exit_code, error_text, summary_json, progress_json,
+                       gemini_workers
                 FROM runs
                 WHERE task_id = ?
                 ORDER BY run_id DESC

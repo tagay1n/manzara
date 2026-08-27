@@ -10,6 +10,7 @@ from app.gemini_runtime import (
     GeminiQuotaExceededError,
     GeminiRequestRejectedError,
     GeminiRequestTimeoutError,
+    GeminiResponseValidationError,
     GeminiRuntimeError,
     GeminiRuntimeManager,
     GeminiServerPauseError,
@@ -21,7 +22,7 @@ from app.gemini_runtime import (
 T = TypeVar("T")
 
 
-class GeminiModelResponseError(ValueError):
+class GeminiModelResponseError(GeminiResponseValidationError):
     """A model returned content that does not satisfy the requested contract."""
 
 
@@ -51,6 +52,11 @@ class GeminiModelPoolOperationalError(GeminiModelPoolError):
 
 
 @dataclass(frozen=True)
+class _ParsedResponse(Generic[T]):
+    value: T
+
+
+@dataclass(frozen=True)
 class GeminiModelPoolResult(Generic[T]):
     """Validated response with the model that produced it."""
 
@@ -76,18 +82,26 @@ def run_ordered_model_pool(
 
     failed = {str(model) for model in already_attempted}
     unavailable: list[str] = []
+    paused: list[tuple[str, GeminiServerPauseError]] = []
 
     for model_name in ordered:
         if model_name in failed:
             continue
-        transient_retries = 0
+        transport_retries = 0
         while True:
             try:
-                raw = manager.run_with_key(
+                parsed_response = manager.run_with_key(
                     model_name=model_name,
-                    call=lambda key, lease: request(model_name, key, lease),
+                    call=lambda key, lease: _ParsedResponse(
+                        parse(request(model_name, key, lease))
+                    ),
                     run_id=run_id,
                     max_attempts=1,
+                )
+                value = (
+                    parsed_response.value
+                    if isinstance(parsed_response, _ParsedResponse)
+                    else parse(parsed_response)
                 )
             except GeminiQuotaExceededError:
                 # The key was exhausted, not the model or document.
@@ -96,15 +110,11 @@ def run_ordered_model_pool(
                 unavailable.append(model_name)
                 break
             except GeminiServerPauseError as exc:
-                if transient_retries == 0:
-                    transient_retries += 1
-                    continue
-                raise GeminiModelPoolOperationalError(
-                    str(exc), retryable=True
-                ) from exc
+                paused.append((model_name, exc))
+                break
             except GeminiTransportError as exc:
-                if transient_retries == 0:
-                    transient_retries += 1
+                if transport_retries == 0:
+                    transport_retries += 1
                     continue
                 raise GeminiModelPoolOperationalError(
                     str(exc), retryable=True
@@ -119,20 +129,54 @@ def run_ordered_model_pool(
                 record_failure(model_name, "timeout", str(exc))
                 failed.add(model_name)
                 break
-            except GeminiRuntimeError as exc:
-                raise GeminiModelPoolOperationalError(str(exc)) from exc
-
-            try:
-                value = parse(raw)
             except GeminiModelResponseError as exc:
                 record_failure(model_name, "response", str(exc))
                 failed.add(model_name)
                 break
+            except GeminiRuntimeError as exc:
+                raise GeminiModelPoolOperationalError(str(exc)) from exc
+
             return GeminiModelPoolResult(
                 model_name=model_name,
                 value=value,
                 unavailable_models=tuple(unavailable),
             )
+
+    # Only wait when no other configured model could serve the item. Each model
+    # that returned 5xx receives exactly one later attempt.
+    for model_name, pause_error in paused:
+        pause_until = pause_error.pause_until
+        if pause_until is not None:
+            manager._sleep_until(pause_until)  # shared stop-aware wait boundary
+        try:
+            parsed_response = manager.run_with_key(
+                model_name=model_name,
+                call=lambda key, lease, selected=model_name: _ParsedResponse(
+                    parse(request(selected, key, lease))
+                ),
+                run_id=run_id,
+                max_attempts=1,
+            )
+            value = (
+                parsed_response.value
+                if isinstance(parsed_response, _ParsedResponse)
+                else parse(parsed_response)
+            )
+        except GeminiStopRequestedError:
+            raise
+        except (GeminiServerPauseError, GeminiTransportError) as exc:
+            raise GeminiModelPoolOperationalError(str(exc), retryable=True) from exc
+        except GeminiModelResponseError as exc:
+            record_failure(model_name, "response", str(exc))
+            failed.add(model_name)
+            continue
+        except GeminiRuntimeError as exc:
+            raise GeminiModelPoolOperationalError(str(exc)) from exc
+        return GeminiModelPoolResult(
+            model_name=model_name,
+            value=value,
+            unavailable_models=tuple(unavailable),
+        )
 
     if all(model in failed for model in ordered):
         raise GeminiModelPoolExhaustedError(

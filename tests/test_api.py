@@ -1974,3 +1974,45 @@ def test_events_stream_outputs_sse_frames(test_client) -> None:
     payload_line = [line for line in text.splitlines() if line.startswith("data: ")][0]
     payload = json.loads(payload_line.replace("data: ", "", 1))
     assert payload["type"].startswith("task.") or payload["type"].startswith("system.")
+
+
+def test_gemini_worker_override_is_shared_and_consumed_by_next_run(test_client) -> None:
+    client, main_app = test_client
+    task_id = "library.metadata_extract"
+
+    response = client.patch(
+        f"/api/tasks/{task_id}/gemini-workers", json={"workers": 2}
+    )
+    assert response.status_code == 200
+
+    tasks_payload = client.get("/api/tasks").json()
+    task = next(
+        item
+        for flow in tasks_payload["flows"]
+        for item in flow["tasks"]
+        if item["task_id"] == task_id
+    )
+    assert task["gemini_workers"]["next_run"] == 2
+    assert task["gemini_workers"]["override_pending"] is True
+
+    run_id = main_app.state.db.create_run(main_app.state.db.get_task(task_id))
+    assert main_app.state.db.get_run(run_id)["gemini_workers"] == 2
+    assert main_app.state.db.get_task(task_id)["gemini_workers_next"] is None
+    detail = client.get(f"/api/tasks/{task_id}").json()
+    assert detail["task"]["gemini_workers"]["active"] == 2
+    assert detail["task"]["gemini_workers"]["editable"] is False
+
+
+def test_gemini_worker_override_rejects_bool_fraction_and_unsupported_task(test_client) -> None:
+    client, _main_app = test_client
+    for value in (True, 1.5):
+        response = client.patch(
+            "/api/tasks/library.metadata_extract/gemini-workers",
+            json={"workers": value},
+        )
+        assert response.status_code == 400
+    response = client.patch(
+        "/api/tasks/library.generate_book_previews/gemini-workers",
+        json={"workers": 1},
+    )
+    assert response.status_code == 400

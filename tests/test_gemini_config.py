@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -76,7 +77,7 @@ def test_configured_model_names_come_only_from_shared_pool(
     ]
 
 
-def test_normalization_uses_first_shared_pool_model(monkeypatch) -> None:
+def test_normalization_uses_full_shared_ordered_model_pool(monkeypatch) -> None:
     from app.modules.library import normalization
 
     monkeypatch.setattr(
@@ -85,4 +86,32 @@ def test_normalization_uses_first_shared_pool_model(monkeypatch) -> None:
         lambda: ["model-first", "model-fallback"],
     )
 
-    assert normalization._resolve_normalization_model() == "model-first"
+    captured = {}
+
+    def fake_pool(**kwargs):  # noqa: ANN003
+        captured["models"] = kwargs["models"]
+        return SimpleNamespace(
+            model_name="model-fallback",
+            value={
+                "suggestion_kind": "create",
+                "target_canonical_id": None,
+                "confidence": 0.8,
+                "confidence_band": "medium",
+                "rationale": "test",
+            },
+        )
+
+    monkeypatch.setattr(normalization, "run_ordered_model_pool", fake_pool)
+    result = normalization._gemini_suggest(
+        entity_type="publisher",
+        raw_name="Publisher",
+        normalized_name="publisher",
+        docs_count=2,
+        mentions_count=2,
+        marker_count=1,
+        canonical_candidates=[],
+        manager=object(),
+    )
+
+    assert captured["models"] == ["model-first", "model-fallback"]
+    assert result["model"] == "model-fallback"

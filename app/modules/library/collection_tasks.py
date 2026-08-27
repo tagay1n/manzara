@@ -37,6 +37,7 @@ def collection_task_definitions(
         },
         {
             "task_id": COLLECTION_VALIDATE_TASK_ID,
+            "gemini_workers_default": 1,
             "panel_id": COLLECTIONS_PANEL_ID,
             "title": "Validate collection proposals",
             "task_type": "metadata",

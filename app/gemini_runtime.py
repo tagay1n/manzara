@@ -6,6 +6,7 @@ import random
 import errno
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -22,7 +23,9 @@ from app.gemini_config import (
 _PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 _UTC = timezone.utc
 _KEY_COOLDOWN_SECONDS = 60
-_GLOBAL_SERVER_PAUSE_SECONDS = 60
+_MODEL_SERVER_PAUSE_SECONDS = 60
+_ACCOUNT_LEASE_TTL_SECONDS = 90
+_ACCOUNT_LEASE_HEARTBEAT_SECONDS = 30
 _MAX_WAIT_SLICE_SECONDS = 10
 
 
@@ -39,7 +42,12 @@ class GeminiAllKeysExhaustedError(GeminiRuntimeError):
 
 
 class GeminiServerPauseError(GeminiRuntimeError):
-    """Raised when Gemini returns 5xx and global pause has been activated."""
+    """Raised when one Gemini model is temporarily paused after a 5xx."""
+
+    def __init__(self, message: str, *, model_name: str | None = None, pause_until: datetime | None = None):
+        self.model_name = model_name
+        self.pause_until = pause_until
+        super().__init__(message)
 
 
 class GeminiRequestRejectedError(GeminiRuntimeError):
@@ -58,6 +66,10 @@ class GeminiStopRequestedError(GeminiRuntimeError):
     """Raised when a task requests graceful stop while waiting for Gemini."""
 
 
+class GeminiResponseValidationError(ValueError):
+    """Response content failed validation and must not affect key health."""
+
+
 @dataclass(frozen=True)
 class GeminiLease:
     """Reserved key context for one Gemini request attempt."""
@@ -67,6 +79,7 @@ class GeminiLease:
     key_value: str
     masked_key: str
     model_name: str
+    account_lease_token: str = ""
 
 
 def _utc_now() -> datetime:
@@ -168,6 +181,7 @@ class GeminiRuntimeManager:
         task_id: Optional[str],
         panel_id: Optional[str],
         should_stop: Optional[Callable[[], bool]] = None,
+        worker_id: Optional[str] = None,
     ):
         self.db = db
         self.task_id = task_id
@@ -175,6 +189,7 @@ class GeminiRuntimeManager:
         self.should_stop = should_stop or (lambda: False)
         self._rand = random.SystemRandom()
         self._local_lock = threading.Lock()
+        self.worker_id = worker_id
 
     def _emit(
         self, event_type: str, payload: Dict[str, Any], *, run_id: Optional[int] = None
@@ -299,6 +314,9 @@ class GeminiRuntimeManager:
         return None
 
     def _ensure_model_rows(self, keys: List[GeminiKey], model_name: str) -> None:
+        ensure_runtime = getattr(self.db, "ensure_gemini_model_runtime", None)
+        if ensure_runtime is not None:
+            ensure_runtime(model_name)
         for key in keys:
             self.db.ensure_gemini_model_state(key.key_id, model_name)
 
@@ -345,8 +363,26 @@ class GeminiRuntimeManager:
                 "wait_until": earliest_cooldown,
             }
 
-        account_choices = sorted(ready_by_account.keys())
-        account_id = self._rand.choice(account_choices)
+        list_leases = getattr(self.db, "list_gemini_account_leases", lambda: [])
+        leases = {
+            str(row.get("account_id") or ""): row
+            for row in list_leases()
+        }
+        account_choices = sorted(
+            ready_by_account.keys(),
+            key=lambda account: (
+                bool(
+                    (leases.get(account) or {}).get("lease_token")
+                    and (
+                        _parse_ts((leases.get(account) or {}).get("lease_expires_at"))
+                        or now_utc
+                    ) > now_utc
+                ),
+                str((leases.get(account) or {}).get("last_acquired_at") or ""),
+                account,
+            ),
+        )
+        account_id = account_choices[0]
         key = self._rand.choice(ready_by_account[account_id])
         return {
             "type": "key",
@@ -395,6 +431,23 @@ class GeminiRuntimeManager:
                 continue
 
             self._ensure_model_rows(keys, model_name)
+            list_model_runtime = getattr(self.db, "list_gemini_model_runtime", lambda: [])
+            model_runtime = next(
+                (
+                    row for row in list_model_runtime()
+                    if str(row.get("model_name") or "") == model_name
+                ),
+                {},
+            )
+            model_pause_until = _parse_ts(model_runtime.get("pause_until"))
+            if model_pause_until is not None and model_pause_until > now_utc:
+                raise GeminiServerPauseError(
+                    f"Gemini model {model_name} paused until {_iso_utc(model_pause_until)}",
+                    model_name=model_name,
+                    pause_until=model_pause_until,
+                )
+            if model_pause_until is not None:
+                self.db.set_gemini_model_pause(model_name, None, None)
             decision = self._pick_candidate(
                 keys=keys, model_name=model_name, now_utc=now_utc
             )
@@ -403,6 +456,17 @@ class GeminiRuntimeManager:
                 continue
 
             key = decision["key"]
+            lease_token = uuid.uuid4().hex
+            lease_expires_at = now_utc + timedelta(seconds=_ACCOUNT_LEASE_TTL_SECONDS)
+            claim_account = getattr(self.db, "try_claim_gemini_account", None)
+            account_claimed = True if claim_account is None else claim_account(
+                key.account_id, lease_token=lease_token, task_id=self.task_id,
+                run_id=run_id, worker_id=(self.worker_id or threading.current_thread().name),
+                now_ts=_iso_utc(now_utc), expires_at=_iso_utc(lease_expires_at),
+            )
+            if not account_claimed:
+                self._sleep_until(None)
+                continue
             cooldown_until = now_utc + timedelta(seconds=_KEY_COOLDOWN_SECONDS)
             claimed = self.db.try_claim_gemini_key_use(
                 key.key_id,
@@ -411,6 +475,9 @@ class GeminiRuntimeManager:
                 cooldown_until=_iso_utc(cooldown_until),
             )
             if not claimed:
+                release = getattr(self.db, "release_gemini_account_lease", None)
+                if release is not None:
+                    release(key.account_id, lease_token)
                 continue
 
             self._emit(
@@ -430,7 +497,28 @@ class GeminiRuntimeManager:
                 key_value=key.key_value,
                 masked_key=key.masked_key,
                 model_name=model_name,
+                account_lease_token=lease_token,
             )
+
+    def _lease_heartbeat(self, lease: GeminiLease, stop: threading.Event) -> None:
+        renew = getattr(self.db, "renew_gemini_account_lease", None)
+        if renew is None:
+            return
+        while not stop.wait(_ACCOUNT_LEASE_HEARTBEAT_SECONDS):
+            now_utc = _utc_now()
+            try:
+                renewed = renew(
+                    lease.account_id,
+                    lease.account_lease_token,
+                    expires_at=_iso_utc(
+                        now_utc + timedelta(seconds=_ACCOUNT_LEASE_TTL_SECONDS)
+                    ),
+                    now_ts=_iso_utc(now_utc),
+                )
+            except Exception:  # a later heartbeat can recover before lease expiry
+                continue
+            if not renewed:
+                return
 
     def _handle_error(
         self,
@@ -485,7 +573,7 @@ class GeminiRuntimeManager:
             ) from error
 
         if status_code is not None and 500 <= status_code <= 599:
-            pause_until = now_utc + timedelta(seconds=_GLOBAL_SERVER_PAUSE_SECONDS)
+            pause_until = now_utc + timedelta(seconds=_MODEL_SERVER_PAUSE_SECONDS)
             self.db.mark_gemini_error(
                 lease.key_id,
                 lease.model_name,
@@ -493,20 +581,29 @@ class GeminiRuntimeManager:
                 error_text=error_text,
                 exhausted=False,
             )
-            self.db.set_gemini_pause(
-                _iso_utc(pause_until), reason=f"gemini_{status_code}"
-            )
+            set_model_pause = getattr(self.db, "set_gemini_model_pause", None)
+            if set_model_pause is not None:
+                set_model_pause(
+                    lease.model_name, _iso_utc(pause_until), reason=f"gemini_{status_code}"
+                )
+            else:
+                self.db.set_gemini_pause(
+                    _iso_utc(pause_until), reason=f"gemini_{status_code}"
+                )
             self._emit(
                 "gemini.pause.started",
                 {
                     "pause_until": _iso_utc(pause_until),
+                    "model_name": lease.model_name,
                     "status_code": status_code,
                     "reason": error_text,
                 },
                 run_id=run_id,
             )
             raise GeminiServerPauseError(
-                f"Gemini server error {status_code}; paused until {_iso_utc(pause_until)}"
+                f"Gemini server error {status_code}; model {lease.model_name} paused until {_iso_utc(pause_until)}",
+                model_name=lease.model_name,
+                pause_until=pause_until,
             ) from error
 
         if _is_timeout_error(error):
@@ -590,8 +687,18 @@ class GeminiRuntimeManager:
 
         for attempt in range(1, attempts + 1):
             lease = self.acquire_key(model_name=model_name, run_id=run_id)
+            heartbeat_stop = threading.Event()
+            heartbeat = threading.Thread(
+                target=self._lease_heartbeat,
+                args=(lease, heartbeat_stop),
+                daemon=True,
+                name=f"gemini-lease-{lease.account_id}",
+            )
+            heartbeat.start()
             try:
                 result = call(lease.key_value, lease)
+            except GeminiResponseValidationError:
+                raise
             except Exception as error:  # noqa: BLE001
                 try:
                     self._handle_error(lease=lease, error=error, run_id=run_id)
@@ -600,6 +707,7 @@ class GeminiRuntimeManager:
                 except GeminiServerPauseError as pause_error:
                     last_error = pause_error
                     if attempt < attempts:
+                        self._sleep_until(pause_error.pause_until)
                         continue
                     raise
                 except GeminiQuotaExceededError:
@@ -628,6 +736,12 @@ class GeminiRuntimeManager:
                     run_id=run_id,
                 )
                 return result
+            finally:
+                heartbeat_stop.set()
+                heartbeat.join(timeout=1.0)
+                release = getattr(self.db, "release_gemini_account_lease", None)
+                if release is not None:
+                    release(lease.account_id, lease.account_lease_token)
 
         if last_error is not None:
             raise last_error
@@ -759,6 +873,22 @@ class GeminiRuntimeManager:
             }
             for account_id, items in sorted(grouped.items(), key=lambda item: item[0])
         ]
+        list_leases = getattr(self.db, "list_gemini_account_leases", lambda: [])
+        leases_by_account = {
+            str(row.get("account_id") or ""): row
+            for row in list_leases()
+        }
+        for account in accounts:
+            lease = leases_by_account.get(str(account["account_id"])) or {}
+            expires_at = _parse_ts(lease.get("lease_expires_at"))
+            account["lease"] = {
+                "active": bool(lease.get("lease_token") and expires_at and expires_at > now_utc),
+                "task_id": lease.get("task_id"),
+                "run_id": lease.get("run_id"),
+                "worker_id": lease.get("worker_id"),
+                "expires_at": lease.get("lease_expires_at"),
+                "last_acquired_at": lease.get("last_acquired_at"),
+            }
 
         exhausted_rows = 0
         usage_by_model = {
@@ -826,6 +956,7 @@ class GeminiRuntimeManager:
                 "exhausted_rows": exhausted_rows,
             },
             "configured_models": configured_models,
+            "model_runtime": getattr(self.db, "list_gemini_model_runtime", lambda: [])(),
             "model_usage": list(usage_by_model.values()),
             "accounts": accounts,
         }

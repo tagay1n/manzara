@@ -1701,7 +1701,7 @@ button {
   color: inherit;
   background: rgba(14, 28, 52, 0.64);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 3px;
 }
@@ -1729,6 +1729,18 @@ button {
   justify-self: end;
 }
 
+.task-list-actions {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+}
+
+.task-list-actions .gemini-worker-control {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
 .task-list-meta,
 .task-list-time {
   color: #7f98bf;
@@ -1753,6 +1765,22 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.gemini-worker-control,
+.gemini-worker-badge {
+  color: #9eb4d4;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.gemini-worker-control select {
+  margin-left: 4px;
+  border: 1px solid #334c72;
+  border-radius: 5px;
+  background: #101c31;
+  color: #dce8fa;
+  padding: 3px 5px;
 }
 
 .task-detail-toggle {

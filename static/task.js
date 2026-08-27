@@ -152,6 +152,24 @@ function toggleButtonModel(task, run) {
   };
 }
 
+function renderGeminiWorkerControl(task) {
+  const target = document.getElementById("gemini-worker-control");
+  const config = task.gemini_workers;
+  if (!config) {
+    target.innerHTML = "";
+    return;
+  }
+  const value = config.active ?? config.next_run ?? config.default;
+  if (!config.editable) {
+    target.innerHTML = `<span class="gemini-worker-badge">${escapeHtml(String(value))} workers</span>`;
+    return;
+  }
+  const options = Array.from({ length: Number(config.max || 0) }, (_, index) => index + 1)
+    .map((count) => `<option value="${count}" ${count === Number(value) ? "selected" : ""}>${count}</option>`)
+    .join("");
+  target.innerHTML = `<label class="gemini-worker-control">Workers <select id="gemini-workers-select">${options}</select></label>`;
+}
+
 function renderRunList(runs) {
   if (!runs.length) {
     return '<div class="run-row">No runs yet.</div>';
@@ -243,6 +261,7 @@ function renderTaskDetail(payload) {
   document.getElementById("task-run-list").innerHTML = renderRunList(runs);
   document.getElementById("run-result").innerHTML = renderRunResult(currentRun);
   const toggleBtn = document.getElementById("task-toggle-btn");
+  renderGeminiWorkerControl(task);
   toggleBtn.classList.remove("active", "red");
   if (buttonModel.cls) toggleBtn.classList.add(buttonModel.cls);
   toggleBtn.title = buttonModel.title;
@@ -387,6 +406,18 @@ async function toggleTask() {
   queueRefresh(0);
 }
 
+async function setGeminiWorkers(workers, select) {
+  if (select) select.disabled = true;
+  try {
+    await api(`/api/tasks/${encodeURIComponent(state.payload.task.task_id)}/gemini-workers`, {
+      method: "PATCH",
+      body: JSON.stringify({ workers: Number(workers) }),
+    });
+  } finally {
+    queueRefresh(0);
+  }
+}
+
 async function stopAll() {
   const stopState = state.payload?.global?.stop_all_state;
   if (stopState === "armed") {
@@ -440,6 +471,14 @@ function setupEventStream() {
 }
 
 function attachUiHandlers() {
+
+  document.getElementById("gemini-worker-control").addEventListener("change", (event) => {
+    const select = event.target?.closest?.("#gemini-workers-select");
+    if (!select) return;
+    setGeminiWorkers(select.value, select).catch((error) => {
+      window.ManzaraUI.toast(error?.message || String(error), { tone: "error" });
+    });
+  });
 
   document.getElementById("task-toggle-btn").addEventListener("click", () => {
     toggleTask().catch((error) => {

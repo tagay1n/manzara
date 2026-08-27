@@ -34,6 +34,7 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
         },
         {
             "task_id": LIBRARY_METADATA_EXTRACT_TASK_ID,
+            "gemini_workers_default": 1,
             "panel_id": "library",
             "title": "Extract metadata",
             "task_type": "metadata",

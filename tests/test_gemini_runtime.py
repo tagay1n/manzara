@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import time
 
 import pytest
 
@@ -155,3 +156,39 @@ def test_snapshot_calculates_exhausted_key_capacity_for_configured_models(
         model["model_name"]
         for model in snapshot["accounts"][0]["keys"][1]["models"]
     ] == ["gemini-a", "gemini-b"]
+
+
+def test_long_request_renews_and_releases_account_lease(monkeypatch) -> None:
+    class Db:
+        def __init__(self) -> None:
+            self.renewals = 0
+            self.releases = 0
+
+        def renew_gemini_account_lease(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            self.renewals += 1
+            return True
+
+        def release_gemini_account_lease(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            self.releases += 1
+            return True
+
+        def mark_gemini_success(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return None
+
+        def insert_event(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return None
+
+    db = Db()
+    manager = GeminiRuntimeManager(db, task_id="task", panel_id="library")
+    lease = GeminiLease("account", "key", "secret", "masked", "model", "token")
+    monkeypatch.setattr(manager, "acquire_key", lambda **_kwargs: lease)
+    monkeypatch.setattr("app.gemini_runtime._ACCOUNT_LEASE_HEARTBEAT_SECONDS", 0.01)
+
+    result = manager.run_with_key(
+        model_name="model",
+        call=lambda *_args: (time.sleep(0.04), "ok")[1],
+    )
+
+    assert result == "ok"
+    assert db.renewals >= 2
+    assert db.releases == 1
