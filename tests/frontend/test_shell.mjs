@@ -94,3 +94,9 @@ test("shared shell has no legacy schedules navigation", () => {
   assert.doesNotMatch(source, /href:\s*["']\/schedules["']/);
   assert.doesNotMatch(source, /title:\s*["']Schedules["']/);
 });
+
+test("shared shell has no command palette", () => {
+  const source = readFileSync(new URL("../../static/shell.js", import.meta.url), "utf-8");
+  assert.doesNotMatch(source, /command-trigger|command-dialog|command-input/);
+  assert.doesNotMatch(source, /ctrlKey|metaKey|Jump to page/);
+});

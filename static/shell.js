@@ -6,21 +6,8 @@
     { id: "library", title: "Library", href: "/library", icon: "book-open" },
     { id: "gemini", title: "Gemini", href: "/gemini", icon: "key-round" },
   ];
-  const STATIC_COMMANDS = [
-    ...NAV_ITEMS.map((item) => ({ ...item, kind: "Page" })),
-    { title: "Classifications", href: "/library/classifications", icon: "tags", kind: "Library" },
-    { title: "Personalities", href: "/library/personalities", icon: "users", kind: "Library" },
-    { title: "Publishers", href: "/library/publishers", icon: "building-2", kind: "Library" },
-    { title: "Collections", href: "/library/collections", icon: "library", kind: "Library" },
-    { title: "Document cleanup", href: "/library/document-cleanup", icon: "list-filter", kind: "Library" },
-  ];
-
   const shellState = {
     mounted: false,
-    commands: [...STATIC_COMMANDS],
-    filteredCommands: [],
-    selectedCommand: 0,
-    commandLoaded: false,
     refreshCoordinator: null,
   };
 
@@ -62,12 +49,6 @@
         </aside>
         <div class="shell-main">
           <header class="topbar">
-            <button id="command-trigger" class="command-trigger" type="button"
-                    aria-haspopup="dialog" aria-controls="command-dialog">
-              <i data-lucide="search"></i>
-              <span>Jump to page, task, flow…</span>
-              <kbd>Ctrl K</kbd>
-            </button>
             <div class="top-controls">
               <span id="stream-state" class="stream-state" data-state="connecting">
                 <span class="status-dot"></span><span>Connecting</span>
@@ -86,17 +67,6 @@
           </footer>
         </div>
       </div>
-      <dialog id="command-dialog" class="command-dialog">
-        <div class="command-frame">
-          <label class="command-input-wrap" for="command-input">
-            <i data-lucide="search"></i>
-            <input id="command-input" autocomplete="off" placeholder="Search pages, flows, and tasks" />
-            <kbd>Esc</kbd>
-          </label>
-          <div id="command-results" class="command-results" role="listbox"></div>
-          <div class="command-help">↑↓ navigate · Enter open · Esc close</div>
-        </div>
-      </dialog>
     `;
   }
 
@@ -134,150 +104,9 @@
       : true;
   }
 
-  function commandMatches(command, query) {
-    if (!query) return true;
-    const haystack = `${command.title || ""} ${command.kind || ""} ${command.subtitle || ""}`.toLowerCase();
-    return haystack.includes(query.toLowerCase());
-  }
-
-  function renderCommands(query = "") {
-    const host = document.getElementById("command-results");
-    if (!host) return;
-    shellState.filteredCommands = shellState.commands.filter((item) => commandMatches(item, query));
-    shellState.selectedCommand = Math.min(
-      Math.max(0, shellState.selectedCommand),
-      Math.max(0, shellState.filteredCommands.length - 1),
-    );
-    host.replaceChildren();
-    if (!shellState.filteredCommands.length) {
-      const empty = document.createElement("div");
-      empty.className = "command-empty";
-      empty.textContent = "No matching destination";
-      host.appendChild(empty);
-      return;
-    }
-    shellState.filteredCommands.forEach((command, index) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `command-result ${index === shellState.selectedCommand ? "selected" : ""}`;
-      button.dataset.commandIndex = String(index);
-      button.setAttribute("role", "option");
-      button.setAttribute("aria-selected", index === shellState.selectedCommand ? "true" : "false");
-      const icon = document.createElement("i");
-      icon.setAttribute("data-lucide", String(command.icon || "corner-down-right"));
-      const copy = document.createElement("span");
-      copy.className = "command-result-copy";
-      const title = document.createElement("strong");
-      title.textContent = String(command.title || "");
-      const meta = document.createElement("small");
-      meta.textContent = String(command.kind || "Page");
-      copy.append(title, meta);
-      button.append(icon, copy);
-      button.addEventListener("click", () => {
-        window.location.assign(command.href);
-      });
-      host.appendChild(button);
-    });
-    window.lucide?.createIcons?.();
-    host.querySelector(".command-result.selected")?.scrollIntoView?.({ block: "nearest" });
-  }
-
-  async function loadDynamicCommands() {
-    if (shellState.commandLoaded) return;
-    shellState.commandLoaded = true;
-    try {
-      const payload = await window.ManzaraCore.api("/api/tasks");
-      const dynamic = [];
-      (payload.flows || []).forEach((flow) => {
-        dynamic.push({
-          title: String(flow.title || flow.panel_id),
-          subtitle: String(flow.panel_id || ""),
-          kind: "Flow",
-          icon: "workflow",
-          href: `/flows/${encodeURIComponent(flow.slug || flow.panel_id)}`,
-        });
-        (flow.tasks || []).forEach((task) => {
-          dynamic.push({
-            title: String(task.title || task.task_id),
-            subtitle: String(flow.title || ""),
-            kind: "Task",
-            icon: window.ManzaraCore.toLucideIcon(task.icon_idle, "play"),
-            href: `/tasks/${encodeURIComponent(task.slug || task.task_id)}`,
-          });
-        });
-      });
-      shellState.commands = [...STATIC_COMMANDS, ...dynamic];
-    } catch (error) {
-      window.ManzaraUI?.toast?.(`Navigation index unavailable: ${error.message || error}`, {
-        tone: "error",
-      });
-    }
-  }
-
-  async function openCommands() {
-    const dialog = document.getElementById("command-dialog");
-    const input = document.getElementById("command-input");
-    if (!dialog || !input) return;
-    await loadDynamicCommands();
-    shellState.selectedCommand = 0;
-    input.value = "";
-    renderCommands("");
-    if (!dialog.open) dialog.showModal();
-    input.focus();
-  }
-
-  function closeCommands() {
-    const dialog = document.getElementById("command-dialog");
-    if (dialog?.open) dialog.close();
-  }
-
-  function moveCommandSelection(delta) {
-    if (!shellState.filteredCommands.length) return;
-    shellState.selectedCommand =
-      (shellState.selectedCommand + delta + shellState.filteredCommands.length)
-      % shellState.filteredCommands.length;
-    renderCommands(document.getElementById("command-input")?.value || "");
-  }
-
   function attachShellHandlers() {
     document.getElementById("rail-toggle")?.addEventListener("click", () => {
       setRailExpanded(!document.documentElement.classList.contains("rail-expanded"));
-    });
-    document.getElementById("command-trigger")?.addEventListener("click", () => {
-      void openCommands();
-    });
-    document.getElementById("command-input")?.addEventListener("input", (event) => {
-      shellState.selectedCommand = 0;
-      renderCommands(event.target.value);
-    });
-    document.getElementById("command-input")?.addEventListener("keydown", (event) => {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        moveCommandSelection(1);
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        moveCommandSelection(-1);
-      } else if (event.key === "Enter") {
-        event.preventDefault();
-        const command = shellState.filteredCommands[shellState.selectedCommand];
-        if (command) window.location.assign(command.href);
-      }
-    });
-    document.getElementById("command-dialog")?.addEventListener("click", (event) => {
-      if (event.target === event.currentTarget) closeCommands();
-    });
-    document.addEventListener("keydown", (event) => {
-      const target = event.target;
-      const typing = target instanceof HTMLInputElement
-        || target instanceof HTMLTextAreaElement
-        || target?.isContentEditable;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        void openCommands();
-      } else if (event.key === "/" && !typing) {
-        event.preventDefault();
-        void openCommands();
-      }
     });
   }
 
@@ -363,14 +192,12 @@
     const host = document.createElement("div");
     host.innerHTML = shellMarkup(activePage);
     const shell = host.firstElementChild;
-    const dialog = host.lastElementChild;
     document.body.insertBefore(shell, pageContent);
     const pageSlot = shell.querySelector("#page-slot");
     if (activePage === "library") {
       pageSlot.appendChild(createLibrarySubnav());
     }
     pageSlot.appendChild(pageContent);
-    document.body.appendChild(dialog);
     shellState.mounted = true;
     setRailExpanded(readRailExpanded(), { persist: false });
     attachShellHandlers();
@@ -381,7 +208,6 @@
 
   window.ManzaraShell = {
     mount,
-    openCommands,
     handleEvent,
     setConnectionState,
   };

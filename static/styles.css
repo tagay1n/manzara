@@ -138,59 +138,6 @@ button {
   z-index: 7;
 }
 
-.topbar-left {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex: 1;
-}
-
-.brand-wrap {
-  display: grid;
-}
-
-.brand {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-.subtitle {
-  margin-top: 1px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.jump-box {
-  min-width: 0;
-  width: min(460px, 100%);
-  height: 38px;
-  display: grid;
-  grid-template-columns: 28px 1fr;
-  align-items: center;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: rgba(10, 18, 36, 0.75);
-  color: #86a3cf;
-  padding: 0 10px 0 8px;
-  gap: 7px;
-}
-
-.jump-box input {
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: #cde2ff;
-  font-size: 13px;
-}
-
-.jump-box input::placeholder {
-  color: #6f87ad;
-}
-
 .top-controls {
   display: flex;
   align-items: center;
@@ -2553,15 +2500,6 @@ button {
     position: static;
   }
 
-  .topbar-left {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .jump-box {
-    width: 100%;
-  }
-
   .panel-grid {
     grid-template-columns: 1fr;
   }
@@ -2666,7 +2604,6 @@ body.console-body {
 
 code,
 pre,
-kbd,
 .status-pill,
 .panel-pill,
 .task-list-time,
@@ -2787,44 +2724,11 @@ kbd,
 
 .topbar {
   min-height: 58px;
+  justify-content: flex-end;
   padding: 9px 18px;
   border-color: var(--line-soft);
   background: rgba(9, 12, 17, 0.9);
   backdrop-filter: blur(16px);
-}
-
-.command-trigger {
-  width: min(520px, 54vw);
-  height: 38px;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0 9px;
-  color: var(--muted);
-  background: rgba(18, 23, 32, 0.72);
-  text-align: left;
-  cursor: pointer;
-}
-
-.command-trigger:hover {
-  border-color: #3a4858;
-  color: var(--text);
-  background: var(--bg-elev);
-}
-
-kbd {
-  min-width: 24px;
-  padding: 2px 6px;
-  border: 1px solid var(--line);
-  border-bottom-color: #3b4654;
-  border-radius: 5px;
-  background: #0b0f15;
-  color: #75808f;
-  font-size: 10px;
-  text-align: center;
 }
 
 .top-controls {
@@ -3195,7 +3099,6 @@ textarea:focus,
   padding: 9px 18px;
 }
 
-.command-dialog,
 .ui-dialog {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -3205,93 +3108,11 @@ textarea:focus,
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
 }
 
-.command-dialog {
-  width: min(640px, calc(100vw - 30px));
-  margin-top: 14vh;
-}
-
-.command-dialog::backdrop,
 .ui-dialog::backdrop,
 .log-dialog::backdrop,
 .evidence-dialog::backdrop {
   background: rgba(2, 4, 7, 0.68);
   backdrop-filter: blur(3px);
-}
-
-.command-frame {
-  display: grid;
-}
-
-.command-input-wrap {
-  height: 52px;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--line-soft);
-  color: var(--muted);
-}
-
-.command-input-wrap input {
-  height: 100%;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  font-size: 15px;
-}
-
-.command-results {
-  max-height: min(56vh, 480px);
-  overflow: auto;
-  padding: 6px;
-}
-
-.command-result {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  border: 0;
-  border-radius: 7px;
-  padding: 9px;
-  color: var(--muted);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-
-.command-result:hover,
-.command-result.selected {
-  color: var(--text);
-  background: #19212b;
-}
-
-.command-result-copy {
-  display: grid;
-  gap: 2px;
-}
-
-.command-result-copy strong {
-  color: inherit;
-  font-size: 13px;
-}
-
-.command-result-copy small,
-.command-help,
-.command-empty {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.command-help,
-.command-empty {
-  padding: 9px 14px;
-}
-
-.command-help {
-  border-top: 1px solid var(--line-soft);
 }
 
 .ui-dialog {
@@ -3497,10 +3318,6 @@ textarea:focus,
     padding: 8px 10px;
   }
 
-  .command-trigger {
-    width: min(100%, 430px);
-  }
-
   .status-pill {
     display: none;
   }
@@ -3521,13 +3338,6 @@ textarea:focus,
 }
 
 @media (max-width: 620px) {
-  .command-trigger span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .command-trigger kbd,
   .stream-state span:last-child {
     display: none;
   }

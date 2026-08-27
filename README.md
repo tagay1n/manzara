@@ -31,7 +31,6 @@ Manzara is an independent implementation tailored to this repository's workflow 
 
 Current UI foundations:
 - Shared responsive console shell with expandable navigation
-- Command palette for pages, flows, and tasks (`Ctrl/Cmd+K` or `/`)
 - API bootstrap followed by SSE-driven operational updates
 - Shared custom dialogs/toasts; browser system dialogs are not used
 - Shared tail/follow/backfill log viewer presented as a desktop drawer or mobile full-screen view
