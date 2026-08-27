@@ -773,6 +773,74 @@ def test_gemini_state_endpoint_returns_grouped_keys(test_client, monkeypatch) ->
     assert "global" in payload
 
 
+def test_gemini_state_reports_capacity_for_every_configured_model(
+    test_client, monkeypatch
+) -> None:
+    client, main_app = test_client
+    keys = [
+        GeminiKey(
+            account_id="acc-a",
+            key_id="acc-a:key-1",
+            key_value="KEY_A_1",
+            masked_key="KEYA...A001",
+        ),
+        GeminiKey(
+            account_id="acc-a",
+            key_id="acc-a:key-2",
+            key_value="KEY_A_2",
+            masked_key="KEYA...A002",
+        ),
+    ]
+    monkeypatch.setattr("app.gemini_runtime.load_gemini_keys", lambda: keys)
+    monkeypatch.setattr(
+        "app.gemini_runtime.load_configured_gemini_model_names",
+        lambda: ["gemini-a", "gemini-b"],
+    )
+
+    main_app.state.db.upsert_gemini_keys(
+        [
+            {
+                "account_id": key.account_id,
+                "key_id": key.key_id,
+                "masked_key": key.masked_key,
+            }
+            for key in keys
+        ]
+    )
+    for key in keys:
+        for model_name in ("gemini-a", "gemini-b"):
+            main_app.state.db.ensure_gemini_model_state(key.key_id, model_name)
+    main_app.state.db.mark_gemini_error(
+        "acc-a:key-1",
+        "gemini-a",
+        now_ts="2026-08-27T10:00:00+00:00",
+        error_text="quota details should not be needed by the page",
+        exhausted=True,
+    )
+
+    response = client.get("/api/gemini/state")
+
+    assert response.status_code == 200
+    payload = response.json()["gemini"]
+    assert payload["configured_models"] == ["gemini-a", "gemini-b"]
+    usage = {item["model_name"]: item for item in payload["model_usage"]}
+    assert usage["gemini-a"] == {
+        "model_name": "gemini-a",
+        "total_keys": 2,
+        "available_keys": 1,
+        "exhausted_keys": 1,
+        "usage_percent": 50,
+        "attempts_cycle": 0,
+        "success_cycle": 0,
+    }
+    assert usage["gemini-b"]["usage_percent"] == 0
+    assert all(
+        [model["model_name"] for model in key["models"]]
+        == ["gemini-a", "gemini-b"]
+        for key in payload["accounts"][0]["keys"]
+    )
+
+
 def test_gemini_reset_key_and_reset_all_clear_exhaustion(test_client, monkeypatch) -> None:
     client, main_app = test_client
 

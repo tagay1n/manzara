@@ -12,7 +12,11 @@ from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from app.db import Database
-from app.gemini_config import GeminiKey, load_gemini_keys
+from app.gemini_config import (
+    GeminiKey,
+    load_configured_gemini_model_names,
+    load_gemini_keys,
+)
 
 
 _PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
@@ -685,6 +689,7 @@ class GeminiRuntimeManager:
             and override_until > now_utc
         )
         state_rows = self.db.list_gemini_model_states(model_name=None)
+        configured_models = load_configured_gemini_model_names()
 
         models_by_key: Dict[str, List[Dict[str, Any]]] = {}
         for row in state_rows:
@@ -711,10 +716,29 @@ class GeminiRuntimeManager:
 
         grouped: Dict[str, List[Dict[str, Any]]] = {}
         for key in keys:
-            model_rows = sorted(
-                models_by_key.get(key.key_id, []),
-                key=lambda item: str(item.get("model_name") or ""),
-            )
+            stored_models = {
+                str(item.get("model_name") or ""): item
+                for item in models_by_key.get(key.key_id, [])
+            }
+            model_rows = []
+            for model_name in configured_models:
+                model_rows.append(
+                    stored_models.get(model_name)
+                    or {
+                        "model_name": model_name,
+                        "exhausted": False,
+                        "exhausted_at": None,
+                        "cooldown_until": None,
+                        "last_used_at": None,
+                        "last_success_at": None,
+                        "last_error_at": None,
+                        "last_error_text": None,
+                        "attempts_total": 0,
+                        "attempts_cycle": 0,
+                        "success_total": 0,
+                        "success_cycle": 0,
+                    }
+                )
             exhausted_models = [
                 item["model_name"] for item in model_rows if item.get("exhausted")
             ]
@@ -737,13 +761,39 @@ class GeminiRuntimeManager:
         ]
 
         exhausted_rows = 0
-        known_models = set()
+        usage_by_model = {
+            model_name: {
+                "model_name": model_name,
+                "total_keys": len(keys),
+                "available_keys": len(keys),
+                "exhausted_keys": 0,
+                "usage_percent": 0,
+                "attempts_cycle": 0,
+                "success_cycle": 0,
+            }
+            for model_name in configured_models
+        }
         for account in accounts:
             for key in account["keys"]:
                 for model in key["models"]:
-                    known_models.add(str(model.get("model_name") or ""))
+                    model_usage = usage_by_model[str(model["model_name"])]
+                    model_usage["attempts_cycle"] += int(
+                        model.get("attempts_cycle") or 0
+                    )
+                    model_usage["success_cycle"] += int(
+                        model.get("success_cycle") or 0
+                    )
                     if model.get("exhausted"):
                         exhausted_rows += 1
+                        model_usage["exhausted_keys"] += 1
+
+        for model_usage in usage_by_model.values():
+            exhausted_keys = int(model_usage["exhausted_keys"])
+            total_keys = int(model_usage["total_keys"])
+            model_usage["available_keys"] = total_keys - exhausted_keys
+            model_usage["usage_percent"] = (
+                round(exhausted_keys / total_keys * 100) if total_keys else 0
+            )
 
         pause_until = control.get("pause_until")
         pause_until_dt = _parse_ts(pause_until)
@@ -772,8 +822,10 @@ class GeminiRuntimeManager:
             "summary": {
                 "accounts": len(accounts),
                 "keys": sum(int(account["key_count"]) for account in accounts),
-                "models_seen": len([item for item in known_models if item]),
+                "models_seen": len(configured_models),
                 "exhausted_rows": exhausted_rows,
             },
+            "configured_models": configured_models,
+            "model_usage": list(usage_by_model.values()),
             "accounts": accounts,
         }

@@ -65,6 +65,35 @@ def test_load_collection_validation_model_pool(monkeypatch, tmp_path: Path) -> N
     assert pools["library_collection_validation"] == ["model-a", "model-b"]
 
 
+def test_configured_model_names_include_aliases_and_pools_once(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.local.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gemini": {
+                    "models": {"library_normalization": "model-shared"},
+                    "model_pools": {
+                        "library_collection_validation": [
+                            "model-shared",
+                            "model-fallback",
+                        ]
+                    },
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
+
+    assert gemini_config.load_configured_gemini_model_names() == [
+        "model-shared",
+        "model-fallback",
+    ]
+
+
 def test_required_model_pool_has_no_implicit_default(monkeypatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.local.yaml"
     config_path.write_text("gemini:\n  accounts: {}\n", encoding="utf-8")

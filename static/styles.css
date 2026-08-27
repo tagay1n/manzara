@@ -2398,6 +2398,108 @@ button {
   gap: 12px;
 }
 
+#gemini-stat-grid {
+  grid-template-columns: repeat(3, minmax(130px, 0.7fr)) repeat(2, minmax(220px, 1.4fr));
+  gap: 12px;
+}
+
+.gemini-stat {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: rgba(5, 12, 24, 0.72);
+  display: grid;
+  gap: 6px;
+}
+
+.gemini-stat span {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.gemini-stat strong {
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.gemini-stat-wide strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.gemini-section-head h2,
+.gemini-section-head p {
+  margin: 0;
+}
+
+.gemini-section-head p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gemini-model-usage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.gemini-usage-card {
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: rgba(5, 12, 24, 0.72);
+}
+
+.gemini-usage-head,
+.gemini-usage-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gemini-usage-head span {
+  color: #cfe5ff;
+  font-size: 12px;
+}
+
+.gemini-usage-head strong {
+  font-size: 20px;
+}
+
+.gemini-usage-track {
+  height: 7px;
+  margin: 10px 0 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(126, 151, 188, 0.2);
+}
+
+.gemini-usage-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #54c6a0;
+}
+
+.gemini-usage-card.is-used .gemini-usage-track span {
+  background: #e0a94f;
+}
+
+.gemini-usage-card.is-exhausted .gemini-usage-track span {
+  background: #ef6b7b;
+}
+
+.gemini-usage-foot {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .gemini-account-card {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -2405,11 +2507,20 @@ button {
   background: rgba(8, 15, 30, 0.75);
 }
 
+.gemini-account-card > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.gemini-account-card > summary::-webkit-details-marker {
+  display: none;
+}
+
 .gemini-account-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 0;
 }
 
 .gemini-account-head h3 {
@@ -2425,12 +2536,20 @@ button {
   margin-bottom: 8px;
 }
 
+.gemini-key-row:last-child {
+  margin-bottom: 0;
+}
+
+.gemini-account-keys {
+  margin-top: 10px;
+}
+
 .gemini-key-head {
   display: flex;
   justify-content: space-between;
   gap: 10px;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .gemini-key-mask {
@@ -2439,58 +2558,40 @@ button {
   color: #d7eaff;
 }
 
-.gemini-key-id {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 11px;
-  color: var(--muted);
-}
-
 .gemini-key-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.gemini-model-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px;
+@media (max-width: 1200px) {
+  #gemini-stat-grid {
+    grid-template-columns: repeat(3, minmax(130px, 1fr));
+  }
+
+  .gemini-stat-wide {
+    grid-column: span 2;
+  }
 }
 
-.gemini-model-card {
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  padding: 8px;
-  background: rgba(5, 12, 24, 0.7);
-}
+@media (max-width: 680px) {
+  #gemini-stat-grid {
+    grid-template-columns: 1fr;
+  }
 
-.gemini-model-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-}
+  .gemini-stat-wide {
+    grid-column: auto;
+  }
 
-.gemini-model-name {
-  font-size: 12px;
-  color: #cfe5ff;
-}
+  .gemini-model-usage {
+    grid-template-columns: 1fr;
+  }
 
-.gemini-model-meta {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.gemini-model-error {
-  margin-top: 6px;
-  padding: 6px;
-  border: 1px solid #5f2d3b;
-  border-radius: 8px;
-  background: rgba(122, 31, 45, 0.22);
-  color: #ffbfd0;
-  font-size: 11px;
-  white-space: pre-wrap;
+  .gemini-key-head,
+  .gemini-usage-foot {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 @media (max-width: 960px) {

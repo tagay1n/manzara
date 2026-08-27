@@ -37,13 +37,48 @@ function renderStats(summary, globalState) {
   }
 
   statGrid.innerHTML = `
-    <div class="stat-cell"><span>Accounts</span><strong>${Number(summary.accounts || 0)}</strong></div>
-    <div class="stat-cell"><span>Keys</span><strong>${Number(summary.keys || 0)}</strong></div>
-    <div class="stat-cell"><span>Models seen</span><strong>${Number(summary.models_seen || 0)}</strong></div>
-    <div class="stat-cell"><span>Exhausted rows</span><strong>${Number(summary.exhausted_rows || 0)}</strong></div>
-    <div class="stat-cell"><span>Pause</span><strong>${escapeHtml(pauseLabel)}</strong></div>
-    <div class="stat-cell"><span>Blackout</span><strong>${escapeHtml(blackoutLabel)}</strong></div>
+    <div class="gemini-stat"><span>Accounts</span><strong>${Number(summary.accounts || 0)}</strong></div>
+    <div class="gemini-stat"><span>Keys</span><strong>${Number(summary.keys || 0)}</strong></div>
+    <div class="gemini-stat"><span>Configured models</span><strong>${Number(summary.models_seen || 0)}</strong></div>
+    <div class="gemini-stat gemini-stat-wide"><span>Request state</span><strong>${escapeHtml(pauseLabel)}</strong></div>
+    <div class="gemini-stat gemini-stat-wide"><span>Reset window</span><strong>${escapeHtml(blackoutLabel)}</strong></div>
   `;
+}
+
+function renderModelUsage(models) {
+  const host = document.getElementById("gemini-model-usage");
+  if (!host) return;
+  if (!models.length) {
+    host.innerHTML = '<div class="run-row">No Gemini models configured.</div>';
+    return;
+  }
+  host.innerHTML = models
+    .map((model) => {
+      const percent = Math.max(0, Math.min(100, Number(model.usage_percent || 0)));
+      const exhausted = Number(model.exhausted_keys || 0);
+      const total = Number(model.total_keys || 0);
+      const stateClass = percent >= 100
+        ? "is-exhausted"
+        : percent > 0
+          ? "is-used"
+          : "is-available";
+      return `
+        <article class="gemini-usage-card ${stateClass}">
+          <div class="gemini-usage-head">
+            <span>${escapeHtml(model.model_name)}</span>
+            <strong>${percent}%</strong>
+          </div>
+          <div class="gemini-usage-track" role="progressbar" aria-label="${escapeHtml(model.model_name)} exhausted key capacity" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}">
+            <span style="width: ${percent}%"></span>
+          </div>
+          <div class="gemini-usage-foot">
+            <span>${exhausted} of ${total} keys exhausted</span>
+            <span>${Number(model.available_keys || 0)} available</span>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function renderAccounts(accounts) {
@@ -58,44 +93,24 @@ function renderAccounts(accounts) {
     .map((account) => {
       const keyRows = (account.keys || [])
         .map((key) => {
-          const models = (key.models || [])
-            .map((model) => {
-              const exhausted = model.exhausted ? "yes" : "no";
-              const cls = model.exhausted ? "panel-pill state-attention" : "panel-pill state-healthy";
-              const lastError = model.last_error_text
-                ? `<div class="gemini-model-error">${escapeHtml(String(model.last_error_text))}</div>`
-                : "";
-              return `
-                <div class="gemini-model-card">
-                  <div class="gemini-model-head">
-                    <span class="gemini-model-name">${escapeHtml(model.model_name)}</span>
-                    <span class="${cls}">${exhausted}</span>
-                  </div>
-                  <div class="gemini-model-meta">cycle ${Number(model.success_cycle || 0)}/${Number(model.attempts_cycle || 0)}</div>
-                  <div class="gemini-model-meta">cooldown: ${escapeHtml(formatDateTime(model.cooldown_until))}</div>
-                  <div class="gemini-model-meta">last used: ${escapeHtml(formatDateTime(model.last_used_at))}</div>
-                  ${lastError}
-                </div>
-              `;
-            })
-            .join("");
-          const exhaustedBadge = (key.exhausted_models || []).length
-            ? `<span class="panel-pill state-attention">${Number((key.exhausted_models || []).length)} exhausted</span>`
-            : '<span class="panel-pill state-healthy">healthy</span>';
+          const exhaustedCount = Number((key.exhausted_models || []).length);
+          const modelCount = Number((key.models || []).length);
+          const exhaustedBadge = exhaustedCount
+            ? `<span class="panel-pill state-attention">${exhaustedCount} of ${modelCount} models exhausted</span>`
+            : '<span class="panel-pill state-healthy">All models available</span>';
+          const resetButton = exhaustedCount
+            ? `<button class="small-btn gemini-reset-key" data-key-id="${escapeHtml(key.key_id)}">Reset key</button>`
+            : "";
           return `
             <div class="gemini-key-row">
               <div class="gemini-key-head">
                 <div>
                   <div class="gemini-key-mask">${escapeHtml(key.masked_key)}</div>
-                  <div class="gemini-key-id">${escapeHtml(key.key_id)}</div>
                 </div>
                 <div class="gemini-key-actions">
                   ${exhaustedBadge}
-                  <button class="small-btn gemini-reset-key" data-key-id="${escapeHtml(key.key_id)}">Reset key</button>
+                  ${resetButton}
                 </div>
-              </div>
-              <div class="gemini-model-grid">
-                ${models || '<div class="run-row">No model activity yet.</div>'}
               </div>
             </div>
           `;
@@ -103,13 +118,13 @@ function renderAccounts(accounts) {
         .join("");
 
       return `
-        <section class="gemini-account-card">
-          <div class="gemini-account-head">
+        <details class="gemini-account-card">
+          <summary class="gemini-account-head">
             <h3>${escapeHtml(account.account_id)}</h3>
             <span class="panel-pill state-running">${Number(account.key_count || 0)} keys</span>
-          </div>
-          ${keyRows}
-        </section>
+          </summary>
+          <div class="gemini-account-keys">${keyRows}</div>
+        </details>
       `;
     })
     .join("");
@@ -128,6 +143,7 @@ function renderPayload(payload) {
   document.getElementById("global-status").textContent =
     `Keys: ${Number(summary.keys || 0)} • Accounts: ${Number(summary.accounts || 0)}`;
   renderStats(summary, globalState);
+  renderModelUsage(gemini.model_usage || []);
   renderAccounts(gemini.accounts || []);
   viewState.set((gemini.accounts || []).length ? "ready" : "empty");
   if (window.lucide?.createIcons) {

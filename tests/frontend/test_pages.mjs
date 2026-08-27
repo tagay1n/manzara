@@ -118,6 +118,7 @@ const GEMINI_PAGE_IDS = [
   "last-event",
   "gemini-status",
   "gemini-stat-grid",
+  "gemini-model-usage",
   "gemini-accounts",
   "reset-all-btn",
   "override-blackout-btn",
@@ -3379,4 +3380,81 @@ test("gemini page confirms and overrides an active blackout", async () => {
   assert.equal(call.options.method, "POST");
   assert.equal(harness.elements.get("override-blackout-btn").hidden, true);
   assert.match(harness.elements.get("gemini-stat-grid").innerHTML, /overridden until/i);
+});
+
+test("gemini page prioritizes model capacity and hides diagnostic errors", async () => {
+  const harness = createHarness({
+    source: GEMINI_SOURCE,
+    ids: GEMINI_PAGE_IDS,
+    locationPathname: "/gemini",
+    apiResolver(path) {
+      if (path !== "/api/gemini/state") throw new Error(`unexpected path: ${path}`);
+      return {
+        event_cursor: 92,
+        gemini: {
+          summary: { accounts: 1, keys: 4, models_seen: 2, exhausted_rows: 3 },
+          global: {
+            cycle_label: "2026-08-27",
+            reset_at_utc: "2026-08-28T07:00:00+00:00",
+            blackout_active: false,
+            blackout_window_active: false,
+            blackout_overridden: false,
+            blackout_start_utc: "2026-08-28T06:00:00+00:00",
+            pause_active: false,
+          },
+          model_usage: [
+            {
+              model_name: "gemini-a",
+              total_keys: 4,
+              available_keys: 1,
+              exhausted_keys: 3,
+              usage_percent: 75,
+              attempts_cycle: 10,
+              success_cycle: 7,
+            },
+            {
+              model_name: "gemini-b",
+              total_keys: 4,
+              available_keys: 4,
+              exhausted_keys: 0,
+              usage_percent: 0,
+              attempts_cycle: 0,
+              success_cycle: 0,
+            },
+          ],
+          accounts: [
+            {
+              account_id: "acc-a",
+              key_count: 1,
+              keys: [
+                {
+                  key_id: "acc-a:key-1",
+                  masked_key: "KEYA...A001",
+                  exhausted_models: ["gemini-a"],
+                  models: [
+                    {
+                      model_name: "gemini-a",
+                      exhausted: true,
+                      last_error_text: "technical quota message that must stay hidden",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      };
+    },
+  });
+  await harness.flush();
+
+  const modelHtml = harness.elements.get("gemini-model-usage").innerHTML;
+  const accountsHtml = harness.elements.get("gemini-accounts").innerHTML;
+  assert.match(modelHtml, /gemini-a/);
+  assert.match(modelHtml, /75%/);
+  assert.match(modelHtml, /3 of 4 keys exhausted/);
+  assert.match(modelHtml, /gemini-b/);
+  assert.doesNotMatch(accountsHtml, /technical quota message/);
+  assert.doesNotMatch(accountsHtml, /cooldown:/);
+  assert.doesNotMatch(accountsHtml, /last used:/);
 });

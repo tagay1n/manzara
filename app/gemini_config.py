@@ -178,6 +178,14 @@ def load_gemini_model_pools() -> Dict[str, List[str]]:
     return pools
 
 
+def load_configured_gemini_model_names() -> List[str]:
+    """Return every configured runtime model once, in configuration order."""
+    model_names = list(load_gemini_models().values())
+    for pool in load_gemini_model_pools().values():
+        model_names.extend(pool)
+    return list(dict.fromkeys(model_names))
+
+
 def load_required_gemini_model_pool(alias: str) -> List[str]:
     """Load one explicitly configured ordered pool without implicit defaults."""
     pool_name = str(alias or "").strip()
