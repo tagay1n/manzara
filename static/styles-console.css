@@ -665,6 +665,235 @@ textarea:focus,
   color: #c8d0da;
 }
 
+.task-detail-layout {
+  grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.8fr);
+}
+
+.run-workspace-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.run-workspace-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.run-workspace-head h2 {
+  margin: 0;
+}
+
+.run-workspace-tabs {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #0b0f15;
+}
+
+.run-workspace-tab {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 12px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.run-workspace-tab:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.run-workspace-tab.active {
+  color: #e7f3f4;
+  background: #1b252e;
+  box-shadow: inset 0 0 0 1px #31444d;
+}
+
+.run-workspace-tab:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.run-workspace-panel[hidden] {
+  display: none;
+}
+
+.task-log-surface {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #2b3744;
+  border-radius: 10px;
+  background: #080b10;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+}
+
+.task-log-head,
+.task-log-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  background: #0e131a;
+}
+
+.task-log-head {
+  min-height: 54px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.task-log-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.task-log-identity h3,
+.task-log-identity p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-log-identity h3 {
+  margin: 0;
+  color: #e5e9ef;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.task-log-identity p {
+  margin: 3px 0 0;
+  color: #7f8997;
+  font-size: 11px;
+}
+
+.task-log-lights {
+  display: flex;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.task-log-lights i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #49525f;
+}
+
+.task-log-lights i:nth-child(2) {
+  background: #70613f;
+}
+
+.task-log-lights i:nth-child(3) {
+  background: #3d6658;
+}
+
+.task-log-viewport {
+  position: relative;
+  min-height: 380px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    #080b10;
+  background-size: 4ch 100%;
+}
+
+.task-log-content {
+  box-sizing: border-box;
+  width: 100%;
+  height: clamp(380px, 56vh, 660px);
+  margin: 0;
+  padding: 16px 18px 22px;
+  overflow: auto;
+  color: #cbd3dd;
+  background: transparent;
+  font-family: "Ubuntu Mono", "Noto Sans Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-color: #35414e #0a0e13;
+  scrollbar-width: thin;
+}
+
+.task-log-content::selection {
+  color: #f4fbfc;
+  background: rgba(105, 174, 188, 0.38);
+}
+
+.task-log-content::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.task-log-content::-webkit-scrollbar-track {
+  background: #0a0e13;
+}
+
+.task-log-content::-webkit-scrollbar-thumb {
+  border: 3px solid #0a0e13;
+  border-radius: 999px;
+  background: #35414e;
+}
+
+.task-log-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #687381;
+  font-family: "Ubuntu Mono", "Noto Sans Mono", monospace;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.task-log-empty[hidden] {
+  display: none;
+}
+
+.task-log-surface[data-state="error"] {
+  border-color: rgba(208, 111, 120, 0.52);
+}
+
+.task-log-foot {
+  padding: 8px 12px;
+  border-top: 1px solid var(--line-soft);
+  color: #687381;
+  font-family: "Ubuntu Mono", "Noto Sans Mono", monospace;
+  font-size: 10px;
+}
+
+.task-log-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #819a91;
+}
+
+.task-log-follow i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(102, 182, 145, 0.1);
+}
+
+.task-log-surface[data-state="closed"] .task-log-follow,
+.task-log-surface[data-state="error"] .task-log-follow {
+  opacity: 0.42;
+}
+
 :focus-visible {
   outline: 2px solid #78aeb8;
   outline-offset: 2px;
@@ -759,6 +988,14 @@ textarea:focus,
     padding: 8px 10px 0;
   }
 
+  .task-detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .task-log-content {
+    height: clamp(320px, 52vh, 520px);
+  }
+
   .log-dialog {
     width: 100vw;
     max-width: 100vw;
@@ -777,6 +1014,37 @@ textarea:focus,
 
   .library-overview-head,
   .task-detail-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .run-workspace-head {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .run-workspace-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .task-log-head {
+    align-items: flex-start;
+  }
+
+  .task-log-identity p {
+    white-space: normal;
+  }
+
+  .task-log-content {
+    height: min(55vh, 440px);
+    min-height: 300px;
+    padding: 14px;
+    font-size: 11px;
+  }
+
+  .task-log-foot {
     align-items: flex-start;
     flex-direction: column;
   }

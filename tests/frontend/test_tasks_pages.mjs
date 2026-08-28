@@ -191,8 +191,6 @@ test("task page renders running control state and toggles task endpoint", async 
       "task-run-list",
       "run-result",
       "last-event",
-      "close-logs",
-      "log-dialog",
       "copy-logs",
       "log-title",
       "log-content",
@@ -227,6 +225,107 @@ test("task page renders running control state and toggles task endpoint", async 
   assert.equal(toggleCalls.length, 1);
   const detailCalls = harness.apiCalls.filter((call) => call.path === "/api/tasks/quick?limit=20");
   assert.ok(detailCalls.length >= 2);
+});
+
+test("task page opens logs inline and returns to overview", async () => {
+  const detailPayload = {
+    event_cursor: 12,
+    task: {
+      task_id: "maintenance.quick",
+      slug: "quick",
+      title: "Quick",
+      task_type: "scan",
+      icon_idle: "Play",
+    },
+    panel: { title: "Operations" },
+    stats: {
+      total_runs: 2,
+      status_counts: { completed: 1, failed: 1 },
+      last_success_at: "2026-03-24T10:00:01Z",
+    },
+    runs: [
+      {
+        run_id: 11,
+        status: "completed",
+        started_at: "2026-03-24T10:00:00Z",
+        finished_at: "2026-03-24T10:00:01Z",
+        exit_code: 0,
+        error_text: null,
+        summary: { message: "Done" },
+      },
+      {
+        run_id: 10,
+        status: "failed",
+        started_at: "2026-03-23T10:00:00Z",
+        finished_at: "2026-03-23T10:00:02Z",
+        exit_code: 1,
+        error_text: "Failed",
+        summary: { message: "Failed" },
+      },
+    ],
+    global: { active_tasks: 0, stop_all_state: "disabled" },
+  };
+  const harness = createHarness({
+    source: TASK_SOURCE,
+    ids: [
+      "global-status", "stop-all-btn", "task-toggle-btn", "task-title", "task-subtitle",
+      "task-stat-grid", "task-run-list", "run-result", "last-event", "workspace-tab-overview",
+      "workspace-tab-logs", "run-overview-panel", "run-logs-panel", "log-title",
+      "log-viewer-state", "log-surface", "log-empty-state", "copy-logs", "log-content",
+    ],
+    locationPathname: "/tasks/quick",
+    apiResolver(path) {
+      if (path === "/api/tasks/quick?limit=20") return JSON.parse(JSON.stringify(detailPayload));
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  await harness.flush();
+  assert.equal(harness.elements.get("workspace-tab-overview").getAttribute("aria-selected"), "true");
+  assert.equal(harness.elements.get("run-logs-panel").hidden, true);
+  assert.deepEqual(harness.logViewer.openCalls, []);
+
+  harness.elements.get("run-result").dispatch("click", {
+    target: {
+      closest(selector) {
+        return selector === "#show-run-logs" ? { dataset: { runId: "11" } } : null;
+      },
+    },
+  });
+  await harness.flush();
+  assert.equal(harness.elements.get("workspace-tab-logs").getAttribute("aria-selected"), "true");
+  assert.equal(harness.elements.get("run-logs-panel").hidden, false);
+  assert.match(harness.elements.get("log-title").textContent, /Quick.*run 11/i);
+  assert.deepEqual(harness.logViewer.openCalls, [11]);
+
+  harness.elements.get("task-run-list").dispatch("click", {
+    target: {
+      closest(selector) {
+        return selector === ".task-run-row" ? { dataset: { runId: "10" } } : null;
+      },
+    },
+  });
+  await harness.flush();
+  assert.deepEqual(harness.logViewer.openCalls, [11, 10]);
+  assert.match(harness.elements.get("log-title").textContent, /run 10/i);
+
+  harness.elements.get("workspace-tab-overview").dispatch("click");
+  assert.equal(harness.elements.get("workspace-tab-overview").getAttribute("aria-selected"), "true");
+  assert.equal(harness.elements.get("run-logs-panel").hidden, true);
+  assert.equal(harness.logViewer.activeRunId, null);
+
+  const tablist = harness.document.querySelector(".run-workspace-tabs");
+  tablist.dispatch("keydown", {
+    key: "ArrowRight",
+    preventDefault() {},
+    target: {
+      closest(selector) {
+        return selector === "[role='tab']" ? harness.elements.get("workspace-tab-overview") : null;
+      },
+    },
+  });
+  await harness.flush();
+  assert.equal(harness.elements.get("workspace-tab-logs").getAttribute("aria-selected"), "true");
 });
 
 test("tasks catalog presents conveyor steps in left-to-right execution order", async () => {
@@ -377,8 +476,6 @@ test("task page normalizes idle icon names for lucide glyph rendering", async ()
       "task-run-list",
       "run-result",
       "last-event",
-      "close-logs",
-      "log-dialog",
       "copy-logs",
       "log-title",
       "log-content",
@@ -450,8 +547,6 @@ test("task page renders structured run artifacts from backend summary", async ()
       "task-run-list",
       "run-result",
       "last-event",
-      "close-logs",
-      "log-dialog",
       "copy-logs",
       "log-title",
       "log-content",
@@ -509,8 +604,6 @@ test("task page applies toggle response run and enables logs immediately", async
       "task-run-list",
       "run-result",
       "last-event",
-      "close-logs",
-      "log-dialog",
       "copy-logs",
       "log-title",
       "log-content",
@@ -561,8 +654,6 @@ test("task page renders loading then error when task detail fetch fails", async 
       "task-run-list",
       "run-result",
       "last-event",
-      "close-logs",
-      "log-dialog",
       "copy-logs",
       "log-title",
       "log-content",

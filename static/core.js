@@ -639,6 +639,9 @@
     const backfillLimit = Math.max(1, Math.trunc(Number(options.backfillLimit || 400)));
     const nearBottomThresholdPx = Math.max(0, Math.trunc(Number(options.nearBottomThresholdPx || 36)));
     const backfillTriggerPx = Math.max(0, Math.trunc(Number(options.backfillTriggerPx || 48)));
+    const onStateChange = typeof options.onStateChange === "function"
+      ? options.onStateChange
+      : null;
 
     let activeRunId = null;
     let nextAfterLogId = 0;
@@ -647,8 +650,22 @@
     let pollTimer = null;
     let loadingFollow = false;
     let loadingBackfill = false;
+    let requestVersion = 0;
+    let currentStatus = "closed";
     const entryIds = new Set();
     const entries = [];
+
+    function emitState(status, error = null) {
+      currentStatus = status;
+      if (!onStateChange) return;
+      onStateChange({
+        status,
+        activeRunId,
+        bufferedLines: entries.length,
+        hasMoreBefore,
+        error: error ? String(error?.message || error) : "",
+      });
+    }
 
     function clearPollTimer() {
       if (pollTimer) {
@@ -756,6 +773,8 @@
 
     async function pollFollow() {
       if (!activeRunId || loadingFollow) return;
+      const version = requestVersion;
+      const runId = activeRunId;
       loadingFollow = true;
       try {
         const wasNearBottom = isNearBottom();
@@ -763,12 +782,16 @@
           afterLogId: nextAfterLogId,
           limit: followLimit,
         });
-        if (!payload) return;
+        if (!payload || version !== requestVersion || runId !== activeRunId) return;
         appendEntries(payload.lines);
         applyCursorPayload(payload, { after: nextAfterLogId, before: nextBeforeLogId });
         if (wasNearBottom && contentNode) {
           contentNode.scrollTop = contentNode.scrollHeight;
         }
+        emitState(entries.length ? "ready" : "empty");
+      } catch (error) {
+        if (version === requestVersion && runId === activeRunId) emitState("error", error);
+        throw error;
       } finally {
         loadingFollow = false;
       }
@@ -777,6 +800,8 @@
     async function loadOlder() {
       if (!activeRunId || loadingBackfill) return;
       if (!hasMoreBefore || nextBeforeLogId <= 0) return;
+      const version = requestVersion;
+      const runId = activeRunId;
       loadingBackfill = true;
       try {
         const previousHeight = contentNode ? contentNode.scrollHeight : 0;
@@ -785,13 +810,17 @@
           beforeLogId: nextBeforeLogId,
           limit: backfillLimit,
         });
-        if (!payload) return;
+        if (!payload || version !== requestVersion || runId !== activeRunId) return;
         prependEntries(payload.lines);
         applyCursorPayload(payload, { before: nextBeforeLogId, after: nextAfterLogId });
         if (contentNode) {
           const delta = contentNode.scrollHeight - previousHeight;
           contentNode.scrollTop = previousTop + delta;
         }
+        emitState(entries.length ? "ready" : "empty");
+      } catch (error) {
+        if (version === requestVersion && runId === activeRunId) emitState("error", error);
+        throw error;
       } finally {
         loadingBackfill = false;
       }
@@ -824,6 +853,8 @@
         throw new Error("run_id must be a positive integer");
       }
       clearPollTimer();
+      requestVersion += 1;
+      const version = requestVersion;
       resetState();
       if (titleNode) {
         titleNode.textContent = `Logs • ${taskTitle} • run ${activeRunId}`;
@@ -831,23 +862,32 @@
       if (dialogNode && !dialogNode.open && typeof dialogNode.showModal === "function") {
         dialogNode.showModal();
       }
+      emitState("loading");
 
-      const payload = await fetchChunk({ tail: true, limit: tailLimit });
-      if (payload) {
-        appendEntries(payload.lines);
-        applyCursorPayload(payload);
-      }
-      if (contentNode) {
-        contentNode.scrollTop = contentNode.scrollHeight;
-      }
+      try {
+        const payload = await fetchChunk({ tail: true, limit: tailLimit });
+        if (version !== requestVersion) return;
+        if (payload) {
+          appendEntries(payload.lines);
+          applyCursorPayload(payload);
+        }
+        if (contentNode) {
+          contentNode.scrollTop = contentNode.scrollHeight;
+        }
+        emitState(entries.length ? "ready" : "empty");
 
-      pollTimer = setInterval(() => {
-        pollFollow().catch((error) => console.error(error));
-      }, Number.isFinite(pollIntervalMs) && pollIntervalMs > 0 ? pollIntervalMs : 1500);
+        pollTimer = setInterval(() => {
+          pollFollow().catch((error) => console.error(error));
+        }, Number.isFinite(pollIntervalMs) && pollIntervalMs > 0 ? pollIntervalMs : 1500);
+      } catch (error) {
+        if (version === requestVersion) emitState("error", error);
+        throw error;
+      }
     }
 
     function close(options = {}) {
       clearPollTimer();
+      requestVersion += 1;
       activeRunId = null;
       if (options.keepContent !== true) {
         resetState();
@@ -855,6 +895,7 @@
       if (options.closeDialog !== false && dialogNode && dialogNode.open) {
         dialogNode.close();
       }
+      emitState("closed");
     }
 
     function destroy() {
@@ -877,6 +918,7 @@
           nextBeforeLogId,
           hasMoreBefore,
           bufferedLines: entries.length,
+          status: currentStatus,
         };
       },
     };

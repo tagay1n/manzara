@@ -365,6 +365,11 @@ export function createHarness({
     started: 0,
     stopped: 0,
   };
+  const logViewer = {
+    activeRunId: null,
+    closeCalls: 0,
+    openCalls: [],
+  };
 
   const windowObj = {
     location: { pathname: locationPathname },
@@ -642,12 +647,12 @@ export function createHarness({
         };
       },
       createRunLogViewer(options = {}) {
-        let activeRunId = null;
         return {
           async open(runId, taskTitle = "Task") {
-            activeRunId = Number(runId || 0);
+            logViewer.activeRunId = Number(runId || 0);
+            logViewer.openCalls.push(logViewer.activeRunId);
             if (options.titleNode) {
-              options.titleNode.textContent = `Logs • ${taskTitle} • run ${activeRunId}`;
+              options.titleNode.textContent = `Logs • ${taskTitle} • run ${logViewer.activeRunId}`;
             }
             if (options.contentNode) {
               options.contentNode.textContent = "";
@@ -655,15 +660,30 @@ export function createHarness({
             if (options.dialogNode && !options.dialogNode.open) {
               options.dialogNode.showModal?.();
             }
+            options.onStateChange?.({
+              status: "empty",
+              activeRunId: logViewer.activeRunId,
+              bufferedLines: 0,
+              hasMoreBefore: false,
+              error: "",
+            });
           },
           close(closeOptions = {}) {
-            activeRunId = null;
+            logViewer.activeRunId = null;
+            logViewer.closeCalls += 1;
             if (options.contentNode && closeOptions.keepContent !== true) {
               options.contentNode.textContent = "";
             }
             if (closeOptions.closeDialog !== false && options.dialogNode?.open) {
               options.dialogNode.close?.();
             }
+            options.onStateChange?.({
+              status: "closed",
+              activeRunId: null,
+              bufferedLines: 0,
+              hasMoreBefore: false,
+              error: "",
+            });
           },
           destroy() {
             this.close();
@@ -672,7 +692,7 @@ export function createHarness({
           async pollFollow() {},
           getState() {
             return {
-              activeRunId,
+              activeRunId: logViewer.activeRunId,
               nextAfterLogId: 0,
               nextBeforeLogId: 0,
               hasMoreBefore: false,
@@ -746,6 +766,7 @@ export function createHarness({
     alerts,
     prompts,
     sse,
+    logViewer,
     async flush() {
       for (let i = 0; i < 16; i += 1) {
         await Promise.resolve();

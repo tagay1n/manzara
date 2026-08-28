@@ -610,6 +610,7 @@ test("createRunLogViewer uses tail on open then follows and backfills with curso
       this.open = false;
     },
   };
+  const viewerStates = [];
 
   const viewer = core.createRunLogViewer({
     api: fakeApi,
@@ -619,6 +620,9 @@ test("createRunLogViewer uses tail on open then follows and backfills with curso
     tailLimit: 3,
     followLimit: 2,
     backfillLimit: 2,
+    onStateChange(nextState) {
+      viewerStates.push(nextState);
+    },
   });
 
   await viewer.open(77, "Demo");
@@ -627,6 +631,8 @@ test("createRunLogViewer uses tail on open then follows and backfills with curso
   assert.match(contentNode.textContent, /line-10\nline-11\nline-12\n$/);
   assert.match(calls[0], /\/api\/runs\/77\/logs\?/);
   assert.match(calls[0], /tail=true/);
+  assert.deepEqual(viewerStates.map((item) => item.status), ["loading", "ready"]);
+  assert.equal(viewerStates.at(-1).bufferedLines, 3);
 
   await viewer.pollFollow();
   assert.match(contentNode.textContent, /line-13\n$/);
@@ -646,4 +652,40 @@ test("createRunLogViewer uses tail on open then follows and backfills with curso
   assert.equal(dialogNode.open, false);
   assert.equal(clearedInterval > 0, true);
   assert.equal(viewer.getState().activeRunId, null);
+  assert.equal(viewerStates.at(-1).status, "closed");
+});
+
+test("createRunLogViewer reports empty and error states", async () => {
+  const states = [];
+  let shouldFail = false;
+  const core = loadCore({
+    timerApi: {
+      setInterval() { return 1; },
+      clearInterval() {},
+    },
+  });
+  const viewer = core.createRunLogViewer({
+    api: async () => {
+      if (shouldFail) throw new Error("logs unavailable");
+      return {
+        run: { run_id: 5 },
+        lines: [],
+        next_after_log_id: 0,
+        next_before_log_id: 0,
+        has_more_before: false,
+      };
+    },
+    contentNode: { textContent: "", scrollTop: 0, scrollHeight: 0, clientHeight: 100 },
+    onStateChange(nextState) {
+      states.push(nextState);
+    },
+  });
+
+  await viewer.open(5, "Demo");
+  assert.deepEqual(states.map((item) => item.status), ["loading", "empty"]);
+
+  shouldFail = true;
+  await assert.rejects(viewer.open(6, "Demo"), /logs unavailable/);
+  assert.equal(states.at(-1).status, "error");
+  assert.equal(states.at(-1).error, "logs unavailable");
 });

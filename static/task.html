@@ -36,25 +36,44 @@
               <div id="task-run-list" class="task-run-list"></div>
             </section>
 
-            <section class="runs-card">
-              <h2>Run Result</h2>
-              <div id="run-result" class="run-result">Select a run.</div>
+            <section class="runs-card run-workspace-card">
+              <div class="run-workspace-head">
+                <h2>Run Workspace</h2>
+                <div class="run-workspace-tabs" role="tablist" aria-label="Run workspace">
+                  <button id="workspace-tab-overview" class="run-workspace-tab active" type="button" role="tab" aria-selected="true" aria-controls="run-overview-panel" tabindex="0">Overview</button>
+                  <button id="workspace-tab-logs" class="run-workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="run-logs-panel" tabindex="-1">Logs</button>
+                </div>
+              </div>
+
+              <div id="run-overview-panel" class="run-workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-overview">
+                <div id="run-result" class="run-result">Select a run.</div>
+              </div>
+
+              <div id="run-logs-panel" class="run-workspace-panel" role="tabpanel" aria-labelledby="workspace-tab-logs" hidden>
+                <section id="log-surface" class="task-log-surface" aria-label="Run logs" data-state="closed">
+                  <header class="task-log-head">
+                    <div class="task-log-identity">
+                      <span class="task-log-lights" aria-hidden="true"><i></i><i></i><i></i></span>
+                      <div>
+                        <h3 id="log-title">Run Logs</h3>
+                        <p id="log-viewer-state" role="status" aria-live="polite">Select a run to inspect its logs.</p>
+                      </div>
+                    </div>
+                    <button id="copy-logs" class="small-btn" type="button">Copy logs</button>
+                  </header>
+                  <div class="task-log-viewport">
+                    <pre id="log-content" class="task-log-content" tabindex="0" aria-label="Run log output"></pre>
+                    <div id="log-empty-state" class="task-log-empty" aria-hidden="true" hidden>No log lines yet.</div>
+                  </div>
+                  <footer class="task-log-foot">
+                    <span>Scroll to the top to load earlier lines</span>
+                    <span class="task-log-follow"><i aria-hidden="true"></i> Following live output</span>
+                  </footer>
+                </section>
+              </div>
             </section>
           </section>
         </main>
-
-    <dialog id="log-dialog" class="log-dialog">
-      <div class="log-head">
-        <h3 id="log-title">Run Logs</h3>
-        <button id="close-logs" class="icon-btn" title="Close logs" aria-label="Close logs">
-          <i data-lucide="x"></i>
-        </button>
-      </div>
-      <pre id="log-content" class="log-content"></pre>
-      <div class="log-controls">
-        <button id="copy-logs" class="small-btn">Copy</button>
-      </div>
-    </dialog>
 
     <script src="/static/sound-notifier.js"></script>
     <script src="/static/core.js"></script>

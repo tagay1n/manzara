@@ -7,6 +7,7 @@ const state = {
   eventStreamController: null,
   selectedRunId: null,
   logViewer: null,
+  activeWorkspaceTab: "overview",
   soundNotifier: null,
 };
 
@@ -228,6 +229,84 @@ function renderRunResult(run) {
   `;
 }
 
+function updateLogViewerState(viewerState = {}) {
+  const status = String(viewerState.status || "closed");
+  const surface = document.getElementById("log-surface");
+  const statusNode = document.getElementById("log-viewer-state");
+  const emptyNode = document.getElementById("log-empty-state");
+  if (surface) {
+    surface.dataset.state = status;
+    surface.setAttribute("aria-busy", status === "loading" ? "true" : "false");
+  }
+  if (!statusNode || !emptyNode) return;
+
+  const lineCount = Number(viewerState.bufferedLines || 0);
+  const messages = {
+    loading: "Loading recent lines…",
+    ready: `${lineCount} log ${lineCount === 1 ? "line" : "lines"} • Following live output`,
+    empty: "No log lines yet • Waiting for output",
+    error: `Could not load logs: ${String(viewerState.error || "Unknown error")}`,
+    closed: "Select Logs to follow the selected run.",
+  };
+  statusNode.textContent = messages[status] || messages.closed;
+  emptyNode.hidden = !["loading", "empty", "error"].includes(status);
+  emptyNode.setAttribute("aria-hidden", emptyNode.hidden ? "true" : "false");
+  if (status === "loading") emptyNode.textContent = "Loading log output…";
+  if (status === "empty") emptyNode.textContent = "No log lines yet.";
+  if (status === "error") emptyNode.textContent = "Log output is temporarily unavailable.";
+}
+
+function applyWorkspaceTab() {
+  const isOverview = state.activeWorkspaceTab === "overview";
+  const overviewTab = document.getElementById("workspace-tab-overview");
+  const logsTab = document.getElementById("workspace-tab-logs");
+  const overviewPanel = document.getElementById("run-overview-panel");
+  const logsPanel = document.getElementById("run-logs-panel");
+  overviewTab.classList.toggle("active", isOverview);
+  overviewTab.setAttribute("aria-selected", isOverview ? "true" : "false");
+  overviewTab.setAttribute("tabindex", isOverview ? "0" : "-1");
+  logsTab.classList.toggle("active", !isOverview);
+  logsTab.setAttribute("aria-selected", isOverview ? "false" : "true");
+  logsTab.setAttribute("tabindex", isOverview ? "-1" : "0");
+  overviewPanel.hidden = !isOverview;
+  logsPanel.hidden = isOverview;
+}
+
+async function openSelectedRunLogs() {
+  const run = selectedRun();
+  const runId = Number(run?.run_id || 0);
+  const viewerState = state.logViewer?.getState() || {};
+  if (!runId || (viewerState.activeRunId === runId && viewerState.status !== "error")) return;
+  await state.logViewer?.open(runId, state.payload?.task?.title || state.taskId);
+}
+
+function selectWorkspaceTab(tab, { focus = false } = {}) {
+  if (tab !== "overview" && tab !== "logs") return;
+  if (tab === "logs" && !selectedRun()) return;
+  state.activeWorkspaceTab = tab;
+  applyWorkspaceTab();
+  const tabNode = document.getElementById(`workspace-tab-${tab}`);
+  if (focus && typeof tabNode?.focus === "function") tabNode.focus();
+  if (tab === "overview") {
+    state.logViewer?.close();
+    return;
+  }
+  openSelectedRunLogs().catch((error) => console.error(error));
+}
+
+function syncWorkspaceForRun(run) {
+  const logsTab = document.getElementById("workspace-tab-logs");
+  logsTab.disabled = !Number(run?.run_id || 0);
+  if (logsTab.disabled && state.activeWorkspaceTab === "logs") {
+    selectWorkspaceTab("overview");
+    return;
+  }
+  applyWorkspaceTab();
+  if (state.activeWorkspaceTab === "logs") {
+    openSelectedRunLogs().catch((error) => console.error(error));
+  }
+}
+
 
 function renderGlobalState(payload) {
   const active = payload.global.active_tasks || 0;
@@ -260,6 +339,7 @@ function renderTaskDetail(payload) {
   `;
   document.getElementById("task-run-list").innerHTML = renderRunList(runs);
   document.getElementById("run-result").innerHTML = renderRunResult(currentRun);
+  syncWorkspaceForRun(currentRun);
   const toggleBtn = document.getElementById("task-toggle-btn");
   renderGeminiWorkerControl(task);
   toggleBtn.classList.remove("active", "red");
@@ -280,6 +360,7 @@ function renderTaskLoading() {
   document.getElementById("task-stat-grid").innerHTML = "";
   document.getElementById("task-run-list").innerHTML = '<div class="run-row">Loading runs...</div>';
   document.getElementById("run-result").innerHTML = '<div class="run-row">Loading run details...</div>';
+  syncWorkspaceForRun(null);
 }
 
 function renderTaskError(error) {
@@ -291,6 +372,7 @@ function renderTaskError(error) {
   document.getElementById("task-stat-grid").innerHTML = "";
   document.getElementById("task-run-list").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
   document.getElementById("run-result").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
+  syncWorkspaceForRun(null);
 }
 
 function ensureCanonicalTaskPath(taskPathKey) {
@@ -436,13 +518,13 @@ async function stopAll() {
 function initLogViewer() {
   state.logViewer = window.ManzaraCore.createRunLogViewer({
     api,
-    dialogNode: document.getElementById("log-dialog"),
     titleNode: document.getElementById("log-title"),
     contentNode: document.getElementById("log-content"),
     tailLimit: 400,
     followLimit: 400,
     backfillLimit: 400,
     pollIntervalMs: 1500,
+    onStateChange: updateLogViewerState,
   });
 }
 
@@ -500,30 +582,35 @@ function attachUiHandlers() {
     renderTaskDetail(state.payload);
   });
 
+  for (const tab of ["overview", "logs"]) {
+    document.getElementById(`workspace-tab-${tab}`).addEventListener("click", () => {
+      selectWorkspaceTab(tab);
+    });
+  }
+  document.querySelector?.(".run-workspace-tabs")?.addEventListener("keydown", (event) => {
+    const currentTab = event.target?.closest?.("[role='tab']");
+    if (!currentTab) return;
+    const keys = { ArrowLeft: "overview", ArrowRight: "logs", Home: "overview", End: "logs" };
+    const nextTab = keys[event.key];
+    if (!nextTab) return;
+    event.preventDefault();
+    selectWorkspaceTab(nextTab, { focus: true });
+  });
+
   document.getElementById("run-result").addEventListener("click", (event) => {
     const btn = event.target.closest("#show-run-logs");
     if (btn) {
       const runId = Number(btn.dataset.runId || 0);
       if (!runId) return;
-      state.logViewer?.open(runId, state.payload?.task?.title || state.taskId).catch((error) =>
-        console.error(error)
-      );
+      state.selectedRunId = runId;
+      selectWorkspaceTab("logs");
       return;
     }
-
-
   });
-
-  document.getElementById("close-logs").addEventListener("click", () => {
-    state.logViewer?.close();
-  });
-  document.getElementById("log-dialog").addEventListener("close", () => {
-    state.logViewer?.close({ closeDialog: false });
-  });
-
   document.getElementById("copy-logs").addEventListener("click", async () => {
     const text = document.getElementById("log-content").textContent;
     await navigator.clipboard.writeText(text || "");
+    window.ManzaraUI.toast("Logs copied.", { tone: "success" });
   });
 }
 
