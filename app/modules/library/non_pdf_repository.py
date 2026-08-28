@@ -66,6 +66,14 @@ class NonPdfExtractionRepository:
                   AND d.primary_storage_verified_at IS NOT NULL
                   AND LOWER(BTRIM(COALESCE(d.mime_type, '')))
                       <> 'application/pdf'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM document_cleanup_queue cleanup
+                      WHERE cleanup.scope = 'document'
+                        AND cleanup.md5 = d.md5
+                        AND cleanup.reason = 'corrupted'
+                        AND cleanup.status IN ('planned', 'running', 'failed')
+                  )
             )
             SELECT d.md5, d.mime_type, d.ya_path, d.document_url,
                    d.primary_storage_size, d.content_url

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping
 
+from app.document_cleanup_paths import cleanup_target_path
 from app.modules.library.document_cleanup import (
     build_isbn_cleanup_decisions,
     cleanup_reasons,
@@ -13,24 +13,11 @@ from app.modules.library.document_cleanup import (
 from app.modules.library.runtime.metadata.fields import extract_isbn_values, parse_meta
 
 
-def cleanup_target_path(
-    filtered_out_path: str,
-    *,
-    reason: str,
-    md5: str,
-    source_path: str,
-) -> str:
-    """Build a collision-resistant but recognizable filtered-out path."""
-    source_name = PurePosixPath(str(source_path).removeprefix("disk:")).name
-    safe_name = source_name or "document"
-    root = str(filtered_out_path).removeprefix("disk:").rstrip("/")
-    return f"{root}/{reason}/{md5}_{safe_name}"
-
-
 def prepare_document_cleanup(
     *,
     repository: Any,
     filtered_out_path: str,
+    source_root_path: str,
     should_stop: Callable[[], bool] = lambda: False,
     on_progress: Callable[[int, int, Mapping[str, int]], None] | None = None,
 ) -> dict[str, Any]:
@@ -84,7 +71,7 @@ def prepare_document_cleanup(
                 "target_path": cleanup_target_path(
                     filtered_out_path,
                     reason=reason,
-                    md5=md5,
+                    source_root_path=source_root_path,
                     source_path=source_path,
                 ),
                 "evidence": {"reasons": reasons},
@@ -182,6 +169,7 @@ def apply_isbn_review_decision(
     review_id: int,
     keep_md5s: list[str],
     filtered_out_path: str,
+    source_root_path: str,
 ) -> dict[str, Any]:
     """Persist a review decision and queue every non-kept document."""
     decision = repository.decide_review(review_id, keep_md5s=keep_md5s)
@@ -200,7 +188,7 @@ def apply_isbn_review_decision(
                 "target_path": cleanup_target_path(
                     filtered_out_path,
                     reason="duplicate_isbn",
-                    md5=md5,
+                    source_root_path=source_root_path,
                     source_path=source_path,
                 ),
                 "evidence": {

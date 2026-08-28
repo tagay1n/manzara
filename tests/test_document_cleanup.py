@@ -8,7 +8,10 @@ from app.modules.library.document_cleanup import (
     build_isbn_cleanup_decisions,
     cleanup_reasons,
 )
-from app.modules.library.document_cleanup_service import prepare_document_cleanup
+from app.modules.library.document_cleanup_service import (
+    cleanup_target_path,
+    prepare_document_cleanup,
+)
 from app.modules.maintenance.document_cleanup_executor import (
     execute_yandex_cleanup,
 )
@@ -46,6 +49,39 @@ def test_cleanup_reasons_share_document_sync_format_policy() -> None:
         mime_type="video/x-ms-wmv",
         source_path="/media/movie.wmv",
     ) == ["non_document"]
+
+
+def test_cleanup_target_preserves_hierarchy_below_source_root() -> None:
+    assert cleanup_target_path(
+        "/neurotatarlar/kitaplar/filtered_out",
+        reason="corrupted",
+        source_root_path="/neurotatarlar/kitaplar/monocorpus",
+        source_path=(
+            "/neurotatarlar/kitaplar/monocorpus/"
+            "__Библиотека/Башкорт/Китап.pdf"
+        ),
+    ) == (
+        "/neurotatarlar/kitaplar/filtered_out/corrupted/"
+        "__Библиотека/Башкорт/Китап.pdf"
+    )
+
+
+def test_cleanup_target_rejects_source_outside_configured_root() -> None:
+    with pytest.raises(ValueError, match="outside configured document root"):
+        cleanup_target_path(
+            "/filtered",
+            reason="corrupted",
+            source_root_path="/documents",
+            source_path="/other/book.pdf",
+        )
+
+    with pytest.raises(ValueError, match="outside the document source root"):
+        cleanup_target_path(
+            "/documents/filtered",
+            reason="corrupted",
+            source_root_path="/documents",
+            source_path="/documents/book.pdf",
+        )
 
 
 def test_isbn_cleanup_keeps_only_unambiguously_complete_document() -> None:
@@ -242,6 +278,7 @@ def test_preparation_only_writes_plans_and_ambiguous_reviews() -> None:
     summary = prepare_document_cleanup(
         repository=repository,
         filtered_out_path="/filtered",
+        source_root_path="/books",
     )
 
     assert summary["plans_created"] == 2
@@ -292,6 +329,7 @@ def test_preparation_does_not_recreate_explicitly_canceled_plan() -> None:
     summary = prepare_document_cleanup(
         repository=repository,
         filtered_out_path="/filtered",
+        source_root_path="/books",
     )
 
     assert summary["plans_created"] == 0
@@ -317,6 +355,7 @@ def test_preparation_queues_windows_shortcut_as_non_document() -> None:
     summary = prepare_document_cleanup(
         repository=repository,
         filtered_out_path="/filtered",
+        source_root_path="/library",
     )
 
     assert summary["planned_non_document"] == 1

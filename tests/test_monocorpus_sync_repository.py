@@ -46,6 +46,7 @@ def test_document_cleanup_does_not_reference_retired_crh_tables() -> None:
     sql = "\n".join(repository.engine.statements)
     assert "_crh" not in sql
     assert 'DELETE FROM "library_non_pdf_extraction_state" WHERE md5=:md5' in sql
+    assert 'DELETE FROM "library_metadata_extraction_state" WHERE md5=:md5' in sql
     assert "DELETE FROM document WHERE md5=:md5" in sql
 
 

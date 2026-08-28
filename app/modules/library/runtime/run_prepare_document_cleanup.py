@@ -70,6 +70,7 @@ def main() -> int:
         summary = prepare_document_cleanup(
             repository=repository,
             filtered_out_path=storage.filtered_out_path,
+            source_root_path=storage.source_path,
             should_stop=lambda: bool(stop_state["requested"]),
             on_progress=publish,
         )

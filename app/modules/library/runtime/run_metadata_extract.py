@@ -40,6 +40,11 @@ from app.gemini_model_pool import (
 from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
 from app.gemini_workers import resolve_gemini_workers
+from app.modules.library.corrupt_document import (
+    CorruptDocumentError,
+    build_corrupt_cleanup_plan,
+)
+from app.modules.library.document_cleanup_repository import DocumentCleanupRepository
 from app.modules.library.metadata_extraction import (
     MetadataExtractionRepository,
     parse_metadata_response,
@@ -143,6 +148,7 @@ def _publish_progress(
 def run_metadata_extraction(
     *,
     repository: MetadataExtractionRepository,
+    cleanup_repository: Any | None = None,
     db: Database,
     storage: Any,
     primary_s3: Any,
@@ -178,6 +184,7 @@ def run_metadata_extraction(
                 executor.map(
                     lambda partition: run_metadata_extraction(
                         repository=repository,
+                        cleanup_repository=cleanup_repository,
                         db=db,
                         storage=storage,
                         primary_s3=primary_s3,
@@ -196,6 +203,7 @@ def run_metadata_extraction(
             )
         counter_keys = (
             "succeeded", "already_complete", "terminal", "source_deferred",
+            "corrupted_planned", "corrupted_plan_reused",
             "quota_deferred", "service_deferred",
         )
         model_attempts = Counter()
@@ -232,6 +240,8 @@ def run_metadata_extraction(
         already_complete=0,
         terminal=0,
         source_deferred=0,
+        corrupted_planned=0,
+        corrupted_plan_reused=0,
         quota_deferred=0,
         service_deferred=0,
     )
@@ -285,6 +295,43 @@ def run_metadata_extraction(
                 f"library metadata: source prepare complete md5={candidate.md5}",
                 flush=True,
             )
+        except CorruptDocumentError as exc:
+            if cleanup_repository is None:
+                raise RuntimeError(
+                    "Corrupt document planning requires a cleanup repository"
+                ) from exc
+            cleanup_id, created = cleanup_repository.enqueue_cleanup(
+                build_corrupt_cleanup_plan(
+                    storage=storage,
+                    md5=candidate.md5,
+                    source_path=candidate.source_path,
+                    mime_type=candidate.mime_type,
+                    source_size=candidate.primary_storage_size,
+                    task_id=TASK_ID,
+                    run_id=run_id,
+                    error=exc,
+                )
+            )
+            counters[
+                "corrupted_planned" if created else "corrupted_plan_reused"
+            ] += 1
+            processed += 1
+            print(
+                f"library metadata: corrupted plan md5={candidate.md5} "
+                f"cleanup_id={cleanup_id} detector={exc.detector} created={created}",
+                flush=True,
+            )
+            shutil.rmtree(workspace / candidate.md5, ignore_errors=True)
+            _publish_progress(
+                db,
+                run_id,
+                current=processed,
+                total=total,
+                counters=counters,
+                model_attempts=model_attempts,
+                model_successes=model_successes,
+            )
+            continue
         except Exception as exc:  # noqa: BLE001
             counters["source_deferred"] += 1
             processed += 1
@@ -424,7 +471,13 @@ def run_metadata_extraction(
 
     resolved = sum(
         int(counters.get(key, 0))
-        for key in ("succeeded", "already_complete", "terminal")
+        for key in (
+            "succeeded",
+            "already_complete",
+            "terminal",
+            "corrupted_planned",
+            "corrupted_plan_reused",
+        )
     )
     summary = {
         "kind": "library.metadata_extraction_summary",
@@ -461,6 +514,10 @@ def main() -> int:
         app_settings.database_url,
         schema=app_settings.database_schema,
     )
+    cleanup_repository = DocumentCleanupRepository(
+        app_settings.database_url,
+        schema=app_settings.database_schema,
+    )
     db = Database(app_settings.database_url, schema=app_settings.database_schema)
     primary_s3 = Session().client(
         "s3",
@@ -485,6 +542,7 @@ def main() -> int:
     try:
         summary = run_metadata_extraction(
             repository=repository,
+            cleanup_repository=cleanup_repository,
             db=db,
             storage=storage,
             primary_s3=primary_s3,
@@ -501,6 +559,7 @@ def main() -> int:
         emit_run_artifact(summary)
         return 1 if summary["outcome"] == "gemini_unavailable" else 0
     finally:
+        cleanup_repository.dispose()
         repository.dispose()
 
 

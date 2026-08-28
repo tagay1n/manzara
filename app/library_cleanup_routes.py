@@ -104,6 +104,7 @@ def register_library_cleanup_routes(
                 review_id=review_id,
                 keep_md5s=keep_md5s,
                 filtered_out_path=storage.filtered_out_path,
+                source_root_path=storage.source_path,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

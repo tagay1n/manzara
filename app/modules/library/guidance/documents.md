@@ -13,3 +13,4 @@
 - QA cohorts are deterministic and capped per normalized catalog MIME type. Full-catalog promotion requires owner review.
 - Before publishing, require a public HTML `<img>` reference for every prepared image. After a successful checkpoint, remove objects outside the document's expected key set.
 - Retain converted documents, media, ASTs, Markdown, and archives under the run workspace. Replace legacy public content only after verifying every new object and rechecking the source snapshot.
+- Queue a guarded `corrupted` move only when verified non-PDF source bytes fail deterministic container, decoding, or input-parser checks. Converter timeouts, unsupported formats, OCR-only content, output validation, and storage failures remain non-corruption outcomes.

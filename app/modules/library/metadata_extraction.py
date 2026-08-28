@@ -22,6 +22,10 @@ from app.document_storage import (
     verify_primary_document_object,
 )
 from app.gemini_model_pool import GeminiModelResponseError
+from app.modules.library.corrupt_document import (
+    CorruptDocumentError,
+    PasswordProtectedDocumentError,
+)
 from app.modules.library.metadata_normalization import normalize_base_schema_org
 from app.modules.library.metadata_prompt import (
     DEFINE_META_PROMPT_BODY,
@@ -90,6 +94,7 @@ class MetadataExtractionCandidate:
     primary_storage_size: int
     attempts: tuple[dict[str, Any], ...]
     source_filename: str = ""
+    source_path: str = ""
 
     @property
     def attempted_models(self) -> set[str]:
@@ -178,6 +183,14 @@ class MetadataExtractionRepository:
                       )
                   )
               )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM document_cleanup_queue cleanup
+                  WHERE cleanup.scope = 'document'
+                    AND cleanup.md5 = d.md5
+                    AND cleanup.reason = 'corrupted'
+                    AND cleanup.status IN ('planned', 'running', 'failed')
+              )
             ORDER BY
                 CASE
                     WHEN state.md5 IS NULL
@@ -229,6 +242,7 @@ class MetadataExtractionRepository:
             primary_storage_size=int(row.get("primary_storage_size") or 0),
             attempts=tuple(dict(item) for item in attempts if isinstance(item, dict)),
             source_filename=PurePosixPath(source_path).name,
+            source_path=source_path,
         )
 
     def record_model_failure(
@@ -574,12 +588,26 @@ def load_text_slice(
 def create_pdf_slice(source: Path, destination: Path) -> int:
     """Create a first/last-page PDF slice and return its page count."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with pymupdf.open(source) as pdf, pymupdf.open() as sliced:
+    try:
+        pdf = pymupdf.open(source)
+    except (pymupdf.EmptyFileError, pymupdf.FileDataError) as exc:
+        raise CorruptDocumentError("pdf_open", str(exc)) from exc
+    with pdf, pymupdf.open() as sliced:
+        if pdf.needs_pass:
+            raise PasswordProtectedDocumentError(
+                f"Password-protected PDF cannot be read: {source}"
+            )
         pages = select_pdf_pages(pdf.page_count)
         if not pages:
-            raise ValueError(f"PDF has no pages: {source}")
-        for page in pages:
-            sliced.insert_pdf(pdf, from_page=page, to_page=page)
+            raise CorruptDocumentError(
+                "pdf_page_tree", f"PDF has no usable pages: {source}"
+            )
+        try:
+            for page in pages:
+                pdf.load_page(page)
+                sliced.insert_pdf(pdf, from_page=page, to_page=page)
+        except (RuntimeError, ValueError) as exc:
+            raise CorruptDocumentError("pdf_page_read", str(exc)) from exc
         sliced.save(destination)
         return sliced.page_count
 

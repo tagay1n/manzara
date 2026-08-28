@@ -48,13 +48,13 @@ class DocumentCleanupRepository:
             ),
         }
         with self.engine.begin() as conn:
-            if str(values["scope"]) == "duplicate_resource":
+            if str(values["scope"]) in {"duplicate_resource", "source_resource"}:
                 existing = conn.execute(
                     text(
                         """
                         SELECT cleanup_id FROM document_cleanup_queue
-                        WHERE scope = 'duplicate_resource'
-                          AND source_resource_id = :source_resource_id
+                        WHERE scope = :scope
+                          AND source_path = :source_path
                           AND status IN ('planned', 'running', 'failed')
                         """
                     ),

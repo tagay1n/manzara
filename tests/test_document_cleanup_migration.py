@@ -33,5 +33,18 @@ def test_document_cleanup_tables_are_migrated(prepared_test_schema) -> None:
                     ),
                     {"md5": status, "status": status},
                 )
+            conn.execute(
+                text(
+                    f'''INSERT INTO "{schema}".document_cleanup_queue (
+                        scope, action, reason, md5, source_resource_id,
+                        source_path, target_path
+                    ) VALUES (
+                        'source_resource', 'move', 'corrupted', :md5,
+                        'resource:empty', '/documents/empty.pdf',
+                        '/filtered/corrupted/empty.pdf'
+                    )'''
+                ),
+                {"md5": "d41d8cd98f00b204e9800998ecf8427e"},
+            )
     finally:
         engine.dispose()

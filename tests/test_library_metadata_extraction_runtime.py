@@ -16,6 +16,7 @@ from app.modules.library.metadata_extraction import (
     MetadataExtractionCandidate,
     MetadataRequest,
 )
+from app.modules.library.corrupt_document import CorruptDocumentError
 from app.modules.library.runtime import run_metadata_extract as runtime
 
 
@@ -87,7 +88,54 @@ def _candidate() -> MetadataExtractionCandidate:
         upstream_meta_url=None,
         primary_storage_size=12,
         attempts=(),
+        source_path="/documents/nested/book.pdf",
     )
+
+
+class _CleanupRepository:
+    def __init__(self) -> None:
+        self.plans: list[dict] = []
+
+    def enqueue_cleanup(self, payload):  # noqa: ANN001
+        self.plans.append(dict(payload))
+        return len(self.plans), True
+
+
+def test_runtime_queues_structurally_corrupt_pdf_without_calling_model(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    repository = _Repository(_candidate())
+    cleanup = _CleanupRepository()
+    monkeypatch.setattr(runtime, "GeminiRuntimeManager", _Manager)
+    monkeypatch.setattr(
+        runtime,
+        "prepare_metadata_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            CorruptDocumentError("pdf_page_tree", "PDF has no usable pages")
+        ),
+    )
+
+    summary = runtime.run_metadata_extraction(
+        repository=repository,
+        cleanup_repository=cleanup,
+        db=_Db(),
+        storage=_storage(tmp_path / "cache"),
+        primary_s3=object(),
+        models=["first"],
+        workspace=tmp_path,
+        run_id=52,
+        should_stop=lambda: False,
+        request_json=lambda **_kwargs: pytest.fail("model must not be called"),
+    )
+
+    assert summary["corrupted_planned"] == 1
+    assert summary["source_deferred"] == 0
+    assert cleanup.plans[0]["reason"] == "corrupted"
+    assert cleanup.plans[0]["target_path"] == (
+        "/filtered/corrupted/nested/book.pdf"
+    )
+    assert cleanup.plans[0]["evidence"]["detector"] == "pdf_page_tree"
+    assert "corrupted plan" in capsys.readouterr().out
 
 
 def _storage(cache_path: Path) -> DocumentStorageSettings:
@@ -101,7 +149,7 @@ def _storage(cache_path: Path) -> DocumentStorageSettings:
         cache_path=cache_path,
         source_path="/documents",
         restricted_path="/documents/private",
-        filtered_out_path="/documents/filtered",
+        filtered_out_path="/filtered",
         primary=connection,
         legacy=connection,
         public_bucket="public",

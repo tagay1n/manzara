@@ -82,6 +82,14 @@ class _YaDisk:
         self.timeline.append(("remove", str(path)))
         self.files.pop(str(path), None)
 
+    def mkdir(self, _path):  # noqa: ANN001
+        return None
+
+    def move(self, source, target, overwrite=False):  # noqa: ANN001
+        assert overwrite is False
+        self.timeline.append(("move", f"{source} -> {target}"))
+        self.files[str(target)] = self.files.pop(str(source))
+
 
 class _Repository:
     def __init__(self, yadisk: _YaDisk, documents=None) -> None:  # noqa: ANN001
@@ -109,6 +117,9 @@ class _Repository:
     def mark_cleanup_completed(self, *_args, **_kwargs):
         return None
 
+    def mark_cleanup_phase(self, *_args, **_kwargs):
+        return None
+
     def mark_cleanup_failed(self, *_args, **_kwargs):
         return None
 
@@ -121,6 +132,10 @@ class _Repository:
         self.documents[item["md5"]] = item
         self.saved.append(item)
         return created
+
+    def delete_document_state(self, md5):  # noqa: ANN001
+        self.timeline.append(("delete_document", str(md5)))
+        self.documents.pop(str(md5), None)
 
 
 class _Db:
@@ -325,6 +340,102 @@ def test_filtered_resource_is_not_published_or_saved() -> None:
     assert result["filtered"] == 1
     assert repository.saved == []
     assert yadisk.published == []
+
+
+def test_zero_byte_resource_is_planned_and_moved_during_same_sync() -> None:
+    empty_md5 = hashlib.md5(b"").hexdigest()  # noqa: S324
+    source = "/documents/nested/Пустой.pdf"
+    target = "/filtered/corrupted/nested/Пустой.pdf"
+    yadisk = _YaDisk({source: b""})
+    repository = _Repository(
+        yadisk,
+        documents={
+            empty_md5: {
+                "md5": empty_md5,
+                "mime_type": "application/pdf",
+                "ya_path": source,
+            }
+        },
+    )
+
+    result = run_monocorpus_sync(
+        repository=repository,
+        db=_Db(),
+        yadisk=yadisk,
+        primary_s3=_S3(),
+        legacy_s3=_S3(),
+        settings=_settings(),
+        config={"yandex": {"cloud": {"bucket": {}}}},
+        run_id=6,
+        should_stop=lambda: False,
+    )
+
+    assert result["corrupted_zero_detected"] == 1
+    assert result["corrupted_plans_created"] == 1
+    assert source not in yadisk.files
+    assert yadisk.files[target] == b""
+    assert repository.saved == []
+    assert empty_md5 not in repository.documents
+    assert yadisk.timeline == [
+        ("enqueue", source),
+        ("move", f"{source} -> {target}"),
+    ]
+
+
+def test_multiple_zero_byte_resources_with_same_md5_move_independently() -> None:
+    sources = (
+        "/documents/one/empty.pdf",
+        "/documents/two/empty.pdf",
+    )
+    yadisk = _YaDisk({source: b"" for source in sources})
+    repository = _Repository(yadisk)
+
+    result = run_monocorpus_sync(
+        repository=repository,
+        db=_Db(),
+        yadisk=yadisk,
+        primary_s3=_S3(),
+        legacy_s3=_S3(),
+        settings=_settings(),
+        config={"yandex": {"cloud": {"bucket": {}}}},
+        run_id=7,
+        should_stop=lambda: False,
+    )
+
+    assert result["corrupted_zero_detected"] == 2
+    assert result["corrupted_plans_created"] == 2
+    assert yadisk.files == {
+        "/filtered/corrupted/one/empty.pdf": b"",
+        "/filtered/corrupted/two/empty.pdf": b"",
+    }
+
+
+def test_missing_yandex_size_is_not_assumed_to_be_zero() -> None:
+    class MissingSizeYaDisk(_YaDisk):
+        def listdir(self, path, **kwargs):  # noqa: ANN001
+            for item in super().listdir(path, **kwargs):
+                item.pop("size", None)
+                yield item
+
+    content = b"document"
+    md5 = hashlib.md5(content).hexdigest()  # noqa: S324
+    yadisk = MissingSizeYaDisk({"/documents/book.pdf": content})
+    repository = _Repository(yadisk)
+
+    result = run_monocorpus_sync(
+        repository=repository,
+        db=_Db(),
+        yadisk=yadisk,
+        primary_s3=_S3(),
+        legacy_s3=_S3(),
+        settings=_settings(),
+        config={"yandex": {"cloud": {"bucket": {}}}},
+        run_id=8,
+        should_stop=lambda: False,
+    )
+
+    assert result["corrupted_zero_detected"] == 0
+    assert repository.documents[md5]["ya_path"] == "/documents/book.pdf"
 
 
 def test_cleanup_treats_absent_legacy_bucket_as_empty() -> None:

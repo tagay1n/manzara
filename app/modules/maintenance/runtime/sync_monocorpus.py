@@ -19,6 +19,7 @@ from app.document_storage import (
     DocumentStorageSettings,
     load_document_storage_settings,
 )
+from app.document_cleanup_paths import cleanup_target_path
 from app.modules.maintenance.document_cleanup_executor import execute_yandex_cleanup
 from app.document_sync_filter import classify_document, normalize_document_mime
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
@@ -29,6 +30,7 @@ from app.settings import load_settings
 
 TASK_ID = "maintenance.monocorpus_sync"
 PANEL_ID = "maintenance"
+EMPTY_MD5 = "d41d8cd98f00b204e9800998ecf8427e"
 
 
 def _resource_value(resource: Any, key: str, default: Any = None) -> Any:
@@ -99,9 +101,10 @@ def _walk_files(
                 continue
             if resource_type != "file" or not path:
                 continue
+            raw_size = _resource_value(resource, "size")
             yield {
                 "source_path": path,
-                "source_size": int(_resource_value(resource, "size", 0) or 0),
+                "source_size": None if raw_size is None else int(raw_size),
                 "source_md5": str(
                     _resource_value(resource, "md5", "") or ""
                 ).lower(),
@@ -396,6 +399,9 @@ def run_monocorpus_sync(
         "unchanged": 0,
         "published": 0,
         "duplicate_resources_queued": 0,
+        "corrupted_zero_detected": 0,
+        "corrupted_plans_created": 0,
+        "corrupted_plans_reused": 0,
         "filtered": 0,
         "cleanups_completed": 0,
         "cleanups_canceled": 0,
@@ -453,6 +459,50 @@ def run_monocorpus_sync(
         counters["discovered"] += 1
         md5 = str(resource.get("source_md5") or "").lower()
         source_path = str(resource.get("source_path") or "")
+        if resource.get("source_size") == 0:
+            counters["corrupted_zero_detected"] += 1
+            md5 = md5 or EMPTY_MD5
+            payload = {
+                "scope": "source_resource",
+                "action": "move",
+                "reason": "corrupted",
+                "md5": md5,
+                "source_resource_id": resource.get("resource_id") or None,
+                "source_path": source_path,
+                "target_path": cleanup_target_path(
+                    settings.filtered_out_path,
+                    reason="corrupted",
+                    source_root_path=settings.source_path,
+                    source_path=source_path,
+                ),
+                "evidence": {
+                    "detector": "yandex_zero_byte",
+                    "source_size": 0,
+                    "mime_type": str(resource.get("mime_type") or ""),
+                    "run_id": int(run_id),
+                    "task_id": TASK_ID,
+                },
+            }
+            cleanup_id, created = repository.enqueue_cleanup(payload)
+            counters[
+                "corrupted_plans_created" if created else "corrupted_plans_reused"
+            ] += 1
+            removed, cleanup_outcome = _apply_cleanup(
+                {**payload, "cleanup_id": cleanup_id, "status": "planned"},
+                repository=repository,
+                yadisk=yadisk,
+                primary_s3=primary_s3,
+                legacy_s3=legacy_s3,
+                settings=settings,
+                config=config,
+                run_id=run_id,
+                missing_legacy_buckets=missing_legacy_buckets,
+            )
+            counters["objects_removed"] += removed
+            counters[f"cleanups_{cleanup_outcome}"] += 1
+            counters["failed"] += int(cleanup_outcome == "failed")
+            _publish_progress(db, run_id, counters, source_path)
+            continue
         decision = classify_document(source_path, str(resource.get("mime_type") or ""))
         if not decision.accepted:
             counters["filtered"] += 1

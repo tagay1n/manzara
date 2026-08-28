@@ -24,11 +24,16 @@ from app.modules.library.non_pdf_extraction import (
     render_markdown,
     validate_rendered_markdown,
 )
-from app.modules.library.non_pdf_repository import NonPdfExtractionRepository
+from app.modules.library.corrupt_document import CorruptDocumentError
+from app.modules.library.non_pdf_repository import (
+    NonPdfCandidate,
+    NonPdfExtractionRepository,
+)
 from app.modules.library.runtime.run_extract_non_pdf import (
     _delete_stale_assets,
     _failure_status,
     _write_content_archive,
+    run_extraction,
 )
 from app.modules.library.tasks import library_task_definitions
 
@@ -87,6 +92,24 @@ def test_detection_prefers_source_bytes_over_wrong_mime_and_extension(
     assert detect_document_format(
         html, mime_type="application/msword", source_path="wrong.doc"
     ) == "html"
+
+
+def test_invalid_docx_container_is_classified_as_structural_corruption(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "broken.docx"
+    source.write_bytes(b"not a ZIP container")
+
+    with pytest.raises(CorruptDocumentError, match="document_container"):
+        prepare_extraction(
+            source,
+            workspace=tmp_path / "workspace",
+            mime_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+            source_path="nested/broken.docx",
+        )
 
 
 def test_ole_detection_does_not_treat_thumbnail_cache_as_word_document(
@@ -670,6 +693,95 @@ def test_candidate_queue_can_explicitly_retry_known_failures() -> None:
     )
 
     assert repository.engine.params["retry_known_failures"] is True
+    assert "cleanup.reason = 'corrupted'" in repository.engine.sql
+
+
+class _CorruptRuntimeRepository:
+    def __init__(self, candidate: NonPdfCandidate) -> None:
+        self.candidate = candidate
+        self.outcomes: list[dict] = []
+
+    def list_candidates(self, **_kwargs):
+        return [self.candidate]
+
+    def start_attempt(self, *_args, **_kwargs):
+        return None
+
+    def mark_outcome(self, _md5, **kwargs):  # noqa: ANN001
+        self.outcomes.append(dict(kwargs))
+
+
+class _CorruptCleanupRepository:
+    def __init__(self) -> None:
+        self.plans: list[dict] = []
+
+    def enqueue_cleanup(self, payload):  # noqa: ANN001
+        self.plans.append(dict(payload))
+        return len(self.plans), True
+
+
+class _ProgressDb:
+    def update_run_progress(self, *_args, **_kwargs):
+        return None
+
+    def insert_event(self, *_args, **_kwargs):
+        return None
+
+
+def test_non_pdf_runtime_queues_structural_corruption(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "source.docx"
+    source.write_bytes(b"broken")
+    candidate = NonPdfCandidate(
+        md5="a" * 32,
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        source_path="/documents/nested/source.docx",
+        document_url="https://s3.example/source.docx",
+        primary_storage_size=6,
+        content_url=None,
+    )
+    repository = _CorruptRuntimeRepository(candidate)
+    cleanup = _CorruptCleanupRepository()
+    storage = type(
+        "Storage",
+        (),
+        {
+            "cache_path": tmp_path / "cache",
+            "source_path": "/documents",
+            "filtered_out_path": "/filtered",
+            "content_bucket": "content",
+            "content_images_bucket": "images",
+        },
+    )()
+    monkeypatch.setattr(
+        "app.modules.library.runtime.run_extract_non_pdf.download_cached_primary_document",
+        lambda **_kwargs: source,
+    )
+    monkeypatch.setattr(
+        "app.modules.library.runtime.run_extract_non_pdf.prepare_extraction",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            CorruptDocumentError("document_container", "invalid ZIP")
+        ),
+    )
+
+    summary = run_extraction(
+        repository=repository,
+        cleanup_repository=cleanup,
+        db=_ProgressDb(),
+        s3=object(),
+        storage=storage,
+        workspace=tmp_path / "run",
+        run_id=71,
+        should_stop=lambda: False,
+    )
+
+    assert summary["corrupted"] == 1
+    assert cleanup.plans[0]["target_path"] == (
+        "/filtered/corrupted/nested/source.docx"
+    )
+    assert cleanup.plans[0]["evidence"]["detector"] == "document_container"
+    assert repository.outcomes[0]["status"] == "failed"
 
 
 def test_new_extractor_version_resets_automatic_attempt_budget() -> None:

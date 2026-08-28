@@ -17,10 +17,13 @@ from typing import Any, Mapping
 import unicodedata
 from urllib.parse import urlsplit
 import zipfile
+import zlib
 from xml.etree import ElementTree
 
 from PIL import Image
 import requests
+
+from app.modules.library.corrupt_document import CorruptDocumentError
 
 
 EXTRACTOR_VERSION = "nonpdf.v7"
@@ -62,6 +65,14 @@ class UnsupportedDocumentFormat(ValueError):
     def __init__(self, detected_format: str) -> None:
         self.detected_format = str(detected_format or "unknown")
         super().__init__(f"Unsupported document format: {self.detected_format}")
+
+
+class ConverterCommandError(RuntimeError):
+    """A converter rejected one input document."""
+
+
+class ConverterTimeoutError(RuntimeError):
+    """A converter exceeded its operational time limit."""
 
 
 def require_converter_binaries() -> None:
@@ -175,9 +186,31 @@ def prepare_extraction(
     source_path: str,
 ) -> PreparedExtraction:
     workspace.mkdir(parents=True, exist_ok=True)
-    detected = detect_document_format(
-        source, mime_type=mime_type, source_path=source_path
-    )
+    if source.stat().st_size <= 0:
+        raise CorruptDocumentError("empty_source", "Source document is empty")
+    try:
+        detected = detect_document_format(
+            source, mime_type=mime_type, source_path=source_path
+        )
+    except (zipfile.BadZipFile, EOFError, zlib.error) as exc:
+        raise CorruptDocumentError("document_container", str(exc)) from exc
+    if detected in {"docx", "odt", "epub"}:
+        if not zipfile.is_zipfile(source):
+            raise CorruptDocumentError(
+                "document_container",
+                f"Detected {detected} document is not a valid ZIP container",
+            )
+        try:
+            with zipfile.ZipFile(source) as archive:
+                if bad_member := archive.testzip():
+                    raise CorruptDocumentError(
+                        "document_container",
+                        f"Corrupt ZIP member: {bad_member}",
+                    )
+        except CorruptDocumentError:
+            raise
+        except (zipfile.BadZipFile, EOFError, zlib.error) as exc:
+            raise CorruptDocumentError("document_container", str(exc)) from exc
     (workspace / "detection.json").write_text(
         json.dumps(
             {
@@ -194,7 +227,10 @@ def prepare_extraction(
     if detected not in _SUPPORTED_FORMATS:
         raise UnsupportedDocumentFormat(detected)
     if detected in {"markdown", "text"}:
-        text_value = _decode_text(source.read_bytes())
+        try:
+            text_value = _decode_text(source.read_bytes())
+        except ValueError as exc:
+            raise CorruptDocumentError("text_decode", str(exc)) from exc
         if detected == "text" and not text_value.endswith("\n"):
             text_value += "\n"
         assets = (
@@ -207,31 +243,40 @@ def prepare_extraction(
     pandoc_source = Path(source)
     pandoc_format = detected
     if detected in {"doc", "rtf"}:
-        pandoc_source = _convert_to_docx(
-            source, workspace=workspace, detected_format=detected
-        )
+        try:
+            pandoc_source = _convert_to_docx(
+                source, workspace=workspace, detected_format=detected
+            )
+        except ConverterCommandError as exc:
+            raise CorruptDocumentError("document_open", str(exc)) from exc
         pandoc_format = "docx"
     elif detected == "fb2":
-        pandoc_source = _fb2_to_html(source, workspace=workspace)
+        try:
+            pandoc_source = _fb2_to_html(source, workspace=workspace)
+        except (ElementTree.ParseError, ValueError) as exc:
+            raise CorruptDocumentError("document_parse", str(exc)) from exc
         pandoc_format = "html"
     ast_path = workspace / "raw-ast.json"
     media_dir = workspace / "media"
-    result = _run(
-        [
-            "pandoc",
-            str(pandoc_source),
-            "-f",
-            pandoc_format,
-            "-t",
-            "json",
-            "--extract-media",
-            str(media_dir),
-            "-o",
-            str(ast_path),
-        ],
-        workspace=workspace,
-        label="pandoc-read",
-    )
+    try:
+        result = _run(
+            [
+                "pandoc",
+                str(pandoc_source),
+                "-f",
+                pandoc_format,
+                "-t",
+                "json",
+                "--extract-media",
+                str(media_dir),
+                "-o",
+                str(ast_path),
+            ],
+            workspace=workspace,
+            label="pandoc-read",
+        )
+    except ConverterCommandError as exc:
+        raise CorruptDocumentError("document_parse", str(exc)) from exc
     del result
     ast = json.loads(ast_path.read_text(encoding="utf-8"))
     # Only body blocks are rendered into the published Markdown. Avoid uploading
@@ -377,9 +422,11 @@ def _run(
     (workspace / f"{label}.stdout.log").write_text(stdout, encoding="utf-8")
     (workspace / f"{label}.stderr.log").write_text(stderr, encoding="utf-8")
     if timed_out:
-        raise RuntimeError(f"{label} timed out after {timeout_seconds} seconds")
+        raise ConverterTimeoutError(
+            f"{label} timed out after {timeout_seconds} seconds"
+        )
     if process.returncode != 0:
-        raise RuntimeError(
+        raise ConverterCommandError(
             f"{label} failed with exit code {process.returncode}: "
             f"{stderr.strip()[-1000:]}"
         )
@@ -426,7 +473,9 @@ def _convert_to_docx(
     )
     matches = sorted(converted.glob("*.docx"))
     if len(matches) != 1:
-        raise RuntimeError(f"LibreOffice produced {len(matches)} DOCX files")
+        raise ConverterCommandError(
+            f"LibreOffice produced {len(matches)} DOCX files"
+        )
     return matches[0]
 
 

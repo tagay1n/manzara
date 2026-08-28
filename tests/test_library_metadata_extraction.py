@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
+import pymupdf
 
 from app.modules.library.metadata_extraction import (
     MetadataExtractionRepository,
+    create_pdf_slice,
     PROMPT_VERSION,
     build_pdf_prompt,
     build_text_prompt,
     parse_metadata_response,
     select_pdf_pages,
+)
+from app.modules.library.corrupt_document import (
+    CorruptDocumentError,
+    PasswordProtectedDocumentError,
 )
 from app.gemini_model_pool import GeminiModelResponseError
 from app.modules.library.metadata_normalization import normalize_base_schema_org
@@ -204,6 +211,33 @@ def test_candidate_query_requires_verified_primary_storage() -> None:
     assert "ya_public_url" not in sql
     assert "d.content_url IS NOT NULL" in sql
     assert "LOWER(COALESCE(d.mime_type, '')) = 'application/pdf'" in sql
+    assert "cleanup.reason = 'corrupted'" in sql
+    assert "cleanup.status IN ('planned', 'running', 'failed')" in sql
+
+
+def test_pdf_slice_classifies_invalid_source_as_corrupt(tmp_path: Path) -> None:
+    source = tmp_path / "broken.pdf"
+    source.write_bytes(b"%PDF-1.7\nnot a document")
+
+    with pytest.raises(CorruptDocumentError, match="pdf_open"):
+        create_pdf_slice(source, tmp_path / "slice.pdf")
+
+
+def test_pdf_slice_does_not_classify_password_protection_as_corrupt(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "encrypted.pdf"
+    with pymupdf.open() as document:
+        document.new_page()
+        document.save(
+            source,
+            encryption=pymupdf.PDF_ENCRYPT_AES_256,
+            owner_pw="owner",
+            user_pw="reader",
+        )
+
+    with pytest.raises(PasswordProtectedDocumentError):
+        create_pdf_slice(source, tmp_path / "slice.pdf")
 
 
 def test_candidate_query_includes_existing_low_quality_metadata() -> None:

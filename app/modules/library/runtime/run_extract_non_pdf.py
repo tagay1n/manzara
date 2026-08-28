@@ -34,6 +34,13 @@ from app.document_storage import (  # noqa: E402
     normalized_extension,
     object_url,
 )
+from app.modules.library.corrupt_document import (  # noqa: E402
+    CorruptDocumentError,
+    build_corrupt_cleanup_plan,
+)
+from app.modules.library.document_cleanup_repository import (  # noqa: E402
+    DocumentCleanupRepository,
+)
 from app.modules.library.non_pdf_extraction import (  # noqa: E402
     EXTRACTOR_VERSION,
     PreparedExtraction,
@@ -289,6 +296,7 @@ def _image_content_type(suffix: str) -> str:
 def run_extraction(
     *,
     repository: NonPdfExtractionRepository,
+    cleanup_repository: Any | None = None,
     db: Database,
     s3: Any,
     storage: DocumentStorageSettings,
@@ -307,7 +315,8 @@ def run_extraction(
     )
     total = len(candidates)
     counters: Counter[str] = Counter(
-        ready=0, failed=0, deferred=0, unsupported=0, downloaded_sources=0,
+        ready=0, failed=0, deferred=0, unsupported=0, corrupted=0,
+        corrupted_plan_reused=0, downloaded_sources=0,
         reused_sources=0, uploaded_images=0, reused_images=0,
         uploaded_archives=0, reused_archives=0, checkpoint_raced=0,
         deleted_stale_images=0,
@@ -442,6 +451,38 @@ def run_extraction(
                     "reason=source or content row changed",
                     flush=True,
                 )
+        except CorruptDocumentError as exc:
+            if cleanup_repository is None:
+                raise RuntimeError(
+                    "Corrupt document planning requires a cleanup repository"
+                ) from exc
+            cleanup_id, created = cleanup_repository.enqueue_cleanup(
+                build_corrupt_cleanup_plan(
+                    storage=storage,
+                    md5=candidate.md5,
+                    source_path=candidate.source_path,
+                    mime_type=candidate.mime_type,
+                    source_size=candidate.primary_storage_size,
+                    task_id=TASK_ID,
+                    run_id=run_id,
+                    error=exc,
+                )
+            )
+            counters["corrupted" if created else "corrupted_plan_reused"] += 1
+            mime_outcomes[_mime_key(candidate.mime_type)]["corrupted"] += 1
+            repository.mark_outcome(
+                candidate.md5,
+                extractor_version=EXTRACTOR_VERSION,
+                detected_format=detected,
+                status="failed",
+                run_id=run_id,
+                error_text=f"{type(exc).__name__}: {exc}",
+            )
+            print(
+                f"non-pdf extraction: corrupted plan md5={candidate.md5} "
+                f"cleanup_id={cleanup_id} detector={exc.detector} created={created}",
+                flush=True,
+            )
         except UnsupportedDocumentFormat as exc:
             detected = exc.detected_format
             formats[detected] += 1
@@ -527,6 +568,9 @@ def main() -> int:
     repository = NonPdfExtractionRepository(
         settings.database_url, schema=settings.database_schema
     )
+    cleanup_repository = DocumentCleanupRepository(
+        settings.database_url, schema=settings.database_schema
+    )
     db = Database(settings.database_url, schema=settings.database_schema)
     stop = {"requested": False}
 
@@ -542,6 +586,7 @@ def main() -> int:
     try:
         summary = run_extraction(
             repository=repository,
+            cleanup_repository=cleanup_repository,
             db=db,
             s3=s3,
             storage=storage,
@@ -555,6 +600,7 @@ def main() -> int:
         emit_run_artifact(summary)
         return 0
     finally:
+        cleanup_repository.dispose()
         repository.dispose()
 
 

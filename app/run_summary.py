@@ -256,15 +256,20 @@ def build_structured_run_summary(
     if task_id == "maintenance.monocorpus_sync":
         data = artifacts if isinstance(artifacts, dict) else {}
         if data.get("kind") == "maintenance.monocorpus_sync_summary":
-            summary["highlights"].extend(
-                [
+            highlights = [
                     {"label": "Discovered", "value": str(int(data.get("discovered") or 0))},
                     {"label": "Added", "value": str(int(data.get("created") or 0))},
                     {"label": "Published", "value": str(int(data.get("published") or 0))},
                     {"label": "Cleaned", "value": str(int(data.get("cleanups_completed") or 0))},
                     {"label": "Failed", "value": str(int(data.get("failed") or 0))},
-                ]
-            )
+            ]
+            zero_corrupt = int(data.get("corrupted_zero_detected") or 0)
+            if zero_corrupt:
+                highlights.insert(
+                    3,
+                    {"label": "Zero-byte quarantined", "value": str(zero_corrupt)},
+                )
+            summary["highlights"].extend(highlights)
             summary["message"] = (
                 "Monocorpus sync stopped at a safe item boundary."
                 if data.get("stopped")
@@ -315,11 +320,20 @@ def build_structured_run_summary(
                 "Processed": int(data.get("processed") or 0),
                 "Succeeded": int(data.get("succeeded") or 0),
                 "Terminal": int(data.get("terminal") or 0),
-                "Quota deferred": int(data.get("quota_deferred") or 0),
-                "Service deferred": int(data.get("service_deferred") or 0),
-                "Source deferred": int(data.get("source_deferred") or 0),
-                "Remaining": int(data.get("remaining") or 0),
             }
+            corrupted = int(data.get("corrupted_planned") or 0) + int(
+                data.get("corrupted_plan_reused") or 0
+            )
+            if corrupted:
+                values["Corrupted planned"] = corrupted
+            values.update(
+                {
+                    "Quota deferred": int(data.get("quota_deferred") or 0),
+                    "Service deferred": int(data.get("service_deferred") or 0),
+                    "Source deferred": int(data.get("source_deferred") or 0),
+                    "Remaining": int(data.get("remaining") or 0),
+                }
+            )
             summary["highlights"].extend(
                 {"label": label, "value": str(value)}
                 for label, value in values.items()
@@ -372,20 +386,26 @@ def build_structured_run_summary(
         unsupported = int(content_artifacts.get("unsupported") or 0)
         deferred = int(content_artifacts.get("deferred") or 0)
         failed = int(content_artifacts.get("failed") or 0)
+        corrupted = int(content_artifacts.get("corrupted") or 0) + int(
+            content_artifacts.get("corrupted_plan_reused") or 0
+        )
         images = int(content_artifacts.get("uploaded_images") or 0)
         stale_images = int(content_artifacts.get("deleted_stale_images") or 0)
         per_mime_limit = content_artifacts.get("per_mime_limit")
         if content_artifacts.get("kind") == "library.non_pdf_extraction_summary":
-            summary["highlights"].extend(
-                [
+            highlights = [
                     {"label": "Ready", "value": str(ready)},
                     {"label": "Unsupported", "value": str(unsupported)},
                     {"label": "Deferred", "value": str(deferred)},
                     {"label": "Failed", "value": str(failed)},
                     {"label": "Images uploaded", "value": str(images)},
                     {"label": "Stale images removed", "value": str(stale_images)},
-                ]
-            )
+            ]
+            if corrupted:
+                highlights.insert(
+                    4, {"label": "Corrupted planned", "value": str(corrupted)}
+                )
+            summary["highlights"].extend(highlights)
             if per_mime_limit is not None:
                 summary["highlights"].append(
                     {"label": "Per MIME cap", "value": str(per_mime_limit)}

@@ -7,6 +7,7 @@
 - Persist content failures after every model attempt and resume with the next untried model. Quota, service, storage, and stop conditions are retryable, not terminal exclusions.
 - Defer a document whose models are exhausted and continue. Use `all_keys_exhausted` only when every configured model is unavailable.
 - Metadata requires a non-placeholder title plus another bibliographic/content signal. Never overwrite usable `metadata.schema_org`; replace objectively poor metadata only with validated usable output. Never erase language with null, upload metadata ZIPs, or mutate storage URLs.
+- Treat deterministic PDF open, page-tree, and page-read failures as structural corruption. Persist a guarded `corrupted` move plan and exclude active plans from extraction retries; password protection and storage/service failures are not corruption.
 
 ## Evaluation
 

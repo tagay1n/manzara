@@ -185,6 +185,7 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
         """Delete one document and known dependent state in one transaction."""
         dependent_tables = (
             "library_book_previews",
+            "library_metadata_extraction_state",
             "library_non_pdf_extraction_state",
             "library_collection_proposal_items",
             "library_collection_items",
