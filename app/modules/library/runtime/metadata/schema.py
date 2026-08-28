@@ -53,7 +53,7 @@ class Audience(BaseModel):
     type: Literal["Audience", "EducationalAudience", "PeopleAudience"] = Field(
         alias="@type"
     )
-    audienceType: str
+    audienceType: Optional[str] = None
     suggestedMinAge: Optional[StrictInt] = None
     suggestedMaxAge: Optional[StrictInt] = None
 

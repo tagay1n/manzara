@@ -298,7 +298,15 @@ def metadata_contract_issues(schema_org: Any) -> list[dict[str, str]]:
             }:
                 valid_shape = False
                 continue
-            if not is_english_facet(item.get("audienceType")):
+            audience_type = item.get("audienceType")
+            has_age = any(
+                item.get(field) is not None
+                for field in ("suggestedMinAge", "suggestedMaxAge")
+            )
+            if audience_type is None:
+                if item.get("@type") != "PeopleAudience" or not has_age:
+                    valid_shape = False
+            elif not is_english_facet(audience_type):
                 issues.append(
                     _issue(
                         "audience_not_english",

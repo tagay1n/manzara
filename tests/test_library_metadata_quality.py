@@ -16,25 +16,17 @@ def _book(**overrides):
 
 def test_assessment_repairs_english_roles_without_reextracting() -> None:
     decision = assess_metadata(
-        _book(
-            contributor=[
-                {"@type": "Person", "name": "A. Example", "role": "editor"}
-            ]
-        )
+        _book(contributor=[{"@type": "Person", "name": "A. Example", "role": "editor"}])
     )
 
     assert decision.status == "resolved"
     assert decision.changed is True
-    assert decision.schema_org["editor"] == [
-        {"@type": "Person", "name": "A. Example"}
-    ]
+    assert decision.schema_org["editor"] == [{"@type": "Person", "name": "A. Example"}]
 
 
 def test_assessment_invalidates_non_english_roles_and_preserves_payload() -> None:
     original = _book(
-        contributor=[
-            {"@type": "Person", "name": "A. Example", "role": "мөхәррир"}
-        ]
+        contributor=[{"@type": "Person", "name": "A. Example", "role": "мөхәррир"}]
     )
     decision = assess_metadata(original)
 
@@ -56,5 +48,76 @@ def test_assessment_invalidates_language_and_schema_shape_problems() -> None:
     assert decision.status == "invalid"
     assert {issue["code"] for issue in decision.issues} >= {
         "description_script_mismatch",
-        "audience_shape",
+        "audience_not_english",
+    }
+
+
+def test_assessment_losslessly_repairs_legacy_json_ld_shapes() -> None:
+    decision = assess_metadata(
+        _book(
+            audience="General public",
+            suggestedMinAge=12,
+            bookEdition=2,
+            accessMode="textual",
+            accessModeSufficient=["textual", "visual"],
+            about=[
+                {
+                    "@type": "DefinedTerm",
+                    "termCode": "821.512.145",
+                    "inDefinedTermSet": "UDC",
+                }
+            ],
+        )
+    )
+
+    assert decision.status == "resolved"
+    assert decision.changed is True
+    assert decision.schema_org["audience"] == {
+        "@type": "PeopleAudience",
+        "audienceType": "General public",
+        "suggestedMinAge": 12,
+    }
+    assert "suggestedMinAge" not in decision.schema_org
+    assert decision.schema_org["bookEdition"] == "2"
+    assert decision.schema_org["accessMode"] == ["textual"]
+    assert decision.schema_org["accessModeSufficient"] == [
+        {
+            "@type": "ItemList",
+            "itemListElement": ["textual", "visual"],
+        }
+    ]
+    assert decision.schema_org["about"][0]["inDefinedTermSet"] == {
+        "@type": "DefinedTermSet",
+        "name": "UDC",
+    }
+
+
+def test_assessment_persists_safe_repairs_while_retaining_semantic_issue() -> None:
+    decision = assess_metadata(
+        _book(
+            genre=["тарих"],
+            about=[
+                {
+                    "@type": "DefinedTerm",
+                    "termCode": "900",
+                    "inDefinedTermSet": "DDC",
+                }
+            ],
+        )
+    )
+
+    assert decision.status == "invalid"
+    assert decision.changed is True
+    assert {issue["code"] for issue in decision.issues} == {"genre_not_english"}
+    assert decision.schema_org["genre"] == ["тарих"]
+    assert decision.schema_org["about"][0]["inDefinedTermSet"]["name"] == "DDC"
+
+
+def test_age_only_audience_is_preserved_without_inventing_a_label() -> None:
+    decision = assess_metadata(_book(suggestedMinAge="16"))
+
+    assert decision.status == "resolved"
+    assert decision.schema_org["audience"] == {
+        "@type": "PeopleAudience",
+        "suggestedMinAge": 16,
     }

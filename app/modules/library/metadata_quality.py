@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
+from urllib.parse import urlparse
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from app.modules.library.metadata_contract import (
+    ACCESS_MODES,
     CONTRACT_VERSION,
     metadata_contract_issues,
     reshape_english_contributor_roles,
@@ -29,11 +32,127 @@ class MetadataAssessment:
     changed: bool
 
 
+def _clean_label(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.split())
+    return normalized or None
+
+
+def _integral_age(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if 0 <= value <= 150 else None
+    if isinstance(value, float):
+        return int(value) if value.is_integer() and 0 <= value <= 150 else None
+    raw = _clean_label(value)
+    if raw and raw.isdigit() and 0 <= int(raw) <= 150:
+        return int(raw)
+    return None
+
+
+def _normalize_legacy_audience(updated: dict[str, Any]) -> bool:
+    raw_audience = updated.get("audience")
+    changed = False
+    if raw_audience is None:
+        normalized: Any = None
+    else:
+        items = raw_audience if isinstance(raw_audience, list) else [raw_audience]
+        normalized_items: list[Any] = []
+        for item in items:
+            if label := _clean_label(item):
+                normalized_items.append({"@type": "Audience", "audienceType": label})
+                changed = True
+            else:
+                normalized_items.append(deepcopy(item))
+        normalized = (
+            normalized_items if isinstance(raw_audience, list) else normalized_items[0]
+        )
+
+    age = _integral_age(updated.get("suggestedMinAge"))
+    if age is not None:
+        normalized_items = normalized if isinstance(normalized, list) else [normalized]
+        target = next(
+            (item for item in normalized_items if isinstance(item, dict)), None
+        )
+        if target is None:
+            target = {"@type": "PeopleAudience"}
+            normalized_items = [target]
+        else:
+            target["@type"] = "PeopleAudience"
+        target["suggestedMinAge"] = age
+        normalized = (
+            normalized_items if isinstance(normalized, list) else normalized_items[0]
+        )
+        updated.pop("suggestedMinAge", None)
+        changed = True
+
+    if normalized is not None and normalized != raw_audience:
+        updated["audience"] = normalized
+        changed = True
+    return changed
+
+
+def _normalize_legacy_shapes(
+    schema_org: Mapping[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Apply only lossless representation changes to historical JSON-LD."""
+    updated = deepcopy(dict(schema_org))
+    changed = _normalize_legacy_audience(updated)
+
+    edition = updated.get("bookEdition")
+    if isinstance(edition, (int, float)) and not isinstance(edition, bool):
+        updated["bookEdition"] = str(edition)
+        changed = True
+
+    access_mode = updated.get("accessMode")
+    if isinstance(access_mode, str) and access_mode in ACCESS_MODES:
+        updated["accessMode"] = [access_mode]
+        changed = True
+
+    sufficient = updated.get("accessModeSufficient")
+    if (
+        isinstance(sufficient, list)
+        and sufficient
+        and all(isinstance(item, str) and item in ACCESS_MODES for item in sufficient)
+    ):
+        updated["accessModeSufficient"] = [
+            {"@type": "ItemList", "itemListElement": list(sufficient)}
+        ]
+        changed = True
+
+    about = updated.get("about")
+    about_items = about if isinstance(about, list) else []
+    for item in about_items:
+        if not isinstance(item, dict) or item.get("@type") != "DefinedTerm":
+            continue
+        termset = item.get("inDefinedTermSet")
+        if isinstance(termset, str):
+            name = _clean_label(termset)
+            parsed = urlparse(name or "")
+            if name and not (parsed.scheme in {"http", "https"} and parsed.netloc):
+                item["inDefinedTermSet"] = {
+                    "@type": "DefinedTermSet",
+                    "name": name,
+                }
+                changed = True
+        elif isinstance(termset, dict) and _clean_label(termset.get("name")):
+            if termset.get("@type") != "DefinedTermSet":
+                termset["@type"] = "DefinedTermSet"
+                changed = True
+    return updated, changed
+
+
 def assess_metadata(schema_org: Any) -> MetadataAssessment:
-    """Assess one payload, applying only deterministic English role reshaping."""
+    """Assess one payload after lossless shape and English-role repairs."""
     original = dict(schema_org) if isinstance(schema_org, Mapping) else {}
-    reshaped, changed, requires_reextract = reshape_english_contributor_roles(original)
-    candidate = original if requires_reextract else reshaped
+    normalized, shape_changed = _normalize_legacy_shapes(original)
+    reshaped, role_changed, requires_reextract = reshape_english_contributor_roles(
+        normalized
+    )
+    candidate = normalized if requires_reextract else reshaped
+    changed = shape_changed or role_changed
     issues = metadata_contract_issues(candidate)
     if requires_reextract and not any(
         item["code"] == "role_not_english" for item in issues
@@ -46,7 +165,7 @@ def assess_metadata(schema_org: Any) -> MetadataAssessment:
             }
         )
     if issues:
-        return MetadataAssessment(original, "invalid", tuple(issues), False)
+        return MetadataAssessment(candidate, "invalid", tuple(issues), changed)
     return MetadataAssessment(candidate, "resolved", (), changed)
 
 
@@ -89,7 +208,7 @@ class MetadataQualityRepository:
                 counters["scanned"] += 1
                 counters[decision.status] += 1
                 if decision.changed:
-                    counters["roles_repaired"] += 1
+                    counters["normalized"] += 1
                 for issue in decision.issues:
                     issue_counts[issue["code"]] += 1
             if apply:
@@ -200,6 +319,17 @@ class MetadataQualityRepository:
                         "WHERE md5 = ANY(:md5s)"
                     ),
                     {"md5s": invalid_md5s},
+                )
+            resolved_md5s = [
+                md5 for md5, decision in decisions if decision.status == "resolved"
+            ]
+            if resolved_md5s:
+                conn.execute(
+                    text(
+                        "DELETE FROM library_metadata_extraction_state "
+                        "WHERE md5 = ANY(:md5s)"
+                    ),
+                    {"md5s": resolved_md5s},
                 )
 
 

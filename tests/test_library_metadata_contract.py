@@ -43,13 +43,16 @@ def test_contract_rejects_english_description_for_cyrillic_document() -> None:
 
 
 def test_contract_accepts_english_description_for_english_document() -> None:
-    assert metadata_contract_issues(
-        _book(
-            name="A Book",
-            inLanguage="en",
-            description="A concise history of publishing.",
+    assert (
+        metadata_contract_issues(
+            _book(
+                name="A Book",
+                inLanguage="en",
+                description="A concise history of publishing.",
+            )
         )
-    ) == []
+        == []
+    )
 
 
 def test_contract_rejects_non_english_discovery_facets() -> None:
@@ -70,9 +73,7 @@ def test_contract_rejects_legacy_schema_shapes() -> None:
             audience="General public",
             bookEdition=2,
             accessModeSufficient=["textual"],
-            contributor=[
-                {"@type": "Person", "name": "Editor", "role": "editor"}
-            ],
+            contributor=[{"@type": "Person", "name": "Editor", "role": "editor"}],
         )
     )
 
@@ -96,6 +97,20 @@ def test_contract_accepts_schema_org_role_relationship() -> None:
     )
 
     assert metadata_contract_issues(payload) == []
+
+
+def test_contract_accepts_age_only_people_audience() -> None:
+    assert (
+        metadata_contract_issues(
+            _book(
+                audience={
+                    "@type": "PeopleAudience",
+                    "suggestedMinAge": 16,
+                }
+            )
+        )
+        == []
+    )
 
 
 def test_english_roles_are_reshaped_but_non_english_roles_require_reextract() -> None:
@@ -125,9 +140,7 @@ def test_english_roles_are_reshaped_but_non_english_roles_require_reextract() ->
 
     _updated, _changed, requires_reextract = reshape_english_contributor_roles(
         _book(
-            contributor=[
-                {"@type": "Person", "name": "C. Example", "role": "мөхәррир"}
-            ]
+            contributor=[{"@type": "Person", "name": "C. Example", "role": "мөхәррир"}]
         )
     )
     assert requires_reextract is True

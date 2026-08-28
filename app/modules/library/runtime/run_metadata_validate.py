@@ -60,7 +60,7 @@ def main() -> int:
             "percent": round((current / total) * 100, 2) if total else 100,
             "invalid": int(counters.get("invalid") or 0),
             "resolved": int(counters.get("resolved") or 0),
-            "roles_repaired": int(counters.get("roles_repaired") or 0),
+            "normalized": int(counters.get("normalized") or 0),
         }
         db.update_run_progress(run_id, progress)
         db.insert_event(
