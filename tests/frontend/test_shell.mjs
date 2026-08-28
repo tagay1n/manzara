@@ -83,8 +83,7 @@ test("frontend source does not use browser system dialogs", () => {
     "library-classifications.js",
     "library-collections.js",
     "library-normalization.js",
-    "library-personalities.js",
-    "library-publishers.js",
+    "library-entities.js",
     "task.js",
     "tasks.js",
   ].map((file) => readFileSync(new URL(`../../static/${file}`, import.meta.url), "utf-8"));

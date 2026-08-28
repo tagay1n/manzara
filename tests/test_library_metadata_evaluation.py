@@ -27,6 +27,7 @@ from metadata.evaluation import (  # noqa: E402
     _parse_evaluation_response,
 )
 from metadata import evaluation as evaluation_module  # noqa: E402
+from metadata import evaluation_helpers as evaluation_helpers_module  # noqa: E402
 from metadata.repository import fetch_docs_for_evaluation  # noqa: E402
 
 
@@ -94,23 +95,23 @@ def test_evaluation_replaces_invalid_pdf_in_configured_shared_cache(
     downloads: list[str] = []
 
     monkeypatch.setattr(
-        evaluation_module,
+        evaluation_helpers_module,
         "load_document_storage_settings",
         lambda _config: SimpleNamespace(cache_path=tmp_path),
     )
     monkeypatch.setattr(
-        evaluation_module,
+        evaluation_helpers_module,
         "_resolve_doc_source_url",
         lambda *_args: "https://example.test/document.pdf",
     )
 
     def download(_url, local_path):  # noqa: ANN001
         downloads.append(str(local_path))
-        evaluation_module.Path(local_path).write_bytes(content)
+        evaluation_helpers_module.Path(local_path).write_bytes(content)
 
-    monkeypatch.setattr(evaluation_module, "_download_file", download)
+    monkeypatch.setattr(evaluation_helpers_module, "_download_file", download)
 
-    result = evaluation_module._ensure_pdf_in_shared_cache(doc, {}, object())
+    result = evaluation_helpers_module._ensure_pdf_in_shared_cache(doc, {}, object())
 
     assert result == str(cached)
     assert cached.read_bytes() == content

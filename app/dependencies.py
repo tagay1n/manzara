@@ -26,13 +26,15 @@ from app.modules.library.collections import (
     merge_collections,
     update_collection,
 )
-from app.modules.library.insights import (
-    get_classification_detail,
+from app.modules.library.classification_insights import (
     get_classification_insights,
-    get_merge_candidates,
-    merge_classifications,
-    get_normalization_preview,
     list_classifications,
+)
+from app.modules.library.classification_operations import (
+    get_classification_detail,
+    get_merge_candidates,
+    get_normalization_preview,
+    merge_classifications,
 )
 from app.modules.library.normalization import (
     bulk_link_aliases,
@@ -47,11 +49,13 @@ from app.modules.library.normalization import (
     link_alias,
     list_canonicals,
     list_history as list_normalization_history,
-    list_suggestions,
     merge_canonicals,
-    refresh_suggestions,
     reject_alias,
     undo_event,
+)
+from app.modules.library.normalization_suggestions import (
+    list_suggestions,
+    refresh_suggestions,
 )
 from app.modules.library.personalities import (
     get_personality_insights,

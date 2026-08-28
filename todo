@@ -1,9 +1,0 @@
-rename schema in database
-move gec-annotations-filter
-add upstream metadata to database
-notification panel
-
-tasks hierarchy/concurrency
-
-fix test_task_completion_not_blocked_by_open_stdout_fd completion timeout
-normalize metadata - should be only english

@@ -30,7 +30,7 @@ def test_worker_validation_is_strict_and_account_bounded(monkeypatch, value) -> 
 
 
 def test_normalization_preserves_order_while_gemini_calls_run_concurrently(monkeypatch) -> None:
-    from app.modules.library import normalization
+    from app.modules.library import normalization_suggestions as normalization
 
     items = [
         {

@@ -13,6 +13,34 @@ const state = {
   activeTab: "table",
 };
 
+const entity = window.location.pathname.includes("/publishers")
+  ? {
+      singular: "publisher",
+      plural: "publishers",
+      title: "Publisher",
+      titlePlural: "Publishers",
+      docsLabel: "Docs With Publishers",
+      docsKey: "docs_with_publishers",
+      markerLabel: "Org Marker",
+      markerKey: "org_marker_mentions",
+      topKey: "top_publishers",
+    }
+  : {
+      singular: "personality",
+      plural: "personalities",
+      title: "Personality",
+      titlePlural: "Personalities",
+      docsLabel: "Docs With Authors",
+      docsKey: "docs_with_authors",
+      markerLabel: "Patronymic Form",
+      markerKey: "patronymic_mentions",
+      topKey: "top_personalities",
+    };
+
+function entityId(suffix) {
+  return `${entity.singular}-${suffix}`;
+}
+
 const viewState = window.ManzaraCore.attachViewState(state, "loading");
 
 const TAB_IDS = ["table", "scripts", "clusters", "queue"];
@@ -94,34 +122,34 @@ function tableUrl() {
     min_docs: String(Math.max(0, filters.minDocs || 0)),
     sort: filters.sort,
   });
-  return `/api/library/publishers/table?${params.toString()}`;
+  return `/api/library/${entity.plural}/table?${params.toString()}`;
 }
 
 function renderOverview(overview) {
   state.overviewPayload = overview;
-  const statusNode = document.getElementById("publisher-status");
+  const statusNode = document.getElementById(entityId("status"));
   const stats = overview.stats || {};
   if (overview.available) {
     const source = overview.config_source ? ` • source: ${overview.config_source}` : "";
-    setStatusMessage(statusNode, `Publisher stats loaded${source}`, { error: false });
+    setStatusMessage(statusNode, `${entity.title} stats loaded${source}`, { error: false });
   } else {
     setStatusMessage(
       statusNode,
-      `Publisher dataset unavailable: ${overview.error || "unknown error"}`,
+      `${entity.title} dataset unavailable: ${overview.error || "unknown error"}`,
       { error: true }
     );
   }
 
-  document.getElementById("publisher-stat-grid").innerHTML = `
+  document.getElementById(entityId("stat-grid")).innerHTML = `
     <div class="library-stat-card"><span class="library-stat-label">Mentions</span><span class="library-stat-value">${stats.total_mentions || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Docs With Publishers</span><span class="library-stat-value">${stats.docs_with_publishers || 0}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">${entity.docsLabel}</span><span class="library-stat-value">${stats[entity.docsKey] || 0}</span></div>
     <div class="library-stat-card"><span class="library-stat-label">Raw Names</span><span class="library-stat-value">${stats.unique_raw_names || 0}</span></div>
     <div class="library-stat-card"><span class="library-stat-label">Normalized Keys</span><span class="library-stat-value">${stats.unique_normalized_names || 0}</span></div>
     <div class="library-stat-card"><span class="library-stat-label">Mixed Script</span><span class="library-stat-value">${stats.mixed_script_mentions || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Org Marker</span><span class="library-stat-value">${stats.org_marker_mentions || 0}</span></div>
+    <div class="library-stat-card"><span class="library-stat-label">${entity.markerLabel}</span><span class="library-stat-value">${stats[entity.markerKey] || 0}</span></div>
   `;
 
-  const topRows = (overview.top_publishers || [])
+  const topRows = (overview[entity.topKey] || [])
     .slice(0, 12)
     .map(
       (item) => `
@@ -135,25 +163,25 @@ function renderOverview(overview) {
     `
     )
     .join("");
-  document.getElementById("publisher-top-list").innerHTML =
-    topRows || '<div class="run-row">No publishers found yet.</div>';
+  document.getElementById(entityId("top-list")).innerHTML =
+    topRows || `<div class="run-row">No ${entity.plural} found yet.</div>`;
 }
 
 function renderTable(payload) {
   state.tablePayload = payload;
-  const statusNode = document.getElementById("publisher-table-status");
+  const statusNode = document.getElementById(entityId("table-status"));
   if (!payload.available) {
     setStatusMessage(statusNode, `Table unavailable: ${payload.error || "unknown error"}`, {
       error: true,
     });
-    document.getElementById("publisher-table-body").innerHTML = "";
+    document.getElementById(entityId("table-body")).innerHTML = "";
     return;
   }
   setStatusMessage(statusNode, `Loaded ${payload.items.length} rows from ${payload.total} total`, {
     error: false,
   });
 
-  document.getElementById("publisher-table-body").innerHTML = (payload.items || [])
+  document.getElementById(entityId("table-body")).innerHTML = (payload.items || [])
     .map(
       (item) => `
       <tr>
@@ -162,7 +190,7 @@ function renderTable(payload) {
         <td>${escapeHtml(item.script_label || "other")}</td>
         <td>${item.docs_count || 0}</td>
         <td>${item.mentions_count || 0}</td>
-        <td>${item.org_marker_mentions || 0}</td>
+        <td>${item[entity.markerKey] || 0}</td>
       </tr>
     `
     )
@@ -299,7 +327,7 @@ function switchTab(tab) {
 }
 
 async function refreshOverview() {
-  const payload = await api("/api/library/publishers");
+  const payload = await api(`/api/library/${entity.plural}`);
   state.globalPayload = payload;
   renderGlobalState(payload);
   renderOverview(payload.overview || {});
@@ -311,7 +339,7 @@ async function refreshTable() {
 }
 
 async function refreshInsights() {
-  const payload = await api("/api/library/publishers/insights");
+  const payload = await api(`/api/library/${entity.plural}/insights`);
   renderInsights(payload);
 }
 
@@ -321,18 +349,18 @@ async function refreshAll() {
 
 function renderPageLoading() {
   viewState.set("loading");
-  setStatusMessage(document.getElementById("publisher-status"), "Loading publishers...", {
+  setStatusMessage(document.getElementById(entityId("status")), `Loading ${entity.plural}...`, {
     error: false,
   });
-  document.getElementById("publisher-stat-grid").innerHTML = renderRunRowMessage("Loading overview...");
-  document.getElementById("publisher-top-list").innerHTML = renderRunRowMessage(
-    "Loading top publishers..."
+  document.getElementById(entityId("stat-grid")).innerHTML = renderRunRowMessage("Loading overview...");
+  document.getElementById(entityId("top-list")).innerHTML = renderRunRowMessage(
+    `Loading top ${entity.plural}...`
   );
-  setStatusMessage(document.getElementById("publisher-table-status"), "Loading publisher table...", {
+  setStatusMessage(document.getElementById(entityId("table-status")), `Loading ${entity.singular} table...`, {
     error: false,
   });
-  document.getElementById("publisher-table-body").innerHTML =
-    renderLoadingTableRow(6, "Loading publisher rows...");
+  document.getElementById(entityId("table-body")).innerHTML =
+    renderLoadingTableRow(6, `Loading ${entity.singular} rows...`);
   document.getElementById("scripts-root").innerHTML = renderWorkflowFootnoteMessage(
     "Loading script distribution..."
   );
@@ -346,18 +374,18 @@ function renderPageLoading() {
 
 function renderPageError(error) {
   viewState.set("error");
-  const message = String(error?.message || error || "Failed to load publishers.");
-  setStatusMessage(document.getElementById("publisher-status"), `Publishers unavailable: ${message}`, {
+  const message = String(error?.message || error || `Failed to load ${entity.plural}.`);
+  setStatusMessage(document.getElementById(entityId("status")), `${entity.titlePlural} unavailable: ${message}`, {
     error: true,
   });
-  document.getElementById("publisher-stat-grid").innerHTML =
+  document.getElementById(entityId("stat-grid")).innerHTML =
     renderRunRowMessage(message, { error: true });
-  document.getElementById("publisher-top-list").innerHTML =
+  document.getElementById(entityId("top-list")).innerHTML =
     renderRunRowMessage(message, { error: true });
-  setStatusMessage(document.getElementById("publisher-table-status"), `Table unavailable: ${message}`, {
+  setStatusMessage(document.getElementById(entityId("table-status")), `Table unavailable: ${message}`, {
     error: true,
   });
-  document.getElementById("publisher-table-body").innerHTML = "";
+  document.getElementById(entityId("table-body")).innerHTML = "";
   const errorHtml = renderWorkflowFootnoteMessage(message, { error: true });
   document.getElementById("scripts-root").innerHTML = errorHtml;
   document.getElementById("clusters-root").innerHTML = errorHtml;

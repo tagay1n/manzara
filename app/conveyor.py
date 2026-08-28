@@ -12,7 +12,6 @@ from app.repositories.conveyor import ConveyorRevisionConflict
 from app.runtime_states import (
     CONVEYOR_RUN_STATUS_COMPLETED,
     CONVEYOR_RUN_STATUS_FAILED,
-    CONVEYOR_RUN_STATUS_RUNNING,
     CONVEYOR_RUN_STATUS_STOPPED,
     TASK_RUN_ACTIVE_STATUSES,
     TASK_RUN_STATUS_COMPLETED,

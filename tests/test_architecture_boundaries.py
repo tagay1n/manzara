@@ -19,16 +19,30 @@ def test_database_public_facade_is_composed_from_focused_repositories():
 
 def test_flow_specific_agent_guidance_is_nested():
     root_guidance = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    assert "Library metadata extraction" not in root_guidance
-    assert "Document storage policy" not in root_guidance
+    assert len(root_guidance.split()) <= 500
+    assert "PDF previews" not in root_guidance
+    assert "Pacific reset" not in root_guidance
     for flow in ("library", "maintenance"):
-        assert (ROOT / "app" / "modules" / flow / "AGENTS.md").is_file()
+        guidance = ROOT / "app" / "modules" / flow / "AGENTS.md"
+        assert guidance.is_file()
+        assert len(guidance.read_text(encoding="utf-8").split()) <= 250
+
+    assert (ROOT / "static" / "AGENTS.md").is_file()
+    assert (ROOT / "app" / "task_runtime" / "AGENTS.md").is_file()
+    assert (ROOT / "docs" / "gemini-runtime.md").is_file()
 
 
 def test_architecture_index_names_major_ownership_boundaries():
     source = (ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
-    for concern in ("Database repositories", "Task runtime", "Frontend", "Flow modules"):
+    for concern in ("Database repositories", "Task runtime", "Frontend", "Library flow"):
         assert concern in source
+
+
+def test_verification_docs_do_not_embed_ephemeral_results():
+    source = (ROOT / "docs" / "verification.md").read_text(encoding="utf-8")
+    assert "passed" not in source
+    assert "current head" not in source
+    assert "alembic heads" in source
 
 
 def test_task_runtime_helpers_are_outside_task_runner_module():

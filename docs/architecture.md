@@ -1,18 +1,18 @@
 # Architecture index
 
-This is a short ownership map. Detailed operational invariants live in the nearest `AGENTS.md`.
+Detailed invariants live in the nearest `AGENTS.md` or its routed guidance file.
 
-| Concern | Owner/location |
-| --- | --- |
-| Application assembly and routes | `app/factory.py`, `app/app_setup.py`, and focused `app/*_routes.py` modules |
-| Database repositories | `app/repositories/`; `app/db.py` is the stable compatibility facade |
-| Task runtime | `app/tasks.py` orchestrates; process, command, and logging concerns live in `app/task_runtime/` |
-| Editable task conveyor | `app/conveyor.py` executes the singleton staged plan; persistence lives in `app/repositories/conveyor.py`; `static/conveyor.js` owns the editor above the task catalog |
-| Document eligibility policy | `app/document_sync_filter.py`; Library cleanup planning and Maintenance sync both consume this shared classifier |
-| Shared Gemini runtime | `app/gemini_runtime.py`, `app/gemini_model_pool.py`, and `app/gemini_requests.py` |
-| Flow modules | `app/modules/<flow>/`; each flow owns its tasks, runtime, config, repositories, and nested guidance |
-| Frontend | shared transport/shell/UI in `static/core.js`, `static/shell.js`, and `static/ui.js`; page controllers and domain renderers are separate files |
-| Migrations | `alembic/versions/`; PostgreSQL schema is the persisted source of truth |
-| Tests | backend in `tests/`, browser behavior in `tests/frontend/`; use focused tests while iterating and the full suite before commit |
+| Concern | Owner/location | Focused verification |
+| --- | --- | --- |
+| Application assembly and routes | `app/factory.py`, `app/app_setup.py`, focused `app/*_routes.py` | `tests/test_api_*.py`, `tests/test_wiring_contracts.py` |
+| Database repositories | `app/repositories/`; `app/db.py` is the facade | `tests/test_db.py`, repository-specific tests |
+| Task runtime | `app/tasks.py`, `app/task_runtime/`, run artifact modules | task-runtime API tests, `tests/test_run_*.py` |
+| Editable conveyor | `app/conveyor.py`, `app/repositories/conveyor.py`, `static/conveyor.js` | `tests/test_conveyor.py`, frontend tasks-page tests |
+| Document eligibility | `app/document_sync_filter.py` | `tests/test_document_sync_filter.py` |
+| Shared Gemini runtime | `app/gemini_*.py`; read `docs/gemini-runtime.md` | `tests/test_gemini_*.py` |
+| Library flow | `app/modules/library/`; read its routing `AGENTS.md` | `tests/test_library_*.py` |
+| Maintenance flow | `app/modules/maintenance/`; read its routing `AGENTS.md` | Maintenance/storage-specific tests |
+| Frontend | `static/`; read `static/AGENTS.md` | `tests/frontend/` |
+| Migrations | `alembic/versions/`; PostgreSQL is authoritative | migration tests, `alembic heads` |
 
 Dependencies point inward: flow modules may use shared core; shared core must not import flow internals. The backend owns domain decisions, and frontend code renders backend contracts.

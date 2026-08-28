@@ -20,7 +20,7 @@ _bootstrap_repo_root()
 
 from app.db import Database  # noqa: E402
 from app.gemini_workers import resolve_gemini_workers  # noqa: E402
-from app.modules.library.normalization import refresh_suggestions  # noqa: E402
+from app.modules.library.normalization_suggestions import refresh_suggestions  # noqa: E402
 from app.settings import load_settings  # noqa: E402
 
 

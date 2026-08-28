@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from app.modules.library.insights import _rewrite_schema_org_classification_terms
+from app.modules.library.classification_insights import (
+    _rewrite_schema_org_classification_terms,
+)
 
 
 def test_rewrite_schema_org_classification_terms_replaces_managed_terms() -> None:

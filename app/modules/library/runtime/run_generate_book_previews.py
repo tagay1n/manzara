@@ -25,7 +25,6 @@ from botocore.config import Config  # noqa: E402
 
 from app.db import Database  # noqa: E402
 from app.document_storage import (  # noqa: E402
-    DEFAULT_S3_ENDPOINT,
     load_document_storage_settings,
 )
 from app.modules.library.preview_generation import (  # noqa: E402

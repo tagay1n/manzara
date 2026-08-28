@@ -78,7 +78,7 @@ def test_configured_model_names_come_only_from_shared_pool(
 
 
 def test_normalization_uses_full_shared_ordered_model_pool(monkeypatch) -> None:
-    from app.modules.library import normalization
+    from app.modules.library import normalization_suggestions as normalization
 
     monkeypatch.setattr(
         normalization,
