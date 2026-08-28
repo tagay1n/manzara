@@ -30,11 +30,12 @@ METADATA_GAP_FILL_RULES_TEXT = (
 METADATA_PATCH_SHAPE_TEXT = (
     "metadata_patch must be a schema.org Book-compatible PARTIAL object (or null). "
     "Allowed keys: name, author, publisher, datePublished, isbn, inLanguage, description, "
-    "numberOfPages, genre. "
+    "numberOfPages, genre. Keep genre values as concise canonical English labels. "
     "Do not include keys that were not requested. "
     "Use schema.org-compatible nested shapes: "
     "author=[{'@type':'Person'|'Organization','name':...}], "
-    "publisher={'@type':'Organization','name':...}."
+    "publisher={'@type':'Organization','name':...}. Keep description in the same "
+    "language and script as inLanguage; use English only for an English document."
 )
 
 LIBRARY_APPLICABILITY_RULES_TEXT = (

@@ -44,7 +44,11 @@ def _document() -> EvaluationTask:
         document_url="https://example.test/a.pdf",
         upstream_meta_url=None,
         content_url=None,
-        schema_org={"name": "A"},
+        schema_org={
+            "@context": "https://schema.org",
+            "@type": "Book",
+            "name": "A",
+        },
     )
 
 

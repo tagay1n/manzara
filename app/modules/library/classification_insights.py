@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from app.modules.library.response_envelope import available_payload, unavailable_payload
 from app.modules.library.stats import create_runtime_engine
+from app.modules.library.metadata_terms import defined_term, termset_name
 
 _DEFAULT_PAGE_SIZE = 25
 _MAX_PAGE_SIZE = 100
@@ -66,12 +67,8 @@ def _serialize_value(value: Any) -> Any:
     return value
 
 
-def _build_defined_term(term_code: str, termset: str) -> dict[str, str]:
-    return {
-        "@type": "DefinedTerm",
-        "termCode": term_code,
-        "inDefinedTermSet": termset,
-    }
+def _build_defined_term(term_code: str, termset: str) -> dict[str, Any]:
+    return defined_term(term_code, termset)
 
 
 def _coerce_schema_object(schema_org: Any) -> dict[str, Any] | None:
@@ -113,7 +110,7 @@ def _rewrite_schema_org_classification_terms(
         if not isinstance(item, dict):
             retained.append(item)
             continue
-        termset = str(item.get("inDefinedTermSet") or "").strip().casefold()
+        termset = str(termset_name(item.get("inDefinedTermSet")) or "").casefold()
         if termset in _MANAGED_CLASSIFICATION_TERMSETS:
             continue
         retained.append(item)

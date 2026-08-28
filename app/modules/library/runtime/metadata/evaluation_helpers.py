@@ -30,6 +30,8 @@ from models import Classification
 from core.paths import get_in_workdir
 from .isbn_utils import canonicalize_isbn_values
 from .url_utils import normalize_url_list
+from app.modules.library.metadata_contract import is_english_facet
+from app.modules.library.metadata_terms import defined_term, termset_name
 
 
 LEGAL_DOC_PATTERNS = [
@@ -282,7 +284,7 @@ def _normalize_author(value: Any) -> list[dict[str, str]] | None:
     seen = set()
     for name in names:
         clean = _clean_text(name, max_len=300)
-        if not clean:
+        if not clean or not is_english_facet(clean):
             continue
         key = clean.casefold()
         if key in seen:
@@ -354,7 +356,7 @@ def _normalize_classification_path(value: Any) -> list[str] | None:
         if not text:
             continue
         # Classification labels are expected in English for stable taxonomy keys.
-        if CYRILLIC_RE.search(text):
+        if not is_english_facet(text):
             return None
         cleaned.append(text)
     if len(cleaned) < 2 or len(cleaned) > 8:
@@ -615,18 +617,14 @@ def _sanitize_schema_urls(schema_org: dict[str, Any]) -> tuple[dict[str, Any], b
     return updated, changed
 
 
-def _build_defined_term(term_code: str, termset: str) -> dict[str, str]:
-    return {
-        "@type": "DefinedTerm",
-        "termCode": term_code,
-        "inDefinedTermSet": termset,
-    }
+def _build_defined_term(term_code: str, termset: str) -> dict[str, Any]:
+    return defined_term(term_code, termset)
 
 
 def _is_managed_about_term(item: Any) -> bool:
     if not isinstance(item, dict):
         return False
-    termset = _clean_text(item.get("inDefinedTermSet"), max_len=120)
+    termset = termset_name(item.get("inDefinedTermSet"))
     return bool(termset and termset.casefold() in MANAGED_TERMSETS)
 
 
@@ -637,7 +635,7 @@ def _extract_about_term_values(items: list[Any], termset: str) -> list[str]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        item_set = _clean_text(item.get("inDefinedTermSet"), max_len=120)
+        item_set = termset_name(item.get("inDefinedTermSet"))
         if not item_set or item_set.casefold() != target_set:
             continue
         value = _clean_text(item.get("termCode"), max_len=500) or _clean_text(item.get("name"), max_len=500)

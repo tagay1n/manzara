@@ -40,6 +40,7 @@ from app.gemini_runtime import (
 )
 from app.settings import load_settings
 from app.artifacts import flow_artifacts_dir
+from app.modules.library.metadata_contract import CONTRACT_VERSION, metadata_contract_issues
 from integrations.s3 import create_document_session, create_session
 from dirs import Dirs
 from .fields import extract_flat_fields
@@ -50,6 +51,7 @@ from core.config import read_config
 from core.db import get_session
 from core.upstream_meta import load_upstream_metadata
 from .repository import (
+    EVALUATION_PROMPT_VERSION,
     clear_evaluation_state,
     count_docs_for_evaluation,
     fetch_docs_for_evaluation,
@@ -263,7 +265,35 @@ def _parse_evaluation_response(
         raise GeminiModelResponseError(
             "applicable metadata evaluation has no usable classification"
         )
+    merged = _schema_after_evaluation(doc.schema_org, evaluation)
+    if issues := metadata_contract_issues(merged):
+        codes = ", ".join(sorted({item["code"] for item in issues}))
+        raise GeminiModelResponseError(
+            f"metadata evaluation violates {CONTRACT_VERSION}: {codes}"
+        )
     return evaluation
+
+
+def _schema_after_evaluation(
+    existing: dict | str | None,
+    evaluation: Evaluation,
+) -> dict[str, Any]:
+    schema_org = dict(existing) if isinstance(existing, dict) else {}
+    if evaluation.metadata_patch:
+        patch_payload = json.loads(
+            evaluation.metadata_patch.model_dump_json(
+                by_alias=True, exclude_none=True, ensure_ascii=False
+            )
+        )
+        schema_org, _ = _apply_metadata_patch(schema_org, patch_payload)
+    schema_org, _ = _sync_auxiliary_terms_in_about(
+        schema_org=schema_org,
+        applicable=evaluation.applicable,
+        ddc=evaluation.library_ddc,
+        path=evaluation.library_path,
+    )
+    schema_org, _ = _sanitize_schema_urls(schema_org)
+    return schema_org
 
 
 def evaluate(args) -> None:
@@ -762,7 +792,7 @@ class LibraryApplicabilityWorker:
             metadata = session.get(Metadata, md5)
             if metadata:
                 metadata.lib = bool(evaluation.applicable)
-                metadata.lib_eval_method = f"{model_name}/v1"
+                metadata.lib_eval_method = f"{model_name}/{EVALUATION_PROMPT_VERSION}"
                 if evaluation.applicable and evaluation.library_ddc and evaluation.library_path:
                     metadata.classification_id = _resolve_classification_id(
                         session,
@@ -796,6 +826,11 @@ class LibraryApplicabilityWorker:
                 if applied:
                     metadata.schema_org = schema_org
                     self.log(f"Patched metadata for {md5}: {', '.join(applied)}")
+                if issues := metadata_contract_issues(schema_org):
+                    codes = ", ".join(sorted({item["code"] for item in issues}))
+                    raise ValueError(
+                        f"Refusing evaluation outside {CONTRACT_VERSION}: {codes}"
+                    )
                 session.commit()
         clear_evaluation_state(md5)
 

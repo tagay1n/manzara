@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from sqlalchemy import text
 
 from app.modules.library.stats import create_runtime_engine
+from app.modules.library.metadata_terms import termset_name
 
 
 DETECTOR_VERSION = "metadata-v1"
@@ -205,7 +206,7 @@ def _issue_number(schema: Mapping[str, Any]) -> str:
     for item in schema.get("about") if isinstance(schema.get("about"), list) else []:
         if not isinstance(item, Mapping):
             continue
-        if normalize_collection_text(item.get("inDefinedTermSet")) in {
+        if normalize_collection_text(termset_name(item.get("inDefinedTermSet"))) in {
             "issuenumber",
             "issue number",
         }:

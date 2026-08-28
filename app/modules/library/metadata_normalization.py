@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 from app.modules.library.runtime.metadata.isbn_utils import canonicalize_isbn_values
 from app.modules.library.runtime.metadata.url_utils import normalize_url_list
@@ -16,14 +17,16 @@ def _normalize_base_schema_org(schema_org: dict) -> dict:
 
     _set_or_drop(updated, "name", _clean_text(updated.get("name"), max_len=600))
     _set_or_drop(updated, "description", _clean_text(updated.get("description"), max_len=5000))
-    _set_or_drop(updated, "audience", _clean_text(updated.get("audience"), max_len=400))
+    _set_or_drop(updated, "audience", _normalize_audience(updated.get("audience")))
     _set_or_drop(updated, "inLanguage", _normalize_in_language(updated.get("inLanguage")))
     _set_or_drop(updated, "datePublished", _normalize_date_published(updated.get("datePublished")))
     _set_or_drop(updated, "numberOfPages", _normalize_int(updated.get("numberOfPages"), 1, 20_000))
-    _set_or_drop(updated, "bookEdition", _normalize_int(updated.get("bookEdition"), 1, 1_000))
+    _set_or_drop(updated, "bookEdition", _clean_text(updated.get("bookEdition"), max_len=120))
     _set_or_drop(updated, "genre", _normalize_string_list(updated.get("genre"), max_len=120, lower_case=True))
     _set_or_drop(updated, "author", _normalize_people(updated.get("author"), keep_role=False))
-    _set_or_drop(updated, "contributor", _normalize_people(updated.get("contributor"), keep_role=True))
+    _set_or_drop(updated, "contributor", _normalize_contributors(updated.get("contributor")))
+    for field in ("editor", "translator", "illustrator"):
+        _set_or_drop(updated, field, _normalize_people(updated.get(field), keep_role=False))
     _set_or_drop(updated, "publisher", _normalize_publisher(updated.get("publisher")))
     _set_or_drop(updated, "isBasedOn", _normalize_is_based_on(updated.get("isBasedOn")))
 
@@ -41,13 +44,14 @@ def _normalize_base_schema_org(schema_org: dict) -> dict:
     for item in about:
         if not isinstance(item, dict):
             continue
-        termset = _clean_text(item.get("inDefinedTermSet"), max_len=120)
+        termset = _normalize_termset(item.get("inDefinedTermSet"))
         term_code = _clean_text(item.get("termCode") or item.get("name"), max_len=500)
         if not termset or not term_code:
             continue
-        if termset.casefold() in {"ddc", "genre", "categorypath"}:
+        termset_name = _termset_name(termset)
+        if termset_name.casefold() in {"ddc", "genre", "categorypath"}:
             continue
-        key = (termset.casefold(), term_code.casefold())
+        key = (termset_name.casefold(), term_code.casefold())
         if key in seen:
             continue
         seen.add(key)
@@ -129,6 +133,91 @@ def _normalize_people(value, keep_role: bool):
     return out or None
 
 
+def _normalize_contributors(value):
+    items = value if isinstance(value, list) else [value]
+    out = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            people = _normalize_people(item, keep_role=False) or []
+            out.extend(people)
+            continue
+        if str(item.get("@type") or "") == "Role":
+            role_name = _clean_text(item.get("roleName"), max_len=120)
+            nested = _normalize_people(item.get("contributor"), keep_role=False)
+            if not role_name or not nested:
+                continue
+            normalized = {
+                "@type": "Role",
+                "roleName": role_name,
+                "contributor": nested[0],
+            }
+            key = ("role", role_name.casefold(), nested[0]["name"].casefold())
+        else:
+            people = _normalize_people(item, keep_role=False)
+            if not people:
+                continue
+            normalized = people[0]
+            key = ("entity", normalized["@type"].casefold(), normalized["name"].casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(normalized)
+    return out or None
+
+
+def _normalize_audience(value):
+    items = value if isinstance(value, list) else [value]
+    normalized = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        audience_type = _clean_text(item.get("audienceType"), max_len=400)
+        item_type = _clean_text(item.get("@type"), max_len=40)
+        if item_type not in {"Audience", "EducationalAudience", "PeopleAudience"} or not audience_type:
+            continue
+        result = {"@type": item_type, "audienceType": audience_type}
+        if item_type == "PeopleAudience":
+            for key in ("suggestedMinAge", "suggestedMaxAge"):
+                number = _normalize_int(item.get(key), 0, 150)
+                if number is not None:
+                    result[key] = number
+        dedupe = (item_type.casefold(), audience_type.casefold())
+        if dedupe in seen:
+            continue
+        seen.add(dedupe)
+        normalized.append(result)
+    if not normalized:
+        return None
+    return normalized[0] if len(normalized) == 1 else normalized
+
+
+def _normalize_termset(value):
+    if isinstance(value, dict):
+        name = _clean_text(value.get("name"), max_len=120)
+        if str(value.get("@type") or "") != "DefinedTermSet" or not name:
+            return None
+        result = {"@type": "DefinedTermSet", "name": name}
+        url = _clean_text(value.get("url"), max_len=500)
+        if url:
+            result["url"] = url
+        return result
+    name = _clean_text(value, max_len=120)
+    if not name:
+        return None
+    parsed = urlparse(name)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return name
+    return {"@type": "DefinedTermSet", "name": name}
+
+
+def _termset_name(value) -> str:
+    if isinstance(value, dict):
+        return str(value.get("name") or "")
+    return str(value or "")
+
+
 def _normalize_publisher(value):
     if isinstance(value, dict):
         name = _clean_text(value.get("name"), max_len=400)
@@ -175,7 +264,11 @@ def _normalize_date_published(value):
 def _normalize_int(value, min_value: int, max_value: int):
     if value is None or isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
+        return value if min_value <= value <= max_value else None
+    if isinstance(value, float):
+        if not value.is_integer():
+            return None
         int_val = int(value)
         return int_val if min_value <= int_val <= max_value else None
     text = _clean_text(value, max_len=40)

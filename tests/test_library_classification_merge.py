@@ -29,11 +29,15 @@ def test_rewrite_schema_org_classification_terms_replaces_managed_terms() -> Non
     assert isinstance(updated, dict)
     about = updated.get("about")
     assert isinstance(about, list)
-    assert {"@type": "DefinedTerm", "termCode": "810", "inDefinedTermSet": "DDC"} in about
     assert {
         "@type": "DefinedTerm",
-        "termCode": "Language > Tatar",
-        "inDefinedTermSet": "CategoryPath",
+        "termCode": "810",
+        "inDefinedTermSet": {"@type": "DefinedTermSet", "name": "DDC"},
+    } in about
+    assert {
+        "@type": "DefinedTerm",
+        "name": "Language > Tatar",
+        "inDefinedTermSet": {"@type": "DefinedTermSet", "name": "CategoryPath"},
     } in about
     assert {"@type": "DefinedTerm", "termCode": "004", "inDefinedTermSet": "UDC"} in about
     assert {"name": "free-text term"} in about

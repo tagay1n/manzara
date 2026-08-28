@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from google import genai
 from google.genai import types
+from pydantic import BaseModel
 
 
 def _state_name(file_state: Any) -> str:
@@ -30,6 +32,33 @@ def _stream_text(response: Any) -> str:
             if value:
                 parts.append(str(value))
     return "".join(parts)
+
+
+def _drop_unsupported_schema_keywords(value: Any) -> Any:
+    """Remove JSON Schema keywords unsupported by Gemini response_schema."""
+    if isinstance(value, dict):
+        return {
+            key: _drop_unsupported_schema_keywords(item)
+            for key, item in value.items()
+            if key not in {"additionalProperties", "additional_properties"}
+        }
+    if isinstance(value, list):
+        return [_drop_unsupported_schema_keywords(item) for item in value]
+    return value
+
+
+def _transport_response_schema(response_schema: Any) -> Any:
+    """Build a transport-safe schema without weakening local validation."""
+    if (
+        isinstance(response_schema, type)
+        and issubclass(response_schema, BaseModel)
+    ):
+        raw_schema = response_schema.model_json_schema()
+    elif isinstance(response_schema, Mapping):
+        raw_schema = deepcopy(dict(response_schema))
+    else:
+        return response_schema
+    return _drop_unsupported_schema_keywords(raw_schema)
 
 
 def generate_structured_json(
@@ -65,7 +94,7 @@ def generate_structured_json(
             config=types.GenerateContentConfig(
                 temperature=0.1,
                 response_mime_type="application/json",
-                response_schema=response_schema,
+                response_schema=_transport_response_schema(response_schema),
                 candidate_count=1,
                 seed=1552,
                 http_options=types.HttpOptions(

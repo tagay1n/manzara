@@ -36,6 +36,7 @@ def test_metadata_evaluation_state_table_exists(
             "model_pool_json",
             "last_run_id",
             "terminal_reason",
+            "prompt_version",
         } <= columns
     finally:
         engine.dispose()

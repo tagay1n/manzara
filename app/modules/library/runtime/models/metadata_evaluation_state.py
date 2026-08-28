@@ -16,6 +16,7 @@ class LibraryMetadataEvaluationState(Base):
     model_pool_json = Column(JSON, nullable=False, default=list)
     last_run_id = Column(BigInteger)
     terminal_reason = Column(Text)
+    prompt_version = Column(String)
     created_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True))
 

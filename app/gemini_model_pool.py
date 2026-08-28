@@ -122,9 +122,7 @@ def run_ordered_model_pool(
             except GeminiStopRequestedError:
                 raise
             except GeminiRequestRejectedError as exc:
-                record_failure(model_name, "request", str(exc))
-                failed.add(model_name)
-                break
+                raise GeminiModelPoolOperationalError(str(exc)) from exc
             except GeminiRequestTimeoutError as exc:
                 record_failure(model_name, "timeout", str(exc))
                 failed.add(model_name)

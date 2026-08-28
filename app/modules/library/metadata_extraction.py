@@ -27,6 +27,7 @@ from app.modules.library.corrupt_document import (
     PasswordProtectedDocumentError,
 )
 from app.modules.library.metadata_normalization import normalize_base_schema_org
+from app.modules.library.metadata_contract import CONTRACT_VERSION, metadata_contract_issues
 from app.modules.library.metadata_prompt import (
     DEFINE_META_PROMPT_BODY,
     DEFINE_META_PROMPT_NON_PDF_HEADER,
@@ -39,7 +40,7 @@ from app.modules.runtime_shared_utils import load_upstream_metadata
 
 TEXT_SLICE_CHARS = 20_000
 PDF_EDGE_PAGES = 4
-PROMPT_VERSION = "prompt.v3"
+PROMPT_VERSION = "prompt.v4"
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SUPPORTING_METADATA_FIELDS = (
     "author",
@@ -145,6 +146,7 @@ class MetadataExtractionRepository:
                 state.prompt_version
             FROM document d
             LEFT JOIN metadata m ON m.md5 = d.md5
+            LEFT JOIN library_metadata_quality_state quality ON quality.md5 = d.md5
             LEFT JOIN library_metadata_extraction_state state ON state.md5 = d.md5
             WHERE (
                   m.md5 IS NULL
@@ -163,6 +165,10 @@ class MetadataExtractionRepository:
                         AND signal.value <> to_jsonb(''::text)
                         AND signal.value <> '[]'::jsonb
                         AND signal.value <> '{}'::jsonb
+                  )
+                  OR (
+                      quality.status = 'invalid'
+                      AND quality.contract_version = :contract_version
                   )
               )
               AND d.document_url IS NOT NULL
@@ -201,7 +207,10 @@ class MetadataExtractionRepository:
                 state.updated_at ASC NULLS FIRST,
                 d.md5 ASC
         """
-        params: dict[str, Any] = {"prompt_version": PROMPT_VERSION}
+        params: dict[str, Any] = {
+            "prompt_version": PROMPT_VERSION,
+            "contract_version": CONTRACT_VERSION,
+        }
         if limit is not None:
             sql += " LIMIT :limit"
             params["limit"] = max(0, int(limit))
@@ -426,9 +435,13 @@ class MetadataExtractionRepository:
             rows = conn.execute(
                 text(
                     """
-                    SELECT d.md5, m.schema_org
+                    SELECT d.md5, m.schema_org,
+                           quality.status AS quality_status,
+                           quality.contract_version AS quality_contract_version
                     FROM document d
                     LEFT JOIN metadata m ON m.md5 = d.md5
+                    LEFT JOIN library_metadata_quality_state quality
+                      ON quality.md5 = d.md5
                     WHERE d.md5 = :md5
                     FOR UPDATE OF d
                     """
@@ -440,9 +453,16 @@ class MetadataExtractionRepository:
                     f"Document MD5 {md5} matched {len(rows)} rows; refusing metadata write"
                 )
             existing_schema_org = rows[0].get("schema_org")
-            if existing_schema_org is not None and metadata_quality_issue(
-                existing_schema_org
-            ) is None:
+            quality_invalid = (
+                rows[0].get("quality_status") == "invalid"
+                and rows[0].get("quality_contract_version") == CONTRACT_VERSION
+            )
+            if (
+                existing_schema_org is not None
+                and not quality_invalid
+                and metadata_quality_issue(existing_schema_org) is None
+                and not metadata_contract_issues(existing_schema_org)
+            ):
                 conn.execute(
                     text("DELETE FROM library_metadata_extraction_state WHERE md5 = :md5"),
                     {"md5": str(md5)},
@@ -450,6 +470,9 @@ class MetadataExtractionRepository:
                 return False
             if issue := metadata_quality_issue(schema_org):
                 raise ValueError(f"Refusing low-quality metadata write: {issue}")
+            if issues := metadata_contract_issues(schema_org):
+                codes = ", ".join(sorted({item["code"] for item in issues}))
+                raise ValueError(f"Refusing metadata outside {CONTRACT_VERSION}: {codes}")
 
             stored = conn.execute(
                 text(
@@ -457,7 +480,10 @@ class MetadataExtractionRepository:
                     INSERT INTO metadata (md5, schema_org)
                     VALUES (:md5, CAST(:schema_org AS JSONB))
                     ON CONFLICT (md5) DO UPDATE SET
-                        schema_org = EXCLUDED.schema_org
+                        schema_org = EXCLUDED.schema_org,
+                        lib = NULL,
+                        lib_eval_method = NULL,
+                        classification_id = NULL
                     """
                 ),
                 {
@@ -486,8 +512,22 @@ class MetadataExtractionRepository:
             if int(updated.rowcount or 0) != 1:
                 raise RuntimeError(f"Document metadata marker update failed for {md5}")
             conn.execute(
-                text("DELETE FROM library_metadata_extraction_state WHERE md5 = :md5"),
-                {"md5": str(md5)},
+                text(
+                    """
+                    WITH extraction AS (
+                        DELETE FROM library_metadata_extraction_state WHERE md5 = :md5
+                    ), evaluation AS (
+                        DELETE FROM library_metadata_evaluation_state WHERE md5 = :md5
+                    )
+                    UPDATE library_metadata_quality_state
+                    SET status = 'resolved', issues_json = '[]'::jsonb,
+                        contract_version = :contract_version,
+                        resolved_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE md5 = :md5
+                    """
+                ),
+                {"md5": str(md5), "contract_version": CONTRACT_VERSION},
             )
         return True
 
@@ -683,6 +723,11 @@ def parse_metadata_response(raw_response: Any) -> dict[str, Any]:
     normalized = normalize_base_schema_org(schema_org)
     if issue := metadata_quality_issue(normalized):
         raise GeminiModelResponseError(f"Gemini returned no usable metadata: {issue}")
+    if issues := metadata_contract_issues(normalized):
+        summary = ", ".join(str(item["code"]) for item in issues[:5])
+        raise GeminiModelResponseError(
+            f"Gemini returned metadata outside {PROMPT_VERSION}: {summary}"
+        )
     return normalized
 
 

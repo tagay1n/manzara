@@ -56,7 +56,8 @@ Use the `Book` schema where appropriate, but apply a more specific `@type` if a 
 - `@type`: Choose the correct type as listed above
 - `name`: Title of the work
 - `author`: Name(s) of author(s) or organization (use `"@type": "Person"` or `"@type": "Organization"`)
-- `contributor`: Persons involved in roles such as: author, editor, translator, illustrator, composer, lyricist, contributor, reviewer, publisher, sponsor. Express roles in English
+- `contributor`: Secondary contributors without an inline `role` property. Use standard
+  schema.org properties `editor`, `translator`, or `illustrator` when those roles are explicit.
 - `inLanguage`: Use BCP 47 with script as listed above
 - `datePublished`: Use full date format if found: `"YYYY-MM-DD"`
 - `publisher`: `"@type": "Organization"` if identified
@@ -64,14 +65,23 @@ Use the `Book` schema where appropriate, but apply a more specific `@type` if a 
 - `numberOfPages`: If identified
 - `about`: Use schema.org `DefinedTerm` items for auxiliary metadata previously placed in `additionalProperty`
   (UDC, BBK, and other source-provided classification codes), e.g.
-  `{"@type":"DefinedTerm","termCode":"821.512.145","inDefinedTermSet":"UDC"}`
-  `{"@type":"DefinedTerm","termCode":"84(2=411.2)","inDefinedTermSet":"BBK"}`
+  `{"@type":"DefinedTerm","termCode":"821.512.145","inDefinedTermSet":{"@type":"DefinedTermSet","name":"UDC"}}`
+  `{"@type":"DefinedTerm","termCode":"84(2=411.2)","inDefinedTermSet":{"@type":"DefinedTermSet","name":"BBK"}}`
 - Do **not** infer or generate DDC in this base extraction flow.
 - Do **not** generate `CategoryPath` in this base extraction flow.
-- `genre`: optional; if present, keep in English
-- `audience`: Target audience, expressed in English
+- `genre`: optional array of concise canonical English labels. Never copy a Tatar or Russian label.
+- `audience`: schema.org object such as
+  `{"@type":"Audience","audienceType":"General public"}`. Keep `audienceType` in English.
 - `bookEdition`: Edition information
-- `description`: Preface, abstract, or annotation in document's language. Use 1–3 sentences only. Summarize the core purpose or content of the text. Do not include long quotations or excessive legal/formal language. Avoid repeating the title.
+- `description`: Preface, abstract, or annotation in the same language and script as
+  `inLanguage`. Use 1–3 sentences only. Never translate it to English unless `inLanguage`
+  is English. Summarize the core purpose or content of the text. Do not include long
+  quotations or excessive legal/formal language. Avoid repeating the title.
+- `bookEdition`: Text, not a number.
+- `accessMode`: If directly supported by the document, use an array containing only
+  `auditory`, `tactile`, `textual`, or `visual`.
+- `accessModeSufficient`: Omit unless supported by evidence. If present, use schema.org
+  `ItemList` objects with `itemListElement` arrays of the same controlled access modes.
 
 ## Error Handling::
 1. If no metadata can be extracted with certainty:

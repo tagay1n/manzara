@@ -12,6 +12,9 @@ from models import Document, LibraryMetadataEvaluationState, Metadata
 from core.db import get_session
 
 
+EVALUATION_PROMPT_VERSION = "prompt.v2"
+
+
 def fetch_docs_for_metadata_extraction(limit: int, excluded_md5s: set[str]) -> list[Document]:
     """Return a batch of docs that still need metadata extraction."""
     predicate = (
@@ -117,7 +120,11 @@ def _evaluation_state_allows_retry(
     state: LibraryMetadataEvaluationState | None,
     model_pool: Sequence[str],
 ) -> bool:
-    if state is None or str(state.status or "") != "terminal":
+    if state is None:
+        return True
+    if getattr(state, "prompt_version", None) != EVALUATION_PROMPT_VERSION:
+        return True
+    if str(state.status or "") != "terminal":
         return True
     previous = {
         str(model)
@@ -132,7 +139,12 @@ def get_evaluation_attempted_models(md5: str) -> set[str]:
     """Return content-level models already tried for one document."""
     with get_session() as session:
         state = session.get(LibraryMetadataEvaluationState, str(md5))
-        attempts = state.attempts_json if state is not None else []
+        attempts = (
+            state.attempts_json
+            if state is not None
+            and state.prompt_version == EVALUATION_PROMPT_VERSION
+            else []
+        )
         return {
             str(item.get("model") or "")
             for item in (attempts or [])
@@ -175,6 +187,9 @@ def record_evaluation_model_failure(
         if not any(str(item.get("model") or "") == str(model_name) for item in attempts):
             attempts.append(attempt)
         state.status = "partial"
+        if state.prompt_version != EVALUATION_PROMPT_VERSION:
+            attempts = [attempt]
+        state.prompt_version = EVALUATION_PROMPT_VERSION
         state.attempts_json = attempts
         state.model_pool_json = list(models)
         state.last_run_id = run_id
@@ -202,6 +217,7 @@ def mark_evaluation_terminal(
             )
             session.add(state)
         state.status = "terminal"
+        state.prompt_version = EVALUATION_PROMPT_VERSION
         state.model_pool_json = list(models)
         state.last_run_id = run_id
         state.terminal_reason = str(reason or "")[:4000]

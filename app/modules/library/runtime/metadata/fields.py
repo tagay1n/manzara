@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any
 
+from app.modules.library.metadata_terms import termset_name
+
 
 YEAR_RE = re.compile(r"(1[5-9]\d{2}|20\d{2})")
 UNKNOWN_VALUES = {"", "unknown", "неизвестно", "null", "none", "n/a"}
@@ -59,7 +61,7 @@ def extract_genre(meta: dict[str, Any]) -> str | None:
         for item in _as_list(meta.get("about")):
             if not isinstance(item, dict):
                 continue
-            termset = _clean_text(item.get("inDefinedTermSet"))
+            termset = termset_name(item.get("inDefinedTermSet"))
             if not termset or termset.casefold() != "genre":
                 continue
             value = _clean_text(item.get("termCode")) or _clean_text(item.get("name"))
