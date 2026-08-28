@@ -121,3 +121,53 @@ def test_age_only_audience_is_preserved_without_inventing_a_label() -> None:
         "@type": "PeopleAudience",
         "suggestedMinAge": 16,
     }
+
+
+def test_assessment_promotes_generic_work_with_book_evidence() -> None:
+    decision = assess_metadata(
+        {
+            "@context": "https://schema.org",
+            "@type": "CreativeWork",
+            "name": "A generic catalogue record",
+            "isbn": ["9785298021098"],
+            "numberOfPages": 240,
+        }
+    )
+
+    assert decision.status == "resolved"
+    assert decision.changed is True
+    assert decision.schema_org["@type"] == "Book"
+    assert decision.schema_org["numberOfPages"] == 240
+
+
+def test_assessment_prunes_book_fields_from_explicit_non_book() -> None:
+    decision = assess_metadata(
+        {
+            "@context": "https://schema.org",
+            "@type": "Legislation",
+            "name": "A statute",
+            "datePublished": "2020",
+            "numberOfPages": 12,
+            "bookEdition": "2",
+            "isbn": ["9785298021098"],
+            "illustrator": [{"@type": "Person", "name": "Example"}],
+        }
+    )
+
+    assert decision.status == "resolved"
+    assert decision.changed is True
+    assert set(decision.schema_org).isdisjoint(
+        {"numberOfPages", "bookEdition", "isbn", "illustrator"}
+    )
+
+
+def test_assessment_repairs_exact_inline_author_relationship() -> None:
+    decision = assess_metadata(
+        _book(author=[{"@type": "Person", "name": "A. Example", "role": "editor"}])
+    )
+
+    assert decision.status == "resolved"
+    assert "author" not in decision.schema_org
+    assert decision.schema_org["editor"] == [
+        {"@type": "Person", "name": "A. Example"}
+    ]

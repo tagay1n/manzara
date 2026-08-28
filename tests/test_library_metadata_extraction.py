@@ -464,6 +464,17 @@ def test_parse_metadata_response_accepts_title_with_independent_evidence() -> No
     assert parsed["datePublished"] == "1998"
 
 
+def test_parse_metadata_response_sanitizes_before_contract_gate() -> None:
+    parsed = parse_metadata_response(
+        '{"@context":"https://schema.org","@type":"NewsArticle",'
+        '"name":"Daily bulletin","datePublished":"2001",'
+        '"numberOfPages":8}'
+    )
+
+    assert parsed["@type"] == "NewsArticle"
+    assert "numberOfPages" not in parsed
+
+
 def test_success_write_rejects_ambiguous_document_md5() -> None:
     repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
     repository.engine = _WriteEngine(

@@ -245,6 +245,8 @@ def test_runtime_persists_success_and_emits_structured_progress(
     output = capsys.readouterr().out
     assert "library metadata: source prepare start" in output
     assert "library metadata: source prepare complete" in output
+    assert "library metadata: Gemini response md5=" in output
+    assert '\n{\n  "@context": "https://schema.org",' in output
 
 
 def test_primary_s3_config_bounds_network_waits() -> None:

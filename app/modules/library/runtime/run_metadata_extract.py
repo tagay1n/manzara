@@ -93,6 +93,20 @@ def _primary_s3_config() -> Config:
     )
 
 
+def _format_response_for_log(response_text: str | None) -> str:
+    """Pretty-print JSON responses for readable extraction logs."""
+    if response_text is None:
+        return ""
+    raw = response_text.strip()
+    if not raw:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return raw
+    return json.dumps(parsed, ensure_ascii=False, indent=2)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract document metadata")
     parser.add_argument(
@@ -359,7 +373,7 @@ def run_metadata_extraction(
                 f"model={model_name}",
                 flush=True,
             )
-            return request_json(
+            raw_response = request_json(
                 api_key=api_key,
                 model_name=model_name,
                 contents=request.contents,
@@ -367,6 +381,12 @@ def run_metadata_extraction(
                 files=request.files,
                 timeout_seconds=360,
             )
+            print(
+                f"library metadata: Gemini response md5={candidate.md5} "
+                f"model={model_name}:\n{_format_response_for_log(raw_response)}",
+                flush=True,
+            )
+            return raw_response
 
         def record_failure(model_name: str, kind: str, error: str) -> None:
             repository.record_model_failure(

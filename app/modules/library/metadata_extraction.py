@@ -709,7 +709,11 @@ def parse_metadata_response(raw_response: Any) -> dict[str, Any]:
     if not isinstance(raw_response, str) or not raw_response.strip():
         raise GeminiModelResponseError("Gemini returned an empty metadata response")
     try:
-        metadata = Book.model_validate_json(raw_response)
+        decoded = json.loads(raw_response)
+        if not isinstance(decoded, dict):
+            raise ValueError("metadata response must be a JSON object")
+        normalized = normalize_base_schema_org(decoded)
+        metadata = Book.model_validate(normalized)
     except Exception as exc:
         raise GeminiModelResponseError(f"Invalid metadata JSON: {exc}") from exc
     schema_org = json.loads(

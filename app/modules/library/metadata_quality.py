@@ -19,6 +19,7 @@ from app.modules.library.metadata_contract import (
     metadata_contract_issues,
     reshape_english_contributor_roles,
 )
+from app.modules.library.metadata_normalization import sanitize_schema_org_contract
 
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -148,11 +149,12 @@ def assess_metadata(schema_org: Any) -> MetadataAssessment:
     """Assess one payload after lossless shape and English-role repairs."""
     original = dict(schema_org) if isinstance(schema_org, Mapping) else {}
     normalized, shape_changed = _normalize_legacy_shapes(original)
+    normalized, sanitize_changed = sanitize_schema_org_contract(normalized)
     reshaped, role_changed, requires_reextract = reshape_english_contributor_roles(
         normalized
     )
     candidate = normalized if requires_reextract else reshaped
-    changed = shape_changed or role_changed
+    changed = shape_changed or sanitize_changed or role_changed
     issues = metadata_contract_issues(candidate)
     if requires_reextract and not any(
         item["code"] == "role_not_english" for item in issues

@@ -2,14 +2,129 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import re
 from urllib.parse import urlparse
 
+from app.modules.library.metadata_contract import (
+    ACCESS_MODES,
+    SUPPORTED_TYPES,
+    reshape_english_contributor_roles,
+)
 from app.modules.library.runtime.metadata.isbn_utils import canonicalize_isbn_values
 from app.modules.library.runtime.metadata.url_utils import normalize_url_list
 
 UNKNOWN_VALUES = {"", "unknown", "неизвестно", "none", "null", "n/a"}
 WHITESPACE_RE = re.compile(r"\s+")
+BOOK_ONLY_FIELDS = {"bookEdition", "illustrator", "isbn", "numberOfPages"}
+STANDARD_AUTHOR_ROLES = {
+    "author": "author",
+    "editor": "editor",
+    "illustrator": "illustrator",
+    "translator": "translator",
+}
+
+
+def _repair_inline_author_roles(updated: dict) -> bool:
+    raw = updated.get("author")
+    if raw is None:
+        return False
+    authors = raw if isinstance(raw, list) else [raw]
+    retained = []
+    promoted: dict[str, list[dict]] = {}
+    changed = False
+    for item in authors:
+        if not isinstance(item, dict) or "role" not in item:
+            retained.append(item)
+            continue
+        role = _clean_text(item.get("role"), max_len=120)
+        property_name = STANDARD_AUTHOR_ROLES.get((role or "").casefold())
+        if property_name is None:
+            retained.append(item)
+            continue
+        entity = {key: deepcopy(value) for key, value in item.items() if key != "role"}
+        if property_name == "author":
+            retained.append(entity)
+        else:
+            promoted.setdefault(property_name, []).append(entity)
+        changed = True
+    if retained:
+        updated["author"] = retained
+    else:
+        updated.pop("author", None)
+    for property_name, entities in promoted.items():
+        existing = updated.get(property_name)
+        existing_items = (
+            existing if isinstance(existing, list) else ([existing] if existing else [])
+        )
+        updated[property_name] = existing_items + entities
+    return changed
+
+
+def _normalize_contract_access_modes(value):
+    if isinstance(value, str):
+        raw_items = value.split(",")
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        return value
+    normalized = []
+    for item in raw_items:
+        label = _clean_text(item, max_len=80)
+        if not label:
+            return value
+        mode = "tactile" if label.casefold() == "braille" else label.casefold()
+        if mode not in ACCESS_MODES:
+            return value
+        if mode not in normalized:
+            normalized.append(mode)
+    return normalized or value
+
+
+def sanitize_schema_org_contract(schema_org: dict) -> tuple[dict, bool]:
+    """Apply deterministic contract repairs before validation."""
+    updated = deepcopy(dict(schema_org))
+    changed = _repair_inline_author_roles(updated)
+
+    reshaped, role_changed, _requires_reextract = reshape_english_contributor_roles(
+        updated
+    )
+    updated = reshaped
+    changed = changed or role_changed
+
+    if updated.get("@context") == "http://schema.org":
+        updated["@context"] = "https://schema.org"
+        changed = True
+    if updated.get("@type") == "New sArticl e":
+        updated["@type"] = "NewsArticle"
+        changed = True
+    if str(updated.get("inLanguage") or "").casefold() == "tt-latn-x-zamanalif":
+        updated["inLanguage"] = "tt-Latn"
+        changed = True
+    if updated.get("genre") == []:
+        updated.pop("genre")
+        changed = True
+
+    if "accessMode" in updated:
+        access_modes = _normalize_contract_access_modes(updated.get("accessMode"))
+        if access_modes != updated.get("accessMode"):
+            updated["accessMode"] = access_modes
+            changed = True
+
+    work_type = updated.get("@type")
+    has_book_evidence = bool(updated.get("isbn")) or bool(
+        _clean_text(updated.get("bookEdition"), max_len=120)
+    )
+    if work_type == "CreativeWork" and has_book_evidence:
+        updated["@type"] = "Book"
+        work_type = "Book"
+        changed = True
+    if work_type in SUPPORTED_TYPES and work_type != "Book":
+        for field in BOOK_ONLY_FIELDS:
+            if field in updated:
+                updated.pop(field)
+                changed = True
+    return updated, changed
 
 def _normalize_base_schema_org(schema_org: dict) -> dict:
     """Normalize base metadata fields before storing in `metadata.schema_org`."""
@@ -23,7 +138,7 @@ def _normalize_base_schema_org(schema_org: dict) -> dict:
     _set_or_drop(updated, "numberOfPages", _normalize_int(updated.get("numberOfPages"), 1, 20_000))
     _set_or_drop(updated, "bookEdition", _clean_text(updated.get("bookEdition"), max_len=120))
     _set_or_drop(updated, "genre", _normalize_string_list(updated.get("genre"), max_len=120, lower_case=True))
-    _set_or_drop(updated, "author", _normalize_people(updated.get("author"), keep_role=False))
+    _set_or_drop(updated, "author", _normalize_people(updated.get("author"), keep_role=True))
     _set_or_drop(updated, "contributor", _normalize_contributors(updated.get("contributor")))
     for field in ("editor", "translator", "illustrator"):
         _set_or_drop(updated, field, _normalize_people(updated.get(field), keep_role=False))
@@ -69,7 +184,8 @@ def _normalize_base_schema_org(schema_org: dict) -> dict:
         updated.pop("about", None)
 
     updated.pop("additionalProperty", None)
-    return updated
+    sanitized, _changed = sanitize_schema_org_contract(updated)
+    return sanitized
 
 def _set_or_drop(data: dict, key: str, value):
     if value is None:
@@ -154,7 +270,7 @@ def _normalize_contributors(value):
             }
             key = ("role", role_name.casefold(), nested[0]["name"].casefold())
         else:
-            people = _normalize_people(item, keep_role=False)
+            people = _normalize_people(item, keep_role=True)
             if not people:
                 continue
             normalized = people[0]
@@ -301,4 +417,4 @@ def _normalize_in_language(value):
 
 normalize_base_schema_org = _normalize_base_schema_org
 
-__all__ = ["normalize_base_schema_org"]
+__all__ = ["normalize_base_schema_org", "sanitize_schema_org_contract"]
