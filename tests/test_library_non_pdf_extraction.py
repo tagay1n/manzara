@@ -115,6 +115,35 @@ def test_invalid_docx_container_is_classified_as_structural_corruption(
         )
 
 
+def test_word_lock_file_is_classified_before_conversion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "~$temporary.doc"
+    source.write_bytes(b"Word lock metadata")
+    converter_called = False
+
+    def convert(*_args, **_kwargs):
+        nonlocal converter_called
+        converter_called = True
+        raise AssertionError("invalid source must not reach LibreOffice")
+
+    monkeypatch.setattr(
+        "app.modules.library.non_pdf_extraction._convert_to_docx", convert
+    )
+
+    with pytest.raises(CorruptDocumentError) as caught:
+        prepare_extraction(
+            source,
+            workspace=tmp_path / "workspace",
+            mime_type="application/msword",
+            source_path="nested/~$temporary.doc",
+        )
+
+    assert caught.value.detector == "temporary_source"
+    assert converter_called is False
+
+
 def test_legacy_doc_uses_google_fallback_for_invalid_libreoffice_output(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -158,6 +187,49 @@ def test_legacy_doc_uses_google_fallback_for_invalid_libreoffice_output(
     assert prepared.detected_format == "doc"
     assert prepared.legacy_conversion == "google_drive"
     assert fallback_calls == [(source, "doc")]
+
+
+def test_legacy_doc_normalizes_valid_libreoffice_docx_before_pandoc(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    source = tmp_path / "source.doc"
+    source.write_bytes(
+        bytes.fromhex("d0cf11e0a1b11ae1")
+        + b"\x00" * 504
+        + "WordDocument".encode("utf-16-le")
+    )
+    converted = tmp_path / "converted.docx"
+    subprocess.run(
+        ["pandoc", "-f", "markdown", "-t", "docx", "-o", str(converted)],
+        input="# LibreOffice converted\n",
+        text=True,
+        check=True,
+    )
+    normalized_calls: list[Path] = []
+
+    monkeypatch.setattr(
+        "app.modules.library.non_pdf_extraction._convert_to_docx",
+        lambda *_args, **_kwargs: converted,
+    )
+
+    def normalize(path: Path, *, workspace: Path) -> Path:
+        normalized_calls.append(path)
+        return path
+
+    monkeypatch.setattr(
+        "app.modules.library.non_pdf_extraction._normalize_docx_archive",
+        normalize,
+    )
+
+    prepared = prepare_extraction(
+        source,
+        workspace=tmp_path / "workspace",
+        mime_type="application/msword",
+        source_path="source.doc",
+    )
+
+    assert prepared.legacy_conversion == "libreoffice"
+    assert normalized_calls == [converted]
 
 
 def test_legacy_doc_converter_failure_is_not_source_corruption(

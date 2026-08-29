@@ -196,6 +196,12 @@ def prepare_extraction(
         )
     except (zipfile.BadZipFile, EOFError, zlib.error) as exc:
         raise CorruptDocumentError("document_container", str(exc)) from exc
+    source_name = PurePosixPath(str(source_path or source.name)).name
+    if detected == "doc" and source_name.startswith("~$"):
+        raise CorruptDocumentError(
+            "temporary_source",
+            "Word owner/lock file is not a document",
+        )
     if detected in {"docx", "odt", "epub"}:
         if not zipfile.is_zipfile(source):
             raise CorruptDocumentError(
@@ -249,6 +255,10 @@ def prepare_extraction(
         try:
             pandoc_source = _convert_to_docx(
                 source, workspace=workspace, detected_format=detected
+            )
+            _validate_converted_docx(pandoc_source)
+            pandoc_source = _normalize_docx_archive(
+                pandoc_source, workspace=workspace
             )
             _validate_converted_docx(pandoc_source)
             legacy_conversion = "libreoffice"
@@ -518,6 +528,42 @@ def _validate_converted_docx(path: Path) -> None:
         raise
     except (OSError, zipfile.BadZipFile, EOFError, zlib.error) as exc:
         raise ConverterCommandError(f"Converted DOCX is invalid: {exc}") from exc
+
+
+def _normalize_docx_archive(path: Path, *, workspace: Path) -> Path:
+    """Rewrite a DOCX without producer-specific ZIP data descriptors."""
+    normalized_dir = workspace / "normalized"
+    normalized_dir.mkdir(parents=True, exist_ok=True)
+    normalized_path = normalized_dir / "source.docx"
+    try:
+        with (
+            zipfile.ZipFile(path) as source,
+            zipfile.ZipFile(
+                normalized_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+                allowZip64=True,
+            ) as target,
+        ):
+            for source_info in source.infolist():
+                target_info = zipfile.ZipInfo(
+                    source_info.filename,
+                    date_time=source_info.date_time,
+                )
+                target_info.compress_type = (
+                    zipfile.ZIP_STORED
+                    if source_info.is_dir()
+                    else zipfile.ZIP_DEFLATED
+                )
+                target_info.external_attr = source_info.external_attr
+                target_info.create_system = source_info.create_system
+                target_info.comment = source_info.comment
+                with source.open(source_info) as input_stream:
+                    with target.open(target_info, "w") as output_stream:
+                        shutil.copyfileobj(input_stream, output_stream)
+    except (OSError, zipfile.BadZipFile, EOFError, zlib.error) as exc:
+        raise ConverterCommandError(f"Converted DOCX normalization failed: {exc}") from exc
+    return normalized_path
 
 
 def _decode_text(payload: bytes) -> str:
