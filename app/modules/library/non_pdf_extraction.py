@@ -13,7 +13,7 @@ import re
 import shutil
 import signal
 import subprocess
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 import unicodedata
 from urllib.parse import urlsplit
 import zipfile
@@ -59,6 +59,7 @@ class PreparedExtraction:
     ast: dict[str, Any] | None
     text: str | None
     assets: tuple[ExtractedAsset, ...]
+    legacy_conversion: str | None = None
 
 
 class UnsupportedDocumentFormat(ValueError):
@@ -184,6 +185,7 @@ def prepare_extraction(
     workspace: Path,
     mime_type: str,
     source_path: str,
+    legacy_doc_converter: Callable[..., Path] | None = None,
 ) -> PreparedExtraction:
     workspace.mkdir(parents=True, exist_ok=True)
     if source.stat().st_size <= 0:
@@ -242,13 +244,24 @@ def prepare_extraction(
 
     pandoc_source = Path(source)
     pandoc_format = detected
+    legacy_conversion: str | None = None
     if detected in {"doc", "rtf"}:
         try:
             pandoc_source = _convert_to_docx(
                 source, workspace=workspace, detected_format=detected
             )
-        except ConverterCommandError as exc:
-            raise CorruptDocumentError("document_open", str(exc)) from exc
+            _validate_converted_docx(pandoc_source)
+            legacy_conversion = "libreoffice"
+        except (ConverterCommandError, ConverterTimeoutError):
+            if legacy_doc_converter is None:
+                raise
+            pandoc_source = legacy_doc_converter(
+                source,
+                workspace=workspace,
+                detected_format=detected,
+            )
+            _validate_converted_docx(pandoc_source)
+            legacy_conversion = "google_drive"
         pandoc_format = "docx"
     elif detected == "fb2":
         try:
@@ -276,6 +289,10 @@ def prepare_extraction(
             label="pandoc-read",
         )
     except ConverterCommandError as exc:
+        if detected in {"doc", "rtf"}:
+            raise ConverterCommandError(
+                f"Converted legacy document failed Pandoc parsing: {exc}"
+            ) from exc
         raise CorruptDocumentError("document_parse", str(exc)) from exc
     del result
     ast = json.loads(ast_path.read_text(encoding="utf-8"))
@@ -284,7 +301,14 @@ def prepare_extraction(
     assets = _collect_assets(
         {"blocks": ast.get("blocks", [])}, workspace=workspace
     )
-    return PreparedExtraction(detected, workspace, ast, None, assets)
+    return PreparedExtraction(
+        detected,
+        workspace,
+        ast,
+        None,
+        assets,
+        legacy_conversion=legacy_conversion,
+    )
 
 
 def render_markdown(
@@ -477,6 +501,23 @@ def _convert_to_docx(
             f"LibreOffice produced {len(matches)} DOCX files"
         )
     return matches[0]
+
+
+def _validate_converted_docx(path: Path) -> None:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if bad_member := archive.testzip():
+                raise ConverterCommandError(
+                    f"Converted DOCX has a corrupt ZIP member: {bad_member}"
+                )
+            if "word/document.xml" not in set(archive.namelist()):
+                raise ConverterCommandError(
+                    "Converted DOCX is missing word/document.xml"
+                )
+    except ConverterCommandError:
+        raise
+    except (OSError, zipfile.BadZipFile, EOFError, zlib.error) as exc:
+        raise ConverterCommandError(f"Converted DOCX is invalid: {exc}") from exc
 
 
 def _decode_text(payload: bytes) -> str:

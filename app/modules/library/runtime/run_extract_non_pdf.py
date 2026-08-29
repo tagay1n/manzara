@@ -50,6 +50,9 @@ from app.modules.library.non_pdf_extraction import (  # noqa: E402
     require_converter_binaries,
     validate_rendered_markdown,
 )
+from app.modules.library.google_doc_conversion import (  # noqa: E402
+    GoogleDriveDocxConverter,
+)
 from app.modules.library.non_pdf_repository import (  # noqa: E402
     MAX_AUTOMATIC_ATTEMPTS,
     NonPdfExtractionRepository,
@@ -320,6 +323,7 @@ def run_extraction(
         reused_sources=0, uploaded_images=0, reused_images=0,
         uploaded_archives=0, reused_archives=0, checkpoint_raced=0,
         deleted_stale_images=0,
+        google_drive_converted=0, libreoffice_converted=0,
     )
     formats: Counter[str] = Counter()
     mime_outcomes: defaultdict[str, Counter[str]] = defaultdict(Counter)
@@ -333,6 +337,7 @@ def run_extraction(
         flush=True,
     )
     processed = 0
+    google_doc_converter = GoogleDriveDocxConverter()
     for candidate in candidates:
         if should_stop():
             break
@@ -361,7 +366,10 @@ def run_extraction(
                 workspace=doc_workspace,
                 mime_type=candidate.mime_type,
                 source_path=candidate.source_path,
+                legacy_doc_converter=google_doc_converter,
             )
+            if prepared.legacy_conversion:
+                counters[f"{prepared.legacy_conversion}_converted"] += 1
             detected = prepared.detected_format
             formats[detected] += 1
             image_urls = _expected_asset_urls(
@@ -440,7 +448,9 @@ def run_extraction(
                 mime_outcomes[_mime_key(candidate.mime_type)]["ready"] += 1
                 print(
                     f"non-pdf extraction: ready md5={candidate.md5} "
-                    f"format={detected} images={len(prepared.assets)} url={url}",
+                    f"format={detected} "
+                    f"conversion={prepared.legacy_conversion or 'native'} "
+                    f"images={len(prepared.assets)} url={url}",
                     flush=True,
                 )
             else:
