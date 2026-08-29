@@ -12,6 +12,8 @@ from app.db import Database
 from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_model_pool import (
     GeminiModelPoolExhaustedError,
+    GeminiModelPoolOperationalError,
+    GeminiModelPoolUnavailableError,
     GeminiModelResponseError,
     run_ordered_model_pool,
 )
@@ -122,8 +124,12 @@ def _gemini_suggest(
             run_id=None,
         )
         return {**result.value, "model": result.model_name}
-    except GeminiModelPoolExhaustedError:
+    except (GeminiModelPoolExhaustedError, GeminiModelPoolUnavailableError):
         return None
+    except GeminiModelPoolOperationalError as exc:
+        if exc.retryable:
+            return None
+        raise
     except Exception:
         raise
 

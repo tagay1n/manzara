@@ -223,3 +223,54 @@ def test_server_pause_then_transport_reset_uses_one_shared_retry_budget() -> Non
 
     assert exc_info.value.retryable is True
     assert manager.calls == ["first", "first"]
+
+
+def test_deferred_model_timeout_uses_same_fallback_contract() -> None:
+    manager = _Manager(
+        {
+            "first": [
+                GeminiServerPauseError("first paused"),
+                GeminiRequestTimeoutError("first timed out"),
+            ],
+            "second": [GeminiServerPauseError("second paused"), "good"],
+        }
+    )
+    failures: list[tuple[str, str]] = []
+
+    result = run_ordered_model_pool(
+        manager=manager,
+        models=["first", "second"],
+        run_id=16,
+        request=lambda _model, _key, _lease: None,
+        parse=lambda raw: raw,
+        record_failure=lambda model, kind, _error: failures.append((model, kind)),
+    )
+
+    assert result.model_name == "second"
+    assert result.value == "good"
+    assert manager.calls == ["first", "second", "first", "second"]
+    assert failures == [("first", "timeout")]
+
+
+def test_deferred_model_rotates_quota_limited_key() -> None:
+    manager = _Manager(
+        {
+            "first": [
+                GeminiServerPauseError("paused"),
+                GeminiQuotaExceededError("key exhausted"),
+                "good",
+            ]
+        }
+    )
+
+    result = run_ordered_model_pool(
+        manager=manager,
+        models=["first"],
+        run_id=17,
+        request=lambda _model, _key, _lease: None,
+        parse=lambda raw: raw,
+        record_failure=lambda *_args: None,
+    )
+
+    assert result.value == "good"
+    assert manager.calls == ["first", "first", "first"]

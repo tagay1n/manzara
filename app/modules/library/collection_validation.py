@@ -20,10 +20,12 @@ from app.gemini_runtime import (
     GeminiAllKeysExhaustedError,
     GeminiQuotaExceededError,
     GeminiRequestRejectedError,
+    GeminiRequestTimeoutError,
     GeminiRuntimeError,
     GeminiRuntimeManager,
     GeminiServerPauseError,
     GeminiStopRequestedError,
+    GeminiTransportError,
 )
 from app.modules.library.collection_detection import (
     AdaptiveBatchSizer,
@@ -431,7 +433,7 @@ def _validate_collection_proposals_worker(
                                 error=str(exc),
                             )
                         break
-                    except GeminiServerPauseError as exc:
+                    except (GeminiServerPauseError, GeminiTransportError) as exc:
                         service_deferred = True
                         malformed_error = str(exc)
                         counters["service_deferred"] += 1
@@ -451,7 +453,7 @@ def _validate_collection_proposals_worker(
                     except GeminiStopRequestedError:
                         break
                     except (
-                        GeminiRuntimeError,
+                        GeminiRequestTimeoutError,
                         TimeoutError,
                         ValueError,
                         json.JSONDecodeError,
@@ -472,6 +474,10 @@ def _validate_collection_proposals_worker(
                             )
                         if content_attempt == 0:
                             continue
+                    except GeminiRuntimeError:
+                        # Authentication, configuration, and other unknown runtime
+                        # failures are task-fatal, not malformed model content.
+                        raise
                 if should_stop():
                     break
                 if service_deferred:

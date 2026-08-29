@@ -115,3 +115,31 @@ def test_normalization_uses_full_shared_ordered_model_pool(monkeypatch) -> None:
 
     assert captured["models"] == ["model-first", "model-fallback"]
     assert result["model"] == "model-fallback"
+
+
+def test_normalization_keeps_heuristic_on_retryable_gemini_failure(
+    monkeypatch,
+) -> None:
+    from app.gemini_model_pool import GeminiModelPoolOperationalError
+    from app.modules.library import normalization_suggestions as normalization
+
+    monkeypatch.setattr(
+        normalization,
+        "run_ordered_model_pool",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            GeminiModelPoolOperationalError("503 pause", retryable=True)
+        ),
+    )
+
+    result = normalization._gemini_suggest(
+        entity_type="publisher",
+        raw_name="Publisher",
+        normalized_name="publisher",
+        docs_count=2,
+        mentions_count=2,
+        marker_count=1,
+        canonical_candidates=[],
+        manager=object(),
+    )
+
+    assert result is None
