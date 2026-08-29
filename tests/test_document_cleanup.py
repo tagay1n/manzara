@@ -143,7 +143,7 @@ class _FakeYaDisk:
         self.removed.append(path)
 
     def move(self, source: str, target: str, overwrite: bool = False) -> None:
-        assert overwrite is False
+        assert overwrite is True
         self.moved.append((source, target))
 
 

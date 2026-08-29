@@ -86,7 +86,7 @@ class _YaDisk:
         return None
 
     def move(self, source, target, overwrite=False):  # noqa: ANN001
-        assert overwrite is False
+        assert overwrite is True
         self.timeline.append(("move", f"{source} -> {target}"))
         self.files[str(target)] = self.files.pop(str(source))
 
@@ -204,6 +204,43 @@ def test_missing_cleanup_source_and_target_is_canceled_without_deleting_state() 
     assert repository.timeline == [
         ("canceled", "146:Cleanup source and verified target are both missing")
     ]
+
+
+def test_cleanup_overwrites_existing_filtered_out_target() -> None:
+    content = b"same document"
+    md5 = hashlib.md5(content).hexdigest()  # noqa: S324
+    source = "/documents/book.pdf"
+    target = "/filtered/non_tatar/book.pdf"
+    yadisk = _YaDisk({source: content, target: content})
+    repository = _Repository(yadisk, documents={md5: {"md5": md5}})
+
+    removed, outcome = _apply_cleanup(
+        {
+            "cleanup_id": 655,
+            "scope": "document",
+            "action": "move",
+            "reason": "non_tatar",
+            "md5": md5,
+            "source_path": source,
+            "target_path": target,
+            "status": "failed",
+        },
+        repository=repository,
+        yadisk=yadisk,
+        primary_s3=_S3(),
+        legacy_s3=_S3(),
+        settings=_settings(),
+        config={"yandex": {"cloud": {"bucket": {}}}},
+        run_id=909,
+        missing_legacy_buckets=set(),
+    )
+
+    assert removed == 0
+    assert outcome == "completed"
+    assert source not in yadisk.files
+    assert yadisk.files[target] == content
+    assert yadisk.timeline == [("move", f"{source} -> {target}")]
+    assert repository.timeline == [("delete_document", md5)]
 
 
 class _S3:

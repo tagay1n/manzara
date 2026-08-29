@@ -24,7 +24,7 @@ def execute_yandex_cleanup(item: Mapping[str, Any], *, yadisk: Any) -> None:
         target_path = str(item.get("target_path") or "").strip()
         if not target_path:
             raise ValueError("Move cleanup requires target_path")
-        yadisk.move(source_path, target_path, overwrite=False)
+        yadisk.move(source_path, target_path, overwrite=True)
         return
     raise ValueError(f"Unsupported cleanup action: {action!r}")
 

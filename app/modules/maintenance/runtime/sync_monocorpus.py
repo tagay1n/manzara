@@ -289,23 +289,18 @@ def _apply_cleanup(
             target = str(item.get("target_path") or "")
             target_verified = _verify_moved_target(yadisk, item)
             source_exists = _meta_or_none(yadisk, str(item["source_path"])) is not None
-            if target_verified and source_exists:
-                raise RuntimeError(
-                    "Verified cleanup target and original source both exist; refusing "
-                    "to choose a destructive resolution automatically"
-                )
-            if not target_verified:
-                if not source_exists:
-                    reason = "Cleanup source and verified target are both missing"
-                    repository.mark_cleanup_canceled(cleanup_id, reason)
-                    print(
-                        f"monocorpus sync: cleanup canceled cleanup_id={cleanup_id} "
-                        f"reason={reason}",
-                        flush=True,
-                    )
-                    return 0, "canceled"
+            if source_exists:
                 _ensure_yandex_directory(yadisk, str(PurePosixPath(target).parent))
                 execute_yandex_cleanup(executable, yadisk=yadisk)
+            elif not target_verified:
+                reason = "Cleanup source and verified target are both missing"
+                repository.mark_cleanup_canceled(cleanup_id, reason)
+                print(
+                    f"monocorpus sync: cleanup canceled cleanup_id={cleanup_id} "
+                    f"reason={reason}",
+                    flush=True,
+                )
+                return 0, "canceled"
             if not _verify_moved_target(yadisk, item):
                 raise RuntimeError("Moved Yandex target failed MD5 verification")
             if _meta_or_none(yadisk, str(item["source_path"])) is not None:
