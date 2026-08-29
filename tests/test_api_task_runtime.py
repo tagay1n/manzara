@@ -80,6 +80,49 @@ def test_toggle_task_start_and_complete(test_client, wait_for_terminal_run) -> N
     assert any("quick-ok" in line["line"] for line in logs)
 
 
+def test_pgbackrest_backup_emits_preflight_and_start_logs(
+    test_client,
+    wait_for_terminal_run,
+    monkeypatch,
+) -> None:
+    client, main_app = test_client
+    main_app.state.db.seed_tasks(
+        [
+            {
+                "task_id": "maintenance.pgbackrest_backup_full",
+                "panel_id": "backup",
+                "title": "Full backup",
+                "task_type": "backup",
+                "icon_idle": "Database",
+                "icon_running": "Square",
+                "cwd": ".",
+                "command": {"mode": "shell", "value": "printf 'pgBackRest progress\\n'"},
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        main_app.state.runner,
+        "_capture_pgbackrest_s3_state",
+        lambda **_: {"ok": True, "bucket": "ttbackups", "label_count": 2},
+    )
+    monkeypatch.setattr(
+        task_runtime,
+        "wait_for_pgbackrest_s3_change",
+        lambda **_: {"ok": True, "labels_added": ["20260829-010101F"]},
+    )
+
+    response = client.post("/api/tasks/maintenance.pgbackrest_backup_full/toggle")
+    assert response.status_code == 200
+    run = wait_for_terminal_run(main_app, int(response.json()["run"]["run_id"]))
+    assert run["status"] == "completed"
+
+    logs = client.get(f"/api/runs/{run['run_id']}/logs").json()["lines"]
+    messages = [str(item["line"]) for item in logs]
+    assert any("Preparing full pgBackRest backup" in message for message in messages)
+    assert any("Starting full pgBackRest backup" in message for message in messages)
+    assert "pgBackRest progress" in messages
+
+
 def test_task_artifact_event_and_summary_without_log_parsing(
     test_client,
     wait_for_terminal_run,

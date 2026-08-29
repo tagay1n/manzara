@@ -318,9 +318,40 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
 
             backup_s3_state_before: Optional[Dict[str, Any]] = None
             if self._is_pgbackrest_backup_task(task):
+                backup_kind = self._pgbackrest_backup_kind(task)
+                self._emit_task_log(
+                    run_id=run_id,
+                    task_id=task["task_id"],
+                    panel_id=task["panel_id"],
+                    line=(
+                        f"Preparing {backup_kind} pgBackRest backup; "
+                        "capturing Backblaze repository state."
+                    ),
+                )
                 backup_s3_state_before = self._capture_pgbackrest_s3_state(
                     command_value=command["value"],
                 )
+                if backup_s3_state_before.get("ok"):
+                    self._emit_task_log(
+                        run_id=run_id,
+                        task_id=task["task_id"],
+                        panel_id=task["panel_id"],
+                        line=(
+                            "Backblaze repository state captured: "
+                            f"bucket={backup_s3_state_before.get('bucket')}, "
+                            f"existing_backup_labels={backup_s3_state_before.get('label_count', 0)}."
+                        ),
+                    )
+                else:
+                    self._emit_task_log(
+                        run_id=run_id,
+                        task_id=task["task_id"],
+                        panel_id=task["panel_id"],
+                        line=(
+                            "Backblaze repository preflight failed; the task will report "
+                            "the detailed verification error after pgBackRest exits."
+                        ),
+                    )
 
             command_text, stdin_text = self._prepare_command(command["value"], sudo_password)
             proc_env = os.environ.copy()
@@ -330,6 +361,17 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
             if task.get("gemini_workers") is not None:
                 proc_env["MANZARA_GEMINI_WORKERS"] = str(task["gemini_workers"])
             proc_env[RUN_ARTIFACT_PATH_ENV] = str(artifact_output_path)
+
+            if self._is_pgbackrest_backup_task(task):
+                self._emit_task_log(
+                    run_id=run_id,
+                    task_id=task["task_id"],
+                    panel_id=task["panel_id"],
+                    line=(
+                        f"Starting {self._pgbackrest_backup_kind(task)} pgBackRest backup; "
+                        "live pgBackRest progress will follow."
+                    ),
+                )
 
             proc = subprocess.Popen(
                 command_text,

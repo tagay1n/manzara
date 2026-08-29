@@ -32,6 +32,12 @@ def test_maintenance_task_definitions_include_guarded_sync_task(tmp_path) -> Non
         by_id["maintenance.sync_documents_s3"]["title"]
         == "Upload to Backblaze S3"
     )
+    assert "--log-level-console=info" in by_id[
+        "maintenance.pgbackrest_backup_full"
+    ]["command"]["value"]
+    assert "--log-level-console=info" in by_id[
+        "maintenance.pgbackrest_backup_incr"
+    ]["command"]["value"]
     assert not any(task_id.startswith("library.collection_") for task_id in task_ids)
 
 

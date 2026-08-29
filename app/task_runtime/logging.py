@@ -46,6 +46,12 @@ class TaskLoggingMixin:
         return task_id.startswith("maintenance.pgbackrest_backup_")
 
 
+    def _pgbackrest_backup_kind(self, task: Dict[str, Any]) -> str:
+        """Return the human-visible kind for a pgBackRest backup task."""
+        task_id = str(task.get("task_id") or "")
+        return "incremental" if task_id.endswith("_incr") else "full"
+
+
     def _capture_pgbackrest_s3_state(
         self,
         *,

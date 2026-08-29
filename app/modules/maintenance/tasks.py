@@ -39,10 +39,12 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
     meta_eval_cmd = py_bootstrap + f'"$PY_BIN" "{meta_eval_runner}"'
     backup_full_cmd = (
-        f"sudo -n -u postgres pgbackrest --stanza={stanza} --type=full backup"
+        f"sudo -n -u postgres pgbackrest --stanza={stanza} "
+        "--log-level-console=info --type=full backup"
     )
     backup_incr_cmd = (
-        f"sudo -n -u postgres pgbackrest --stanza={stanza} --type=incr backup"
+        f"sudo -n -u postgres pgbackrest --stanza={stanza} "
+        "--log-level-console=info --type=incr backup"
     )
     personality_refresh_cmd = (
         py_bootstrap

@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=None,
-        help="Explicit config yaml with yandex.cloud credentials.",
+        help="Explicit config yaml with backups.pgbackrest storage settings.",
     )
     parser.add_argument(
         "--monocorpus-repo",
@@ -88,4 +88,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

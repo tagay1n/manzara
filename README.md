@@ -56,7 +56,12 @@ Common environment variables:
 - `MANZARA_CONFIG_PATH` — explicit YAML path
 - `MANZARA_ARTIFACTS_ROOT` — defaults to `~/.manzara`
 - `MONOCORPUS_REPO_PATH` — defaults to `/home/tans1q/projects/monocorpus`
-- `PG_BACKREST_STANZA`, `PG_BACKREST_S3_BUCKET`, and `PG_BACKREST_S3_ENDPOINT`
+- `PG_BACKREST_STANZA` — pgBackRest stanza name, default `monocorpus`
+- `MANZARA_PGBACKREST_S3_BUCKET`, `MANZARA_PGBACKREST_S3_ENDPOINT`, and
+  `MANZARA_PGBACKREST_S3_REGION` — optional overrides for `backups.pgbackrest`
+
+PostgreSQL physical backups use the dedicated `backups.pgbackrest` S3 contract.
+See `docs/postgres-backup-recovery.md` for migration, validation, and recovery.
 
 Gemini configuration contains one ordered `gemini.model_pool` and account-grouped keys. Models have no code default. See `docs/gemini-runtime.md` for runtime behavior.
 

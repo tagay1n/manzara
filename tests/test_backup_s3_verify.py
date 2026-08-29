@@ -2,12 +2,58 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict
 
 from app.modules.maintenance import backup_s3_verify as verify
 
 
+def test_load_backup_s3_settings_uses_dedicated_backup_contract(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+backups:
+  pgbackrest:
+    endpoint_url: https://s3.eu-central-003.backblazeb2.com
+    region_name: eu-central-003
+    bucket: ttbackups
+    repository_path: /pgbackrest
+    access_key_id: backup-key
+    secret_access_key: backup-secret
+yandex:
+  cloud:
+    aws_access_key_id: legacy-key
+    aws_secret_access_key: legacy-secret
+""".strip(),
+        encoding="utf-8",
+    )
+
+    settings = verify.load_backup_s3_settings(config_path=config_path)
+
+    assert settings == {
+        "ok": True,
+        "endpoint_url": "https://s3.eu-central-003.backblazeb2.com",
+        "region_name": "eu-central-003",
+        "bucket": "ttbackups",
+        "repository_path": "/pgbackrest",
+        "aws_access_key_id": "backup-key",
+        "aws_secret_access_key": "backup-secret",
+        "source": str(config_path),
+    }
+
+
+def test_backup_roots_follow_configured_repository_path() -> None:
+    assert verify.pgbackrest_backup_roots("mono", "/pgbackrest") == (
+        "pgbackrest/backup/mono/",
+    )
+
+
 def test_capture_pgbackrest_s3_state_collects_labels(monkeypatch) -> None:
+    monkeypatch.setattr(
+        verify,
+        "load_backup_s3_settings",
+        lambda **_: {"ok": False, "error": "not configured"},
+    )
     monkeypatch.setattr(
         verify,
         "load_s3_credentials",
@@ -50,7 +96,7 @@ def test_capture_pgbackrest_s3_state_collects_labels(monkeypatch) -> None:
     monkeypatch.setattr(
         verify,
         "capture_repository_markers",
-        lambda _s3, _bucket, _stanza: {
+        lambda _s3, _bucket, _stanza, **_: {
             "backup/mono/backup.info": {"etag": "before", "size": 42}
         },
     )

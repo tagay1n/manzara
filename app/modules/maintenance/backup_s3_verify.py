@@ -13,7 +13,6 @@ from boto3 import Session
 from botocore.exceptions import ClientError
 
 REDACTED_SENTINEL = "<REDACTED>"
-DEFAULT_ENDPOINT = "https://storage.yandexcloud.net"
 DEFAULT_MONOCORPUS_REPO = Path("/home/tans1q/projects/monocorpus")
 
 _LABEL_RE = re.compile(r"new backup label\s*=\s*([A-Za-z0-9._-]+)", re.IGNORECASE)
@@ -22,7 +21,6 @@ _ENDPOINT_RE = re.compile(r"--repo1-s3-endpoint=([^\s]+)")
 _STANZA_RE = re.compile(r"--stanza=([^\s]+)")
 _BACKUP_LABEL_RE = re.compile(r"^\d{8}-\d{6}F(?:_\d{8}-\d{6}[DI])?$")
 
-DEFAULT_PGBACKREST_S3_BUCKET = "tt-monocorpus-postgres-backups"
 DEFAULT_PGBACKREST_STANZA = "monocorpus"
 DEFAULT_VERIFY_WAIT_SECONDS = 120
 DEFAULT_VERIFY_POLL_SECONDS = 5.0
@@ -38,6 +36,17 @@ REQUIRED_BACKUP_FILES = (
 )
 
 
+def pgbackrest_backup_roots(
+    stanza: str,
+    repository_path: Optional[str] = None,
+) -> tuple[str, ...]:
+    """Return S3 key roots for one pgBackRest repository and stanza."""
+    configured = str(repository_path or "").strip().strip("/")
+    if configured:
+        return (f"{configured}/backup/{stanza}/",)
+    return tuple(template.format(stanza=stanza) for template in PGBACKREST_BACKUP_ROOTS)
+
+
 def verify_backup_objects_in_s3(
     log_lines: Iterable[str],
     *,
@@ -51,10 +60,20 @@ def verify_backup_objects_in_s3(
 ) -> Dict[str, Any]:
     """Verify that objects for one backup label exist in S3 bucket."""
     markers = extract_backup_markers(log_lines)
+    storage = load_backup_s3_settings(
+        config_path=config_path,
+        monocorpus_repo_path=monocorpus_repo_path,
+    )
+    configured = storage if storage.get("ok") else {}
     resolved_label = str(label or markers.get("label") or "").strip()
-    resolved_bucket = str(bucket or markers.get("bucket") or "").strip()
+    resolved_bucket = str(
+        bucket or markers.get("bucket") or configured.get("bucket") or ""
+    ).strip()
     resolved_stanza = str(stanza or markers.get("stanza") or "").strip()
-    resolved_endpoint = str(endpoint or markers.get("endpoint") or DEFAULT_ENDPOINT).strip()
+    resolved_endpoint = str(
+        endpoint or markers.get("endpoint") or configured.get("endpoint_url") or ""
+    ).strip()
+    repository_path = str(configured.get("repository_path") or "").strip()
 
     if not resolved_label:
         return {"ok": False, "error": "backup label not found in logs or arguments"}
@@ -76,11 +95,12 @@ def verify_backup_objects_in_s3(
         aws_access_key_id=credentials["aws_access_key_id"],
         aws_secret_access_key=credentials["aws_secret_access_key"],
         endpoint_url=resolved_endpoint,
+        region_name=str(credentials.get("region_name") or configured.get("region_name") or "") or None,
     )
 
     candidate_prefixes = [
-        f"var/lib/pgbackrest/backup/{resolved_stanza}/{resolved_label}/",
-        f"backup/{resolved_stanza}/{resolved_label}/",
+        f"{root}{resolved_label}/"
+        for root in pgbackrest_backup_roots(resolved_stanza, repository_path)
     ]
     primary_prefix = candidate_prefixes[0]
     listed = {"count": 0, "items": [], "prefix": candidate_prefixes[0]}
@@ -90,7 +110,11 @@ def verify_backup_objects_in_s3(
             break
     if listed["count"] == 0:
         # Fallback scan for unusual key layout while keeping bounded cost.
-        for fallback_prefix in ("var/lib/pgbackrest/backup/", "backup/"):
+        fallback_roots = tuple(
+            root.rsplit(f"{resolved_stanza}/", 1)[0]
+            for root in pgbackrest_backup_roots(resolved_stanza, repository_path)
+        )
+        for fallback_prefix in fallback_roots:
             fallback = list_objects(s3, resolved_bucket, fallback_prefix, limit=max_scan_keys)
             filtered = [item for item in fallback["items"] if resolved_label in str(item.get("key") or "")]
             if filtered:
@@ -160,6 +184,11 @@ def capture_pgbackrest_s3_state(
     max_scan_labels: int = 5000,
 ) -> Dict[str, Any]:
     """Capture current pgBackRest labels available in S3 for one stanza."""
+    storage = load_backup_s3_settings(
+        config_path=config_path,
+        monocorpus_repo_path=monocorpus_repo_path,
+    )
+    configured = storage if storage.get("ok") else {}
     resolved_stanza = str(stanza or _extract_stanza_from_command(command_value) or "").strip()
     if not resolved_stanza:
         resolved_stanza = DEFAULT_PGBACKREST_STANZA
@@ -167,14 +196,17 @@ def capture_pgbackrest_s3_state(
         bucket
         or os.environ.get("PG_BACKREST_S3_BUCKET")
         or os.environ.get("MANZARA_PGBACKREST_S3_BUCKET")
-        or DEFAULT_PGBACKREST_S3_BUCKET
+        or configured.get("bucket")
+        or ""
     ).strip()
     resolved_endpoint = str(
         endpoint
         or os.environ.get("PG_BACKREST_S3_ENDPOINT")
         or os.environ.get("MANZARA_PGBACKREST_S3_ENDPOINT")
-        or DEFAULT_ENDPOINT
+        or configured.get("endpoint_url")
+        or ""
     ).strip()
+    repository_path = str(configured.get("repository_path") or "").strip()
 
     if not resolved_bucket:
         return {
@@ -200,13 +232,13 @@ def capture_pgbackrest_s3_state(
         aws_access_key_id=credentials["aws_access_key_id"],
         aws_secret_access_key=credentials["aws_secret_access_key"],
         endpoint_url=resolved_endpoint,
+        region_name=str(credentials.get("region_name") or configured.get("region_name") or "") or None,
     )
 
     labels: set[str] = set()
     label_prefixes: dict[str, list[str]] = {}
     scanned_roots: list[str] = []
-    for root_template in PGBACKREST_BACKUP_ROOTS:
-        root = root_template.format(stanza=resolved_stanza)
+    for root in pgbackrest_backup_roots(resolved_stanza, repository_path):
         scanned_roots.append(root)
         listed = list_child_prefixes(s3, resolved_bucket, root, limit=max_scan_labels)
         for label in listed.get("labels", []):
@@ -221,6 +253,7 @@ def capture_pgbackrest_s3_state(
         s3,
         resolved_bucket,
         resolved_stanza,
+        repository_path=repository_path,
     )
 
     return {
@@ -228,6 +261,7 @@ def capture_pgbackrest_s3_state(
         "bucket": resolved_bucket,
         "stanza": resolved_stanza,
         "endpoint": resolved_endpoint,
+        "repository_path": repository_path,
         "labels": sorted(labels),
         "label_count": len(labels),
         "roots": scanned_roots,
@@ -437,11 +471,12 @@ def capture_repository_markers(
     s3: Any,
     bucket: str,
     stanza: str,
+    *,
+    repository_path: Optional[str] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Capture bounded S3 fingerprints changed when pgBackRest finalizes a backup."""
     markers: Dict[str, Dict[str, Any]] = {}
-    for root_template in PGBACKREST_BACKUP_ROOTS:
-        root = root_template.format(stanza=stanza)
+    for root in pgbackrest_backup_roots(stanza, repository_path):
         for name in ("backup.info", "backup.info.copy"):
             key = f"{root}{name}"
             try:
@@ -475,6 +510,7 @@ def _validate_new_labels_have_required_files(
     bucket = str(state.get("bucket") or "").strip()
     endpoint = str(state.get("endpoint") or "").strip()
     stanza = str(state.get("stanza") or "").strip()
+    repository_path = str(state.get("repository_path") or "").strip()
     credentials = load_s3_credentials(
         config_path=config_path,
         monocorpus_repo_path=monocorpus_repo_path,
@@ -487,7 +523,8 @@ def _validate_new_labels_have_required_files(
         service_name="s3",
         aws_access_key_id=credentials["aws_access_key_id"],
         aws_secret_access_key=credentials["aws_secret_access_key"],
-        endpoint_url=endpoint or DEFAULT_ENDPOINT,
+        endpoint_url=endpoint,
+        region_name=str(credentials.get("region_name") or "") or None,
     )
 
     label_prefixes = state.get("label_prefixes") or {}
@@ -496,8 +533,8 @@ def _validate_new_labels_have_required_files(
         prefixes = list(label_prefixes.get(label) or [])
         if not prefixes:
             prefixes = [
-                root_template.format(stanza=stanza) + f"{label}/"
-                for root_template in PGBACKREST_BACKUP_ROOTS
+                root + f"{label}/"
+                for root in pgbackrest_backup_roots(stanza, repository_path)
             ]
 
         for prefix in prefixes:
@@ -510,7 +547,7 @@ def _validate_new_labels_have_required_files(
                     "ok": True,
                     "bucket": bucket,
                     "stanza": stanza,
-                    "endpoint": endpoint or DEFAULT_ENDPOINT,
+                    "endpoint": endpoint,
                     "label": label,
                     "prefix": prefix,
                     "object_count": int(sample.get("count") or 0),
@@ -564,7 +601,28 @@ def load_s3_credentials(
     config_path: Optional[Path] = None,
     monocorpus_repo_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Load S3 credentials from local Manzara or monocorpus config files."""
+    """Load credentials for the configured pgBackRest S3 repository."""
+    settings = load_backup_s3_settings(
+        config_path=config_path,
+        monocorpus_repo_path=monocorpus_repo_path,
+    )
+    if not settings.get("ok"):
+        return settings
+    return {
+        "ok": True,
+        "aws_access_key_id": settings["aws_access_key_id"],
+        "aws_secret_access_key": settings["aws_secret_access_key"],
+        "region_name": settings["region_name"],
+        "source": settings.get("source"),
+    }
+
+
+def load_backup_s3_settings(
+    *,
+    config_path: Optional[Path] = None,
+    monocorpus_repo_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Load the dedicated pgBackRest S3 repository configuration."""
     for path in _config_candidates(
         config_path=config_path,
         monocorpus_repo_path=monocorpus_repo_path,
@@ -574,21 +632,79 @@ def load_s3_credentials(
         payload = _read_yaml(path)
         if not isinstance(payload, dict):
             continue
-        if _contains_redacted(payload):
+        backups = payload.get("backups") or {}
+        if not isinstance(backups, dict):
             continue
-        cloud = ((payload.get("yandex") or {}).get("cloud") or {})
-        key_id = str(cloud.get("aws_access_key_id") or "").strip()
-        key_secret = str(cloud.get("aws_secret_access_key") or "").strip()
-        if key_id and key_secret:
-            return {
-                "ok": True,
-                "aws_access_key_id": key_id,
-                "aws_secret_access_key": key_secret,
-                "source": str(path),
-            }
+        repository = backups.get("pgbackrest") or {}
+        if not isinstance(repository, dict):
+            continue
+
+        endpoint_url = str(
+            os.environ.get("MANZARA_PGBACKREST_S3_ENDPOINT")
+            or repository.get("endpoint_url")
+            or ""
+        ).strip().rstrip("/")
+        region_name = str(
+            os.environ.get("MANZARA_PGBACKREST_S3_REGION")
+            or repository.get("region_name")
+            or ""
+        ).strip()
+        bucket = str(
+            os.environ.get("MANZARA_PGBACKREST_S3_BUCKET")
+            or repository.get("bucket")
+            or ""
+        ).strip()
+        repository_path = str(
+            os.environ.get("MANZARA_PGBACKREST_REPOSITORY_PATH")
+            or repository.get("repository_path")
+            or ""
+        ).strip()
+        key_id = str(
+            os.environ.get("MANZARA_PGBACKREST_S3_ACCESS_KEY_ID")
+            or repository.get("access_key_id")
+            or ""
+        ).strip()
+        key_secret = str(
+            os.environ.get("MANZARA_PGBACKREST_S3_SECRET_ACCESS_KEY")
+            or repository.get("secret_access_key")
+            or ""
+        ).strip()
+
+        credential_source = str(repository.get("credential_source") or "").strip()
+        if credential_source == "documents.primary_storage" and not (key_id and key_secret):
+            documents = payload.get("documents") or {}
+            primary = documents.get("primary_storage") if isinstance(documents, dict) else {}
+            if isinstance(primary, dict):
+                key_id = str(primary.get("access_key_id") or "").strip()
+                key_secret = str(primary.get("secret_access_key") or "").strip()
+
+        values = (
+            endpoint_url,
+            region_name,
+            bucket,
+            repository_path,
+            key_id,
+            key_secret,
+        )
+        if any(not value or REDACTED_SENTINEL in value for value in values):
+            continue
+        return {
+            "ok": True,
+            "endpoint_url": endpoint_url,
+            "region_name": region_name,
+            "bucket": bucket,
+            "repository_path": repository_path,
+            "aws_access_key_id": key_id,
+            "aws_secret_access_key": key_secret,
+            "source": str(path),
+        }
+
     return {
         "ok": False,
-        "error": "Unable to load S3 credentials from Manzara/monocorpus config files.",
+        "error": (
+            "Unable to load backups.pgbackrest S3 settings from "
+            "Manzara/monocorpus config files."
+        ),
     }
 
 
