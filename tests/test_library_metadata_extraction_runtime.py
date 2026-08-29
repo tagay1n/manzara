@@ -249,6 +249,60 @@ def test_runtime_persists_success_and_emits_structured_progress(
     assert '\n{\n  "@context": "https://schema.org",' in output
 
 
+def test_parallel_runtime_emits_only_aggregate_monotonic_progress(
+    monkeypatch, tmp_path
+) -> None:
+    candidates = [
+        MetadataExtractionCandidate(
+            md5=character * 32,
+            mime_type="application/pdf",
+            document_url=f"https://s3.example/public/{character}.pdf",
+            content_url=None,
+            upstream_meta_url=None,
+            primary_storage_size=12,
+            attempts=(),
+        )
+        for character in "abcd"
+    ]
+    repository = _Repository(candidates[0])
+    repository.list_candidates = lambda **_kwargs: candidates
+    db = _Db()
+    monkeypatch.setattr(runtime, "GeminiRuntimeManager", _Manager)
+    monkeypatch.setattr(
+        runtime,
+        "prepare_metadata_request",
+        lambda *_args, **_kwargs: MetadataRequest(({"text": "prompt"},), {}),
+    )
+
+    summary = runtime.run_metadata_extraction(
+        repository=repository,
+        db=db,
+        storage=object(),
+        primary_s3=object(),
+        models=["first"],
+        workspace=tmp_path,
+        run_id=420,
+        should_stop=lambda: False,
+        request_json=lambda **_kwargs: json.dumps(
+            {
+                "@context": "https://schema.org",
+                "@type": "Book",
+                "name": "Kitap",
+                "datePublished": "2001",
+            }
+        ),
+        workers=2,
+    )
+
+    assert summary["processed"] == 4
+    assert summary["succeeded"] == 4
+    assert all(payload["total"] == 4 for payload in db.progress)
+    currents = [payload["current"] for payload in db.progress]
+    assert currents == sorted(currents)
+    assert db.progress[-1]["current"] == 4
+    assert db.progress[-1]["succeeded"] == 4
+
+
 def test_primary_s3_config_bounds_network_waits() -> None:
     config = runtime._primary_s3_config()
 

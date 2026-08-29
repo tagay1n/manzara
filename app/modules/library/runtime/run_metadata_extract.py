@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import signal
 import sys
+import threading
 from typing import Any, Callable, Mapping
 
 
@@ -59,6 +60,16 @@ from app.settings import load_settings
 TASK_ID = "library.metadata_extract"
 PANEL_ID = "library"
 DEFAULT_OPERATIONAL_RETRY_COOLDOWN_SECONDS = 21_600
+PROGRESS_COUNTER_KEYS = (
+    "succeeded",
+    "already_complete",
+    "terminal",
+    "source_deferred",
+    "corrupted_planned",
+    "corrupted_plan_reused",
+    "quota_deferred",
+    "service_deferred",
+)
 
 
 def _operational_retry_cooldown_seconds(config: Mapping[str, Any]) -> int:
@@ -159,6 +170,60 @@ def _publish_progress(
     )
 
 
+class _AggregateProgressPublisher:
+    """Publish one monotonic run snapshot assembled from worker-local state."""
+
+    def __init__(self, db: Database, run_id: int, *, total: int) -> None:
+        self._db = db
+        self._run_id = int(run_id)
+        self._total = int(total)
+        self._lock = threading.Lock()
+        self._states: dict[
+            int,
+            tuple[int, Counter[str], Counter[str], Counter[str]],
+        ] = {}
+
+    def publish(
+        self,
+        worker_id: int,
+        *,
+        current: int,
+        counters: Mapping[str, int],
+        model_attempts: Mapping[str, int],
+        model_successes: Mapping[str, int],
+    ) -> None:
+        with self._lock:
+            self._states[int(worker_id)] = (
+                int(current),
+                Counter(counters),
+                Counter(model_attempts),
+                Counter(model_successes),
+            )
+            aggregate_counters: Counter[str] = Counter()
+            aggregate_attempts: Counter[str] = Counter()
+            aggregate_successes: Counter[str] = Counter()
+            aggregate_current = 0
+            for (
+                worker_current,
+                worker_counters,
+                worker_attempts,
+                worker_successes,
+            ) in self._states.values():
+                aggregate_current += worker_current
+                aggregate_counters.update(worker_counters)
+                aggregate_attempts.update(worker_attempts)
+                aggregate_successes.update(worker_successes)
+            _publish_progress(
+                self._db,
+                self._run_id,
+                current=aggregate_current,
+                total=self._total,
+                counters=aggregate_counters,
+                model_attempts=aggregate_attempts,
+                model_successes=aggregate_successes,
+            )
+
+
 def run_metadata_extraction(
     *,
     repository: MetadataExtractionRepository,
@@ -177,6 +242,8 @@ def run_metadata_extraction(
     request_json: Callable[..., str] = generate_structured_json,
     workers: int = 1,
     _candidates: list[Any] | None = None,
+    _aggregate_progress: _AggregateProgressPublisher | None = None,
+    _worker_id: int = 0,
 ) -> dict[str, Any]:
     """Process one fixed candidate snapshot and return a structured summary."""
     candidates = (
@@ -187,6 +254,20 @@ def run_metadata_extraction(
     worker_count = max(1, min(int(workers), len(candidates) or 1))
     if worker_count > 1 and _candidates is None:
         partitions = [candidates[index::worker_count] for index in range(worker_count)]
+        aggregate_progress = _AggregateProgressPublisher(
+            db,
+            run_id,
+            total=len(candidates),
+        )
+        _publish_progress(
+            db,
+            run_id,
+            current=0,
+            total=len(candidates),
+            counters={key: 0 for key in PROGRESS_COUNTER_KEYS},
+            model_attempts={},
+            model_successes={},
+        )
         print(
             f"library metadata: worker pool requested={workers} started={worker_count}",
             flush=True,
@@ -196,7 +277,7 @@ def run_metadata_extraction(
         ) as executor:
             results = list(
                 executor.map(
-                    lambda partition: run_metadata_extraction(
+                    lambda indexed_partition: run_metadata_extraction(
                         repository=repository,
                         cleanup_repository=cleanup_repository,
                         db=db,
@@ -210,16 +291,13 @@ def run_metadata_extraction(
                         operational_retry_cooldown_seconds=operational_retry_cooldown_seconds,
                         request_json=request_json,
                         workers=1,
-                        _candidates=partition,
+                        _candidates=indexed_partition[1],
+                        _aggregate_progress=aggregate_progress,
+                        _worker_id=indexed_partition[0],
                     ),
-                    partitions,
+                    enumerate(partitions),
                 )
             )
-        counter_keys = (
-            "succeeded", "already_complete", "terminal", "source_deferred",
-            "corrupted_planned", "corrupted_plan_reused",
-            "quota_deferred", "service_deferred",
-        )
         model_attempts = Counter()
         model_successes = Counter()
         for result in results:
@@ -235,7 +313,7 @@ def run_metadata_extraction(
             "remaining": sum(int(result.get("remaining") or 0) for result in results),
             **{
                 key: sum(int(result.get(key) or 0) for result in results)
-                for key in counter_keys
+                for key in PROGRESS_COUNTER_KEYS
             },
             "model_attempts": dict(model_attempts),
             "model_successes": dict(model_successes),
@@ -244,7 +322,7 @@ def run_metadata_extraction(
         }
         _publish_progress(
             db, run_id, current=summary["processed"], total=len(candidates),
-            counters=Counter({key: summary[key] for key in counter_keys}),
+            counters=Counter({key: summary[key] for key in PROGRESS_COUNTER_KEYS}),
             model_attempts=model_attempts, model_successes=model_successes,
         )
         return summary
@@ -263,21 +341,34 @@ def run_metadata_extraction(
     model_successes: Counter[str] = Counter()
     processed = 0
     outcome = "completed"
+
+    def publish_progress() -> None:
+        if _aggregate_progress is not None:
+            _aggregate_progress.publish(
+                _worker_id,
+                current=processed,
+                counters=counters,
+                model_attempts=model_attempts,
+                model_successes=model_successes,
+            )
+            return
+        _publish_progress(
+            db,
+            run_id,
+            current=processed,
+            total=total,
+            counters=counters,
+            model_attempts=model_attempts,
+            model_successes=model_successes,
+        )
+
     manager = GeminiRuntimeManager(
         db,
         task_id=TASK_ID,
         panel_id=PANEL_ID,
         should_stop=should_stop,
     )
-    _publish_progress(
-        db,
-        run_id,
-        current=0,
-        total=total,
-        counters=counters,
-        model_attempts=model_attempts,
-        model_successes=model_successes,
-    )
+    publish_progress()
     print(
         f"library metadata: start run_id={run_id} eligible={total} "
         f"models={json.dumps(models)}",
@@ -336,15 +427,7 @@ def run_metadata_extraction(
                 flush=True,
             )
             shutil.rmtree(workspace / candidate.md5, ignore_errors=True)
-            _publish_progress(
-                db,
-                run_id,
-                current=processed,
-                total=total,
-                counters=counters,
-                model_attempts=model_attempts,
-                model_successes=model_successes,
-            )
+            publish_progress()
             continue
         except Exception as exc:  # noqa: BLE001
             counters["source_deferred"] += 1
@@ -355,15 +438,7 @@ def run_metadata_extraction(
                 flush=True,
             )
             shutil.rmtree(workspace / candidate.md5, ignore_errors=True)
-            _publish_progress(
-                db,
-                run_id,
-                current=processed,
-                total=total,
-                counters=counters,
-                model_attempts=model_attempts,
-                model_successes=model_successes,
-            )
+            publish_progress()
             continue
 
         def call_model(model_name: str, api_key: str, _lease: Any) -> str:
@@ -474,15 +549,7 @@ def run_metadata_extraction(
         finally:
             shutil.rmtree(workspace / candidate.md5, ignore_errors=True)
 
-        _publish_progress(
-            db,
-            run_id,
-            current=processed,
-            total=total,
-            counters=counters,
-            model_attempts=model_attempts,
-            model_successes=model_successes,
-        )
+        publish_progress()
         if outcome != "completed":
             break
         if should_stop():
