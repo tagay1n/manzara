@@ -52,6 +52,50 @@ def test_assessment_invalidates_language_and_schema_shape_problems() -> None:
     }
 
 
+def test_assessment_resolves_valid_yanalif_description() -> None:
+    decision = assess_metadata(
+        _book(
+            name="Janalif kitabь",
+            inLanguage="tt-Latn-x-yanalif",
+            description=(
+                "Bu əsər kolxoz eşceləreneꞑ tormьşь turьnda sөjli həm "
+                "praktik kyrsətmələr birə."
+            ),
+        )
+    )
+
+    assert decision.status == "resolved"
+    assert decision.issues == ()
+
+
+def test_assessment_preserves_zamanalif_variant_tag() -> None:
+    decision = assess_metadata(
+        _book(
+            name="Tatar orfografiyäse",
+            inLanguage="tt-Latn-x-zaman-alif",
+            description="Äsär zamança Tatar yazuı qağidälären añlata.",
+        )
+    )
+
+    assert decision.status == "resolved"
+    assert decision.schema_org["inLanguage"] == "tt-Latn-x-zaman-alif"
+    assert decision.changed is False
+
+
+def test_assessment_repairs_legacy_zamanalif_variant_tag() -> None:
+    decision = assess_metadata(
+        _book(
+            name="Tatar orfografiyäse",
+            inLanguage="tt-Latn-x-zamanalif",
+            description="Äsär zamança Tatar yazuı qağidälären añlata.",
+        )
+    )
+
+    assert decision.status == "resolved"
+    assert decision.schema_org["inLanguage"] == "tt-Latn-x-zaman-alif"
+    assert decision.changed is True
+
+
 def test_assessment_losslessly_repairs_legacy_json_ld_shapes() -> None:
     decision = assess_metadata(
         _book(

@@ -40,7 +40,7 @@ from app.modules.runtime_shared_utils import load_upstream_metadata
 
 TEXT_SLICE_CHARS = 20_000
 PDF_EDGE_PAGES = 4
-PROMPT_VERSION = "prompt.v4"
+PROMPT_VERSION = "prompt.v5"
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SUPPORTING_METADATA_FIELDS = (
     "author",

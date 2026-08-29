@@ -32,7 +32,7 @@ def _codes(payload) -> set[str]:
 
 
 def test_contract_accepts_document_language_description_and_english_facets() -> None:
-    assert CONTRACT_VERSION == "schema-org.v1"
+    assert CONTRACT_VERSION == "schema-org.v2"
     assert metadata_contract_issues(_book()) == []
 
 
@@ -52,6 +52,85 @@ def test_contract_accepts_english_description_for_english_document() -> None:
             )
         )
         == []
+    )
+
+
+def test_contract_accepts_historical_yanalif_letters() -> None:
+    assert (
+        metadata_contract_issues(
+            _book(
+                name="Janalif kitabь",
+                inLanguage="tt-Latn-x-yanalif",
+                description=(
+                    "Əsər jəş buьn өçen jazьlƣan. Anda ꞑ və ƶ xərəfləre "
+                    "həm Ьь Yañalif xərəfləre bularaq qullanьla."
+                ),
+            )
+        )
+        == []
+    )
+
+
+def test_contract_accepts_limited_yanalif_ocr_script_noise() -> None:
+    assert (
+        metadata_contract_issues(
+            _book(
+                name="Jəşelçə",
+                inLanguage="tt-Latn-x-yanalif",
+                description=(
+                    "Kolxoz həm sovxoz eşcelərenə jəşelcəne nicek ystery, "
+                    "anь dөres saqlav həm annan fajdalanu turında praktik "
+                    "kyrsətmələr birelə."
+                ),
+            )
+        )
+        == []
+    )
+
+
+def test_contract_rejects_predominantly_cyrillic_yanalif_description() -> None:
+    assert "description_script_mismatch" in _codes(
+        _book(
+            name="Janalif sabaqlarь",
+            inLanguage="tt-Latn-x-yanalif",
+            description=(
+                "Janalif sabaqlarь китабы яңалиф белән укырга һәм язарга "
+                "өйрәнү өчен төзелгән."
+            ),
+        )
+    )
+
+
+def test_contract_uses_two_to_one_competing_script_threshold() -> None:
+    payload = _book(
+        name="Janalif",
+        inLanguage="tt-Latn-x-yanalif",
+        description="aaaa ббббббб",
+    )
+    assert metadata_contract_issues(payload) == []
+    assert "description_script_mismatch" in _codes(
+        {**payload, "description": "aaaa бббббббб"}
+    )
+
+
+def test_contract_accepts_zamanalif_and_rejects_cyrillic_description() -> None:
+    valid = _book(
+        name="Tatar orfografiyäse",
+        inLanguage="tt-Latn-x-zaman-alif",
+        description=(
+            "Äsär Tatar orfografiyäseneñ töp qağidälären añlata häm "
+            "zamandaş uquçılar öçen misallar birä."
+        ),
+    )
+    assert metadata_contract_issues(valid) == []
+    assert "description_script_mismatch" in _codes(
+        {
+            **valid,
+            "description": (
+                "Әсәр татар орфографиясенең төп кагыйдәләрен аңлата һәм "
+                "укучылар өчен мисаллар бирә."
+            ),
+        }
     )
 
 

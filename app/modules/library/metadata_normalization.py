@@ -99,7 +99,7 @@ def sanitize_schema_org_contract(schema_org: dict) -> tuple[dict, bool]:
         updated["@type"] = "NewsArticle"
         changed = True
     if str(updated.get("inLanguage") or "").casefold() == "tt-latn-x-zamanalif":
-        updated["inLanguage"] = "tt-Latn"
+        updated["inLanguage"] = "tt-Latn-x-zaman-alif"
         changed = True
     if updated.get("genre") == []:
         updated.pop("genre")

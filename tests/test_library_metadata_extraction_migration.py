@@ -136,7 +136,7 @@ def test_metadata_success_is_transactional_against_json_column(
             ).mappings().one()
         assert metadata["name"] == "Kitap"
         assert document["language"] == "tt-Cyrl"
-        assert document["meta_extraction_method"] == "model-one/prompt.v4"
+        assert document["meta_extraction_method"] == "model-one/prompt.v5"
     finally:
         if repository is not None:
             repository.dispose()

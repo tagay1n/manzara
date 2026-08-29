@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from copy import deepcopy
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
 
-CONTRACT_VERSION = "schema-org.v1"
+CONTRACT_VERSION = "schema-org.v2"
 SCHEMA_CONTEXT = "https://schema.org"
 SUPPORTED_TYPES = frozenset(
     {
@@ -28,9 +29,6 @@ SUPPORTED_TYPES = frozenset(
 ACCESS_MODES = frozenset({"auditory", "tactile", "textual", "visual"})
 
 _ENGLISH_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &'()/:,+.\-]*$")
-_CYRILLIC_RE = re.compile(r"[\u0400-\u052f]")
-_ARABIC_RE = re.compile(r"[\u0600-\u06ff\u0750-\u077f]")
-_LATIN_RE = re.compile(r"[A-Za-z]")
 _DATE_RE = re.compile(r"^\d{4}(?:-\d{2})?(?:-\d{2})?$")
 _BCP47_RE = re.compile(
     r"^[A-Za-z]{2,8}(?:-[A-Za-z]{4})?(?:-[A-Za-z]{2}|-\d{3})?"
@@ -66,6 +64,14 @@ _ALLOWED_FIELDS = {
     "isBasedOn",
 }
 _BOOK_ONLY_FIELDS = {"isbn", "numberOfPages", "bookEdition", "illustrator"}
+_YANALIF_ALPHABET = frozenset(
+    "AaBʙCcÇçDdEeƏəFfGgƢƣHhIiJjKkLlMmNnꞐꞑOoƟɵPpQqRrSsŞşTtUuVvXxYyZzƵƶЬь"
+)
+_ZAMANALIF_ALPHABET = frozenset(
+    "AaÄäBbCcÇçDdEeFfGgĞğHhIıİiJjKkLlMmNnÑñOoÖöPpQqRrSsŞşTtUuÜüVvWwXxYyZz"
+)
+_MIN_SCRIPT_EVIDENCE_LETTERS = 4
+_COMPETING_SCRIPT_DOMINANCE = 2
 
 
 def _issue(code: str, path: str, message: str) -> dict[str, str]:
@@ -152,24 +158,63 @@ def _validate_entity(
     return issues
 
 
+def _unicode_script(character: str) -> str | None:
+    if not character.isalpha():
+        return None
+    name = unicodedata.name(character, "")
+    if "LATIN" in name:
+        return "latin"
+    if "CYRILLIC" in name:
+        return "cyrillic"
+    if "ARABIC" in name:
+        return "arabic"
+    return None
+
+
 def _description_matches_language(description: str, in_language: str) -> bool:
+    """Reject only descriptions with clear competing-script dominance."""
     primary = str(in_language or "").split(",", 1)[0].strip()
     if not primary:
         return True
     lowered = primary.casefold()
-    if "-cyrl" in lowered:
-        return bool(_CYRILLIC_RE.search(description))
-    if "-arab" in lowered:
-        return bool(_ARABIC_RE.search(description))
-    if lowered.startswith("tt-latn"):
-        return bool(
-            _LATIN_RE.search(description) and not _CYRILLIC_RE.search(description)
-        )
-    if lowered == "en" or lowered.startswith("en-"):
-        return bool(
-            _LATIN_RE.search(description) and not _CYRILLIC_RE.search(description)
-        )
-    return True
+    if lowered == "tt-latn-x-yanalif":
+        expected_script = "latin"
+        expected_compatibility_letters = _YANALIF_ALPHABET
+        competing_scripts = {"cyrillic", "arabic"}
+    elif lowered in {"tt-latn-x-zaman-alif", "tt-latn-x-zamanalif"}:
+        expected_script = "latin"
+        expected_compatibility_letters = _ZAMANALIF_ALPHABET
+        competing_scripts = {"cyrillic", "arabic"}
+    elif lowered.startswith("tt-latn") or lowered == "en" or lowered.startswith(
+        "en-"
+    ):
+        expected_script = "latin"
+        expected_compatibility_letters = frozenset()
+        competing_scripts = {"cyrillic", "arabic"}
+    elif "-cyrl" in lowered:
+        expected_script = "cyrillic"
+        expected_compatibility_letters = frozenset()
+        competing_scripts = {"latin", "arabic"}
+    elif "-arab" in lowered:
+        expected_script = "arabic"
+        expected_compatibility_letters = frozenset()
+        competing_scripts = {"latin", "cyrillic"}
+    else:
+        return True
+
+    expected = 0
+    competing = 0
+    for character in unicodedata.normalize("NFC", description):
+        script = _unicode_script(character)
+        if character in expected_compatibility_letters or script == expected_script:
+            expected += 1
+        elif script in competing_scripts:
+            competing += 1
+    if expected + competing < _MIN_SCRIPT_EVIDENCE_LETTERS:
+        return True
+    return not (
+        competing > 0 and competing >= _COMPETING_SCRIPT_DOMINANCE * expected
+    )
 
 
 def _validate_defined_term(value: Any, *, path: str) -> list[dict[str, str]]:
