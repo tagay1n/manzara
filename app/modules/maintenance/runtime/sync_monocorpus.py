@@ -233,7 +233,13 @@ def _managed_legacy_buckets(config: Mapping[str, Any]) -> list[str]:
     yandex = config.get("yandex") if isinstance(config.get("yandex"), Mapping) else {}
     cloud = yandex.get("cloud") if isinstance(yandex.get("cloud"), Mapping) else {}
     buckets = cloud.get("bucket") if isinstance(cloud.get("bucket"), Mapping) else {}
-    return sorted({str(value) for value in buckets.values() if str(value or "").strip()})
+    return sorted(
+        {
+            str(buckets.get(key) or "").strip()
+            for key in ("document", "document_private")
+            if str(buckets.get(key) or "").strip()
+        }
+    )
 
 
 def _cleanup_managed_storage(

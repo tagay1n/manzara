@@ -64,7 +64,6 @@ def _payload() -> dict:
         "full": True,
         "sharing_restricted": False,
         "document_url": "https://example.test/book.pdf",
-        "upstream_meta_url": None,
         "primary_storage_size": 1,
         "primary_storage_etag": "etag",
         "primary_storage_verified_at": "2026-08-04T00:00:00+00:00",

@@ -8,11 +8,16 @@ from typing import Sequence
 from sqlalchemy import and_
 from sqlalchemy import select
 
-from models import Document, LibraryMetadataEvaluationState, Metadata
+from models import (
+    Document,
+    LibraryMetadataEvaluationState,
+    LibraryUpstreamMetadata,
+    Metadata,
+)
 from core.db import get_session
 
 
-EVALUATION_PROMPT_VERSION = "prompt.v2"
+EVALUATION_PROMPT_VERSION = "prompt.v3"
 
 
 def fetch_docs_for_metadata_extraction(limit: int, excluded_md5s: set[str]) -> list[Document]:
@@ -42,7 +47,7 @@ def fetch_docs_for_evaluation(
     lang_codes: list[str],
     excluded_md5s: set[str],
     model_pool: Sequence[str],
-) -> list[tuple[Document, Metadata]]:
+) -> list[tuple[Document, Metadata, dict | None]]:
     """Return unevaluated or internally inconsistent metadata rows."""
     predicate = (
         (
@@ -67,18 +72,27 @@ def fetch_docs_for_evaluation(
 
     with get_session() as session:
         stmt = (
-            select(Document, Metadata, LibraryMetadataEvaluationState)
+            select(
+                Document,
+                Metadata,
+                LibraryMetadataEvaluationState,
+                LibraryUpstreamMetadata.payload_json,
+            )
             .join(Metadata, Metadata.md5 == Document.md5)
             .outerjoin(
                 LibraryMetadataEvaluationState,
                 LibraryMetadataEvaluationState.md5 == Document.md5,
             )
+            .outerjoin(
+                LibraryUpstreamMetadata,
+                LibraryUpstreamMetadata.md5 == Document.md5,
+            )
             .where(predicate)
         )
         rows = session.execute(stmt)
         return [
-            (doc, meta)
-            for doc, meta, state in rows
+            (doc, meta, upstream_metadata)
+            for doc, meta, state, upstream_metadata in rows
             if _evaluation_state_allows_retry(state, model_pool)
         ][: max(0, int(batch_size))]
 

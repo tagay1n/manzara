@@ -284,7 +284,6 @@ def _settings() -> DocumentStorageSettings:
         content_images_bucket="ttcontent-images-b2",
         legacy_public_bucket="legacy-public",
         legacy_private_bucket="legacy-private",
-        upstream_bucket="upstream",
         encryption_key=base64.urlsafe_b64encode(b"0" * 32).decode(),
     )
 
@@ -483,7 +482,7 @@ def test_cleanup_treats_absent_legacy_bucket_as_empty() -> None:
         primary_s3=_S3(),
         legacy_s3=legacy_s3,
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {"obsolete": "missing-legacy"}}}},
+        config={"yandex": {"cloud": {"bucket": {"document": "missing-legacy"}}}},
         missing_legacy_buckets=missing_buckets,
     )
     removed += _cleanup_managed_storage(
@@ -491,7 +490,7 @@ def test_cleanup_treats_absent_legacy_bucket_as_empty() -> None:
         primary_s3=_S3(),
         legacy_s3=legacy_s3,
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {"obsolete": "missing-legacy"}}}},
+        config={"yandex": {"cloud": {"bucket": {"document": "missing-legacy"}}}},
         missing_legacy_buckets=missing_buckets,
     )
 

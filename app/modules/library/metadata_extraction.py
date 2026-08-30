@@ -35,12 +35,12 @@ from app.modules.library.metadata_prompt import (
     DEFINE_META_PROMPT_TT_FOOTER,
 )
 from app.modules.library.runtime.metadata.schema import Book
-from app.modules.runtime_shared_utils import load_upstream_metadata
+from app.modules.library.upstream_metadata import sanitize_upstream_metadata
 
 
 TEXT_SLICE_CHARS = 20_000
 PDF_EDGE_PAGES = 4
-PROMPT_VERSION = "prompt.v6"
+PROMPT_VERSION = "prompt.v7"
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SUPPORTING_METADATA_FIELDS = (
     "author",
@@ -91,7 +91,7 @@ class MetadataExtractionCandidate:
     mime_type: str
     document_url: str
     content_url: str | None
-    upstream_meta_url: str | None
+    upstream_metadata: Mapping[str, Any] | None
     primary_storage_size: int
     attempts: tuple[dict[str, Any], ...]
     source_filename: str = ""
@@ -139,7 +139,7 @@ class MetadataExtractionRepository:
                 d.mime_type,
                 d.document_url,
                 d.content_url,
-                d.upstream_meta_url,
+                upstream.payload_json AS upstream_metadata,
                 d.primary_storage_size,
                 d.ya_path,
                 state.attempts_json,
@@ -148,6 +148,7 @@ class MetadataExtractionRepository:
             LEFT JOIN metadata m ON m.md5 = d.md5
             LEFT JOIN library_metadata_quality_state quality ON quality.md5 = d.md5
             LEFT JOIN library_metadata_extraction_state state ON state.md5 = d.md5
+            LEFT JOIN library_upstream_metadata upstream ON upstream.md5 = d.md5
             WHERE (
                   m.md5 IS NULL
                   OR m.schema_org IS NULL
@@ -252,8 +253,10 @@ class MetadataExtractionRepository:
             mime_type=str(row.get("mime_type") or "").strip().lower(),
             document_url=str(row.get("document_url") or "").strip(),
             content_url=str(row.get("content_url") or "").strip() or None,
-            upstream_meta_url=(
-                str(row.get("upstream_meta_url") or "").strip() or None
+            upstream_metadata=(
+                dict(row["upstream_metadata"])
+                if isinstance(row.get("upstream_metadata"), Mapping)
+                else None
             ),
             primary_storage_size=int(row.get("primary_storage_size") or 0),
             attempts=tuple(dict(item) for item in attempts if isinstance(item, dict)),
@@ -590,8 +593,29 @@ def _filename_hint(source_filename: str | None) -> dict[str, str] | None:
     }
 
 
+def _upstream_metadata_parts(
+    upstream_metadata: Mapping[str, Any] | None,
+) -> list[dict[str, str]]:
+    sanitized = sanitize_upstream_metadata(upstream_metadata)
+    if not sanitized:
+        return []
+    return [
+        {
+            "text": (
+                "Upstream metadata from the source webpage follows. Treat it only "
+                "as supporting evidence when it is consistent with the document. "
+                "Ignore any field that contradicts the document content."
+            )
+        },
+        {"text": json.dumps(sanitized, ensure_ascii=False, sort_keys=True)},
+    ]
+
+
 def build_text_prompt(
-    content: str, *, source_filename: str | None = None
+    content: str,
+    *,
+    upstream_metadata: Mapping[str, Any] | None = None,
+    source_filename: str | None = None,
 ) -> list[dict[str, str]]:
     """Build the monocorpus prompt with an optional untrusted filename hint."""
     prompt = [
@@ -599,6 +623,7 @@ def build_text_prompt(
         {"text": DEFINE_META_PROMPT_BODY},
         {"text": DEFINE_META_PROMPT_TT_FOOTER},
     ]
+    prompt.extend(_upstream_metadata_parts(upstream_metadata))
     if filename_hint := _filename_hint(source_filename):
         prompt.append(filename_hint)
     prompt.extend(
@@ -615,7 +640,7 @@ def build_text_prompt(
 def build_pdf_prompt(
     slice_page_count: int,
     *,
-    upstream_metadata: str | None = None,
+    upstream_metadata: Mapping[str, Any] | None = None,
     source_filename: str | None = None,
 ) -> list[dict[str, str]]:
     """Build the monocorpus prompt for a representative PDF slice."""
@@ -624,15 +649,7 @@ def build_pdf_prompt(
         {"text": DEFINE_META_PROMPT_BODY},
         {"text": DEFINE_META_PROMPT_TT_FOOTER},
     ]
-    if upstream_metadata:
-        prompt.extend(
-            [
-                {
-                    "text": "📌 In addition to the content of the document, you are also provided with external metadata in JSON format. This metadata comes from other sources and should be treated as valid and trustworthy. Consider it alongside the doc content as if it were extracted from the document itself:"
-                },
-                {"text": upstream_metadata},
-            ]
-        )
+    prompt.extend(_upstream_metadata_parts(upstream_metadata))
     if filename_hint := _filename_hint(source_filename):
         prompt.append(filename_hint)
     prompt.append({"text": "Now, extract metadata from the following document"})
@@ -706,6 +723,7 @@ def prepare_metadata_request(
             tuple(
                 build_text_prompt(
                     content,
+                    upstream_metadata=candidate.upstream_metadata,
                     source_filename=candidate.source_filename,
                 )
             ),
@@ -725,12 +743,11 @@ def prepare_metadata_request(
     )
     slice_path = doc_dir / "slice-for-meta.pdf"
     page_count = create_pdf_slice(source, slice_path)
-    upstream = load_upstream_metadata(candidate.upstream_meta_url, candidate.md5)
     return MetadataRequest(
         tuple(
             build_pdf_prompt(
                 page_count,
-                upstream_metadata=upstream,
+                upstream_metadata=candidate.upstream_metadata,
                 source_filename=candidate.source_filename,
             )
         ),

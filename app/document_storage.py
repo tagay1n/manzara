@@ -57,7 +57,6 @@ class DocumentStorageSettings:
     private_bucket: str
     legacy_public_bucket: str
     legacy_private_bucket: str
-    upstream_bucket: str
     encryption_key: str
     yadisk_token: str = ""
     preview_bucket: str = ""
@@ -134,9 +133,6 @@ def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorag
         ),
         legacy_private_bucket=_required(
             legacy_buckets, "document_private", "yandex.cloud.bucket"
-        ),
-        upstream_bucket=_required(
-            legacy_buckets, "upstream_metadata", "yandex.cloud.bucket"
         ),
         encryption_key=_required(payload, "encryption_key", "config"),
         yadisk_token=_required(disk, "oauth_token", "yandex.disk"),

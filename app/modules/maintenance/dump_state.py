@@ -28,7 +28,6 @@ EXCLUDED_CSV_COLUMNS = {
     "content_extraction_method",
     "meta_extraction_method",
     "lib",
-    "upstream_meta_url",
     "genre",
     "primary_storage_size",
     "primary_storage_etag",

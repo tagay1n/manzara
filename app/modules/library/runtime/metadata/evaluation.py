@@ -49,7 +49,7 @@ from models import Classification, Metadata
 from core.paths import get_in_workdir
 from core.config import read_config
 from core.db import get_session
-from core.upstream_meta import load_upstream_metadata
+from app.modules.library.upstream_metadata import sanitize_upstream_metadata
 from .repository import (
     EVALUATION_PROMPT_VERSION,
     clear_evaluation_state,
@@ -222,7 +222,7 @@ class EvaluationTask:
     ya_public_url: str | None
     mime_type: str | None
     document_url: str | None
-    upstream_meta_url: str | None
+    upstream_metadata: dict[str, Any] | None
     content_url: str | None
     schema_org: dict | str | None
 
@@ -425,11 +425,15 @@ def _load_batch(
             ya_public_url=doc.ya_public_url,
             mime_type=doc.mime_type,
             document_url=doc.document_url,
-            upstream_meta_url=doc.upstream_meta_url,
+            upstream_metadata=(
+                dict(upstream_metadata)
+                if isinstance(upstream_metadata, dict)
+                else None
+            ),
             content_url=doc.content_url,
             schema_org=meta.schema_org if meta else None,
         )
-        for doc, meta in rows
+        for doc, meta, upstream_metadata in rows
     ]
 
 
@@ -638,7 +642,7 @@ class LibraryApplicabilityWorker:
     def _evaluate(self, doc: EvaluationTask) -> GeminiModelPoolResult[Evaluation]:
         flattened_meta = extract_flat_fields(doc.schema_org)
         excerpt = self._load_content_excerpt(doc)
-        upstream_metadata = self._load_upstream_metadata(doc)
+        upstream_metadata = sanitize_upstream_metadata(doc.upstream_metadata)
         files: dict[str, str] = {}
         if excerpt is None and doc.mime_type == "application/pdf":
             if slice_path := self._prepare_pdf_slice_for_eval(doc):
@@ -728,15 +732,6 @@ class LibraryApplicabilityWorker:
             return _build_content_excerpt(markdown, self.excerpt_chars)
         except Exception as exc:  # noqa: BLE001
             self.log(f"Could not build excerpt for {doc.md5}: {exc}")
-            return None
-
-    def _load_upstream_metadata(self, doc: EvaluationTask) -> str | None:
-        if not doc.upstream_meta_url:
-            return None
-        try:
-            return load_upstream_metadata(doc.upstream_meta_url, doc.md5)
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"Could not load upstream metadata for {doc.md5}: {exc}")
             return None
 
     def _dump_prompt(self, md5: str, prompt: list[dict[str, Any]]) -> None:

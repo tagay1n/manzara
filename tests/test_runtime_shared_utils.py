@@ -68,4 +68,4 @@ def test_library_utils_export_shared_common_functions() -> None:
     assert set(library_utils.__all__) == set(shared_utils.__all__)
     assert callable(library_utils.get_in_workdir)
     assert callable(library_utils.read_config)
-    assert callable(library_utils.load_upstream_metadata)
+    assert not hasattr(library_utils, "load_upstream_metadata")

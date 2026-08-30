@@ -19,7 +19,7 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                     """
                     SELECT md5, mime_type, ya_path, ya_public_url, ya_public_key,
                            ya_resource_id, language, "full", sharing_restricted,
-                           document_url, content_url, upstream_meta_url
+                           document_url, content_url
                     FROM document
                     WHERE md5 IS NOT NULL
                     """
@@ -182,28 +182,8 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
             return True
 
     def delete_document_state(self, md5: str) -> None:
-        """Delete one document and known dependent state in one transaction."""
-        dependent_tables = (
-            "library_book_previews",
-            "library_metadata_extraction_state",
-            "library_non_pdf_extraction_state",
-            "library_collection_proposal_items",
-            "library_collection_items",
-            "library_collection_document_features",
-            "isbn_keep_many",
-            "metadata",
-        )
+        """Delete one document; PostgreSQL cascades document-owned state."""
         with self.engine.begin() as conn:
-            for table_name in dependent_tables:
-                exists = conn.execute(
-                    text("SELECT to_regclass(:name) IS NOT NULL"),
-                    {"name": table_name},
-                ).scalar_one()
-                if exists:
-                    conn.execute(
-                        text(f'DELETE FROM "{table_name}" WHERE md5=:md5'),
-                        {"md5": md5},
-                    )
             deleted = conn.execute(
                 text("DELETE FROM document WHERE md5=:md5"), {"md5": md5}
             )

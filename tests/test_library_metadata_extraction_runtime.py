@@ -85,7 +85,7 @@ def _candidate() -> MetadataExtractionCandidate:
         mime_type="application/pdf",
         document_url="https://s3.example/public/a.pdf",
         content_url=None,
-        upstream_meta_url=None,
+        upstream_metadata=None,
         primary_storage_size=12,
         attempts=(),
         source_path="/documents/nested/book.pdf",
@@ -156,7 +156,6 @@ def _storage(cache_path: Path) -> DocumentStorageSettings:
         private_bucket="private",
         legacy_public_bucket="legacy-public",
         legacy_private_bucket="legacy-private",
-        upstream_bucket="upstream",
         encryption_key="unused",
     )
 
@@ -175,7 +174,7 @@ def test_metadata_extraction_reuses_shared_verified_pdf_cache(
         mime_type="application/pdf",
         document_url=f"https://s3.example.test/public/{digest}.pdf",
         content_url=None,
-        upstream_meta_url=None,
+        upstream_metadata=None,
         primary_storage_size=len(content),
         attempts=(),
     )
@@ -192,8 +191,6 @@ def test_metadata_extraction_reuses_shared_verified_pdf_cache(
             raise AssertionError(f"unexpected remote access: {name}")
 
     monkeypatch.setattr(extraction, "create_pdf_slice", create_slice)
-    monkeypatch.setattr(extraction, "load_upstream_metadata", lambda *_args: None)
-
     request = extraction.prepare_metadata_request(
         candidate,
         workspace=tmp_path / "run",
@@ -258,7 +255,7 @@ def test_parallel_runtime_emits_only_aggregate_monotonic_progress(
             mime_type="application/pdf",
             document_url=f"https://s3.example/public/{character}.pdf",
             content_url=None,
-            upstream_meta_url=None,
+            upstream_metadata=None,
             primary_storage_size=12,
             attempts=(),
         )
@@ -356,7 +353,7 @@ def test_runtime_defers_document_with_exhausted_remaining_model_and_continues(
         mime_type=base.mime_type,
         document_url=base.document_url,
         content_url=base.content_url,
-        upstream_meta_url=base.upstream_meta_url,
+        upstream_metadata=base.upstream_metadata,
         primary_storage_size=base.primary_storage_size,
         attempts=({"model": "first"}, {"model": "third"}),
     )
@@ -365,7 +362,7 @@ def test_runtime_defers_document_with_exhausted_remaining_model_and_continues(
         mime_type=base.mime_type,
         document_url=base.document_url,
         content_url=base.content_url,
-        upstream_meta_url=base.upstream_meta_url,
+        upstream_metadata=base.upstream_metadata,
         primary_storage_size=base.primary_storage_size,
         attempts=(),
     )
@@ -496,7 +493,7 @@ def test_runtime_defers_one_document_after_repeated_service_error_and_continues(
         mime_type=first.mime_type,
         document_url=first.document_url,
         content_url=first.content_url,
-        upstream_meta_url=first.upstream_meta_url,
+        upstream_metadata=first.upstream_metadata,
         primary_storage_size=first.primary_storage_size,
         attempts=(),
     )

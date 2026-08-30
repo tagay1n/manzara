@@ -11,10 +11,8 @@ from pathlib import Path
 import re
 import sys
 from typing import Any
-import zipfile
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import requests
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 import yaml
@@ -25,7 +23,6 @@ workdir = "~/.monocorpus"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REDACTED_SENTINEL = "<REDACTED>"
 ENTRY_POINT_DIR = "0_entry_point"
-UPSTREAM_METADATA_DIR = "misc/upstream_metadata"
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -287,38 +284,10 @@ def decrypt(ciphertext, config):
     return aesgcm.decrypt(nonce, ct, None).decode()
 
 
-def load_upstream_metadata(upstream_meta_url, md5):
-    """Download upstream metadata ZIP and return sanitized JSON as a string."""
-    if not upstream_meta_url:
-        return None
-    upstream_metadata_zip = get_in_workdir(UPSTREAM_METADATA_DIR, file=f"{md5}.zip")
-    with open(upstream_metadata_zip, "wb") as zip_file, requests.get(
-        upstream_meta_url, stream=True
-    ) as response:
-        response.raise_for_status()
-        for chunk in response.iter_content(chunk_size=8192):
-            zip_file.write(chunk)
-
-    upstream_metadata_unzip = get_in_workdir(UPSTREAM_METADATA_DIR, md5)
-    with zipfile.ZipFile(upstream_metadata_zip, "r") as archive:
-        archive.extractall(upstream_metadata_unzip)
-
-    with open(os.path.join(upstream_metadata_unzip, "metadata.json"), "r") as raw_meta:
-        metadata = json.load(raw_meta)
-        metadata.pop("available_pages", None)
-        metadata.pop("doc_card_url", None)
-        metadata.pop("download_code", None)
-        metadata.pop("doc_url", None)
-        metadata.pop("access", None)
-        metadata.pop("lang", None)
-        return json.dumps(metadata, ensure_ascii=False)
-
-
 __all__ = [
     "ENTRY_POINT_DIR",
     "REDACTED_SENTINEL",
     "REPO_ROOT",
-    "UPSTREAM_METADATA_DIR",
     "_contains_redacted",
     "_find",
     "calculate_md5",
@@ -328,7 +297,6 @@ __all__ = [
     "get_engine",
     "get_in_workdir",
     "get_session",
-    "load_upstream_metadata",
     "obtain_documents",
     "pick_files",
     "prefix",

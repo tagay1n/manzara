@@ -57,8 +57,8 @@ LIBRARY_CLASSIFICATION_RULES_TEXT = (
     "library_path labels must be in English. "
     "Use one of known_classifications if there is a close match; otherwise "
     "suggest a new classification with best-fit ddc and path. "
-    "If upstream_metadata is provided, treat it as trustworthy external metadata "
-    "and use it together with document content."
+    "If upstream_metadata is provided, use it only as supporting evidence when it "
+    "is consistent with the document. Ignore fields that contradict document content."
 )
 
 MISSING_FIELD_REQUESTS = {

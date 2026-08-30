@@ -78,7 +78,7 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
     assert settings.content_images_bucket == "ttcontent-images"
     assert settings.legacy.endpoint_url == "https://storage.yandexcloud.net"
     assert settings.legacy_public_bucket == "public-docs"
-    assert settings.upstream_bucket == "upstream"
+    assert not hasattr(settings, "upstream_bucket")
 
     del payload["documents"]["primary_storage"]["bucket"]["private"]
     with pytest.raises(RuntimeError, match="documents.primary_storage.bucket.private"):
@@ -204,7 +204,6 @@ def _primary_settings(tmp_path: Path) -> DocumentStorageSettings:
         private_bucket="private-docs",
         legacy_public_bucket="unused",
         legacy_private_bucket="unused-private",
-        upstream_bucket="unused-upstream",
         encryption_key="unused",
     )
 

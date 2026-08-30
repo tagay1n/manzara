@@ -97,14 +97,15 @@ def test_metadata_success_is_transactional_against_json_column(
             conn.execute(
                 text(
                     f"""
-                    CREATE TABLE "{schema}".library_metadata_quality_state (
-                        md5 TEXT PRIMARY KEY REFERENCES "{schema}".metadata(md5),
-                        contract_version TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        issues_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-                        resolved_at TIMESTAMPTZ,
-                        updated_at TIMESTAMPTZ
-                    )
+                        CREATE TABLE "{schema}".library_metadata_quality_state (
+                            md5 TEXT PRIMARY KEY REFERENCES "{schema}".metadata(md5),
+                            contract_version TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            issues_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                            detected_at TIMESTAMPTZ,
+                            resolved_at TIMESTAMPTZ,
+                            updated_at TIMESTAMPTZ
+                        )
                     """
                 )
             )
@@ -136,7 +137,7 @@ def test_metadata_success_is_transactional_against_json_column(
             ).mappings().one()
         assert metadata["name"] == "Kitap"
         assert document["language"] == "tt-Cyrl"
-        assert document["meta_extraction_method"] == "model-one/prompt.v5"
+        assert document["meta_extraction_method"] == "model-one/prompt.v7"
     finally:
         if repository is not None:
             repository.dispose()

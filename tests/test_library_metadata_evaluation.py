@@ -42,7 +42,7 @@ def _document() -> EvaluationTask:
         ya_public_url=None,
         mime_type="application/pdf",
         document_url="https://example.test/a.pdf",
-        upstream_meta_url=None,
+        upstream_metadata={"title": "Source title"},
         content_url=None,
         schema_org={
             "@context": "https://schema.org",
@@ -84,6 +84,7 @@ def test_evaluation_selection_reopens_only_incomplete_or_inconsistent_rows() -> 
     assert "Metadata.classification_id.is_(None)" in source
     assert "Metadata.lib_eval_method" not in source
     assert "LibraryMetadataEvaluationState" in source
+    assert "LibraryUpstreamMetadata" in source
     assert "model_pool" in inspect.signature(fetch_docs_for_evaluation).parameters
 
 
@@ -132,10 +133,12 @@ def test_worker_advances_to_next_model_after_incomplete_response_and_logs_attemp
             return call("test-key", object())
 
     calls: list[str] = []
+    prompts: list[str] = []
 
     def _request(**kwargs):  # noqa: ANN003
         model = kwargs["model_name"]
         calls.append(model)
+        prompts.append("\n".join(part["text"] for part in kwargs["contents"]))
         if model == "model-first":
             return json.dumps({"applicable": True})
         return json.dumps(
@@ -169,6 +172,8 @@ def test_worker_advances_to_next_model_after_incomplete_response_and_logs_attemp
 
     assert result.model_name == "model-second"
     assert calls == ["model-first", "model-second"]
+    assert all('"upstream_metadata": {"title": "Source title"}' in item for item in prompts)
+    assert all("supporting evidence" in item for item in prompts)
     output = capsys.readouterr().out
     assert "Gemini request" in output
     assert f"md5={_document().md5}" in output

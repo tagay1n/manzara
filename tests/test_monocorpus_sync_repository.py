@@ -37,17 +37,14 @@ class _Engine:
         return _Connection(self.statements)
 
 
-def test_document_cleanup_does_not_reference_retired_crh_tables() -> None:
+def test_document_cleanup_delegates_dependents_to_database_cascade() -> None:
     repository = MonocorpusSyncRepository.__new__(MonocorpusSyncRepository)
     repository.engine = _Engine()
 
     repository.delete_document_state("a" * 32)
 
     sql = "\n".join(repository.engine.statements)
-    assert "_crh" not in sql
-    assert 'DELETE FROM "library_non_pdf_extraction_state" WHERE md5=:md5' in sql
-    assert 'DELETE FROM "library_metadata_extraction_state" WHERE md5=:md5' in sql
-    assert "DELETE FROM document WHERE md5=:md5" in sql
+    assert sql.strip() == "DELETE FROM document WHERE md5=:md5"
 
 
 def test_catalog_update_clears_storage_checkpoint_when_source_identity_changes() -> None:

@@ -24,7 +24,6 @@ class Document(Base):
     sharing_restricted = Column(Boolean)
     document_url = Column(String)
     content_url = Column(String)
-    upstream_meta_url = Column(String)
     primary_storage_size = Column(BigInteger)
     primary_storage_etag = Column(String)
     primary_storage_verified_at = Column(DateTime(timezone=True))

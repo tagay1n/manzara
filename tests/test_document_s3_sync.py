@@ -160,7 +160,6 @@ def settings(cache: Path) -> DocumentStorageSettings:
         private_bucket="private-docs",
         legacy_public_bucket="legacy-public-docs",
         legacy_private_bucket="legacy-private-docs",
-        upstream_bucket="upstream",
         encryption_key=base64.urlsafe_b64encode(b"0" * 32).decode(),
     )
 
