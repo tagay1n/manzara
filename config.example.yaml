@@ -51,7 +51,6 @@ yandex:
     bucket:
       document: ttdoc
       document_private: ttdoc-private
-      metadata: ttmeta
       content: ttcontent
       content_chunks: ttcontent-chunks
       image: ttimg

@@ -573,7 +573,7 @@ def test_cleanup_removes_backblaze_content_and_embedded_images() -> None:
         primary_s3=primary_s3,
         legacy_s3=_S3(),
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {"metadata": "ttmeta"}}}},
+        config={"yandex": {"cloud": {"bucket": {}}}},
     )
 
     assert removed == 3
