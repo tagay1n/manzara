@@ -40,7 +40,7 @@ from app.modules.runtime_shared_utils import load_upstream_metadata
 
 TEXT_SLICE_CHARS = 20_000
 PDF_EDGE_PAGES = 4
-PROMPT_VERSION = "prompt.v5"
+PROMPT_VERSION = "prompt.v6"
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SUPPORTING_METADATA_FIELDS = (
     "author",
@@ -76,9 +76,9 @@ def metadata_quality_issue(schema_org: Any) -> str | None:
     """Return why metadata is unusable, or ``None`` for a safe result."""
     if not isinstance(schema_org, Mapping):
         return "metadata is not an object"
-    if not _has_value(schema_org.get("name")):
-        return "metadata has no usable title"
     if not any(_has_value(schema_org.get(field)) for field in _SUPPORTING_METADATA_FIELDS):
+        if not _has_value(schema_org.get("name")):
+            return "metadata has no usable bibliographic evidence"
         return "metadata has no usable bibliographic evidence beyond the title"
     return None
 
@@ -151,7 +151,14 @@ class MetadataExtractionRepository:
             WHERE (
                   m.md5 IS NULL
                   OR m.schema_org IS NULL
-                  OR NULLIF(BTRIM(m.schema_org->>'name'), '') IS NULL
+                  OR (
+                      NULLIF(BTRIM(m.schema_org->>'name'), '') IS NULL
+                      AND (
+                          quality.md5 IS NULL
+                          OR quality.status <> 'resolved'
+                          OR quality.contract_version IS DISTINCT FROM :contract_version
+                      )
+                  )
                   OR NOT EXISTS (
                       SELECT 1
                       FROM jsonb_each(m.schema_org::jsonb) AS signal(key, value)
@@ -464,8 +471,28 @@ class MetadataExtractionRepository:
                 and not metadata_contract_issues(existing_schema_org)
             ):
                 conn.execute(
-                    text("DELETE FROM library_metadata_extraction_state WHERE md5 = :md5"),
-                    {"md5": str(md5)},
+                    text(
+                        """
+                        WITH extraction AS (
+                            DELETE FROM library_metadata_extraction_state
+                            WHERE md5 = :md5
+                        )
+                        INSERT INTO library_metadata_quality_state (
+                            md5, contract_version, status, issues_json,
+                            detected_at, resolved_at, updated_at
+                        ) VALUES (
+                            :md5, :contract_version, 'resolved', '[]'::jsonb,
+                            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        ON CONFLICT (md5) DO UPDATE SET
+                            contract_version = EXCLUDED.contract_version,
+                            status = 'resolved',
+                            issues_json = '[]'::jsonb,
+                            resolved_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP
+                        """
+                    ),
+                    {"md5": str(md5), "contract_version": CONTRACT_VERSION},
                 )
                 return False
             if issue := metadata_quality_issue(schema_org):
@@ -519,12 +546,19 @@ class MetadataExtractionRepository:
                     ), evaluation AS (
                         DELETE FROM library_metadata_evaluation_state WHERE md5 = :md5
                     )
-                    UPDATE library_metadata_quality_state
-                    SET status = 'resolved', issues_json = '[]'::jsonb,
-                        contract_version = :contract_version,
+                    INSERT INTO library_metadata_quality_state (
+                        md5, contract_version, status, issues_json,
+                        detected_at, resolved_at, updated_at
+                    ) VALUES (
+                        :md5, :contract_version, 'resolved', '[]'::jsonb,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT (md5) DO UPDATE SET
+                        contract_version = EXCLUDED.contract_version,
+                        status = 'resolved',
+                        issues_json = '[]'::jsonb,
                         resolved_at = CURRENT_TIMESTAMP,
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE md5 = :md5
                     """
                 ),
                 {"md5": str(md5), "contract_version": CONTRACT_VERSION},

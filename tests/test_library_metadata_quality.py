@@ -24,6 +24,16 @@ def test_assessment_repairs_english_roles_without_reextracting() -> None:
     assert decision.schema_org["editor"] == [{"@type": "Person", "name": "A. Example"}]
 
 
+def test_assessment_resolves_metadata_without_title() -> None:
+    payload = _book()
+    payload.pop("name")
+
+    decision = assess_metadata(payload)
+
+    assert decision.status == "resolved"
+    assert decision.issues == ()
+
+
 def test_assessment_invalidates_non_english_roles_and_preserves_payload() -> None:
     original = _book(
         contributor=[{"@type": "Person", "name": "A. Example", "role": "мөхәррир"}]

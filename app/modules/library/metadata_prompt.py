@@ -55,6 +55,7 @@ Use the `Book` schema where appropriate, but apply a more specific `@type` if a 
 - `@context`: `"https://schema.org"`
 - `@type`: Choose the correct type as listed above
 - `name`: Title of the work
+- If the document genuinely has no reliable title, omit `name`; never invent one.
 - `author`: Name(s) of author(s) or organization (use `"@type": "Person"` or `"@type": "Organization"`)
 - `contributor`: Secondary contributors without an inline `role` property. Use standard
   schema.org properties `editor`, `translator`, or `illustrator` when those roles are explicit.

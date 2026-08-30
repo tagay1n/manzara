@@ -32,8 +32,15 @@ def _codes(payload) -> set[str]:
 
 
 def test_contract_accepts_document_language_description_and_english_facets() -> None:
-    assert CONTRACT_VERSION == "schema-org.v2"
+    assert CONTRACT_VERSION == "schema-org.v3"
     assert metadata_contract_issues(_book()) == []
+
+
+def test_contract_accepts_document_without_title() -> None:
+    payload = _book()
+    payload.pop("name")
+
+    assert metadata_contract_issues(payload) == []
 
 
 def test_contract_rejects_english_description_for_cyrillic_document() -> None:

@@ -9,7 +9,7 @@ from typing import Any, Mapping
 from urllib.parse import urlparse
 
 
-CONTRACT_VERSION = "schema-org.v2"
+CONTRACT_VERSION = "schema-org.v3"
 SCHEMA_CONTEXT = "https://schema.org"
 SUPPORTED_TYPES = frozenset(
     {
@@ -287,10 +287,6 @@ def metadata_contract_issues(schema_org: Any) -> list[dict[str, str]]:
                         f"{field} is only supported for Book metadata",
                     )
                 )
-    name = schema_org.get("name")
-    if not isinstance(name, str) or not name.strip():
-        issues.append(_issue("name", "$.name", "name is required"))
-
     in_language = schema_org.get("inLanguage")
     if in_language is not None and (
         not isinstance(in_language, str)
