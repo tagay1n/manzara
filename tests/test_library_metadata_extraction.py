@@ -264,12 +264,22 @@ def test_candidate_query_requires_verified_primary_storage() -> None:
     assert "LEFT JOIN library_upstream_metadata upstream" in sql
     assert "upstream.payload_json AS upstream_metadata" in sql
     assert "quality.status = 'invalid'" in sql
-    assert "quality.contract_version = :contract_version" in sql
     assert "ya_public_url" not in sql
     assert "d.content_url IS NOT NULL" in sql
     assert "LOWER(COALESCE(d.mime_type, '')) = 'application/pdf'" in sql
     assert "cleanup.reason = 'corrupted'" in sql
     assert "cleanup.status IN ('planned', 'running', 'failed')" in sql
+
+
+def test_candidate_query_keeps_invalid_state_across_contract_versions() -> None:
+    repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
+    repository.engine = _Engine()
+
+    repository.list_candidates()
+
+    sql = " ".join(repository.engine.statements[0].split())
+    assert "OR quality.status = 'invalid'" in sql
+    assert "quality.status = 'invalid' AND quality.contract_version" not in sql
 
 
 def test_pdf_slice_classifies_invalid_source_as_corrupt(tmp_path: Path) -> None:

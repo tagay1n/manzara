@@ -174,10 +174,7 @@ class MetadataExtractionRepository:
                         AND signal.value <> '[]'::jsonb
                         AND signal.value <> '{}'::jsonb
                   )
-                  OR (
-                      quality.status = 'invalid'
-                      AND quality.contract_version = :contract_version
-                  )
+                  OR quality.status = 'invalid'
               )
               AND d.document_url IS NOT NULL
               AND d.primary_storage_size IS NOT NULL
