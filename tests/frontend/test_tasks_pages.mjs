@@ -26,6 +26,13 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
             slug: "quick",
             title: "Quick",
             task_type: "scan",
+            gemini_workers: {
+              default: 1,
+              next_run: 2,
+              active: null,
+              max: 4,
+              editable: true,
+            },
             run: {
               status: "running",
               started_at: "2026-03-24T10:00:00Z",
@@ -43,6 +50,7 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
     apiResolver(path) {
       if (path === "/api/tasks") return JSON.parse(JSON.stringify(payload));
       if (path === "/api/tasks/maintenance.quick/toggle") return { action: "stop_graceful" };
+      if (path === "/api/tasks/maintenance.quick/gemini-workers") return { workers: 3 };
       if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
       throw new Error(`unexpected path: ${path}`);
     },
@@ -59,6 +67,35 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /3 \/ 12/);
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /25%/);
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /data-task-toggle-id="maintenance.quick"/);
+  assert.match(
+    harness.elements.get("task-flow-grid").innerHTML,
+    /<input[^>]+type="number"[^>]+min="1"[^>]+max="4"[^>]+value="2"/,
+  );
+  assert.doesNotMatch(harness.elements.get("task-flow-grid").innerHTML, />Workers</);
+  assert.doesNotMatch(harness.elements.get("task-flow-grid").innerHTML, /<select|<option/);
+  assert.doesNotMatch(harness.elements.get("task-flow-grid").innerHTML, />scan</);
+  assert.doesNotMatch(harness.elements.get("task-flow-grid").innerHTML, /24\.03\.2026|2026-03-24/);
+
+  const workerInput = {
+    dataset: { geminiWorkersTask: "maintenance.quick" },
+    disabled: false,
+    value: "3",
+    closest(selector) {
+      return selector === "[data-gemini-workers-task]" ? this : null;
+    },
+  };
+  harness.elements.get("task-flow-grid").dispatch("change", { target: workerInput });
+  await harness.flush();
+  assert.equal(
+    harness.apiCalls.filter((call) => call.path === "/api/tasks/maintenance.quick/gemini-workers").length,
+    1,
+  );
+  assert.deepEqual(
+    JSON.parse(harness.apiCalls.find(
+      (call) => call.path === "/api/tasks/maintenance.quick/gemini-workers",
+    ).options.body),
+    { workers: 3 },
+  );
 
   harness.elements.get("task-flow-grid").dispatch("click", {
     target: { dataset: { taskToggleId: "maintenance.quick" }, disabled: false },
@@ -97,6 +134,85 @@ test("tasks page renders empty state when no tasks exist", async () => {
   });
   await harness.flush();
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /No tasks available yet/);
+});
+
+test("tasks page pulses an unopened terminal run and records task navigation locally", async () => {
+  const storageKey = "manzara.task-review.v1";
+  const payload = {
+    global: { active_tasks: 0, stop_all_state: "disabled" },
+    flows: [
+      {
+        panel_id: "metadata",
+        title: "Metadata",
+        tasks: [
+          {
+            task_id: "library.metadata_extract",
+            slug: "extract-metadata",
+            title: "Extract metadata",
+            task_type: "metadata",
+            run: {
+              run_id: 88,
+              status: "completed",
+              finished_at: "2026-08-30T06:00:00Z",
+            },
+          },
+          {
+            task_id: "library.metadata_validate",
+            slug: "validate-metadata",
+            title: "Validate metadata",
+            task_type: "scan",
+            run: {
+              run_id: 89,
+              status: "failed",
+              finished_at: "2026-08-30T06:10:00Z",
+            },
+          },
+        ],
+      },
+    ],
+  };
+  const harness = createHarness({
+    source: TASKS_PAGE_SOURCE,
+    ids: ["global-status", "stop-all-btn", "task-flow-grid", "last-event"],
+    localStorageEntries: {
+      [storageKey]: JSON.stringify({ version: 1, catalog_initialized: true, opened: {} }),
+    },
+    apiResolver(path) {
+      if (path === "/api/tasks") return JSON.parse(JSON.stringify(payload));
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  await harness.flush();
+  const catalog = harness.elements.get("task-flow-grid");
+  assert.match(catalog.innerHTML, /task-result-unread task-result-unread-completed/);
+  assert.match(catalog.innerHTML, /task-result-unread task-result-unread-failed/);
+
+  const removedClasses = [];
+  const taskCard = {
+    classList: {
+      remove(...classes) {
+        removedClasses.push(...classes);
+      },
+    },
+  };
+  const taskLink = {
+    dataset: { taskOpenId: "library.metadata_extract", taskOpenRunId: "88" },
+    closest(selector) {
+      if (selector === "[data-task-open-id]") return this;
+      if (selector === ".task-list-item") return taskCard;
+      return null;
+    },
+  };
+  catalog.dispatch("click", { target: taskLink });
+
+  const stored = JSON.parse(harness.localStorage.getItem(storageKey));
+  assert.equal(stored.opened["library.metadata_extract"], 88);
+  assert.deepEqual(removedClasses, [
+    "task-result-unread",
+    "task-result-unread-completed",
+    "task-result-unread-failed",
+  ]);
 });
 
 test("tasks page renders error state when API fails", async () => {
@@ -281,6 +397,8 @@ test("task page opens logs inline and returns to overview", async () => {
   });
 
   await harness.flush();
+  const reviewState = JSON.parse(harness.localStorage.getItem("manzara.task-review.v1"));
+  assert.equal(reviewState.opened["maintenance.quick"], 11);
   assert.equal(harness.elements.get("workspace-tab-overview").getAttribute("aria-selected"), "true");
   assert.equal(harness.elements.get("run-logs-panel").hidden, true);
   assert.deepEqual(harness.logViewer.openCalls, []);

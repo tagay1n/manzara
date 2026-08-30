@@ -225,6 +225,6 @@ def build_library_panel(
         maintenance=maintenance,
         panel_id="library",
         title=title,
-        description="Metadata and curation workflows.",
+        description="Library ingestion and curation workflows.",
         tasks=tasks,
     )

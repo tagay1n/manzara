@@ -113,7 +113,7 @@ MANAGED_TERMSETS = {
 
 
 TASK_ID = "maintenance.monocorpus_meta_evaluate"
-PANEL_ID = "library"
+PANEL_ID = "metadata"
 
 
 def _run_id() -> int | None:

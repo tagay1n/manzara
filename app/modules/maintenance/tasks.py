@@ -121,8 +121,8 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
         {
             "task_id": MONOCORPUS_META_EVALUATE_TASK_ID,
             "gemini_workers_default": 1,
-            "panel_id": "library",
-            "title": "Monocorpus meta evaluate",
+            "panel_id": "metadata",
+            "title": "Evaluate metadata",
             "task_type": "metadata",
             "icon_idle": "ClipboardCheck",
             "icon_running": "Square",

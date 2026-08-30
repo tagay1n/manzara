@@ -39,7 +39,6 @@ code,
 pre,
 .status-pill,
 .panel-pill,
-.task-list-time,
 .workflow-footnote {
   font-family: "Ubuntu Mono", "Noto Sans Mono", monospace;
 }
@@ -285,6 +284,18 @@ pre,
 .run-row:hover {
   border-color: #344050;
   background: rgba(25, 32, 43, 0.8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-list-item.task-result-unread-completed {
+    border-color: rgba(102, 182, 145, 0.95);
+    box-shadow: 0 0 0 2px rgba(102, 182, 145, 0.16);
+  }
+
+  .task-list-item.task-result-unread-failed {
+    border-color: rgba(208, 111, 120, 1);
+    box-shadow: 0 0 0 2px rgba(208, 111, 120, 0.2);
+  }
 }
 
 .task-card {

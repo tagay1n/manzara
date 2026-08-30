@@ -3,9 +3,16 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 export const TASKS_SOURCE = readFileSync(new URL("../../../static/tasks.js", import.meta.url), "utf-8");
+const TASK_REVIEW_STATE_SOURCE = readFileSync(
+  new URL("../../../static/task-review-state.js", import.meta.url),
+  "utf-8",
+);
 const CONVEYOR_SOURCE = readFileSync(new URL("../../../static/conveyor.js", import.meta.url), "utf-8");
-export const TASKS_PAGE_SOURCE = [CONVEYOR_SOURCE, TASKS_SOURCE].join("\n");
-export const TASK_SOURCE = readFileSync(new URL("../../../static/task.js", import.meta.url), "utf-8");
+export const TASKS_PAGE_SOURCE = [TASK_REVIEW_STATE_SOURCE, CONVEYOR_SOURCE, TASKS_SOURCE].join("\n");
+export const TASK_SOURCE = [
+  TASK_REVIEW_STATE_SOURCE,
+  readFileSync(new URL("../../../static/task.js", import.meta.url), "utf-8"),
+].join("\n");
 export const DASHBOARD_SOURCE = readFileSync(new URL("../../../static/app.js", import.meta.url), "utf-8");
 export const LIBRARY_SOURCE = readFileSync(new URL("../../../static/library.js", import.meta.url), "utf-8");
 export const DATABASE_SOURCE = readFileSync(new URL("../../../static/database.js", import.meta.url), "utf-8");
@@ -346,6 +353,7 @@ export function createHarness({
   confirmResult = true,
   promptResult = null,
   locationPathname = "/tasks",
+  localStorageEntries = {},
 }) {
   const elements = new Map();
   for (const id of ids) {
@@ -369,6 +377,21 @@ export function createHarness({
     activeRunId: null,
     closeCalls: 0,
     openCalls: [],
+  };
+  const storedValues = new Map(
+    Object.entries(localStorageEntries).map(([key, value]) => [String(key), String(value)]),
+  );
+  const localStorage = {
+    getItem(key) {
+      const value = storedValues.get(String(key));
+      return value === undefined ? null : value;
+    },
+    setItem(key, value) {
+      storedValues.set(String(key), String(value));
+    },
+    removeItem(key) {
+      storedValues.delete(String(key));
+    },
   };
 
   const windowObj = {
@@ -417,6 +440,7 @@ export function createHarness({
       },
     },
     ManzaraSound: null,
+    localStorage,
     ManzaraCore: {
       DEFAULT_EVENT_TYPES: ["task.started", "task.completed", "task.failed"],
       async api(path, options = {}) {
@@ -767,6 +791,7 @@ export function createHarness({
     prompts,
     sse,
     logViewer,
+    localStorage,
     async flush() {
       for (let i = 0; i < 16; i += 1) {
         await Promise.resolve();

@@ -212,6 +212,14 @@ class PayloadBuilder:
             tasks=tasks_by_panel.get("library", []),
             title=panel_titles.get("library", "Library"),
         )
+        metadata_panel = {
+            "panel_id": "metadata",
+            "title": panel_titles.get("metadata", "Metadata"),
+            "description": "Metadata evaluation, extraction, and validation.",
+            "status_counts": state.db.run_count_by_status("metadata"),
+            "stats_cards": [],
+            "tasks": tasks_by_panel.get("metadata", []),
+        }
         collection_overview = ops.get_collection_overview()
         collection_stats = collection_overview.get("stats") or {}
         collections_panel = {
@@ -231,6 +239,7 @@ class PayloadBuilder:
             "maintenance": maintenance_panel,
             "backup": backup_panel,
             "library": library_panel,
+            "metadata": metadata_panel,
             "collections": collections_panel,
         }
 
@@ -265,6 +274,7 @@ class PayloadBuilder:
             panel_payloads["maintenance"],
             panel_payloads["backup"],
             panel_payloads["library"],
+            panel_payloads["metadata"],
             panel_payloads["collections"],
         ]
         active_runs = state.db.list_active_runs()

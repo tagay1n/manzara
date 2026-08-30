@@ -9,13 +9,10 @@ const state = {
 };
 
 const viewState = window.ManzaraCore.attachViewState(state, "loading");
+const taskReviewStore = window.ManzaraTaskReview.createStore();
 
 async function api(path, options = {}) {
   return window.ManzaraCore.api(path, options);
-}
-
-function formatDateTime(value) {
-  return window.ManzaraCore.formatDateTime(value);
 }
 
 function initSoundNotifier() {
@@ -52,29 +49,29 @@ function renderGeminiWorkers(task) {
   const config = task.gemini_workers;
   if (!config) return "";
   const value = config.active ?? config.next_run ?? config.default;
-  if (!config.editable) {
-    return `<span class="gemini-worker-badge" title="Workers for active run">${window.ManzaraCore.escapeHtml(String(value))} workers</span>`;
-  }
-  const options = Array.from({ length: Number(config.max || 0) }, (_, index) => index + 1)
-    .map((count) => `<option value="${count}" ${count === Number(value) ? "selected" : ""}>${count} worker${count === 1 ? "" : "s"}</option>`)
-    .join("");
-  return `<label class="gemini-worker-control">Workers <select data-gemini-workers-task="${window.ManzaraCore.escapeHtml(task.task_id)}">${options}</select></label>`;
+  const maximum = Math.max(1, Number(config.max || 1));
+  return `<input class="gemini-worker-spinner" type="number" min="1" max="${window.ManzaraCore.escapeHtml(String(maximum))}" step="1" value="${window.ManzaraCore.escapeHtml(String(value))}" data-gemini-workers-task="${window.ManzaraCore.escapeHtml(task.task_id)}" aria-label="Gemini workers" title="Gemini workers" ${config.editable ? "" : "disabled"}>`;
 }
 
 function renderTaskItem(task) {
   const status = task.run?.status || "idle";
   const control = taskToggleModel(status);
   const taskPathKey = encodeURIComponent(task.slug || task.task_id);
+  const unread = taskReviewStore.isUnread(task);
+  const unreadClass = unread
+    ? ` task-result-unread task-result-unread-${window.ManzaraCore.cssName(status, "completed")}`
+    : "";
+  const openAttributes = unread
+    ? ` data-task-open-id="${window.ManzaraCore.escapeHtml(task.task_id)}" data-task-open-run-id="${window.ManzaraCore.escapeHtml(String(task.run?.run_id || ""))}"`
+    : "";
   return `
-    <article class="task-list-item task-status-${window.ManzaraCore.cssName(status, "idle")}"
+    <article class="task-list-item task-status-${window.ManzaraCore.cssName(status, "idle")}${unreadClass}"
       draggable="true" data-conveyor-task-id="${window.ManzaraCore.escapeHtml(task.task_id)}">
-      <a href="/tasks/${taskPathKey}" class="task-list-link">
+      <a href="/tasks/${taskPathKey}" class="task-list-link"${openAttributes}>
         <div class="task-list-title">${window.ManzaraCore.escapeHtml(task.title)}</div>
         <div class="task-list-meta">
-          <span>${window.ManzaraCore.escapeHtml(task.task_type)}</span>
           ${window.ManzaraCore.renderTaskStatusBadge(task.run || { status }, { compact: true })}
         </div>
-        <div class="task-list-time">${window.ManzaraCore.escapeHtml(formatDateTime(task.run?.started_at || task.run?.finished_at))}</div>
       </a>
       <div class="task-list-actions">
         ${renderGeminiWorkers(task)}
@@ -118,6 +115,7 @@ function renderTasks(payload) {
   state.conveyorController?.sync(payload);
   const flowGrid = document.getElementById("task-flow-grid");
   const flows = payload.flows || [];
+  taskReviewStore.syncCatalog(flows.flatMap((flow) => flow.tasks || []));
   const taskCount = flows.reduce((acc, flow) => acc + Number(flow.tasks?.length || 0), 0);
   if (taskCount === 0) {
     viewState.set("empty");
@@ -191,16 +189,16 @@ async function toggleTask(taskId, button) {
   }
 }
 
-async function setGeminiWorkers(taskId, workers, select) {
-  if (!taskId || select?.disabled) return;
-  if (select) select.disabled = true;
+async function setGeminiWorkers(taskId, workers, input) {
+  if (!taskId || input?.disabled) return;
+  if (input) input.disabled = true;
   try {
     await api(`/api/tasks/${encodeURIComponent(taskId)}/gemini-workers`, {
       method: "PATCH",
       body: JSON.stringify({ workers: Number(workers) }),
     });
   } finally {
-    if (select) select.disabled = false;
+    if (input) input.disabled = false;
     queueRefresh(0);
   }
 }
@@ -234,6 +232,19 @@ function attachUiHandlers() {
     stopAll().catch((error) => console.error(error));
   });
   document.getElementById("task-flow-grid").addEventListener("click", (event) => {
+    const taskLink = event.target?.closest?.("[data-task-open-id]");
+    if (taskLink) {
+      taskReviewStore.markOpened(
+        taskLink.dataset.taskOpenId,
+        taskLink.dataset.taskOpenRunId,
+      );
+      taskLink.closest?.(".task-list-item")?.classList?.remove(
+        "task-result-unread",
+        "task-result-unread-completed",
+        "task-result-unread-failed",
+      );
+      return;
+    }
     if (event.target?.closest?.("[data-gemini-workers-task]")) {
       event.preventDefault?.();
       event.stopPropagation?.();
@@ -249,11 +260,11 @@ function attachUiHandlers() {
     });
   });
   document.getElementById("task-flow-grid").addEventListener("change", (event) => {
-    const select = event.target?.closest?.("[data-gemini-workers-task]");
-    if (!select) return;
+    const input = event.target?.closest?.("[data-gemini-workers-task]");
+    if (!input) return;
     event.preventDefault?.();
     event.stopPropagation?.();
-    setGeminiWorkers(select.dataset.geminiWorkersTask, select.value, select).catch((error) => {
+    setGeminiWorkers(input.dataset.geminiWorkersTask, input.value, input).catch((error) => {
       window.ManzaraUI.toast(error?.message || String(error), { tone: "error" });
     });
   });

@@ -1710,6 +1710,53 @@ button {
   border-color: #3470b3;
 }
 
+.task-list-item.task-result-unread-completed {
+  animation: task-result-attention-completed 1.7s ease-in-out infinite;
+}
+
+.task-list-item.task-result-unread-failed {
+  animation: task-result-attention-failed 1.35s ease-in-out infinite;
+}
+
+@keyframes task-result-attention-completed {
+  0%, 100% {
+    border-color: #233c65;
+    box-shadow: 0 0 0 rgba(102, 182, 145, 0);
+  }
+  50% {
+    border-color: rgba(102, 182, 145, 0.95);
+    box-shadow: 0 0 0 2px rgba(102, 182, 145, 0.16), 0 0 18px rgba(102, 182, 145, 0.3);
+  }
+}
+
+@keyframes task-result-attention-failed {
+  0%, 100% {
+    border-color: #233c65;
+    box-shadow: 0 0 0 rgba(208, 111, 120, 0);
+  }
+  50% {
+    border-color: rgba(208, 111, 120, 1);
+    box-shadow: 0 0 0 2px rgba(208, 111, 120, 0.2), 0 0 20px rgba(208, 111, 120, 0.42);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-list-item.task-result-unread-completed,
+  .task-list-item.task-result-unread-failed {
+    animation: none;
+  }
+
+  .task-list-item.task-result-unread-completed {
+    border-color: rgba(102, 182, 145, 0.95);
+    box-shadow: 0 0 0 2px rgba(102, 182, 145, 0.16);
+  }
+
+  .task-list-item.task-result-unread-failed {
+    border-color: rgba(208, 111, 120, 1);
+    box-shadow: 0 0 0 2px rgba(208, 111, 120, 0.2);
+  }
+}
+
 .task-list-title {
   font-size: 13px;
   font-weight: 600;
@@ -1735,19 +1782,29 @@ button {
   gap: 5px;
 }
 
-.task-list-actions .gemini-worker-control {
-  display: grid;
-  justify-items: end;
-  gap: 2px;
-}
-
-.task-list-meta,
-.task-list-time {
+.task-list-meta {
   color: #7f98bf;
   font-size: 11px;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 7px;
+}
+
+.gemini-worker-spinner {
+  box-sizing: border-box;
+  width: 48px;
+  min-height: 26px;
+  border: 1px solid #334c72;
+  border-radius: 5px;
+  background: #101c31;
+  color: #dce8fa;
+  padding: 2px 3px;
+  font: inherit;
+}
+
+.gemini-worker-spinner:disabled {
+  color: #9eb4d4;
+  opacity: 0.7;
 }
 
 .task-detail-head {

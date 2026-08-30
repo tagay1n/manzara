@@ -21,7 +21,7 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
     return [
         {
             "task_id": LIBRARY_METADATA_VALIDATE_TASK_ID,
-            "panel_id": "library",
+            "panel_id": "metadata",
             "title": "Validate metadata",
             "task_type": "scan",
             "icon_idle": "ListChecks",
@@ -50,7 +50,7 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
         {
             "task_id": LIBRARY_METADATA_EXTRACT_TASK_ID,
             "gemini_workers_default": 1,
-            "panel_id": "library",
+            "panel_id": "metadata",
             "title": "Extract metadata",
             "task_type": "metadata",
             "icon_idle": "ScanText",

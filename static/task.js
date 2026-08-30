@@ -12,6 +12,7 @@ const state = {
 };
 
 const viewState = window.ManzaraCore.attachViewState(state, "loading");
+const taskReviewStore = window.ManzaraTaskReview.createStore();
 
 async function api(path, options = {}) {
   return window.ManzaraCore.api(path, options);
@@ -326,6 +327,7 @@ function renderTaskDetail(payload) {
     state.selectedRunId = runs[0].run_id;
   }
   const currentRun = selectedRun();
+  taskReviewStore.markRunOpened(task.task_id, runs[0]);
   const buttonModel = toggleButtonModel(task, currentRun);
   ensureCanonicalTaskPath(task.slug || task.task_id);
 

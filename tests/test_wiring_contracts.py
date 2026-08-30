@@ -10,7 +10,9 @@ from app.dependencies import (
     build_normalization_operations,
     build_route_payload_builders,
 )
+from app.constants import PANEL_DEFS
 from app.modules.library.collection_tasks import collection_task_definitions
+from app.modules.library.tasks import library_task_definitions
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.maintenance.tasks import maintenance_task_definitions
 from app.registry import build_startup_seed_registry
@@ -50,6 +52,31 @@ def test_collection_tasks_belong_to_dedicated_flow(tmp_path) -> None:
         "library.collection_apply",
     }
     assert {task["panel_id"] for task in tasks} == {"collections"}
+
+
+def test_metadata_tasks_belong_to_dedicated_catalog(tmp_path) -> None:
+    maintenance_tasks = maintenance_task_definitions(
+        MaintenanceSettings(
+            monocorpus_repo_path=tmp_path,
+            pgbackrest_stanza="monocorpus",
+        )
+    )
+    tasks = [*maintenance_tasks, *library_task_definitions(app_root=tmp_path)]
+    by_id = {str(task["task_id"]): task for task in tasks}
+
+    assert {panel["panel_id"]: panel["title"] for panel in PANEL_DEFS}["metadata"] == "Metadata"
+    assert {
+        task_id: (by_id[task_id]["panel_id"], by_id[task_id]["title"])
+        for task_id in (
+            "maintenance.monocorpus_meta_evaluate",
+            "library.metadata_extract",
+            "library.metadata_validate",
+        )
+    } == {
+        "maintenance.monocorpus_meta_evaluate": ("metadata", "Evaluate metadata"),
+        "library.metadata_extract": ("metadata", "Extract metadata"),
+        "library.metadata_validate": ("metadata", "Validate metadata"),
+    }
 
 
 def test_startup_seed_registry_contains_only_panels_and_tasks() -> None:

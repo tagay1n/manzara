@@ -58,7 +58,7 @@ from app.settings import load_settings
 
 
 TASK_ID = "library.metadata_extract"
-PANEL_ID = "library"
+PANEL_ID = "metadata"
 DEFAULT_OPERATIONAL_RETRY_COOLDOWN_SECONDS = 21_600
 PROGRESS_COUNTER_KEYS = (
     "succeeded",

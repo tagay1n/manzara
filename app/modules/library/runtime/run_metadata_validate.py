@@ -14,7 +14,7 @@ from app.settings import load_settings
 
 
 TASK_ID = "library.metadata_validate"
-PANEL_ID = "library"
+PANEL_ID = "metadata"
 
 
 def _run_id(required: bool) -> int | None:
