@@ -12,6 +12,10 @@ class _DirsLike(Enum):
     ENTRY = "sample_entry"
 
 
+def test_default_workdir_is_under_manzara_root() -> None:
+    assert shared_utils.workdir == "~/.manzara"
+
+
 def test_contains_redacted_detects_nested_values() -> None:
     payload = {
         "a": "safe",

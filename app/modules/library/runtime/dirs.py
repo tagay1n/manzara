@@ -4,7 +4,7 @@ from enum import Enum
 
 
 class Dirs(Enum):
-    """Named subdirectories under the project workdir (~/.monocorpus)."""
+    """Named subdirectories under the project workdir (~/.manzara)."""
     ENTRY_POINT = "0_entry_point"
     CONTENT = "1_result"
     METADATA="2_metadata"

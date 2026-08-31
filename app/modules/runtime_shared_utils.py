@@ -19,7 +19,7 @@ import yaml
 
 prefix = "enc:"
 
-workdir = "~/.monocorpus"
+workdir = "~/.manzara"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REDACTED_SENTINEL = "<REDACTED>"
 ENTRY_POINT_DIR = "0_entry_point"

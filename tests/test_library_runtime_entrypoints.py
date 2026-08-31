@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
+
+from app.modules.library.runtime import run_collection_validate
 
 
 @pytest.mark.parametrize(
@@ -53,3 +56,17 @@ def test_collection_runtime_events_use_collections_panel() -> None:
     assert "panel_id=COLLECTIONS_PANEL_ID" in detect_source
     assert "PANEL_ID = COLLECTIONS_PANEL_ID" in validation_source
     assert "panel_id=COLLECTIONS_PANEL_ID" in catalog_source
+
+
+def test_collection_excerpt_uses_shared_manzara_workdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    digest = "a" * 32
+    content_dir = tmp_path / "1_result"
+    content_dir.mkdir()
+    with zipfile.ZipFile(content_dir / f"{digest}.zip", "w") as archive:
+        archive.writestr("document.md", "First line\n\nSecond line")
+    monkeypatch.setattr(run_collection_validate, "workdir", str(tmp_path))
+
+    assert run_collection_validate._excerpt(digest) == "First line\nSecond line"

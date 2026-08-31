@@ -14,7 +14,7 @@ gemini:
       - "<REDACTED>"
 
 documents:
-  cache_path: /home/tans1q/.monocorpus/0_entry_point
+  cache_path: ~/.manzara/0_entry_point
   primary_storage:
     endpoint_url: https://s3.eu-central-003.backblazeb2.com
     region_name: eu-central-003

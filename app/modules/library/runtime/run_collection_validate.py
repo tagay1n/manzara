@@ -18,12 +18,14 @@ if str(ROOT) not in sys.path:
 from app.db import Database  # noqa: E402
 from app.gemini_workers import resolve_gemini_workers  # noqa: E402
 from app.modules.library.collection_validation import validate_collection_proposals  # noqa: E402
+from app.modules.library.runtime.dirs import Dirs  # noqa: E402
+from app.modules.runtime_shared_utils import workdir  # noqa: E402
 from app.run_artifact_channel import emit_run_artifact  # noqa: E402
 from app.settings import load_settings  # noqa: E402
 
 
 def _excerpt(md5: str) -> str | None:
-    archive = Path("~/.monocorpus/1_result").expanduser() / f"{md5}.zip"
+    archive = Path(workdir).expanduser() / Dirs.CONTENT.value / f"{md5}.zip"
     if not archive.exists():
         return None
     try:

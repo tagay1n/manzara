@@ -83,7 +83,10 @@ Task artifact logs are written to:
 ~/.manzara/task_runs/<task_id>/run-<run_id>.log
 ```
 
-The browser uses PostgreSQL-backed API/SSE state; artifact files are for durable inspection.
+The shared verified document cache is stored under
+`~/.manzara/0_entry_point`. Other numbered runtime directories and task
+artifacts live under the same `~/.manzara` root. The browser uses
+PostgreSQL-backed API/SSE state; artifact files are for durable inspection.
 
 ## Database migrations
 

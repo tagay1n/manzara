@@ -12,7 +12,7 @@ Read only the guidance matching the files or behavior being changed:
 
 General Library rules:
 
-- `~/.monocorpus/0_entry_point` is a shared persistent, MD5-verified source cache, not a task artifact directory. Generated and temporary outputs stay under `~/.manzara`.
+- `~/.manzara/0_entry_point` is a shared persistent, MD5-verified source cache, not a task artifact directory. Generated and temporary outputs also stay under `~/.manzara` in their dedicated subdirectories.
 - Models come only from the shared configured Gemini model pool.
 - Flow work is resumable and must preserve per-item failure context and stable progress/artifact summaries.
 - Library cleanup preparation is planning-only. Remote or catalog mutation requires the guarded Maintenance executor and explicit persisted review state.

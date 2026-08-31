@@ -55,3 +55,22 @@ def test_large_normalization_page_loads_domain_scripts_before_controller():
     rendering = html.index('/static/library-normalization-rendering.js')
     controller = html.index('/static/library-normalization.js')
     assert rendering < controller
+
+
+def test_legacy_hidden_monocorpus_workspace_is_not_referenced():
+    legacy_path = "~/" + ".monocorpus"
+    checked = [
+        ROOT / "README.md",
+        ROOT / "config.example.yaml",
+        ROOT / "app" / "modules" / "runtime_shared_utils.py",
+        ROOT / "app" / "modules" / "library" / "AGENTS.md",
+        ROOT / "app" / "modules" / "library" / "runtime" / "dirs.py",
+        ROOT
+        / "app"
+        / "modules"
+        / "library"
+        / "runtime"
+        / "run_collection_validate.py",
+    ]
+    for path in checked:
+        assert legacy_path not in path.read_text(encoding="utf-8"), path
