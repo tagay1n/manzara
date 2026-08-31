@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +16,13 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
-from app.document_storage import DEFAULT_S3_ENDPOINT, resolve_document_object_location
+from app.document_storage import (
+    DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
+    DEFAULT_S3_ENDPOINT,
+    find_valid_cache_file,
+    materialize_cached_document,
+    resolve_document_object_location,
+)
 
 from app.modules.library.previews import (
     PREVIEW_RECIPE_VERSION,
@@ -48,6 +53,7 @@ class PreviewGenerationSettings:
     source_endpoint_url: str = DEFAULT_S3_ENDPOINT
     source_region_name: str = "ru-central1"
     encryption_key: str = ""
+    cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES
 
 
 @dataclass(frozen=True)
@@ -114,15 +120,6 @@ def render_page_variants(
     }
 
 
-def calculate_md5(path: Path) -> str:
-    """Calculate the content identity used by monocorpus documents."""
-    digest = hashlib.md5()  # noqa: S324 - source document identity is MD5.
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def ensure_cached_pdf(
     md5: str,
     *,
@@ -130,30 +127,26 @@ def ensure_cached_pdf(
     source_bucket: str,
     source_key: str | None = None,
     s3: Any,
+    cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
 ) -> tuple[Path, bool]:
     """Return a hash-verified cached PDF, atomically downloading when absent."""
     digest = str(md5 or "").strip().lower()
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    target = cache_dir / f"{digest}.pdf"
-    if target.exists() and calculate_md5(target) == digest:
-        return target, False
-    if target.exists():
-        target.unlink()
+    cached_before = find_valid_cache_file(cache_dir, digest)
+    if cached_before is not None:
+        return cached_before, False
 
-    temporary = cache_dir / f"{digest}.pdf.part"
-    temporary.unlink(missing_ok=True)
-    try:
+    def download(temporary: Path) -> None:
         s3.download_file(
             str(source_bucket), str(source_key or f"{digest}.pdf"), str(temporary)
         )
-        actual = calculate_md5(temporary)
-        if actual != digest:
-            raise ValueError(
-                f"Downloaded PDF MD5 mismatch for {digest}: expected={digest} actual={actual}"
-            )
-        temporary.replace(target)
-    finally:
-        temporary.unlink(missing_ok=True)
+
+    target = materialize_cached_document(
+        cache_path=cache_dir,
+        expected_md5=digest,
+        extension=".pdf",
+        download=download,
+        cache_max_bytes=cache_max_bytes,
+    )
     return target, True
 
 
@@ -271,6 +264,7 @@ def process_book(
             source_bucket=source_bucket,
             source_key=source_key,
             s3=source_s3,
+            cache_max_bytes=settings.cache_max_bytes,
         )
         with fitz.open(pdf_path) as document:
             page_count = int(document.page_count)

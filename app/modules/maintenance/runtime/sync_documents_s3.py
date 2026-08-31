@@ -25,6 +25,7 @@ from app.document_storage import (
     materialize_cached_document,
     normalized_extension,
     object_url,
+    prune_document_cache,
 )
 from app.modules.maintenance.document_sync_repository import (
     PostgresDocumentSyncRepository,
@@ -198,6 +199,7 @@ def _acquire_source(
         expected_md5=md5,
         extension=normalized_extension(source_path, row.get("mime_type")),
         download=download,
+        cache_max_bytes=settings.cache_max_bytes,
     )
     return source, "yandex"
 
@@ -224,6 +226,10 @@ def run_document_upload(
     should_stop: Callable[[], bool],
 ) -> dict[str, Any]:
     """Upload pending PostgreSQL rows at one-document safe boundaries."""
+    prune_document_cache(
+        settings.cache_path,
+        max_bytes=settings.cache_max_bytes,
+    )
     pending = repository.list_pending_documents()
     total = len(pending)
     cache_index = build_cache_index(settings.cache_path)

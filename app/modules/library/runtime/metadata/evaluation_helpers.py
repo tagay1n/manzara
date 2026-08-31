@@ -18,6 +18,7 @@ import requests
 from sqlalchemy import select
 
 from app.document_storage import (
+    DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
     load_document_storage_settings,
     materialize_cached_document,
     resolve_document_download_url,
@@ -483,6 +484,11 @@ def _ensure_pdf_in_shared_cache(
             expected_md5=doc.md5,
             extension=".pdf",
             download=download,
+            cache_max_bytes=getattr(
+                storage,
+                "cache_max_bytes",
+                DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
+            ),
         )
     )
 

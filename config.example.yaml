@@ -15,6 +15,7 @@ gemini:
 
 documents:
   cache_path: ~/.manzara/0_entry_point
+  cache_max_gib: 50
   primary_storage:
     endpoint_url: https://s3.eu-central-003.backblazeb2.com
     region_name: eu-central-003

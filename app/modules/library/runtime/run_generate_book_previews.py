@@ -26,6 +26,7 @@ from botocore.config import Config  # noqa: E402
 from app.db import Database  # noqa: E402
 from app.document_storage import (  # noqa: E402
     load_document_storage_settings,
+    prune_document_cache,
 )
 from app.modules.library.preview_generation import (  # noqa: E402
     PreviewGenerationSettings,
@@ -94,6 +95,7 @@ def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[Prev
         source_endpoint_url=document_storage.primary.endpoint_url,
         source_region_name=document_storage.primary.region_name,
         encryption_key=_required(payload, "encryption_key", "config"),
+        cache_max_bytes=document_storage.cache_max_bytes,
     )
     credentials = {
         "source_access_key_id": document_storage.primary.access_key_id,
@@ -144,6 +146,10 @@ def run_generation(
     limit: int | None = None,
 ) -> dict[str, Any]:
     """Process candidates serially and return the structured run artifact."""
+    prune_document_cache(
+        settings.cache_dir,
+        max_bytes=settings.cache_max_bytes,
+    )
     candidates = repository.list_candidates(
         recipe_version=PREVIEW_RECIPE_VERSION,
         endpoint_url=settings.source_endpoint_url,

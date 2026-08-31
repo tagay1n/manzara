@@ -3,6 +3,7 @@
 ## Previews
 
 - Preview roles depend on page count: one page gets first; two get first/last; longer PDFs get first/second/last. Missing roles for short PDFs are complete, and roles are never duplicated.
+- Keep the shared source cache within `documents.cache_max_gib` (50 GiB by default). When it crosses the limit, evict least-recently-used completed sources to 90% of the limit; recent partial downloads and the source just materialized are protected.
 - Object roles are deterministic and use compact S3 names. PostgreSQL stores document-level status, page count, and recipe version rather than a per-object manifest.
 - Retain per-run and per-document preview workspaces under `~/.manzara`; never prune rendered previews automatically.
 

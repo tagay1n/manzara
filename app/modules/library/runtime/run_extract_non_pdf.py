@@ -33,6 +33,7 @@ from app.document_storage import (  # noqa: E402
     load_document_storage_settings,
     normalized_extension,
     object_url,
+    prune_document_cache,
 )
 from app.modules.library.corrupt_document import (  # noqa: E402
     CorruptDocumentError,
@@ -563,6 +564,10 @@ def main() -> int:
     run_id = _run_id()
     settings = load_settings()
     storage = load_document_storage_settings(load_runtime_config())
+    prune_document_cache(
+        storage.cache_path,
+        max_bytes=storage.cache_max_bytes,
+    )
     if not storage.content_bucket or not storage.content_images_bucket:
         raise RuntimeError(
             "documents.primary_storage.bucket.content and content_images are required"

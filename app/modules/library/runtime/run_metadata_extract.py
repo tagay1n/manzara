@@ -30,7 +30,7 @@ from boto3 import Session
 from botocore.config import Config
 
 from app.db import Database
-from app.document_storage import load_document_storage_settings
+from app.document_storage import load_document_storage_settings, prune_document_cache
 from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_model_pool import (
     GeminiModelPoolExhaustedError,
@@ -593,6 +593,10 @@ def main() -> int:
     config = load_runtime_config()
     models = load_required_gemini_model_pool()
     storage = load_document_storage_settings(config)
+    prune_document_cache(
+        storage.cache_path,
+        max_bytes=storage.cache_max_bytes,
+    )
     workspace = Path(
         os.environ.get("MANZARA_ARTIFACTS_ROOT", "~/.manzara")
     ).expanduser() / "library" / "metadata-extraction" / f"run-{run_id}"

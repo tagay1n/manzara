@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import os
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping
@@ -15,8 +17,13 @@ from urllib.parse import quote, unquote, urlparse
 DEFAULT_S3_ENDPOINT = "https://storage.yandexcloud.net"
 DEFAULT_S3_REGION = "ru-central1"
 DEFAULT_MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024
+DEFAULT_DOCUMENT_CACHE_MAX_BYTES = 50 * 1024**3
+DOCUMENT_CACHE_TARGET_NUMERATOR = 9
+DOCUMENT_CACHE_TARGET_DENOMINATOR = 10
+ABANDONED_CACHE_DOWNLOAD_SECONDS = 24 * 60 * 60
 _PARTIAL_SUFFIXES = {".crdownload", ".download", ".part", ".partial", ".tmp"}
 _SAFE_EXTENSION = re.compile(r"^\.[a-z0-9]{1,12}$")
+_CACHE_ENTRY_NAME = re.compile(r"^[a-f0-9]{32}\.[a-z0-9]{1,12}$")
 _MIME_EXTENSIONS = {
     "application/epub+zip": ".epub",
     "application/msword": ".doc",
@@ -58,10 +65,22 @@ class DocumentStorageSettings:
     legacy_public_bucket: str
     legacy_private_bucket: str
     encryption_key: str
+    cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES
     yadisk_token: str = ""
     preview_bucket: str = ""
     content_bucket: str = ""
     content_images_bucket: str = ""
+
+
+@dataclass(frozen=True)
+class CachePruneResult:
+    """Outcome of one best-effort shared-cache size enforcement pass."""
+
+    initial_bytes: int
+    remaining_bytes: int
+    removed_files: int
+    removed_bytes: int
+    failed_paths: tuple[Path, ...] = ()
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -73,6 +92,13 @@ def _required(mapping: Mapping[str, Any], key: str, path: str) -> str:
     if not value:
         raise RuntimeError(f"Missing required config value: {path}.{key}")
     return value
+
+
+def _cache_max_bytes(documents: Mapping[str, Any]) -> int:
+    value = documents.get("cache_max_gib", 50)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RuntimeError("documents.cache_max_gib must be a positive integer")
+    return value * 1024**3
 
 
 def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorageSettings:
@@ -135,6 +161,7 @@ def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorag
             legacy_buckets, "document_private", "yandex.cloud.bucket"
         ),
         encryption_key=_required(payload, "encryption_key", "config"),
+        cache_max_bytes=_cache_max_bytes(documents),
         yadisk_token=_required(disk, "oauth_token", "yandex.disk"),
         preview_bucket=str(primary_buckets.get("book_previews") or "").strip(),
         content_bucket=str(primary_buckets.get("content") or "").strip(),
@@ -210,6 +237,97 @@ def build_cache_index(cache_path: Path) -> dict[str, list[Path]]:
     return index
 
 
+def prune_document_cache(
+    cache_path: Path,
+    *,
+    max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
+    target_bytes: int | None = None,
+    protected_paths: Iterable[Path] = (),
+) -> CachePruneResult:
+    """Evict oldest completed entries when the shared cache exceeds its limit."""
+    maximum = int(max_bytes)
+    if maximum <= 0:
+        raise ValueError("max_bytes must be positive")
+    target = (
+        int(target_bytes)
+        if target_bytes is not None
+        else maximum
+        * DOCUMENT_CACHE_TARGET_NUMERATOR
+        // DOCUMENT_CACHE_TARGET_DENOMINATOR
+    )
+    if target < 0 or target > maximum:
+        raise ValueError("target_bytes must be between zero and max_bytes")
+
+    root = Path(cache_path)
+    if not root.is_dir():
+        return CachePruneResult(0, 0, 0, 0)
+    protected = {Path(path).resolve(strict=False) for path in protected_paths}
+    total = 0
+    candidates: list[tuple[int, str, int, Path]] = []
+    abandoned_before_ns = time.time_ns() - ABANDONED_CACHE_DOWNLOAD_SECONDS * 10**9
+    try:
+        entries = os.scandir(root)
+    except OSError:
+        return CachePruneResult(0, 0, 0, 0, (root,))
+    with entries:
+        for entry in entries:
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            size = int(stat.st_size)
+            total += size
+            path = Path(entry.path)
+            is_completed = _CACHE_ENTRY_NAME.fullmatch(entry.name.lower()) is not None
+            is_abandoned_download = (
+                path.suffix.lower() in _PARTIAL_SUFFIXES
+                and int(stat.st_mtime_ns) < abandoned_before_ns
+            )
+            if (is_completed or is_abandoned_download) and (
+                path.resolve(strict=False) not in protected
+            ):
+                candidates.append((int(stat.st_mtime_ns), entry.name, size, path))
+
+    initial = total
+    if total <= maximum:
+        return CachePruneResult(initial, total, 0, 0)
+
+    removed_files = 0
+    removed_bytes = 0
+    failed: list[Path] = []
+    for _mtime, _name, size, path in sorted(candidates):
+        if total <= target:
+            break
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            total -= size
+        except OSError:
+            failed.append(path)
+            continue
+        else:
+            total -= size
+            removed_files += 1
+            removed_bytes += size
+
+    print(
+        "document cache: pruned "
+        f"initial_bytes={initial} remaining_bytes={max(0, total)} "
+        f"removed_files={removed_files} removed_bytes={removed_bytes} "
+        f"failed_files={len(failed)}",
+        flush=True,
+    )
+    return CachePruneResult(
+        initial,
+        max(0, total),
+        removed_files,
+        removed_bytes,
+        tuple(failed),
+    )
+
+
 def find_valid_cache_entry(
     cache_index: Mapping[str, Iterable[Path]],
     md5: str,
@@ -217,8 +335,15 @@ def find_valid_cache_entry(
     """Return a matching cache path and its multipart ETag."""
     digest = str(md5 or "").strip().lower()
     for candidate in cache_index.get(digest, []):
-        actual_md5, multipart_etag = calculate_integrity(candidate)
+        try:
+            actual_md5, multipart_etag = calculate_integrity(candidate)
+        except FileNotFoundError:
+            continue
         if actual_md5 == digest:
+            try:
+                candidate.touch()
+            except OSError:
+                pass
             return candidate, multipart_etag
     return None
 
@@ -236,6 +361,7 @@ def materialize_cached_document(
     expected_md5: str,
     extension: str,
     download: Callable[[Path], None],
+    cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
 ) -> Path:
     """Reuse or atomically populate one MD5-verified shared cache file."""
     digest = str(expected_md5 or "").strip().lower()
@@ -251,6 +377,10 @@ def materialize_cached_document(
     cache_path.mkdir(parents=True, exist_ok=True)
     destination = cache_path / f"{digest}{suffix}"
     if destination.is_file() and calculate_md5(destination) == digest:
+        try:
+            destination.touch()
+        except OSError:
+            pass
         return destination
     if cached := find_valid_cache_file(cache_path, digest):
         return cached
@@ -273,6 +403,11 @@ def materialize_cached_document(
         if cached := find_valid_cache_file(cache_path, digest):
             return cached
         temporary.replace(destination)
+        prune_document_cache(
+            cache_path,
+            max_bytes=cache_max_bytes,
+            protected_paths=(destination,),
+        )
         return destination
     finally:
         temporary.unlink(missing_ok=True)
@@ -303,6 +438,7 @@ def download_cached_primary_document(
         expected_md5=expected_md5,
         extension=extension,
         download=download,
+        cache_max_bytes=settings.cache_max_bytes,
     )
 
 
@@ -457,6 +593,8 @@ def verify_primary_document_object(
 
 
 __all__ = [
+    "CachePruneResult",
+    "DEFAULT_DOCUMENT_CACHE_MAX_BYTES",
     "DEFAULT_MULTIPART_CHUNK_SIZE",
     "DocumentStorageSettings",
     "S3ConnectionSettings",
@@ -472,6 +610,7 @@ __all__ = [
     "materialize_cached_document",
     "normalized_extension",
     "object_url",
+    "prune_document_cache",
     "parse_object_url",
     "resolve_document_download_url",
     "resolve_document_object_location",

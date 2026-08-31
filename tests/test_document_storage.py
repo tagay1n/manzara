@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import base64
+import os
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from app.document_storage import (
     find_valid_cache_file,
     load_document_storage_settings,
     materialize_cached_document,
+    prune_document_cache,
     resolve_document_download_url,
 )
 from app.modules.runtime_shared_utils import encrypt
@@ -66,6 +68,7 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
     settings = load_document_storage_settings(payload)
 
     assert settings.cache_path == tmp_path / "cache"
+    assert settings.cache_max_bytes == 50 * 1024**3
     assert settings.source_path == "/documents"
     assert settings.restricted_path == "/documents/private"
     assert settings.filtered_out_path == "/documents/filtered-out"
@@ -80,8 +83,50 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
     assert settings.legacy_public_bucket == "public-docs"
     assert not hasattr(settings, "upstream_bucket")
 
+    payload["documents"]["cache_max_gib"] = 12
+    assert load_document_storage_settings(payload).cache_max_bytes == 12 * 1024**3
+
     del payload["documents"]["primary_storage"]["bucket"]["private"]
     with pytest.raises(RuntimeError, match="documents.primary_storage.bucket.private"):
+        load_document_storage_settings(payload)
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "50", 0, -1])
+def test_cache_max_gib_must_be_a_positive_integer(tmp_path: Path, value: object) -> None:
+    payload = {
+        "documents": {
+            "cache_path": str(tmp_path / "cache"),
+            "cache_max_gib": value,
+            "primary_storage": {
+                "endpoint_url": "https://s3.example.test",
+                "region_name": "test",
+                "access_key_id": "key",
+                "secret_access_key": "secret",
+                "bucket": {"public": "public", "private": "private"},
+            },
+        },
+        "yandex": {
+            "disk": {
+                "oauth_token": "token",
+                "documents": {
+                    "source_path": "/source",
+                    "restricted_path": "/restricted",
+                    "filtered_out_path": "/filtered",
+                },
+            },
+            "cloud": {
+                "aws_access_key_id": "key",
+                "aws_secret_access_key": "secret",
+                "bucket": {
+                    "document": "legacy-public",
+                    "document_private": "legacy-private",
+                },
+            },
+        },
+        "encryption_key": "key",
+    }
+
+    with pytest.raises(RuntimeError, match="documents.cache_max_gib"):
         load_document_storage_settings(payload)
 
 
@@ -104,6 +149,7 @@ def test_materialize_cached_document_reuses_verified_shared_file(
     digest = hashlib.md5(content).hexdigest()  # noqa: S324
     cached = tmp_path / f"{digest}.pdf"
     cached.write_bytes(content)
+    os.utime(cached, ns=(1_000_000_000, 1_000_000_000))
     downloads: list[Path] = []
 
     result = materialize_cached_document(
@@ -115,6 +161,71 @@ def test_materialize_cached_document_reuses_verified_shared_file(
 
     assert result == cached
     assert downloads == []
+    assert cached.stat().st_mtime_ns > 1_000_000_000
+
+
+def test_prune_document_cache_removes_oldest_completed_entries(tmp_path: Path) -> None:
+    oldest = tmp_path / f"{'a' * 32}.pdf"
+    middle = tmp_path / f"{'b' * 32}.docx"
+    newest = tmp_path / f"{'c' * 32}.pdf"
+    partial = tmp_path / f".{'d' * 32}.download"
+    for path in (oldest, middle, newest):
+        path.write_bytes(b"1234")
+    partial.write_bytes(b"x")
+    os.utime(oldest, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(middle, ns=(2_000_000_000, 2_000_000_000))
+    os.utime(newest, ns=(3_000_000_000, 3_000_000_000))
+
+    result = prune_document_cache(tmp_path, max_bytes=10, target_bytes=8)
+
+    assert result.removed_files == 2
+    assert result.removed_bytes == 8
+    assert not oldest.exists()
+    assert not middle.exists()
+    assert newest.exists()
+    assert partial.exists()
+    assert result.remaining_bytes == 5
+
+
+def test_prune_removes_abandoned_but_not_recent_partial_downloads(
+    tmp_path: Path,
+) -> None:
+    completed = tmp_path / f"{'a' * 32}.pdf"
+    abandoned = tmp_path / f".{'b' * 32}.worker.download"
+    recent = tmp_path / f".{'c' * 32}.worker.download"
+    completed.write_bytes(b"1234")
+    abandoned.write_bytes(b"1234")
+    recent.write_bytes(b"1234")
+    old_ns = 1_000_000_000
+    os.utime(abandoned, ns=(old_ns, old_ns))
+
+    result = prune_document_cache(tmp_path, max_bytes=10, target_bytes=8)
+
+    assert result.removed_files == 1
+    assert not abandoned.exists()
+    assert completed.exists()
+    assert recent.exists()
+
+
+def test_materialize_prunes_after_inserting_and_protects_new_document(
+    tmp_path: Path,
+) -> None:
+    old = tmp_path / f"{'a' * 32}.pdf"
+    old.write_bytes(b"old-data")
+    os.utime(old, ns=(1_000_000_000, 1_000_000_000))
+    content = b"new-data"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+
+    result = materialize_cached_document(
+        cache_path=tmp_path,
+        expected_md5=digest,
+        extension=".pdf",
+        download=lambda target: target.write_bytes(content),
+        cache_max_bytes=10,
+    )
+
+    assert result.read_bytes() == content
+    assert not old.exists()
 
 
 def test_materialize_cached_document_replaces_invalid_file_atomically(
