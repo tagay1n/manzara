@@ -28,6 +28,14 @@ from app.document_storage import (  # noqa: E402
     load_document_storage_settings,
     prune_document_cache,
 )
+from app.modules.library.preview_detection import (  # noqa: E402
+    DOCLAYNET_CHECKPOINT,
+    DOCLAYNET_CONFIDENCE,
+    DOCLAYNET_IMAGE_SIZE,
+    DOCLAYNET_IOU,
+    DOCLAYNET_REVISION,
+    DocLayNetPageDetector,
+)
 from app.modules.library.preview_generation import (  # noqa: E402
     PreviewGenerationSettings,
     process_book,
@@ -92,6 +100,7 @@ def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[Prev
             _required(documents, "cache_path", "documents")
         ).expanduser(),
         workspace=artifacts_root / "library" / "book-previews" / f"run-{run_id}",
+        model_cache_dir=artifacts_root / "models" / "huggingface",
         source_endpoint_url=document_storage.primary.endpoint_url,
         source_region_name=document_storage.primary.region_name,
         encryption_key=_required(payload, "encryption_key", "config"),
@@ -108,7 +117,7 @@ def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[Prev
     return settings, credentials
 
 
-def _progress_payload(current: int, total: int, counters: Mapping[str, int]) -> dict[str, Any]:
+def _progress_payload(current: int, total: int, counters: Mapping[str, Any]) -> dict[str, Any]:
     percent = 100 if total == 0 else round((current / total) * 100, 2)
     return {
         "current": int(current),
@@ -120,6 +129,10 @@ def _progress_payload(current: int, total: int, counters: Mapping[str, int]) -> 
         "uploaded_objects": int(counters.get("uploaded_objects") or 0),
         "reused_objects": int(counters.get("reused_objects") or 0),
         "downloaded_sources": int(counters.get("downloaded_sources") or 0),
+        "inspected_pages": int(counters.get("inspected_pages") or 0),
+        "rejected_pages": int(counters.get("rejected_pages") or 0),
+        "selected_pages": int(counters.get("selected_pages") or 0),
+        "inference_seconds": round(float(counters.get("inference_seconds") or 0.0), 3),
     }
 
 
@@ -140,6 +153,7 @@ def run_generation(
     db: Database,
     source_s3: Any,
     target_s3: Any,
+    page_detector: Any,
     settings: PreviewGenerationSettings,
     run_id: int,
     should_stop: Any,
@@ -164,6 +178,10 @@ def run_generation(
         "uploaded_objects": 0,
         "reused_objects": 0,
         "downloaded_sources": 0,
+        "inspected_pages": 0,
+        "rejected_pages": 0,
+        "selected_pages": 0,
+        "inference_seconds": 0.0,
     }
     total = len(candidates)
     _publish_progress(db, run_id, _progress_payload(0, total, counters))
@@ -182,6 +200,7 @@ def run_generation(
             settings=settings,
             source_s3=source_s3,
             target_s3=target_s3,
+            page_detector=page_detector,
             run_id=run_id,
             log=lambda message: print(message, flush=True),
         )
@@ -189,6 +208,10 @@ def run_generation(
         counters["uploaded_objects"] += result.uploaded_objects
         counters["reused_objects"] += result.reused_objects
         counters["downloaded_sources"] += int(result.downloaded_source)
+        counters["inspected_pages"] += result.inspected_pages
+        counters["rejected_pages"] += result.rejected_pages
+        counters["selected_pages"] += result.selected_pages
+        counters["inference_seconds"] += result.inference_seconds
         processed += 1
         _publish_progress(db, run_id, _progress_payload(processed, total, counters))
         if should_stop():
@@ -201,9 +224,18 @@ def run_generation(
     summary = {
         "kind": "library.book_preview_summary",
         "recipe_version": PREVIEW_RECIPE_VERSION,
+        "detector": {
+            "checkpoint": DOCLAYNET_CHECKPOINT,
+            "revision": DOCLAYNET_REVISION,
+            "device": "cpu",
+            "image_size": DOCLAYNET_IMAGE_SIZE,
+            "confidence": DOCLAYNET_CONFIDENCE,
+            "iou": DOCLAYNET_IOU,
+        },
         "processed": processed,
         "total": total,
         **counters,
+        "inference_seconds": round(float(counters["inference_seconds"]), 3),
         "stopped": bool(should_stop()),
     }
     print(
@@ -239,9 +271,6 @@ def main() -> int:
         endpoint_url=credentials["target_endpoint_url"],
         region_name=credentials["target_region_name"],
     )
-    source_s3.head_bucket(Bucket=preview_settings.source_bucket)
-    target_s3.head_bucket(Bucket=preview_settings.target_bucket)
-
     stop_state = {"requested": False}
 
     def request_stop(_signum: int, _frame: Any) -> None:
@@ -253,11 +282,20 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, request_stop)
     try:
+        source_s3.head_bucket(Bucket=preview_settings.source_bucket)
+        target_s3.head_bucket(Bucket=preview_settings.target_bucket)
+        page_detector = DocLayNetPageDetector.from_huggingface(
+            cache_dir=(
+                preview_settings.model_cache_dir
+                or preview_settings.workspace.parent.parent / "models" / "huggingface"
+            )
+        )
         summary = run_generation(
             repository=repository,
             db=db,
             source_s3=source_s3,
             target_s3=target_s3,
+            page_detector=page_detector,
             settings=preview_settings,
             run_id=run_id,
             should_stop=lambda: bool(stop_state["requested"]),

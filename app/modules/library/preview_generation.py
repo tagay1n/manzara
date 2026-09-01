@@ -24,11 +24,14 @@ from app.document_storage import (
     resolve_document_object_location,
 )
 
+from app.modules.library.preview_detection import PageAssessment, PreviewModelError
 from app.modules.library.previews import (
     PREVIEW_RECIPE_VERSION,
+    PreviewPage,
     derive_preview_status,
     preview_object_key,
-    select_preview_pages,
+    preview_pages_from_row,
+    select_informative_preview_pages,
 )
 
 
@@ -50,6 +53,7 @@ class PreviewGenerationSettings:
     target_bucket: str
     cache_dir: Path
     workspace: Path
+    model_cache_dir: Path | None = None
     source_endpoint_url: str = DEFAULT_S3_ENDPOINT
     source_region_name: str = "ru-central1"
     encryption_key: str = ""
@@ -65,12 +69,37 @@ class BookPreviewResult:
     uploaded_objects: int = 0
     reused_objects: int = 0
     downloaded_source: bool = False
+    inspected_pages: int = 0
+    rejected_pages: int = 0
+    selected_pages: int = 0
+    inference_seconds: float = 0.0
     error: str | None = None
 
 
 def _target_size(width: int, height: int, max_width: int, max_height: int) -> tuple[int, int]:
     scale = min(float(max_width) / float(width), float(max_height) / float(height))
     return max(1, round(width * scale)), max(1, round(height * scale))
+
+
+def _render_page_image(document: fitz.Document, page_number: int) -> Image.Image:
+    index = int(page_number) - 1
+    if index < 0 or index >= document.page_count:
+        raise ValueError(f"PDF page {page_number} is outside 1..{document.page_count}")
+    page = document.load_page(index)
+    rect = page.rect
+    large_width, large_height = _target_size(
+        max(1, round(rect.width)),
+        max(1, round(rect.height)),
+        1000,
+        1500,
+    )
+    scale = min(large_width / rect.width, large_height / rect.height)
+    pixmap = page.get_pixmap(
+        matrix=fitz.Matrix(scale, scale),
+        alpha=False,
+        colorspace=fitz.csRGB,
+    )
+    return Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
 
 
 def render_page_variants(
@@ -83,20 +112,7 @@ def render_page_variants(
     """Render one 1-based PDF page into the versioned small/large recipe."""
     output_dir.mkdir(parents=True, exist_ok=True)
     with fitz.open(pdf_path) as document:
-        index = int(page_number) - 1
-        if index < 0 or index >= document.page_count:
-            raise ValueError(f"PDF page {page_number} is outside 1..{document.page_count}")
-        page = document.load_page(index)
-        rect = page.rect
-        large_width, large_height = _target_size(
-            max(1, round(rect.width)),
-            max(1, round(rect.height)),
-            1000,
-            1500,
-        )
-        scale = min(large_width / rect.width, large_height / rect.height)
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False, colorspace=fitz.csRGB)
-        large_image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+        large_image = _render_page_image(document, page_number)
 
     small_size = _target_size(large_image.width, large_image.height, 400, 600)
     small_image = large_image.resize(small_size, Image.Resampling.LANCZOS)
@@ -224,6 +240,30 @@ def _matching_remote(
     return head
 
 
+def _select_detected_pages(
+    pdf_path: Path,
+    *,
+    page_detector: Any,
+) -> tuple[int, list[PreviewPage], dict[int, PageAssessment]]:
+    assessments: dict[int, PageAssessment] = {}
+    with fitz.open(pdf_path) as document:
+        page_count = int(document.page_count)
+
+        def is_useful(page_number: int) -> bool:
+            assessment = assessments.get(page_number)
+            if assessment is None:
+                image = _render_page_image(document, page_number)
+                assessment = page_detector.assess(image, page_number=page_number)
+                assessments[page_number] = assessment
+            return assessment.useful
+
+        selected = select_informative_preview_pages(
+            page_count,
+            is_useful=is_useful,
+        )
+    return page_count, selected, assessments
+
+
 def process_book(
     candidate: dict[str, Any],
     *,
@@ -231,6 +271,7 @@ def process_book(
     settings: PreviewGenerationSettings,
     source_s3: Any,
     target_s3: Any,
+    page_detector: Any,
     run_id: int | None,
     log: Any,
 ) -> BookPreviewResult:
@@ -246,6 +287,8 @@ def process_book(
     reused = 0
     downloaded = False
     verified_objects = 0
+    selected_pages: list[PreviewPage] = []
+    assessments: dict[int, PageAssessment] = {}
     book_workspace = settings.workspace / md5
     book_workspace.mkdir(parents=True, exist_ok=True)
     try:
@@ -266,12 +309,38 @@ def process_book(
             s3=source_s3,
             cache_max_bytes=settings.cache_max_bytes,
         )
-        with fitz.open(pdf_path) as document:
-            page_count = int(document.page_count)
-        selected_pages = select_preview_pages(page_count)
+        persisted_pages = preview_pages_from_row(started)
+        if persisted_pages:
+            with fitz.open(pdf_path) as document:
+                page_count = int(document.page_count)
+            selected_pages = persisted_pages
+            log(
+                f"library previews: reuse selection md5={md5} "
+                f"pages={[page.page_number for page in selected_pages]}"
+            )
+        else:
+            page_count, selected_pages, assessments = _select_detected_pages(
+                pdf_path,
+                page_detector=page_detector,
+            )
+            for page_number, assessment in assessments.items():
+                log(
+                    f"library previews: classify md5={md5} page={page_number} "
+                    f"useful={str(assessment.useful).lower()} "
+                    f"classes={list(assessment.detected_classes)} "
+                    f"seconds={assessment.inference_seconds:.3f}"
+                )
         log(
             f"library previews: process md5={md5} pages={page_count} "
             f"expected_previews={len(selected_pages)}"
+        )
+        repository.checkpoint(
+            md5,
+            recipe_version=PREVIEW_RECIPE_VERSION,
+            source_page_count=page_count,
+            selected_pages=selected_pages,
+            status="processing",
+            run_id=run_id,
         )
 
         for page in selected_pages:
@@ -337,39 +406,53 @@ def process_book(
                     )
 
                 verified_objects += 1
-                current_status = derive_preview_status(page_count, verified_objects)
+                current_status = derive_preview_status(len(selected_pages), verified_objects)
                 repository.checkpoint(
                     md5,
                     recipe_version=PREVIEW_RECIPE_VERSION,
                     source_page_count=page_count,
+                    selected_pages=selected_pages,
                     status=current_status,
                     run_id=run_id,
                 )
 
-        status = derive_preview_status(page_count, verified_objects)
+        status = derive_preview_status(len(selected_pages), verified_objects)
+        repository.checkpoint(
+            md5,
+            recipe_version=PREVIEW_RECIPE_VERSION,
+            source_page_count=page_count,
+            selected_pages=selected_pages,
+            status=status,
+            run_id=run_id,
+        )
         return BookPreviewResult(
             md5=md5,
             status=status,
             uploaded_objects=uploaded,
             reused_objects=reused,
             downloaded_source=downloaded,
+            inspected_pages=len(assessments),
+            rejected_pages=sum(not item.useful for item in assessments.values()),
+            selected_pages=len(selected_pages),
+            inference_seconds=sum(item.inference_seconds for item in assessments.values()),
         )
     except Exception as exc:
         status = (
-            derive_preview_status(page_count, verified_objects)
-            if page_count > 0
+            derive_preview_status(len(selected_pages), verified_objects)
+            if page_count > 0 and selected_pages
             else "failed"
         )
         repository.checkpoint(
             md5,
             recipe_version=PREVIEW_RECIPE_VERSION,
             source_page_count=page_count if page_count > 0 else None,
+            selected_pages=selected_pages,
             status=status,
             run_id=run_id,
             error_text=str(exc),
         )
         log(f"library previews: failed md5={md5} status={status} error={exc}")
-        if _is_storage_fatal(exc):
+        if _is_storage_fatal(exc) or isinstance(exc, PreviewModelError):
             raise
         return BookPreviewResult(
             md5=md5,
@@ -377,13 +460,16 @@ def process_book(
             uploaded_objects=uploaded,
             reused_objects=reused,
             downloaded_source=downloaded,
+            inspected_pages=len(assessments),
+            rejected_pages=sum(not item.useful for item in assessments.values()),
+            selected_pages=len(selected_pages),
+            inference_seconds=sum(item.inference_seconds for item in assessments.values()),
             error=str(exc),
         )
 __all__ = [
     "RenderedVariant",
     "BookPreviewResult",
     "PreviewGenerationSettings",
-    "calculate_md5",
     "ensure_cached_pdf",
     "process_book",
     "render_page_variants",

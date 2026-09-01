@@ -374,8 +374,11 @@ def test_library_preview_endpoint_returns_variable_manifest(test_client, monkeyp
             return {
                 "md5": md5,
                 "status": "ready",
-                "recipe_version": "webp-v1",
+                "recipe_version": "webp-v2",
                 "source_page_count": 2,
+                "first_preview_page": 1,
+                "second_preview_page": None,
+                "last_preview_page": 2,
             }
 
         def dispose(self):

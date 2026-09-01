@@ -9,6 +9,8 @@ from typing import Any, Mapping
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+from app.modules.library.previews import PreviewPage
+
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _STATUSES = {"pending", "processing", "ready", "partial", "failed"}
@@ -52,6 +54,9 @@ class LibraryPreviewRepository:
                         d.document_url,
                         p.recipe_version,
                         p.source_page_count,
+                        p.first_preview_page,
+                        p.second_preview_page,
+                        p.last_preview_page,
                         p.status,
                         p.error_text
                     FROM document d
@@ -105,6 +110,21 @@ class LibraryPreviewRepository:
                                 THEN library_book_previews.source_page_count
                             ELSE NULL
                         END,
+                        first_preview_page = CASE
+                            WHEN library_book_previews.recipe_version = EXCLUDED.recipe_version
+                                THEN library_book_previews.first_preview_page
+                            ELSE NULL
+                        END,
+                        second_preview_page = CASE
+                            WHEN library_book_previews.recipe_version = EXCLUDED.recipe_version
+                                THEN library_book_previews.second_preview_page
+                            ELSE NULL
+                        END,
+                        last_preview_page = CASE
+                            WHEN library_book_previews.recipe_version = EXCLUDED.recipe_version
+                                THEN library_book_previews.last_preview_page
+                            ELSE NULL
+                        END,
                         recipe_version = EXCLUDED.recipe_version,
                         status = 'processing',
                         attempt_count = library_book_previews.attempt_count + 1,
@@ -130,6 +150,7 @@ class LibraryPreviewRepository:
         *,
         recipe_version: str,
         source_page_count: int | None,
+        selected_pages: list[PreviewPage],
         status: str,
         run_id: int | None,
         error_text: str | None = None,
@@ -140,6 +161,12 @@ class LibraryPreviewRepository:
             raise ValueError(f"Invalid preview status: {normalized_status!r}")
         now = _utc_now()
         generated_at = now if normalized_status == "ready" else None
+        selected_by_role = {page.role: int(page.page_number) for page in selected_pages}
+        if len(selected_by_role) != len(selected_pages):
+            raise ValueError("Preview page roles must be unique")
+        unsupported_roles = set(selected_by_role) - {"first", "second", "last"}
+        if unsupported_roles:
+            raise ValueError(f"Unsupported preview page roles: {sorted(unsupported_roles)}")
         with self._engine.begin() as conn:
             result = conn.execute(
                 text(
@@ -147,6 +174,9 @@ class LibraryPreviewRepository:
                     UPDATE library_book_previews
                     SET recipe_version = :recipe_version,
                         source_page_count = :source_page_count,
+                        first_preview_page = :first_preview_page,
+                        second_preview_page = :second_preview_page,
+                        last_preview_page = :last_preview_page,
                         status = :status,
                         last_run_id = :run_id,
                         error_text = :error_text,
@@ -161,6 +191,9 @@ class LibraryPreviewRepository:
                     "source_page_count": (
                         int(source_page_count) if source_page_count is not None else None
                     ),
+                    "first_preview_page": selected_by_role.get("first"),
+                    "second_preview_page": selected_by_role.get("second"),
+                    "last_preview_page": selected_by_role.get("last"),
                     "status": normalized_status,
                     "run_id": int(run_id) if run_id is not None else None,
                     "error_text": str(error_text or "").strip()[:4000] or None,
@@ -238,22 +271,20 @@ class LibraryPreviewRepository:
                         COUNT(*) FILTER (WHERE status = 'failed') AS failed,
                         COALESCE(SUM(
                             CASE WHEN status = 'ready' THEN
-                                CASE
-                                    WHEN source_page_count = 1 THEN 1
-                                    WHEN source_page_count = 2 THEN 2
-                                    WHEN source_page_count > 2 THEN 3
-                                    ELSE 0
-                                END
+                                num_nonnulls(
+                                    first_preview_page,
+                                    second_preview_page,
+                                    last_preview_page
+                                )
                             ELSE 0 END
                         ), 0) AS generated_preview_pages,
                         COALESCE(SUM(
                             CASE WHEN status = 'ready' THEN
-                                CASE
-                                    WHEN source_page_count = 1 THEN 2
-                                    WHEN source_page_count = 2 THEN 4
-                                    WHEN source_page_count > 2 THEN 6
-                                    ELSE 0
-                                END
+                                num_nonnulls(
+                                    first_preview_page,
+                                    second_preview_page,
+                                    last_preview_page
+                                ) * 2
                             ELSE 0 END
                         ), 0) AS generated_image_objects
                     FROM current_rows

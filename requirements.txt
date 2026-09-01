@@ -11,6 +11,11 @@ gspread==6.2.1
 google-api-python-client==2.189.0
 google-auth-oauthlib==1.2.4
 huggingface_hub==1.7.2
+# CPU DocLayNet inference for content-aware Library previews.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu
+torchvision==0.21.0+cpu
+ultralytics==8.3.79
 isbnlib==3.10.14
 pydantic==2.12.5
 psycopg2-binary==2.9.11
