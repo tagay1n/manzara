@@ -58,6 +58,8 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
                 "bucket": {
                     "document": "public-docs",
                     "document_private": "private-docs",
+                    "content": "ttcontent",
+                    "image": "ttimg",
                     "upstream_metadata": "upstream",
                 },
             },
@@ -79,6 +81,8 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
     assert settings.private_bucket == "manzara-documents-private"
     assert settings.content_bucket == "ttcontent"
     assert settings.content_images_bucket == "ttcontent-images"
+    assert settings.legacy_content_bucket == "ttcontent"
+    assert settings.legacy_content_images_bucket == "ttimg"
     assert settings.legacy.endpoint_url == "https://storage.yandexcloud.net"
     assert settings.legacy_public_bucket == "public-docs"
     assert not hasattr(settings, "upstream_bucket")

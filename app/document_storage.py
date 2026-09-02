@@ -70,6 +70,8 @@ class DocumentStorageSettings:
     preview_bucket: str = ""
     content_bucket: str = ""
     content_images_bucket: str = ""
+    legacy_content_bucket: str = ""
+    legacy_content_images_bucket: str = ""
 
 
 @dataclass(frozen=True)
@@ -168,6 +170,8 @@ def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorag
         content_images_bucket=str(
             primary_buckets.get("content_images") or ""
         ).strip(),
+        legacy_content_bucket=str(legacy_buckets.get("content") or "").strip(),
+        legacy_content_images_bucket=str(legacy_buckets.get("image") or "").strip(),
     )
 
 

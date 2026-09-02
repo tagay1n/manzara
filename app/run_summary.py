@@ -418,6 +418,28 @@ def build_structured_run_summary(
             summary["message"] = "Non-PDF extraction completed."
         return summary
 
+    if task_id == "maintenance.migrate_pdf_content" and status == "completed":
+        data = artifacts if isinstance(artifacts, dict) else {}
+        migrated = int(data.get("migrated") or 0)
+        failed = int(data.get("failed") or 0)
+        images = int(data.get("images_uploaded") or 0) + int(
+            data.get("images_reused") or 0
+        )
+        pending = int(data.get("pending_after") or 0)
+        summary["highlights"].extend(
+            [
+                {"label": "Migrated", "value": str(migrated)},
+                {"label": "Images", "value": str(images)},
+                {"label": "Failed", "value": str(failed)},
+                {"label": "Pending", "value": str(pending)},
+            ]
+        )
+        summary["message"] = (
+            f"PDF content migration completed: {migrated} migrated, "
+            f"{failed} failed, {pending} pending."
+        )
+        return summary
+
     if panel_id == "library" and status == "completed":
         summary["message"] = "Library task completed."
         return summary

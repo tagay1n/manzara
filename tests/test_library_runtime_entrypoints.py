@@ -22,6 +22,7 @@ from app.modules.library.runtime import run_collection_validate
         "app/modules/library/runtime/run_generate_book_previews.py",
         "app/modules/library/runtime/run_metadata_extract.py",
         "app/modules/library/runtime/run_extract_non_pdf.py",
+        "app/modules/maintenance/runtime/migrate_pdf_content.py",
     ],
 )
 def test_library_runtime_script_help_runs_outside_repo_cwd(
