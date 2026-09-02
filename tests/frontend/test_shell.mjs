@@ -21,14 +21,18 @@ const STYLES_SOURCE = readFileSync(
   "utf-8",
 );
 
-test("conveyor lays sequential steps left-to-right and parallel tasks vertically", () => {
+test("conveyor wraps sequential step cards and keeps parallel tasks grouped vertically", () => {
   assert.match(
     STYLES_SOURCE,
-    /\.conveyor-stages\s*\{[^}]*display:\s*flex;[^}]*overflow-x:\s*auto;/s,
+    /\.conveyor-stages\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;[^}]*overflow-x:\s*hidden;/s,
   );
   assert.match(
     STYLES_SOURCE,
     /\.conveyor-stage-items\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s,
+  );
+  assert.match(
+    STYLES_SOURCE,
+    /\.conveyor-new-row-drop\s*\{[^}]*flex:\s*0\s+0\s+28px;/s,
   );
 });
 

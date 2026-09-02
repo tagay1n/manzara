@@ -102,9 +102,18 @@
       `;
     }
 
+    function newStageDropHtml(stageIndex, label) {
+      return `
+        <div class="conveyor-new-row-drop" data-new-stage-index="${stageIndex}"
+          aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
+          <i data-lucide="plus" aria-hidden="true"></i>
+        </div>
+      `;
+    }
+
     function stagesHtml(stages, tasks, lockedIds) {
       if (!stages.length) {
-        return '<div class="conveyor-new-row-drop" data-new-stage-index="0">Drag a task badge here</div>';
+        return newStageDropHtml(0, "Drop first task here");
       }
       const lockedStageIndexes = stages
         .map((stage, index) => stage.items.some((item) => lockedIds.has(String(item.item_id))) ? index : -1)
@@ -115,21 +124,23 @@
       return stages.map((stage, stageIndex) => {
         const locked = stage.items.some((item) => lockedIds.has(String(item.item_id)));
         return `
-          ${stageIndex >= minimumEditableIndex ? `<div class="conveyor-new-row-drop" data-new-stage-index="${stageIndex}">Insert sequential step</div>` : ""}
-          <section class="conveyor-stage ${locked ? "is-locked" : ""}" data-stage-index="${stageIndex}">
-            <div class="conveyor-stage-head">
-              <span>Step ${stageIndex + 1}${stage.items.length > 1 ? " • parallel" : ""}</span>
-              <div>
-                <button type="button" class="icon-btn quiet conveyor-stage-up" data-stage-index="${stageIndex}" ${locked || stageIndex <= minimumEditableIndex ? "disabled" : ""} aria-label="Move step left"><i data-lucide="arrow-left"></i></button>
-                <button type="button" class="icon-btn quiet conveyor-stage-down" data-stage-index="${stageIndex}" ${locked || stageIndex === stages.length - 1 ? "disabled" : ""} aria-label="Move step right"><i data-lucide="arrow-right"></i></button>
+          <div class="conveyor-stage-slot">
+            ${stageIndex >= minimumEditableIndex ? newStageDropHtml(stageIndex, `Insert step ${stageIndex + 1}`) : ""}
+            <section class="conveyor-stage ${locked ? "is-locked" : ""} ${stage.items.length > 1 ? "is-parallel" : ""}" data-stage-index="${stageIndex}">
+              <div class="conveyor-stage-head">
+                <span>Step ${stageIndex + 1}${stage.items.length > 1 ? ` • ${stage.items.length} parallel` : ""}</span>
+                <div>
+                  <button type="button" class="icon-btn quiet conveyor-stage-up" data-stage-index="${stageIndex}" ${locked || stageIndex <= minimumEditableIndex ? "disabled" : ""} aria-label="Move step left"><i data-lucide="arrow-left"></i></button>
+                  <button type="button" class="icon-btn quiet conveyor-stage-down" data-stage-index="${stageIndex}" ${locked || stageIndex === stages.length - 1 ? "disabled" : ""} aria-label="Move step right"><i data-lucide="arrow-right"></i></button>
+                </div>
               </div>
-            </div>
-            <div class="conveyor-stage-items" ${locked ? "" : `data-stage-drop-index="${stageIndex}"`}>
-              ${stage.items.map((item, itemIndex) => itemHtml(item, stageIndex, itemIndex, locked, tasks)).join("")}
-            </div>
-          </section>
+              <div class="conveyor-stage-items" ${locked ? "" : `data-stage-drop-index="${stageIndex}"`}>
+                ${stage.items.map((item, itemIndex) => itemHtml(item, stageIndex, itemIndex, locked, tasks)).join("")}
+              </div>
+            </section>
+          </div>
         `;
-      }).join("") + `<div class="conveyor-new-row-drop" data-new-stage-index="${stages.length}">Add next sequential step</div>`;
+      }).join("") + newStageDropHtml(stages.length, `Add step ${stages.length + 1}`);
     }
 
     function render() {

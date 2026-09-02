@@ -515,7 +515,9 @@ test("tasks catalog presents conveyor steps in left-to-right execution order", a
   await harness.flush();
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /data-conveyor-task-id="maintenance.quick"/);
   assert.match(harness.elements.get("conveyor-status").textContent, /left to right/i);
-  assert.match(harness.elements.get("conveyor-stages").innerHTML, /Drag a task badge here/);
+  assert.match(harness.elements.get("conveyor-stages").innerHTML, /aria-label="Drop first task here"/);
+  assert.match(harness.elements.get("conveyor-stages").innerHTML, /data-lucide="plus"/);
+  assert.doesNotMatch(harness.elements.get("conveyor-stages").innerHTML, />Drag a task badge here</);
   assert.equal(harness.elements.get("conveyor-stages").classList.contains("is-empty"), true);
 
   const transfer = { effectAllowed: "", setData() {} };
@@ -546,7 +548,8 @@ test("tasks catalog presents conveyor steps in left-to-right execution order", a
   assert.equal(stages.length, 1);
   assert.equal(stages[0].items[0].task_id, "maintenance.quick");
   assert.match(harness.elements.get("conveyor-stages").innerHTML, /Step 1/);
-  assert.match(harness.elements.get("conveyor-stages").innerHTML, /next sequential step/i);
+  assert.match(harness.elements.get("conveyor-stages").innerHTML, /class="conveyor-stage-slot"/);
+  assert.match(harness.elements.get("conveyor-stages").innerHTML, /aria-label="Add step 2"/);
   assert.equal(harness.elements.get("conveyor-stages").classList.contains("is-empty"), false);
 });
 

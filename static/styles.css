@@ -1893,10 +1893,20 @@ button {
 
 .conveyor-stages {
   display: flex;
+  flex-wrap: wrap;
   align-items: stretch;
   gap: 8px;
-  overflow-x: auto;
+  overflow-x: hidden;
   padding-bottom: 4px;
+}
+
+.conveyor-stage-slot {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  flex: 1 1 266px;
+  max-width: 396px;
+  min-width: 0;
 }
 
 .conveyor-stage {
@@ -1905,7 +1915,7 @@ button {
   background: rgba(14, 28, 52, 0.72);
   padding: 9px;
   display: grid;
-  flex: 1 0 230px;
+  flex: 1 1 230px;
   min-width: 0;
   align-content: start;
   gap: 8px;
@@ -1914,6 +1924,11 @@ button {
 .conveyor-stage.is-locked {
   border-color: #5c6d88;
   background: rgba(39, 48, 65, 0.7);
+}
+
+.conveyor-stage.is-parallel {
+  border-color: #477fbd;
+  box-shadow: inset 3px 0 0 rgba(73, 165, 255, 0.3);
 }
 
 .conveyor-stage-head {
@@ -2000,26 +2015,34 @@ button {
 
 .conveyor-new-row-drop {
   border: 1px dashed #36577f;
-  border-radius: 7px;
+  border-radius: 999px;
   min-height: 28px;
-  min-width: 38px;
-  flex: 0 0 38px;
+  min-width: 28px;
+  flex: 0 0 28px;
   display: grid;
   place-items: center;
-  padding: 6px;
-  text-align: center;
+  align-self: center;
+  padding: 0;
   color: #6f89ad;
-  font-size: 10px;
+  cursor: copy;
+}
+
+.conveyor-new-row-drop svg {
+  width: 14px;
+  height: 14px;
 }
 
 .conveyor-stages.is-empty .conveyor-new-row-drop {
-  min-height: 46px;
-  flex: 1 1 auto;
+  width: 100%;
+  min-height: 36px;
+  flex: 1 1 100%;
+  border-radius: 8px;
 }
 
 .conveyor-new-row-drop:hover {
   border-color: #49a5ff;
   color: #b5d6ff;
+  background: rgba(73, 165, 255, 0.08);
 }
 
 .conveyor-empty {
