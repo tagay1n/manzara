@@ -2,7 +2,7 @@
 
 ## Previews
 
-- Preview roles are selected with the pinned `yolov12l-doclaynet.pt` model at CPU `imgsz=1024`. Search the first and last three pages, exclude header/footer-only detections, keep roles distinct, and persist the actual selected page numbers.
+- Preview roles are selected with the pinned `yolov12l-doclaynet.pt` model at CPU `imgsz=1024`. Search the first and last three pages; treat page-header, page-footer, and picture layouts as non-relevant so pages containing only those classes are skipped. Keep roles distinct and persist the actual selected page numbers.
 - Selection prefers the first useful front page, the last useful back page, then the next distinct useful front page. A valid PDF with no qualifying pages is complete with zero previews; fewer than three useful pages are also complete.
 - Keep the shared source cache within `documents.cache_max_gib` (50 GiB by default). When it crosses the limit, evict least-recently-used completed sources to 90% of the limit; recent partial downloads and the source just materialized are protected.
 - Object roles are deterministic and use compact S3 names. PostgreSQL stores document-level status, page count, recipe version, and the three nullable semantic page selections rather than a per-object manifest.

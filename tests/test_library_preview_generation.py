@@ -202,11 +202,10 @@ class _PageDetector:
         )
 
 
-def test_qualifying_layout_classes_rejects_header_footer_only_pages() -> None:
-    assert qualifying_layout_classes(["Page-header", "Page-footer"]) == ()
-    assert qualifying_layout_classes(["Page-header", "Text"]) == ("Text",)
+def test_qualifying_layout_classes_rejects_non_relevant_only_pages() -> None:
+    assert qualifying_layout_classes(["Page-header", "Page-footer", "Picture"]) == ()
+    assert qualifying_layout_classes(["Page-header", "Picture", "Text"]) == ("Text",)
     assert qualifying_layout_classes(["Picture", "Title", "Picture"]) == (
-        "Picture",
         "Title",
     )
 

@@ -16,7 +16,7 @@ DOCLAYNET_IMAGE_SIZE = 1024
 DOCLAYNET_CONFIDENCE = 0.25
 DOCLAYNET_IOU = 0.45
 DOCLAYNET_MAX_DETECTIONS = 300
-_NON_CONTENT_CLASSES = {"page-header", "page-footer"}
+_NON_RELEVANT_CLASSES = {"page-header", "page-footer", "picture"}
 
 
 class PreviewModelError(RuntimeError):
@@ -37,13 +37,13 @@ def _normalized_class(value: object) -> str:
 
 
 def qualifying_layout_classes(class_names: Iterable[object]) -> tuple[str, ...]:
-    """Return stable unique content classes, excluding header/footer-only regions."""
+    """Return stable unique classes that make a page useful as a preview."""
     selected: list[str] = []
     seen: set[str] = set()
     for raw_name in class_names:
         name = str(raw_name or "").strip()
         normalized = _normalized_class(name)
-        if not normalized or normalized in _NON_CONTENT_CLASSES or normalized in seen:
+        if not normalized or normalized in _NON_RELEVANT_CLASSES or normalized in seen:
             continue
         seen.add(normalized)
         selected.append(name)
