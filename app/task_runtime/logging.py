@@ -226,6 +226,26 @@ class TaskLoggingMixin:
                 else {}
             )
             return payload
+        if kind == "library.site_export_summary":
+            for key in (
+                "version",
+                "documents_published",
+                "documents_excluded",
+                "entities",
+                "collections",
+                "classifications",
+                "documents_with_previews",
+            ):
+                payload[key] = int(artifacts.get(key) or 0)
+            for key in ("format", "revision", "bundle_path", "bundle_sha256"):
+                payload[key] = str(artifacts.get(key) or "")
+            payload["exclusion_reasons"] = (
+                dict(artifacts.get("exclusion_reasons"))
+                if isinstance(artifacts.get("exclusion_reasons"), dict)
+                else {}
+            )
+            payload["stopped"] = bool(artifacts.get("stopped"))
+            return payload
         return payload
 
 

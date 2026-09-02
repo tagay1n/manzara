@@ -9,6 +9,7 @@ Read only the guidance matching the files or behavior being changed:
 | source cache, previews, non-PDF conversion | `guidance/documents.md` |
 | metadata extraction and evaluation | `guidance/metadata.md` |
 | collection detection, validation, and apply | `guidance/collections.md` |
+| static-site publishing export | `guidance/site-export.md` |
 
 General Library rules:
 

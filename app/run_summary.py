@@ -440,6 +440,28 @@ def build_structured_run_summary(
         )
         return summary
 
+    if task_id == "library.site_export" and status == "completed":
+        data = artifacts if isinstance(artifacts, dict) else {}
+        if data.get("kind") == "library.site_export_summary":
+            published = int(data.get("documents_published") or 0)
+            excluded = int(data.get("documents_excluded") or 0)
+            revision = str(data.get("revision") or "")
+            bundle_path = str(data.get("bundle_path") or "")
+            summary["highlights"].extend(
+                [
+                    {"label": "Published", "value": f"{published:,}"},
+                    {"label": "Excluded", "value": f"{excluded:,}"},
+                    {"label": "Revision", "value": revision},
+                    {"label": "Bundle", "value": bundle_path},
+                ]
+            )
+            summary["message"] = (
+                "Static Library export stopped before publication."
+                if data.get("stopped")
+                else f"Static Library export completed: {published:,} documents."
+            )
+        return summary
+
     if panel_id == "library" and status == "completed":
         summary["message"] = "Library task completed."
         return summary

@@ -11,6 +11,7 @@ LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID = "library.prepare_document_cleanup"
 LIBRARY_METADATA_EXTRACT_TASK_ID = "library.metadata_extract"
 LIBRARY_METADATA_VALIDATE_TASK_ID = "library.metadata_validate"
 LIBRARY_EXTRACT_NON_PDF_TASK_ID = "library.extract_non_pdf"
+LIBRARY_SITE_EXPORT_TASK_ID = "library.site_export"
 
 
 def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, Any]]:
@@ -19,6 +20,20 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
     runner = root / "app" / "modules" / "library" / "runtime" / "run_generate_book_previews.py"
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
     return [
+        {
+            "task_id": LIBRARY_SITE_EXPORT_TASK_ID,
+            "panel_id": "library",
+            "title": "Export static library",
+            "task_type": "export",
+            "icon_idle": "PackageOpen",
+            "icon_running": "Square",
+            "cwd": str(root),
+            "command": {
+                "mode": "shell",
+                "value": py_bootstrap
+                + '"$PY_BIN" -m app.modules.library.runtime.run_site_export',
+            },
+        },
         {
             "task_id": LIBRARY_METADATA_VALIDATE_TASK_ID,
             "panel_id": "metadata",
@@ -98,5 +113,6 @@ __all__ = [
     "LIBRARY_METADATA_EXTRACT_TASK_ID",
     "LIBRARY_METADATA_VALIDATE_TASK_ID",
     "LIBRARY_EXTRACT_NON_PDF_TASK_ID",
+    "LIBRARY_SITE_EXPORT_TASK_ID",
     "library_task_definitions",
 ]
