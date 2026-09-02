@@ -610,7 +610,8 @@ function attachUiHandlers() {
     }
   });
   document.getElementById("copy-logs").addEventListener("click", async () => {
-    const text = document.getElementById("log-content").textContent;
+    const text = state.logViewer?.getCopyText?.()
+      || document.getElementById("log-content").textContent;
     await navigator.clipboard.writeText(text || "");
     window.ManzaraUI.toast("Logs copied.", { tone: "success" });
   });

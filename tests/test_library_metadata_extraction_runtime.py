@@ -243,7 +243,8 @@ def test_runtime_persists_success_and_emits_structured_progress(
     assert "library metadata: source prepare start" in output
     assert "library metadata: source prepare complete" in output
     assert "library metadata: Gemini response md5=" in output
-    assert '\n{\n  "@context": "https://schema.org",' in output
+    assert "\n[worker=metadata-1] {" in output
+    assert '[worker=metadata-1]   "@context": "https://schema.org",' in output
 
 
 def test_parallel_runtime_emits_only_aggregate_monotonic_progress(

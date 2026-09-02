@@ -678,6 +678,60 @@
       return String(raw ?? "");
     }
 
+    function parseWorkerLine(raw) {
+      const line = normalizedLineValue(raw);
+      const match = line.match(/^\[worker=([a-z0-9._-]+)\]\s?(.*)$/s);
+      if (!match) return { workerId: "", message: line };
+      return { workerId: match[1], message: match[2] };
+    }
+
+    function logDateParts(value) {
+      const date = parseDate(value);
+      if (!date) return { key: "unknown", dateLabel: "Date unavailable", timeLabel: "--:--:--" };
+      const key = [date.getFullYear(), date.getMonth() + 1, date.getDate()].join("-");
+      const dateLabel = new Intl.DateTimeFormat("en-GB", {
+        day: "2-digit", month: "short", year: "numeric", timeZoneName: "short",
+      }).format(date);
+      const timeLabel = new Intl.DateTimeFormat("en-GB", {
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+      }).format(date);
+      return { key, dateLabel, timeLabel };
+    }
+
+    const TERMINAL_WORKER_COLORS = [
+      "#7dd3fc", // bright cyan
+      "#fbbf24", // bright yellow
+      "#86efac", // bright green
+      "#f0abfc", // bright magenta
+      "#fb7185", // bright red
+      "#a5b4fc", // bright blue
+      "#fdba74", // bright orange
+      "#5eead4", // bright teal
+    ];
+
+    function workerColor(workerId) {
+      const suffix = String(workerId || "").match(/-(\d+)$/);
+      if (suffix) {
+        return TERMINAL_WORKER_COLORS[(Number(suffix[1]) - 1) % TERMINAL_WORKER_COLORS.length];
+      }
+      let hash = 0;
+      for (const character of String(workerId || "")) {
+        hash = ((hash * 31) + character.charCodeAt(0)) >>> 0;
+      }
+      return TERMINAL_WORKER_COLORS[hash % TERMINAL_WORKER_COLORS.length];
+    }
+
+    function normalizeEntry(item, logId) {
+      const parsed = parseWorkerLine(item?.line);
+      return {
+        log_id: logId,
+        ts: String(item?.ts || ""),
+        stream: String(item?.stream || "stdout"),
+        workerId: parsed.workerId,
+        message: parsed.message,
+      };
+    }
+
     function isNearBottom() {
       if (!contentNode) return true;
       const distance = contentNode.scrollHeight - (contentNode.scrollTop + contentNode.clientHeight);
@@ -690,27 +744,73 @@
         contentNode.textContent = "";
         return;
       }
-      contentNode.textContent = `${entries.map((item) => item.line).join("\n")}\n`;
+      const ownerDocument = contentNode.ownerDocument;
+      if (!ownerDocument?.createElement || !ownerDocument?.createDocumentFragment) {
+        let previousDate = "";
+        const textLines = [];
+        for (const entry of entries) {
+          const parts = logDateParts(entry.ts);
+          if (parts.key !== previousDate) {
+            textLines.push(`— ${parts.dateLabel} —`);
+            previousDate = parts.key;
+          }
+          const worker = entry.workerId ? ` ${entry.workerId}` : "";
+          textLines.push(`${parts.timeLabel}${worker} ${entry.message}`);
+        }
+        contentNode.textContent = `${textLines.join("\n")}\n`;
+        return;
+      }
+      const fragment = ownerDocument.createDocumentFragment();
+      let previousDate = "";
+      for (const entry of entries) {
+        const parts = logDateParts(entry.ts);
+        if (parts.key !== previousDate) {
+          const separator = ownerDocument.createElement("span");
+          separator.className = "task-log-date-separator";
+          separator.textContent = parts.dateLabel;
+          fragment.append(separator, ownerDocument.createTextNode("\n"));
+          previousDate = parts.key;
+        }
+        const row = ownerDocument.createElement("span");
+        row.className = "task-log-row";
+        row.dataset.worker = entry.workerId || "unassigned";
+        if (entry.workerId && entry.workerId !== "coordinator") {
+          row.style.setProperty("--worker-color", workerColor(entry.workerId));
+        }
+        const fullDateTime = formatDateTime(entry.ts, { includeSeconds: true, includeZone: true });
+        const workerLabel = entry.workerId || "unassigned";
+        row.title = `${fullDateTime} • ${workerLabel}`;
+        row.setAttribute("aria-label", `${fullDateTime}, ${workerLabel}: ${entry.message}`);
+
+        const time = ownerDocument.createElement("span");
+        time.className = "task-log-time";
+        time.textContent = parts.timeLabel;
+        const worker = ownerDocument.createElement("span");
+        worker.className = "task-log-worker";
+        worker.textContent = workerLabel;
+        const message = ownerDocument.createElement("span");
+        message.className = "task-log-message";
+        message.textContent = entry.message;
+        row.append(time, worker, message);
+        fragment.append(row, ownerDocument.createTextNode("\n"));
+      }
+      contentNode.replaceChildren(fragment);
     }
 
     function appendEntries(lines) {
       if (!Array.isArray(lines) || !lines.length || !contentNode) return 0;
-      const appended = [];
+      let appended = 0;
       for (const item of lines) {
         const logId = Number(item?.log_id || 0);
         if (!Number.isFinite(logId) || logId <= 0 || entryIds.has(logId)) continue;
         entryIds.add(logId);
-        const entry = {
-          log_id: logId,
-          line: normalizedLineValue(item?.line),
-        };
+        const entry = normalizeEntry(item, logId);
         entries.push(entry);
-        appended.push(entry.line);
+        appended += 1;
       }
-      if (!appended.length) return 0;
-      const suffix = `${appended.join("\n")}\n`;
-      contentNode.textContent += suffix;
-      return appended.length;
+      if (!appended) return 0;
+      renderAll();
+      return appended;
     }
 
     function prependEntries(lines) {
@@ -720,10 +820,7 @@
         const logId = Number(item?.log_id || 0);
         if (!Number.isFinite(logId) || logId <= 0 || entryIds.has(logId)) continue;
         entryIds.add(logId);
-        chunk.push({
-          log_id: logId,
-          line: normalizedLineValue(item?.line),
-        });
+        chunk.push(normalizeEntry(item, logId));
       }
       if (!chunk.length) return 0;
       entries.unshift(...chunk);
@@ -911,6 +1008,13 @@
       destroy,
       loadOlder,
       pollFollow,
+      getCopyText() {
+        return entries.map((entry) => {
+          const timestamp = formatDateTime(entry.ts, { includeSeconds: true, includeZone: true });
+          const worker = entry.workerId || "unassigned";
+          return `${timestamp} [${worker}] ${entry.message}`;
+        }).join("\n");
+      },
       getState() {
         return {
           activeRunId,

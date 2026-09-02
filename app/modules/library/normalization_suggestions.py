@@ -18,6 +18,7 @@ from app.gemini_model_pool import (
     run_ordered_model_pool,
 )
 from app.gemini_runtime import GeminiRuntimeManager
+from app.gemini_workers import current_gemini_worker_id, emit_gemini_worker_log
 from app.modules.library.normalization import (
     _canonical_name_map,
     _confidence_band,
@@ -57,6 +58,11 @@ def _gemini_suggest(
     canonical_candidates: List[Dict[str, Any]],
     manager: GeminiRuntimeManager,
 ) -> Optional[Dict[str, Any]]:
+    worker_id = current_gemini_worker_id("normalization")
+    emit_gemini_worker_log(
+        f"library normalization: suggestion start entity={entity_type} alias={raw_name}",
+        worker_id=worker_id,
+    )
     try:
         from google import genai
 
@@ -123,11 +129,25 @@ def _gemini_suggest(
             record_failure=lambda *_args: None,
             run_id=None,
         )
+        emit_gemini_worker_log(
+            f"library normalization: suggestion success entity={entity_type} "
+            f"alias={raw_name} model={result.model_name}",
+            worker_id=worker_id,
+        )
         return {**result.value, "model": result.model_name}
     except (GeminiModelPoolExhaustedError, GeminiModelPoolUnavailableError):
+        emit_gemini_worker_log(
+            f"library normalization: suggestion deferred entity={entity_type} alias={raw_name}",
+            worker_id=worker_id,
+        )
         return None
     except GeminiModelPoolOperationalError as exc:
         if exc.retryable:
+            emit_gemini_worker_log(
+                f"library normalization: suggestion retryable failure "
+                f"entity={entity_type} alias={raw_name} error={exc}",
+                worker_id=worker_id,
+            )
             return None
         raise
     except Exception:

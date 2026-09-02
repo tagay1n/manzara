@@ -837,6 +837,53 @@ textarea:focus,
   scrollbar-width: thin;
 }
 
+.task-log-date-separator {
+  display: inline-block;
+  margin: 5px 0 2px;
+  color: #65717f;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.task-log-row {
+  --worker-color: #7dd3fc;
+  display: inline-flex;
+  align-items: baseline;
+  width: 100%;
+  gap: 0.75ch;
+  color: var(--worker-color);
+  vertical-align: top;
+}
+
+.task-log-row[data-worker="coordinator"],
+.task-log-row[data-worker="unassigned"] {
+  color: #cbd3dd;
+}
+
+.task-log-time {
+  flex: 0 0 auto;
+  color: #65717f;
+  white-space: nowrap;
+}
+
+.task-log-worker {
+  flex: 0 0 auto;
+  overflow: hidden;
+  max-width: 16ch;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.86;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-log-message {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .task-log-content::selection {
   color: #f4fbfc;
   background: rgba(105, 174, 188, 0.38);
@@ -1005,6 +1052,14 @@ textarea:focus,
 
   .task-log-content {
     height: clamp(320px, 52vh, 520px);
+  }
+
+  .task-log-row {
+    gap: 0.5ch;
+  }
+
+  .task-log-worker {
+    max-width: 12ch;
   }
 
   .log-dialog {

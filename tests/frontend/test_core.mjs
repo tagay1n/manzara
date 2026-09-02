@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const CORE_SOURCE = readFileSync(new URL("../../static/core.js", import.meta.url), "utf-8");
+const CONSOLE_STYLES = readFileSync(new URL("../../static/styles-console.css", import.meta.url), "utf-8");
 
 function loadCore({ fetchImpl, EventSourceImpl, timerApi, documentImpl } = {}) {
   const sandbox = {
@@ -66,6 +67,14 @@ test("formatEventBanner includes event type and timezone-aware time", () => {
   });
   assert.match(text, /^Last event: task\.completed @ /);
   assert.match(text, /(GMT|UTC)/);
+});
+
+test("worker log rows use terminal colors and content-sized spacing", () => {
+  assert.match(CORE_SOURCE, /TERMINAL_WORKER_COLORS/);
+  assert.match(CORE_SOURCE, /#7dd3fc/);
+  assert.match(CONSOLE_STYLES, /\.task-log-row\s*\{[^}]*display:\s*inline-flex/s);
+  assert.match(CONSOLE_STYLES, /\.task-log-row\s*\{[^}]*gap:\s*0\.75ch/s);
+  assert.doesNotMatch(CONSOLE_STYLES, /grid-template-columns:\s*8ch\s+minmax\(8ch,\s*16ch\)/);
 });
 
 test("applyStopAllButton renders force/graceful states", () => {
@@ -534,9 +543,9 @@ test("createRunLogViewer uses tail on open then follows and backfills with curso
     tail: {
       run: { run_id: 77 },
       lines: [
-        { log_id: 10, line: "line-10" },
-        { log_id: 11, line: "line-11" },
-        { log_id: 12, line: "line-12" },
+        { log_id: 10, ts: "2026-09-02T10:00:10Z", line: "[worker=metadata-1] line-10" },
+        { log_id: 11, ts: "2026-09-02T10:00:11Z", line: "[worker=metadata-2] line-11" },
+        { log_id: 12, ts: "2026-09-02T10:00:12Z", line: "legacy-line-12" },
       ],
       next_after_log_id: 12,
       next_before_log_id: 10,
@@ -544,14 +553,14 @@ test("createRunLogViewer uses tail on open then follows and backfills with curso
     },
     follow: {
       run: { run_id: 77 },
-      lines: [{ log_id: 13, line: "line-13" }],
+      lines: [{ log_id: 13, ts: "2026-09-02T10:00:13Z", line: "[worker=metadata-1] line-13" }],
       next_after_log_id: 13,
       next_before_log_id: 10,
       has_more_before: true,
     },
     backfill: {
       run: { run_id: 77 },
-      lines: [{ log_id: 9, line: "line-09" }],
+      lines: [{ log_id: 9, ts: "2026-09-01T20:00:00Z", line: "[worker=metadata-2] line-09" }],
       next_after_log_id: 9,
       next_before_log_id: 9,
       has_more_before: false,
@@ -628,18 +637,21 @@ test("createRunLogViewer uses tail on open then follows and backfills with curso
   await viewer.open(77, "Demo");
   assert.equal(dialogNode.open, true);
   assert.equal(titleNode.textContent, "Logs • Demo • run 77");
-  assert.match(contentNode.textContent, /line-10\nline-11\nline-12\n$/);
+  assert.match(contentNode.textContent, /metadata-1 line-10/);
+  assert.match(contentNode.textContent, /metadata-2 line-11/);
+  assert.match(contentNode.textContent, /legacy-line-12/);
   assert.match(calls[0], /\/api\/runs\/77\/logs\?/);
   assert.match(calls[0], /tail=true/);
   assert.deepEqual(viewerStates.map((item) => item.status), ["loading", "ready"]);
   assert.equal(viewerStates.at(-1).bufferedLines, 3);
 
   await viewer.pollFollow();
-  assert.match(contentNode.textContent, /line-13\n$/);
+  assert.match(contentNode.textContent, /metadata-1 line-13\n$/);
   assert.match(calls[1], /after_log_id=12/);
 
   await viewer.loadOlder();
-  assert.match(contentNode.textContent, /^line-09\nline-10\n/);
+  assert.match(contentNode.textContent, /metadata-2 line-09/);
+  assert.equal((contentNode.textContent.match(/^— /gm) || []).length, 2);
   assert.match(calls[2], /before_log_id=10/);
 
   const snapshot = viewer.getState();
@@ -647,6 +659,9 @@ test("createRunLogViewer uses tail on open then follows and backfills with curso
   assert.equal(snapshot.nextAfterLogId, 13);
   assert.equal(snapshot.nextBeforeLogId, 9);
   assert.equal(snapshot.hasMoreBefore, false);
+  assert.match(viewer.getCopyText(), /\[metadata-1\] line-10/);
+  assert.match(viewer.getCopyText(), /\[unassigned\] legacy-line-12/);
+  assert.match(viewer.getCopyText(), /(GMT|UTC)/);
 
   viewer.close();
   assert.equal(dialogNode.open, false);

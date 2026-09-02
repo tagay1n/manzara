@@ -19,7 +19,7 @@ def _bootstrap_repo_root() -> None:
 _bootstrap_repo_root()
 
 from app.db import Database  # noqa: E402
-from app.gemini_workers import resolve_gemini_workers  # noqa: E402
+from app.gemini_workers import emit_gemini_worker_log, resolve_gemini_workers  # noqa: E402
 from app.modules.library.normalization_suggestions import refresh_suggestions  # noqa: E402
 from app.settings import load_settings  # noqa: E402
 
@@ -56,6 +56,10 @@ def main() -> None:
     settings = load_settings()
     db = Database(settings.database_url, schema=settings.database_schema)
     db.init_schema()
+    emit_gemini_worker_log(
+        f"library normalization: start entity={args.entity_type} workers={workers}",
+        worker_id="coordinator",
+    )
     result = refresh_suggestions(
         db,
         args.entity_type,
@@ -64,7 +68,10 @@ def main() -> None:
         workers=workers,
         should_stop=lambda: bool(stop["requested"]),
     )
-    print(json.dumps(result, ensure_ascii=False))
+    emit_gemini_worker_log(
+        f"library normalization: final {json.dumps(result, ensure_ascii=False, sort_keys=True)}",
+        worker_id="coordinator",
+    )
 
 
 if __name__ == "__main__":

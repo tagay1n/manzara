@@ -19,7 +19,6 @@ except ModuleNotFoundError:  # pragma: no cover - compatibility fallback
     import fitz  # type: ignore[no-redef]
 from pydantic import BaseModel
 from prompts.metadata_evaluation import build_library_applicability_prompt
-from rich import print
 from sqlalchemy import func, select
 
 from app.db import Database
@@ -38,6 +37,7 @@ from app.gemini_runtime import (
     GeminiRuntimeError,
     GeminiStopRequestedError,
 )
+from app.gemini_workers import emit_gemini_worker_log
 from app.settings import load_settings
 from app.artifacts import flow_artifacts_dir
 from app.modules.library.metadata_contract import CONTRACT_VERSION, metadata_contract_issues
@@ -312,11 +312,14 @@ def evaluate(args) -> None:
         should_stop=stop_event.is_set,
     )
     channel = Channel(dry_run=args.dry_run)
+    coordinator_log = lambda message: emit_gemini_worker_log(  # noqa: E731
+        message, worker_id="coordinator"
+    )
     if args.dry_run:
-        print("Running in dry-run mode: no DB/file state changes will be persisted.")
+        coordinator_log("Running in dry-run mode: no DB/file state changes will be persisted.")
 
     remaining = _count_remaining(config, channel, models)
-    print(f"Documents remaining for evaluation: {remaining}")
+    coordinator_log(f"Documents remaining for evaluation: {remaining}")
     progress = _EvaluationProgress(state_db, run_id=run_id, total=remaining)
     progress.publish()
     excerpt_chars = max(0, args.excerpt_chars)
@@ -327,7 +330,7 @@ def evaluate(args) -> None:
 
             docs = _load_batch(config, args.batch_size, channel, models)
             if not docs:
-                print("No more documents to process")
+                coordinator_log("No more documents to process")
                 break
 
             docs, non_applicables = _early_skip(docs)
@@ -344,7 +347,9 @@ def evaluate(args) -> None:
 
             tasks_queue = _create_queue(docs)
             worker_count = max(1, min(int(args.workers), tasks_queue.qsize()))
-            print(f"Processing batch of {tasks_queue.qsize()} documents with {worker_count} worker(s)")
+            coordinator_log(
+                f"Processing batch of {tasks_queue.qsize()} documents with {worker_count} worker(s)"
+            )
 
             for index in range(worker_count):
                 worker = LibraryApplicabilityWorker(
@@ -382,13 +387,13 @@ def evaluate(args) -> None:
         except (KeyboardInterrupt, Exception) as e:  # noqa: BLE001
             is_interrupt = isinstance(e, KeyboardInterrupt)
             if is_interrupt:
-                print("Interrupted, shutting down workers...")
+                coordinator_log("Interrupted, shutting down workers...")
                 stop_event.set()
             else:
                 import traceback
 
-                print(f"Error during evaluation batch: {e}")
-                print(traceback.format_exc())
+                coordinator_log(f"Error during evaluation batch: {e}")
+                coordinator_log(traceback.format_exc())
 
             if tasks_queue is not None:
                 tasks_queue.queue.clear()
@@ -471,7 +476,10 @@ def _early_skip(docs: Iterable[EvaluationTask]) -> tuple[list[EvaluationTask], l
 def _save_non_applicable(non_applicables: list[tuple[str, str]]) -> None:
     if not non_applicables:
         return
-    print(f"Marking {len(non_applicables)} documents as non-applicable")
+    emit_gemini_worker_log(
+        f"Marking {len(non_applicables)} documents as non-applicable",
+        worker_id="coordinator",
+    )
     mark_docs_as_non_applicable([md5 for md5, _reason in non_applicables])
 
 
@@ -830,7 +838,10 @@ class LibraryApplicabilityWorker:
         clear_evaluation_state(md5)
 
     def log(self, message: str) -> None:
-        print(f"{threading.current_thread().name} {time.strftime('%d-%m-%y %H:%M:%S')}: {message}")
+        emit_gemini_worker_log(
+            message,
+            worker_id=threading.current_thread().name,
+        )
 
 
 class Channel:

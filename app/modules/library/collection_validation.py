@@ -27,6 +27,7 @@ from app.gemini_runtime import (
     GeminiStopRequestedError,
     GeminiTransportError,
 )
+from app.gemini_workers import emit_gemini_worker_log
 from app.modules.library.collection_detection import (
     AdaptiveBatchSizer,
     PROMPT_VERSION,
@@ -227,6 +228,7 @@ def _validate_collection_proposals_worker(
     call_gemini: Callable[[str, str, str], dict[str, Any]] = _gemini_call,
     workers: int = 1,
     recover_unfinished: bool = True,
+    worker_id: str = "collection-1",
 ) -> dict[str, Any]:
     models = load_required_gemini_model_pool()
     manager = GeminiRuntimeManager(
@@ -234,7 +236,13 @@ def _validate_collection_proposals_worker(
         task_id=TASK_ID,
         panel_id=PANEL_ID,
         should_stop=should_stop,
+        worker_id=worker_id,
     )
+
+    def log(message: str) -> None:
+        emit_gemini_worker_log(message, worker_id=worker_id)
+
+    log(f"library collection validation: worker start run_id={run_id}")
     sizer = AdaptiveBatchSizer(initial_size=20)
     counters = Counter()
     exhausted_models: set[str] = set()
@@ -298,6 +306,10 @@ def _validate_collection_proposals_worker(
                     {"now": _now(), "id": proposal["proposal_id"]},
                 )
             proposal = dict(proposal)
+            log(
+                "library collection validation: proposal start "
+                f"proposal_id={proposal['proposal_id']}"
+            )
             counters["proposals_started"] += 1
             _publish_progress(
                 db,
@@ -361,6 +373,11 @@ def _validate_collection_proposals_worker(
                 service_deferred = False
                 for content_attempt in range(2):
                     started = time.monotonic()
+                    log(
+                        "library collection validation: model attempt "
+                        f"proposal_id={proposal['proposal_id']} model={model} "
+                        f"batch={len(batch)} attempt={content_attempt + 1}"
+                    )
                     try:
                         raw = manager.run_with_key(
                             model_name=model,
@@ -370,6 +387,11 @@ def _validate_collection_proposals_worker(
                         )
                         parsed = parse_validation_response(
                             raw, requested_md5s=[item["md5"] for item in batch]
+                        )
+                        log(
+                            "library collection validation: model success "
+                            f"proposal_id={proposal['proposal_id']} model={model} "
+                            f"batch={len(batch)}"
                         )
                         with engine.begin() as conn:
                             _set_search_path(conn)
@@ -385,6 +407,10 @@ def _validate_collection_proposals_worker(
                             )
                         break
                     except GeminiAllKeysExhaustedError as exc:
+                        log(
+                            "library collection validation: model exhausted "
+                            f"proposal_id={proposal['proposal_id']} model={model} error={exc}"
+                        )
                         exhausted_models.add(model)
                         counters["models_exhausted"] += 1
                         with engine.begin() as conn:
@@ -401,6 +427,10 @@ def _validate_collection_proposals_worker(
                             )
                         break
                     except GeminiQuotaExceededError as exc:
+                        log(
+                            "library collection validation: quota deferred "
+                            f"proposal_id={proposal['proposal_id']} model={model} error={exc}"
+                        )
                         rotate_models.add(model)
                         counters["quota_errors"] += 1
                         with engine.begin() as conn:
@@ -434,6 +464,10 @@ def _validate_collection_proposals_worker(
                             )
                         break
                     except (GeminiServerPauseError, GeminiTransportError) as exc:
+                        log(
+                            "library collection validation: service deferred "
+                            f"proposal_id={proposal['proposal_id']} model={model} error={exc}"
+                        )
                         service_deferred = True
                         malformed_error = str(exc)
                         counters["service_deferred"] += 1
@@ -615,6 +649,10 @@ def _validate_collection_proposals_worker(
             "workers": int(workers),
             **dict(counters),
         }
+        log(
+            "library collection validation: worker final "
+            f"{json.dumps(summary, ensure_ascii=False, sort_keys=True)}"
+        )
         db.update_run_progress(
             run_id,
             {"status": "stopped" if summary["stopped"] else "completed", **summary},
@@ -654,10 +692,11 @@ def validate_collection_proposals(
             call_gemini=call_gemini,
             workers=1,
             recover_unfinished=True,
+            worker_id="collection-1",
         )
-    print(
+    emit_gemini_worker_log(
         f"library collection validation: worker pool requested={workers} started={worker_count}",
-        flush=True,
+        worker_id="coordinator",
     )
     recovery_engine, _ = create_runtime_engine()
     try:
@@ -684,8 +723,9 @@ def validate_collection_proposals(
                 call_gemini=call_gemini,
                 workers=1,
                 recover_unfinished=False,
+                worker_id=f"collection-{index + 1}",
             )
-            for _index in range(worker_count)
+            for index in range(worker_count)
         ]
         results = [future.result() for future in futures]
     counters = Counter()
@@ -707,6 +747,11 @@ def validate_collection_proposals(
     db.update_run_progress(
         run_id,
         {"status": "stopped" if summary["stopped"] else "completed", **summary},
+    )
+    emit_gemini_worker_log(
+        "library collection validation: pool final "
+        f"{json.dumps(summary, ensure_ascii=False, sort_keys=True)}",
+        worker_id="coordinator",
     )
     return summary
 

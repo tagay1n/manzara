@@ -40,7 +40,7 @@ from app.gemini_model_pool import (
 )
 from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
-from app.gemini_workers import resolve_gemini_workers
+from app.gemini_workers import emit_gemini_worker_log, resolve_gemini_workers
 from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     build_corrupt_cleanup_plan,
@@ -268,9 +268,9 @@ def run_metadata_extraction(
             model_attempts={},
             model_successes={},
         )
-        print(
+        emit_gemini_worker_log(
             f"library metadata: worker pool requested={workers} started={worker_count}",
-            flush=True,
+            worker_id="coordinator",
         )
         with ThreadPoolExecutor(
             max_workers=worker_count, thread_name_prefix="metadata-worker"
@@ -341,6 +341,10 @@ def run_metadata_extraction(
     model_successes: Counter[str] = Counter()
     processed = 0
     outcome = "completed"
+    worker_id = f"metadata-{int(_worker_id) + 1}"
+
+    def log(message: str) -> None:
+        emit_gemini_worker_log(message, worker_id=worker_id)
 
     def publish_progress() -> None:
         if _aggregate_progress is not None:
@@ -367,39 +371,32 @@ def run_metadata_extraction(
         task_id=TASK_ID,
         panel_id=PANEL_ID,
         should_stop=should_stop,
+        worker_id=worker_id,
     )
     publish_progress()
-    print(
+    log(
         f"library metadata: start run_id={run_id} eligible={total} "
-        f"models={json.dumps(models)}",
-        flush=True,
+        f"models={json.dumps(models)}"
     )
 
     for candidate in candidates:
         if should_stop():
             outcome = "stopped"
             break
-        print(
+        log(
             f"library metadata: document start md5={candidate.md5} "
-            f"source={'content' if candidate.content_url else 'primary_s3'}",
-            flush=True,
+            f"source={'content' if candidate.content_url else 'primary_s3'}"
         )
         request = None
         try:
-            print(
-                f"library metadata: source prepare start md5={candidate.md5}",
-                flush=True,
-            )
+            log(f"library metadata: source prepare start md5={candidate.md5}")
             request = prepare_metadata_request(
                 candidate,
                 workspace=workspace,
                 storage=storage,
                 primary_s3=primary_s3,
             )
-            print(
-                f"library metadata: source prepare complete md5={candidate.md5}",
-                flush=True,
-            )
+            log(f"library metadata: source prepare complete md5={candidate.md5}")
         except CorruptDocumentError as exc:
             if cleanup_repository is None:
                 raise RuntimeError(
@@ -421,10 +418,9 @@ def run_metadata_extraction(
                 "corrupted_planned" if created else "corrupted_plan_reused"
             ] += 1
             processed += 1
-            print(
+            log(
                 f"library metadata: corrupted plan md5={candidate.md5} "
-                f"cleanup_id={cleanup_id} detector={exc.detector} created={created}",
-                flush=True,
+                f"cleanup_id={cleanup_id} detector={exc.detector} created={created}"
             )
             shutil.rmtree(workspace / candidate.md5, ignore_errors=True)
             publish_progress()
@@ -432,10 +428,9 @@ def run_metadata_extraction(
         except Exception as exc:  # noqa: BLE001
             counters["source_deferred"] += 1
             processed += 1
-            print(
+            log(
                 f"library metadata: source failure md5={candidate.md5} "
-                f"error={type(exc).__name__}: {exc}",
-                flush=True,
+                f"error={type(exc).__name__}: {exc}"
             )
             shutil.rmtree(workspace / candidate.md5, ignore_errors=True)
             publish_progress()
@@ -443,10 +438,9 @@ def run_metadata_extraction(
 
         def call_model(model_name: str, api_key: str, _lease: Any) -> str:
             model_attempts[model_name] += 1
-            print(
+            log(
                 f"library metadata: model attempt md5={candidate.md5} "
-                f"model={model_name}",
-                flush=True,
+                f"model={model_name}"
             )
             raw_response = request_json(
                 api_key=api_key,
@@ -456,10 +450,9 @@ def run_metadata_extraction(
                 files=request.files,
                 timeout_seconds=360,
             )
-            print(
+            log(
                 f"library metadata: Gemini response md5={candidate.md5} "
-                f"model={model_name}:\n{_format_response_for_log(raw_response)}",
-                flush=True,
+                f"model={model_name}:\n{_format_response_for_log(raw_response)}"
             )
             return raw_response
 
@@ -472,10 +465,9 @@ def run_metadata_extraction(
                 models=models,
                 run_id=run_id,
             )
-            print(
+            log(
                 f"library metadata: model failed md5={candidate.md5} "
-                f"model={model_name} kind={kind} error={error}",
-                flush=True,
+                f"model={model_name} kind={kind} error={error}"
             )
 
         try:
@@ -497,26 +489,21 @@ def run_metadata_extraction(
             )
             counters["terminal"] += 1
             processed += 1
-            print(
-                f"library metadata: terminal md5={candidate.md5} reason={exc}",
-                flush=True,
-            )
+            log(f"library metadata: terminal md5={candidate.md5} reason={exc}")
         except GeminiModelPoolUnavailableError as exc:
             counters["quota_deferred"] += 1
             processed += 1
             globally_exhausted = set(exc.unavailable_models) == set(models)
             if globally_exhausted:
                 outcome = "all_keys_exhausted"
-            print(
+            log(
                 f"library metadata: quota deferred md5={candidate.md5} "
-                f"global={globally_exhausted} reason={exc}",
-                flush=True,
+                f"global={globally_exhausted} reason={exc}"
             )
         except GeminiModelPoolOperationalError as exc:
-            print(
+            log(
                 f"library metadata: operational failure md5={candidate.md5} "
-                f"retryable={exc.retryable} error={exc}",
-                flush=True,
+                f"retryable={exc.retryable} error={exc}"
             )
             if exc.retryable:
                 repository.record_operational_deferral(
@@ -541,10 +528,9 @@ def run_metadata_extraction(
             counters["succeeded" if stored else "already_complete"] += 1
             model_successes[result.model_name] += int(stored)
             processed += 1
-            print(
+            log(
                 f"library metadata: document success md5={candidate.md5} "
-                f"model={result.model_name} stored={stored}",
-                flush=True,
+                f"model={result.model_name} stored={stored}"
             )
         finally:
             shutil.rmtree(workspace / candidate.md5, ignore_errors=True)
@@ -578,9 +564,8 @@ def run_metadata_extraction(
         "stopped": outcome == "stopped",
         "workers": int(workers),
     }
-    print(
-        f"library metadata: final {json.dumps(summary, ensure_ascii=False, sort_keys=True)}",
-        flush=True,
+    log(
+        f"library metadata: final {json.dumps(summary, ensure_ascii=False, sort_keys=True)}"
     )
     return summary
 
@@ -624,9 +609,9 @@ def main() -> int:
 
     def request_stop(_signum: int, _frame: Any) -> None:
         stop["requested"] = True
-        print(
+        emit_gemini_worker_log(
             "library metadata: graceful stop requested; finishing current request",
-            flush=True,
+            worker_id="coordinator",
         )
 
     signal.signal(signal.SIGINT, request_stop)
