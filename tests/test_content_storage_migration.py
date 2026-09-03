@@ -51,6 +51,35 @@ def test_archive_rewrite_preserves_member_and_only_rewrites_legacy_images() -> N
     assert "storage.yandexcloud.net/ttimg" not in markdown
 
 
+def test_archive_rewrite_ignores_markdown_delimiters_around_external_urls() -> None:
+    md5 = "a" * 32
+    image_key = f"{md5}-2-0.png"
+    external_link = "[http://plr.iling-ran.ru](http://plr.iling-ran.ru)"
+    source = _archive(
+        md5,
+        f"{external_link}\n"
+        f'<img src="https://storage.yandexcloud.net/ttimg/{image_key}">\n',
+    )
+
+    rewritten, keys, member = rewrite_content_archive(
+        source,
+        md5=md5,
+        legacy_endpoint="https://storage.yandexcloud.net",
+        legacy_bucket="ttimg",
+        primary_endpoint="https://s3.eu-central-003.backblazeb2.com",
+        primary_bucket="ttimgs",
+    )
+
+    assert keys == (image_key,)
+    with zipfile.ZipFile(BytesIO(rewritten)) as archive:
+        markdown = archive.read(member).decode()
+    assert external_link in markdown
+    assert (
+        f"https://s3.eu-central-003.backblazeb2.com/ttimgs/{image_key}"
+        in markdown
+    )
+
+
 def test_archive_rewrite_rejects_cross_document_image_key() -> None:
     md5 = "a" * 32
     source = _archive(

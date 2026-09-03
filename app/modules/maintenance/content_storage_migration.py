@@ -28,7 +28,7 @@ SINGLE_THREAD_TRANSFER_CONFIG = TransferConfig(
     use_threads=False,
     max_concurrency=1,
 )
-_URL_PATTERN = re.compile(r"https?://[^\s\"'<>)]*")
+_URL_PATTERN = re.compile(r"https?://[^\s\"'<>()\[\]]*")
 _MD5_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
