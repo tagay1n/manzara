@@ -22,6 +22,32 @@ class Settings:
     database_url: str
     database_schema: str
     maintenance: MaintenanceSettings
+    postgres_backup_mode: str = "local_pgbackrest"
+
+
+POSTGRES_BACKUP_MODES = frozenset({"local_pgbackrest", "managed"})
+LOCAL_PGBACKREST_TASK_IDS = frozenset(
+    {
+        "maintenance.pgbackrest_backup_full",
+        "maintenance.pgbackrest_backup_incr",
+    }
+)
+
+
+def task_is_available(settings: Settings | Any, task_id: str) -> bool:
+    """Return whether a task may be exposed or started in this deployment."""
+    return not (
+        str(getattr(settings, "postgres_backup_mode", "local_pgbackrest")) == "managed"
+        and str(task_id) in LOCAL_PGBACKREST_TASK_IDS
+    )
+
+
+def normalize_database_url(value: str) -> str:
+    """Normalize provider-style PostgreSQL URLs for every runtime client."""
+    text = str(value or "").strip()
+    if text.startswith("postgres://"):
+        return "postgresql://" + text[len("postgres://") :]
+    return text
 
 
 def _contains_redacted(node: Any) -> bool:
@@ -37,7 +63,7 @@ def _contains_redacted(node: Any) -> bool:
 def _load_database_url() -> str:
     env_url = str(os.environ.get("MANZARA_DATABASE_URL") or "").strip()
     if env_url:
-        return env_url
+        return normalize_database_url(env_url)
 
     config_override = os.environ.get("MANZARA_CONFIG_PATH")
     candidates: list[Path]
@@ -59,12 +85,38 @@ def _load_database_url() -> str:
             continue
         db_url = str(data.get("database_url") or "").strip()
         if db_url:
-            return db_url
+            return normalize_database_url(db_url)
 
     raise RuntimeError(
         "Database URL is not configured. Set MANZARA_DATABASE_URL or provide an unmasked "
         "database_url in config.local.yaml/config.yaml."
     )
+
+
+def _load_postgres_backup_mode() -> str:
+    value = str(os.environ.get("MANZARA_POSTGRES_BACKUP_MODE") or "").strip()
+    if not value:
+        config_override = os.environ.get("MANZARA_CONFIG_PATH")
+        candidates = (
+            [Path(config_override).expanduser()]
+            if config_override
+            else [Path("config.local.yaml"), Path("config.yaml")]
+        )
+        for candidate in candidates:
+            if not candidate.exists():
+                continue
+            data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+            if isinstance(data, dict):
+                value = str(data.get("postgres_backup_mode") or "").strip()
+            if value:
+                break
+    value = value or "local_pgbackrest"
+    if value not in POSTGRES_BACKUP_MODES:
+        allowed = ", ".join(sorted(POSTGRES_BACKUP_MODES))
+        raise RuntimeError(
+            f"MANZARA_POSTGRES_BACKUP_MODE must be one of: {allowed}"
+        )
+    return value
 
 
 def load_settings() -> Settings:
@@ -75,4 +127,5 @@ def load_settings() -> Settings:
         database_url=database_url,
         database_schema=database_schema,
         maintenance=load_maintenance_settings(),
+        postgres_backup_mode=_load_postgres_backup_mode(),
     )

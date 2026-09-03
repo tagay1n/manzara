@@ -78,13 +78,11 @@ def _progress_payload(
 
 
 def _publish_progress(state_db: Any, run_id: int, payload: dict[str, Any]) -> None:
-    state_db.update_run_progress(run_id, payload)
-    state_db.insert_event(
-        "task.progress",
+    state_db.publish_run_progress(
         task_id=TASK_ID,
         run_id=run_id,
         panel_id=PANEL_ID,
-        payload={"status": "running", "progress": payload},
+        progress=payload,
     )
 
 

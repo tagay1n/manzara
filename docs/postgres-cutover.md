@@ -9,7 +9,7 @@ Last updated: 2026-08-21
 - `MANZARA_DATABASE_URL` selects the database.
 - `MANZARA_DB_SCHEMA` selects the Manzara operational schema and defaults to `monocorpus`.
 - Schema changes are Alembic-only. Application startup runs `upgrade head` before panel and task definitions are seeded.
-- Current Alembic head: `20260827_0037`.
+- Current Alembic head: `20260902_0045`.
 
 The repository still contains the historical one-time import script, but it is not part of normal setup or startup. Do not run `scripts/migrate_sqlite_to_postgres.py` against an active database unless performing an explicitly planned legacy recovery.
 
@@ -69,6 +69,9 @@ For a new empty database only, inspect or create the operational schema before m
 ```
 
 Use `--create-schema` only when schema creation is intended. Back up existing data before any manual migration or recovery operation.
+
+For the filtered Aiven free-tier migration and its cutover checklist, see
+`docs/aiven-cutover.md`.
 
 ## Invariants
 

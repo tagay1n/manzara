@@ -25,11 +25,9 @@ class _Db:
         self.progress: list[dict] = []
         self.events: list[tuple[str, dict]] = []
 
-    def update_run_progress(self, _run_id, payload):  # noqa: ANN001
-        self.progress.append(payload)
-
-    def insert_event(self, event_type, **kwargs):  # noqa: ANN001
-        self.events.append((event_type, kwargs))
+    def publish_run_progress(self, **kwargs):  # noqa: ANN003
+        self.progress.append(kwargs["progress"])
+        self.events.append(("task.progress", kwargs))
 
 
 class _Repository:

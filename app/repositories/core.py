@@ -90,6 +90,7 @@ class CoreRepository:
             self.database_url = "postgresql://" + self.database_url.split("://", 1)[1]
         self.schema = str(schema or "monocorpus").strip() or "monocorpus"
         self._lock = threading.Lock()
+        self._progress_last_published: dict[int, float] = {}
 
 
     @contextmanager

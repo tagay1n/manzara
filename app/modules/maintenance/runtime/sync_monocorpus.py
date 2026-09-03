@@ -370,13 +370,11 @@ def _publish_progress(
         payload["current"] = int(current)
     if total is not None:
         payload["total"] = int(total)
-    db.update_run_progress(run_id, payload)
-    db.insert_event(
-        "task.progress",
+    db.publish_run_progress(
         task_id=TASK_ID,
         run_id=run_id,
         panel_id=PANEL_ID,
-        payload={"status": "running", "progress": payload},
+        progress=payload,
     )
 
 

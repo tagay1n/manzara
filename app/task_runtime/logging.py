@@ -5,9 +5,16 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import threading
 from typing import Any, Dict, Optional, TextIO
 
 from app.modules.maintenance.backup_s3_verify import capture_pgbackrest_s3_state
+from app.run_log_store import (
+    has_run_log_before,
+    read_run_log,
+    run_log_path,
+    safe_task_slug,
+)
 
 
 class TaskLoggingMixin:
@@ -21,16 +28,8 @@ class TaskLoggingMixin:
         panel_id: str,
         line: str,
     ) -> None:
-        """Persist one runtime log line and broadcast over SSE."""
+        """Persist one runtime line in the run artifact log."""
         safe_line = self._sanitize_log_line(line)
-        self.db.append_log(run_id, stream="stdout", line=safe_line)
-        self.db.insert_event(
-            "task.log",
-            task_id=task_id,
-            run_id=run_id,
-            panel_id=panel_id,
-            payload={"line": safe_line},
-        )
         self._write_run_log(
             run_id=run_id,
             task_id=task_id,
@@ -72,7 +71,7 @@ class TaskLoggingMixin:
         task_id: str,
         panel_id: str,
     ) -> None:
-        """Stream stdout lines into run logs/events without blocking task finalization."""
+        """Stream stdout lines into the run artifact log without blocking finalization."""
         stream = proc.stdout
         if stream is None:
             return
@@ -82,15 +81,6 @@ class TaskLoggingMixin:
                 if not line:
                     continue
                 safe_line = self._sanitize_log_line(line)
-                self.db.append_log(run_id, stream="stdout", line=safe_line)
-                self.db.heartbeat(run_id)
-                self.db.insert_event(
-                    "task.log",
-                    task_id=task_id,
-                    run_id=run_id,
-                    panel_id=panel_id,
-                    payload={"line": safe_line},
-                )
                 self._write_run_log(
                     run_id=run_id,
                     task_id=task_id,
@@ -103,19 +93,8 @@ class TaskLoggingMixin:
             if self._is_benign_log_stream_close(exc):
                 return
             # Do not break task lifecycle on log-stream errors, but emit
-            # actionable context for UI/DB/artifact diagnostics.
+            # actionable context for UI/artifact diagnostics.
             error_line = self._sanitize_log_line(f"log_stream_error={exc}")
-            try:
-                self.db.append_log(run_id, stream="stderr", line=error_line)
-                self.db.insert_event(
-                    "task.log",
-                    task_id=task_id,
-                    run_id=run_id,
-                    panel_id=panel_id,
-                    payload={"line": error_line},
-                )
-            except Exception:
-                pass
             self._write_run_log(
                 run_id=run_id,
                 task_id=task_id,
@@ -125,6 +104,20 @@ class TaskLoggingMixin:
                 message=error_line,
             )
             return
+
+
+    def _heartbeat_until_stopped(
+        self,
+        run_id: int,
+        stop_event: threading.Event,
+        interval_seconds: float = 5.0,
+    ) -> None:
+        """Persist one bounded-cadence heartbeat independent of log volume."""
+        while not stop_event.wait(max(1.0, float(interval_seconds))):
+            try:
+                self.db.heartbeat(run_id)
+            except Exception:
+                return
 
 
     @staticmethod
@@ -137,9 +130,8 @@ class TaskLoggingMixin:
 
     def _open_run_log(self, task: Dict[str, Any], run_id: int) -> tuple[Optional[TextIO], Optional[str]]:
         task_id = str(task.get("task_id") or "unknown")
-        task_dir = self._artifacts_root / self._safe_slug(task_id)
-        task_dir.mkdir(parents=True, exist_ok=True)
-        log_path = task_dir / f"run-{run_id}.log"
+        log_path = run_log_path(self._artifacts_root, task_id, run_id)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             handle = log_path.open("a", encoding="utf-8")
             header = self._format_run_log(
@@ -261,7 +253,11 @@ class TaskLoggingMixin:
     ) -> None:
         with self._lock:
             handle = self._processes.get(run_id)
-            log_file = handle.log_file if handle else None
+            log_file = (
+                handle.log_file
+                if handle and handle.log_file is not None
+                else self._run_log_files.get(run_id)
+            )
         safe_message = self._sanitize_log_line(message)
         line = self._format_run_log(
             level=level,
@@ -279,8 +275,9 @@ class TaskLoggingMixin:
         if log_file is None:
             return
         try:
-            log_file.write(line + "\n")
-            log_file.flush()
+            with self._log_write_lock:
+                log_file.write(line + "\n")
+                log_file.flush()
         except Exception:
             return
 
@@ -305,10 +302,34 @@ class TaskLoggingMixin:
 
 
     def _safe_slug(self, value: str) -> str:
-        text = str(value or "").strip().lower()
-        if not text:
-            return "unknown"
-        return re.sub(r"[^a-z0-9._-]+", "_", text)
+        return safe_task_slug(value)
+
+
+    def get_run_logs(
+        self,
+        *,
+        task_id: str,
+        run_id: int,
+        after_log_id: int = 0,
+        before_log_id: int | None = None,
+        tail: bool = False,
+        limit: int = 300,
+    ) -> list[Dict[str, Any]]:
+        """Read a bounded page from one file-backed run log."""
+        return read_run_log(
+            self._artifacts_root,
+            task_id,
+            run_id,
+            after_log_id=after_log_id,
+            before_log_id=before_log_id,
+            tail=tail,
+            limit=limit,
+        )
+
+
+    def has_run_logs_before(self, *, task_id: str, run_id: int, log_id: int) -> bool:
+        """Return whether an older file-backed log page exists."""
+        return has_run_log_before(self._artifacts_root, task_id, run_id, log_id)
 
 
     def _sanitize_log_line(self, line: str) -> str:

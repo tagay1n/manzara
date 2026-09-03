@@ -137,13 +137,11 @@ def _progress_payload(current: int, total: int, counters: Mapping[str, Any]) -> 
 
 
 def _publish_progress(db: Database, run_id: int, progress: dict[str, Any]) -> None:
-    db.update_run_progress(run_id, progress)
-    db.insert_event(
-        "task.progress",
+    db.publish_run_progress(
         task_id=TASK_ID,
         run_id=run_id,
         panel_id=PANEL_ID,
-        payload={"status": "running", "progress": progress},
+        progress=progress,
     )
 
 

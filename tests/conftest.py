@@ -229,6 +229,8 @@ def test_client(
 
     monkeypatch.setattr(main_app, "maintenance_task_definitions", _test_task_defs)
     main_app.state = main_app.AppState(settings)
+    main_app.state.runner._artifacts_root = tmp_path / "_artifacts" / "task_runs"
+    main_app.state.runner._artifacts_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(main_app.state.db, "init_schema", lambda: None)
 
     with TestClient(main_app.app) as client:
@@ -256,7 +258,11 @@ def wait_for_terminal_run() -> callable:
                 return run
             time.sleep(0.05)
         run = main_app.state.db.get_run(run_id)
-        logs = main_app.state.db.get_logs(run_id, limit=20)
+        logs = main_app.state.runner.get_run_logs(
+            task_id=str((run or {}).get("task_id") or "unknown"),
+            run_id=run_id,
+            limit=20,
+        )
         raise AssertionError(
             f"Run {run_id} did not reach terminal state; "
             f"last_run={run}; logs={logs}"

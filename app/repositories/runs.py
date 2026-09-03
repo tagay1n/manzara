@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Dict, List, Optional
 
 from app.repositories.core import utc_now
@@ -122,6 +123,63 @@ class RunRepository:
                 )
 
 
+    def publish_run_progress(
+        self,
+        *,
+        run_id: int,
+        task_id: str,
+        panel_id: str,
+        progress: Dict[str, Any],
+        status: str = "running",
+        force: bool = False,
+        minimum_interval_seconds: float = 1.0,
+    ) -> bool:
+        """Persist one coalesced authoritative progress snapshot and SSE event."""
+        if not isinstance(progress, dict):
+            raise ValueError("progress must be an object")
+        resolved_run_id = int(run_id)
+        now_monotonic = time.monotonic()
+        with self._lock:
+            last = float(self._progress_last_published.get(resolved_run_id, 0.0))
+            if not force and now_monotonic - last < max(0.0, minimum_interval_seconds):
+                return False
+
+            timestamp = utc_now()
+            event_payload = {
+                "status": str(status or "running"),
+                "progress": dict(progress),
+            }
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET progress_json = ?, heartbeat_at = ?, updated_at = ?
+                    WHERE run_id = ?
+                    """,
+                    (
+                        json.dumps(progress, ensure_ascii=False),
+                        timestamp,
+                        timestamp,
+                        resolved_run_id,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO events (ts, type, task_id, run_id, panel_id, payload_json)
+                    VALUES (?, 'task.progress', ?, ?, ?, ?)
+                    """,
+                    (
+                        timestamp,
+                        str(task_id),
+                        resolved_run_id,
+                        str(panel_id),
+                        json.dumps(event_payload, ensure_ascii=False),
+                    ),
+                )
+            self._progress_last_published[resolved_run_id] = now_monotonic
+        return True
+
+
     def set_stop_mode(self, run_id: int, mode: str) -> bool:
         """Move an active run into graceful or force stopping mode."""
         status = task_status_from_stop_mode(mode)
@@ -161,6 +219,11 @@ class RunRepository:
                     """,
                     (status, exit_code, error_text, now, now, now, run_id),
                 )
+                conn.execute(
+                    "DELETE FROM events WHERE run_id = ? AND type IN ('task.log', 'task.progress')",
+                    (run_id,),
+                )
+            self._progress_last_published.pop(int(run_id), None)
 
 
     def update_run_summary(self, run_id: int, summary: Dict[str, Any]) -> None:

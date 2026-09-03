@@ -187,13 +187,30 @@ def test_task_artifact_event_and_summary_without_log_parsing(
 
 def test_run_logs_support_tail_and_backfill_pagination(test_client) -> None:
     client, main_app = test_client
-    task = main_app.state.db.get_task("maintenance.quick")
-    assert task is not None
-    run_id = main_app.state.db.create_run(task)
-    main_app.state.db.mark_run_started(run_id, pid=99999)
-    for index in range(1, 21):
-        main_app.state.db.append_log(run_id, "stdout", f"line-{index:02d}")
-    main_app.state.db.finish_run(run_id, "completed", 0, None)
+    main_app.state.db.seed_tasks(
+        [
+            {
+                "task_id": "maintenance.pagination",
+                "panel_id": "maintenance",
+                "title": "Pagination",
+                "task_type": "test",
+                "icon_idle": "Play",
+                "icon_running": "Square",
+                "cwd": ".",
+                "command": {
+                    "mode": "shell",
+                    "value": (
+                        "python3 -c \"[print(f'line-{i:02d}') "
+                        "for i in range(1, 21)]\""
+                    ),
+                },
+            }
+        ]
+    )
+    response = client.post("/api/tasks/maintenance.pagination/toggle")
+    assert response.status_code == 200
+    run_id = int(response.json()["run"]["run_id"])
+    _wait_for_status(main_app, run_id, {"completed"})
 
     all_payload = client.get(f"/api/runs/{run_id}/logs?limit=2000")
     assert all_payload.status_code == 200
@@ -220,6 +237,34 @@ def test_run_logs_support_tail_and_backfill_pagination(test_client) -> None:
     assert int(backfill["next_after_log_id"]) == all_ids[-6]
     assert int(backfill["next_before_log_id"]) == all_ids[-9]
     assert backfill["has_more_before"] is True
+
+
+def test_completed_run_does_not_persist_verbose_telemetry(
+    test_client,
+    wait_for_terminal_run,
+) -> None:
+    client, main_app = test_client
+
+    response = client.post("/api/tasks/maintenance.quick/toggle")
+    run_id = int(response.json()["run"]["run_id"])
+    wait_for_terminal_run(main_app, run_id)
+
+    with main_app.state.db._connect() as conn:
+        log_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM run_logs WHERE run_id = ?",
+            (run_id,),
+        ).scalar()
+        verbose_event_count = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM events
+            WHERE run_id = ? AND type IN ('task.log', 'task.progress')
+            """,
+            (run_id,),
+        ).scalar()
+
+    assert int(log_count or 0) == 0
+    assert int(verbose_event_count or 0) == 0
 
 
 def test_run_logs_reject_conflicting_cursor_modes(test_client) -> None:
@@ -369,6 +414,9 @@ def test_stream_stdout_failures_emit_actionable_log_line(test_client) -> None:
     task = main_app.state.db.get_task("maintenance.quick")
     assert task is not None
     run_id = main_app.state.db.create_run(task)
+    handle, _path = runner._open_run_log(task, run_id)
+    assert handle is not None
+    runner._run_log_files[run_id] = handle
 
     class _BoomStream:
         def __init__(self) -> None:
@@ -387,7 +435,13 @@ def test_stream_stdout_failures_emit_actionable_log_line(test_client) -> None:
         stdout = _BoomStream()
 
     runner._stream_stdout_lines(_Proc(), run_id, task["task_id"], task["panel_id"])
-    logs = main_app.state.db.get_logs(run_id, after_log_id=0, limit=50)
+    handle.close()
+    logs = runner.get_run_logs(
+        task_id=task["task_id"],
+        run_id=run_id,
+        after_log_id=0,
+        limit=50,
+    )
     combined = "\n".join(str(item.get("line") or "") for item in logs)
     assert "line-before-error" in combined
     assert "log_stream_error=stream exploded" in combined
@@ -399,6 +453,9 @@ def test_stream_stdout_closed_file_error_is_ignored(test_client) -> None:
     task = main_app.state.db.get_task("maintenance.quick")
     assert task is not None
     run_id = main_app.state.db.create_run(task)
+    handle, _path = runner._open_run_log(task, run_id)
+    assert handle is not None
+    runner._run_log_files[run_id] = handle
 
     class _ClosedStream:
         def __iter__(self):
@@ -411,7 +468,13 @@ def test_stream_stdout_closed_file_error_is_ignored(test_client) -> None:
         stdout = _ClosedStream()
 
     runner._stream_stdout_lines(_Proc(), run_id, task["task_id"], task["panel_id"])
-    logs = main_app.state.db.get_logs(run_id, after_log_id=0, limit=50)
+    handle.close()
+    logs = runner.get_run_logs(
+        task_id=task["task_id"],
+        run_id=run_id,
+        after_log_id=0,
+        limit=50,
+    )
     combined = "\n".join(str(item.get("line") or "") for item in logs)
     assert "log_stream_error=" not in combined
 

@@ -91,7 +91,9 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
     def __init__(self, db: Database):
         self.db = db
         self._lock = threading.Lock()
+        self._log_write_lock = threading.Lock()
         self._processes: Dict[int, ProcessHandle] = {}
+        self._run_log_files: Dict[int, TextIO] = {}
         self._artifacts_root = task_runs_dir()
         self._artifacts_root.mkdir(parents=True, exist_ok=True)
 
@@ -306,6 +308,8 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
         """Run task process and persist logs/events until completion."""
         run_log_file: Optional[TextIO] = None
         run_log_path: Optional[str] = None
+        heartbeat_stop = threading.Event()
+        heartbeat_thread: Optional[threading.Thread] = None
         try:
             command = task["command"]
             cwd = task["cwd"]
@@ -313,6 +317,9 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
                 raise ValueError("Unsupported command mode")
 
             run_log_file, run_log_path = self._open_run_log(task, run_id)
+            if run_log_file is not None:
+                with self._lock:
+                    self._run_log_files[run_id] = run_log_file
             pre_artifacts = capture_pre_run_artifacts(task)
             artifact_output_path = self._artifact_output_path(task, run_id)
 
@@ -414,6 +421,13 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
                 panel_id=task["panel_id"],
                 payload={"status": TASK_RUN_STATUS_RUNNING},
             )
+            heartbeat_thread = threading.Thread(
+                target=self._heartbeat_until_stopped,
+                args=(run_id, heartbeat_stop),
+                daemon=True,
+                name=f"run-{run_id}-heartbeat",
+            )
+            heartbeat_thread.start()
 
             if stdin_text is not None and proc.stdin is not None:
                 try:
@@ -438,6 +452,9 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
                 log_thread.start()
 
             exit_code = proc.wait()
+            heartbeat_stop.set()
+            if heartbeat_thread.is_alive():
+                heartbeat_thread.join(timeout=1.0)
             if log_thread is not None and log_thread.is_alive():
                 log_thread.join(timeout=1.5)
             # An inherited stdout descriptor can outlive the task process. Closing
@@ -495,7 +512,12 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
                 error_text=error_text,
             )
             run_row = self.db.get_run(run_id) or {}
-            log_rows = self.db.get_logs(run_id, after_log_id=0, limit=5000)
+            log_rows = self.get_run_logs(
+                task_id=str(task["task_id"]),
+                run_id=run_id,
+                after_log_id=0,
+                limit=5000,
+            )
             emitted_artifact = read_run_artifact(artifact_output_path)
             task_artifacts = collect_post_run_artifacts(
                 task,
@@ -572,6 +594,9 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
                 payload={"error": str(exc)},
             )
         finally:
+            heartbeat_stop.set()
+            if heartbeat_thread is not None and heartbeat_thread.is_alive():
+                heartbeat_thread.join(timeout=1.0)
             with self._lock:
                 handle = self._processes.get(run_id)
             log_file_to_close = handle.log_file if handle and handle.log_file is not None else run_log_file
@@ -583,6 +608,7 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
                     pass
             with self._lock:
                 self._processes.pop(run_id, None)
+                self._run_log_files.pop(run_id, None)
 
 
     def _validate_success_conditions(

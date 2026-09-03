@@ -131,11 +131,8 @@ class FakeStateDb:
     def __init__(self) -> None:
         self.progress: list[dict] = []
 
-    def update_run_progress(self, _run_id, payload):  # noqa: ANN001
-        self.progress.append(dict(payload))
-
-    def insert_event(self, *_args, **_kwargs):
-        return None
+    def publish_run_progress(self, **kwargs):  # noqa: ANN003
+        self.progress.append(dict(kwargs["progress"]))
 
 
 def settings(cache: Path) -> DocumentStorageSettings:

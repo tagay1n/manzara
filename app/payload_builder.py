@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from app.contracts import PayloadBuilderOperations
 from app.gemini_workers import configured_gemini_account_count
+from app.settings import task_is_available
 
 
 class PayloadBuilder:
@@ -258,7 +259,11 @@ class PayloadBuilder:
         panel_titles = state.db.get_panel_title_map()
         task_slug_map, _ = self._task_slug_maps()
 
-        tasks = state.db.list_tasks_with_latest_run()
+        tasks = [
+            task
+            for task in state.db.list_tasks_with_latest_run()
+            if task_is_available(state.settings, str(task.get("task_id") or ""))
+        ]
         tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
         for task in tasks:
             panel_id = task["panel_id"]
@@ -300,7 +305,11 @@ class PayloadBuilder:
         state, event_cursor = self._begin_snapshot()
         panel_titles = state.db.get_panel_title_map()
         task_slug_map, _ = self._task_slug_maps()
-        tasks = state.db.list_tasks_with_latest_run()
+        tasks = [
+            task
+            for task in state.db.list_tasks_with_latest_run()
+            if task_is_available(state.settings, str(task.get("task_id") or ""))
+        ]
         task_groups: Dict[str, Dict[str, Any]] = {}
         for task in tasks:
             panel_id = str(task["panel_id"])
@@ -339,6 +348,8 @@ class PayloadBuilder:
         task_map: Dict[str, Dict[str, Any]] = {}
         for task in state.db.list_tasks():
             task_id = str(task["task_id"])
+            if not task_is_available(state.settings, task_id):
+                continue
             panel_id = str(task["panel_id"])
             item = {
                 "task_id": task_id,

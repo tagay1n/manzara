@@ -187,11 +187,9 @@ def test_evaluation_progress_matches_metadata_extraction_contract() -> None:
             self.progress: list[dict] = []
             self.events: list[tuple[str, dict]] = []
 
-        def update_run_progress(self, _run_id, payload):  # noqa: ANN001
-            self.progress.append(payload)
-
-        def insert_event(self, event_type, **kwargs):  # noqa: ANN001
-            self.events.append((event_type, kwargs))
+        def publish_run_progress(self, **kwargs):  # noqa: ANN003
+            self.progress.append(kwargs["progress"])
+            self.events.append(("task.progress", kwargs))
 
     db = _Db()
     progress = evaluation_module._EvaluationProgress(db, run_id=42, total=2)
@@ -222,11 +220,8 @@ def test_worker_defers_retryable_service_error_and_continues(monkeypatch) -> Non
         def __init__(self) -> None:
             self.progress: list[dict] = []
 
-        def update_run_progress(self, _run_id, payload):  # noqa: ANN001
-            self.progress.append(payload)
-
-        def insert_event(self, _event_type, **_kwargs):  # noqa: ANN001
-            pass
+        def publish_run_progress(self, **kwargs):  # noqa: ANN003
+            self.progress.append(kwargs["progress"])
 
     first = _document()
     second = _document()
@@ -287,11 +282,8 @@ def test_worker_stops_cleanly_when_all_models_are_quota_unavailable(
         def __init__(self) -> None:
             self.progress: list[dict] = []
 
-        def update_run_progress(self, _run_id, payload):  # noqa: ANN001
-            self.progress.append(payload)
-
-        def insert_event(self, _event_type, **_kwargs):  # noqa: ANN001
-            pass
+        def publish_run_progress(self, **kwargs):  # noqa: ANN003
+            self.progress.append(kwargs["progress"])
 
     doc = _document()
     tasks = Queue()

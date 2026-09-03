@@ -142,11 +142,8 @@ class _Db:
     def __init__(self) -> None:
         self.progress: list[dict] = []
 
-    def update_run_progress(self, *_args, **_kwargs):
-        self.progress.append(dict(_args[1]))
-        return None
-
-    def insert_event(self, *_args, **_kwargs):
+    def publish_run_progress(self, **kwargs):  # noqa: ANN003
+        self.progress.append(dict(kwargs["progress"]))
         return None
 
 

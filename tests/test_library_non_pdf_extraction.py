@@ -924,10 +924,7 @@ class _CorruptCleanupRepository:
 
 
 class _ProgressDb:
-    def update_run_progress(self, *_args, **_kwargs):
-        return None
-
-    def insert_event(self, *_args, **_kwargs):
+    def publish_run_progress(self, **_kwargs):
         return None
 
 

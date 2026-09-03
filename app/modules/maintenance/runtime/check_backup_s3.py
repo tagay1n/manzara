@@ -14,6 +14,8 @@ from app.modules.maintenance.tasks import (
     MAINTENANCE_PGBACKREST_INCR_TASK_ID,
 )
 from app.settings import load_settings
+from app.artifacts import task_runs_dir
+from app.run_log_store import read_run_log
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,7 +62,16 @@ def resolve_run_id(db: Database, requested_run_id: int | None, task_id: str) -> 
 
 
 def load_run_logs(db: Database, run_id: int) -> List[str]:
-    rows = db.get_logs(run_id, after_log_id=0, limit=8000)
+    run = db.get_run(run_id)
+    if not run:
+        raise RuntimeError(f"Run not found: {run_id}")
+    rows = read_run_log(
+        task_runs_dir(),
+        str(run.get("task_id") or ""),
+        run_id,
+        after_log_id=0,
+        limit=8000,
+    )
     return [str(row.get("line") or "") for row in rows]
 
 

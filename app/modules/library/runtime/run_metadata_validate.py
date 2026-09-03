@@ -62,13 +62,11 @@ def main() -> int:
             "resolved": int(counters.get("resolved") or 0),
             "normalized": int(counters.get("normalized") or 0),
         }
-        db.update_run_progress(run_id, progress)
-        db.insert_event(
-            "task.progress",
+        db.publish_run_progress(
             task_id=TASK_ID,
             run_id=run_id,
             panel_id=PANEL_ID,
-            payload={"status": "running", "progress": progress},
+            progress=progress,
         )
 
     signal.signal(signal.SIGINT, request_stop)

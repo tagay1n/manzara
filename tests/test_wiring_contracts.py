@@ -98,6 +98,31 @@ def test_startup_seed_registry_contains_only_panels_and_tasks() -> None:
     assert not hasattr(registry, "workflow_bundles")
 
 
+def test_managed_postgres_preserves_local_pgbackrest_definitions() -> None:
+    settings = SimpleNamespace(
+        maintenance=SimpleNamespace(),
+        postgres_backup_mode="managed",
+    )
+
+    registry = build_startup_seed_registry(
+        settings,
+        panel_defs=[{"panel_id": "backup", "title": "Backup"}],
+        maintenance_task_definitions=lambda _cfg: [
+            {"task_id": "maintenance.pgbackrest_backup_full"},
+            {"task_id": "maintenance.pgbackrest_backup_incr"},
+            {"task_id": "maintenance.dump_state"},
+        ],
+        library_task_definitions=lambda: [],
+        collection_task_definitions=lambda: [],
+    )
+
+    assert [item["task_id"] for item in registry.task_defs] == [
+        "maintenance.pgbackrest_backup_full",
+        "maintenance.pgbackrest_backup_incr",
+        "maintenance.dump_state"
+    ]
+
+
 def test_route_payload_builders_bind_payload_builder_methods() -> None:
     class _FakeBuilder:
         def build_system_state_payload(self):

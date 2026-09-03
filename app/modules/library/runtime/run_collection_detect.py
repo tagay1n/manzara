@@ -36,13 +36,11 @@ def main() -> None:
         if not run_id:
             return
         snapshot = {"status": "running", **progress}
-        db.update_run_progress(run_id, snapshot)
-        db.insert_event(
-            "task.progress",
+        db.publish_run_progress(
             task_id="library.collection_detect",
             run_id=run_id,
             panel_id=COLLECTIONS_PANEL_ID,
-            payload={"status": "running", "progress": snapshot},
+            progress=snapshot,
         )
 
     print(
@@ -63,22 +61,13 @@ def main() -> None:
             if payload["stopped"]
             else "completed"
         )
-        db.update_run_progress(
-            run_id,
-            {
-                "status": terminal_status,
-                **payload,
-            },
-        )
-        db.insert_event(
-            "task.progress",
+        db.publish_run_progress(
             task_id="library.collection_detect",
             run_id=run_id,
             panel_id=COLLECTIONS_PANEL_ID,
-            payload={
-                "status": terminal_status,
-                "progress": payload,
-            },
+            progress={"status": terminal_status, **payload},
+            status=terminal_status,
+            force=True,
         )
     emit_run_artifact(payload)
     print(

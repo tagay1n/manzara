@@ -44,7 +44,8 @@ def register_stream_routes(
                 detail="before_log_id cannot be combined with after_log_id",
             )
 
-        lines = state.db.get_logs(
+        lines = state.runner.get_run_logs(
+            task_id=str(run.get("task_id") or ""),
             run_id=run_id,
             after_log_id=after_log_id,
             before_log_id=before_log_id,
@@ -60,7 +61,11 @@ def register_stream_routes(
             next_before_log_id = 0
 
         has_more_before = (
-            state.db.has_logs_before(run_id, next_before_log_id)
+            state.runner.has_run_logs_before(
+                task_id=str(run.get("task_id") or ""),
+                run_id=run_id,
+                log_id=next_before_log_id,
+            )
             if next_before_log_id > 0
             else False
         )

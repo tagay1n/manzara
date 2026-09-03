@@ -209,13 +209,11 @@ def _publish_progress(
     db: Database, run_id: int, counters: Counter[str], **extra: Any
 ) -> None:
     payload = {"status": "running", **dict(counters), **extra}
-    db.update_run_progress(run_id, payload)
-    db.insert_event(
-        "task.progress",
+    db.publish_run_progress(
         task_id=TASK_ID,
         run_id=run_id,
         panel_id=PANEL_ID,
-        payload={"status": "running", "progress": payload},
+        progress=payload,
     )
 
 
@@ -653,19 +651,14 @@ def _validate_collection_proposals_worker(
             "library collection validation: worker final "
             f"{json.dumps(summary, ensure_ascii=False, sort_keys=True)}"
         )
-        db.update_run_progress(
-            run_id,
-            {"status": "stopped" if summary["stopped"] else "completed", **summary},
-        )
-        db.insert_event(
-            "task.progress",
+        terminal_status = "stopped" if summary["stopped"] else "completed"
+        db.publish_run_progress(
             task_id=TASK_ID,
             run_id=run_id,
             panel_id=PANEL_ID,
-            payload={
-                "status": "stopped" if summary["stopped"] else "completed",
-                "progress": summary,
-            },
+            progress={"status": terminal_status, **summary},
+            status=terminal_status,
+            force=True,
         )
         return summary
     finally:

@@ -122,6 +122,44 @@ def test_run_progress_round_trip(tmp_path: Path) -> None:
         )
 
 
+def test_run_progress_is_coalesced_and_removed_from_event_history(tmp_path: Path) -> None:
+    with _isolated_database() as db:
+        task = {
+            "task_id": "maintenance.coalesced_progress",
+            "panel_id": "maintenance",
+            "title": "Progress",
+            "task_type": "test",
+            "icon_idle": "Play",
+            "icon_running": "Square",
+            "command": {"mode": "shell", "value": "echo hi"},
+            "cwd": str(tmp_path),
+        }
+        db.seed_tasks([task])
+        run_id = db.create_run(db.get_task(task["task_id"]))
+
+        assert db.publish_run_progress(
+            run_id=run_id,
+            task_id=task["task_id"],
+            panel_id=task["panel_id"],
+            progress={"current": 1},
+        ) is True
+        assert db.publish_run_progress(
+            run_id=run_id,
+            task_id=task["task_id"],
+            panel_id=task["panel_id"],
+            progress={"current": 2},
+        ) is False
+        assert db.get_run(run_id)["progress"] == {"current": 1}
+
+        db.finish_run(run_id, "completed", 0, None)
+        assert [
+            event
+            for event in db.get_events_after(0, limit=50)
+            if int(event.get("run_id") or 0) == run_id
+            and event.get("type") == "task.progress"
+        ] == []
+
+
 def test_prune_runtime_definitions_removes_stale_flow_rows(tmp_path: Path) -> None:
     with _isolated_database() as db:
         db.seed_panels(

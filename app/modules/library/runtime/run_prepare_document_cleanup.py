@@ -55,13 +55,11 @@ def main() -> int:
 
     def publish(current: int, total: int, counters: Mapping[str, int]) -> None:
         payload = _progress(current, total, counters)
-        db.update_run_progress(run_id, payload)
-        db.insert_event(
-            "task.progress",
+        db.publish_run_progress(
             task_id=TASK_ID,
             run_id=run_id,
             panel_id=PANEL_ID,
-            payload={"status": "running", "progress": payload},
+            progress=payload,
         )
 
     signal.signal(signal.SIGINT, request_stop)

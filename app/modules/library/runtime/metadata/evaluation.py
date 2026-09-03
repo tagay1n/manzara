@@ -186,13 +186,11 @@ class _EvaluationProgress:
             "model_attempts": dict(self.model_attempts),
             "model_successes": dict(self.model_successes),
         }
-        self.db.update_run_progress(self.run_id, payload)
-        self.db.insert_event(
-            "task.progress",
+        self.db.publish_run_progress(
             task_id=TASK_ID,
             run_id=self.run_id,
             panel_id=PANEL_ID,
-            payload={"status": "running", "progress": payload},
+            progress=payload,
         )
 
 

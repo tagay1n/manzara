@@ -342,13 +342,11 @@ def _publish_progress(
         "percent": 100 if total == 0 else round(current / total * 100, 2),
         **{key: int(value) for key, value in counters.items()},
     }
-    state_db.update_run_progress(run_id, payload)
-    state_db.insert_event(
-        "task.progress",
+    state_db.publish_run_progress(
         task_id="maintenance.migrate_pdf_content",
         run_id=run_id,
         panel_id="library",
-        payload={"status": "running", "progress": payload},
+        progress=payload,
     )
 
 
