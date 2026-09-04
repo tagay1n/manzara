@@ -23,7 +23,6 @@ from app.document_storage import (
     materialize_cached_document,
     resolve_document_download_url,
 )
-from app.artifacts import flow_artifacts_dir
 from integrations.s3 import create_document_session
 from dirs import Dirs
 from .schema import BookPatch
@@ -39,8 +38,6 @@ LEGAL_DOC_PATTERNS = [
     re.compile(r"^(?=.*common_crawl)(?=.*npa_ta_).*\.pdf$"),
     re.compile(r"^(?=.*pdf законов с pravo\.gov).*\.pdf$"),
 ]
-ARTIFACTS_DIR = str(flow_artifacts_dir("library"))
-UNPROCESSABLES_DIR = os.path.join(ARTIFACTS_DIR, "unprocessables")
 DEFAULT_KNOWN_CLASSIFICATIONS_LIMIT = 500
 HIGH_DEMAND_SLEEP_SECONDS = 60
 ERROR_BACKOFF_SECONDS = 5

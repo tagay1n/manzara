@@ -25,6 +25,7 @@ import requests  # noqa: E402
 from boto3 import Session  # noqa: E402
 from botocore.config import Config  # noqa: E402
 
+from app.artifacts import workspace_dir  # noqa: E402
 from app.db import Database  # noqa: E402
 from app.document_storage import (  # noqa: E402
     DocumentStorageSettings,
@@ -574,10 +575,7 @@ def main() -> int:
     s3 = _s3_client(storage)
     s3.head_bucket(Bucket=storage.content_bucket)
     s3.head_bucket(Bucket=storage.content_images_bucket)
-    workspace = Path(
-        os.environ.get("MANZARA_ARTIFACTS_ROOT", "~/.manzara")
-    ).expanduser() / "library" / "non-pdf-extraction" / f"run-{run_id}"
-    workspace.mkdir(parents=True, exist_ok=True)
+    workspace = workspace_dir("library", "non-pdf-extraction", run_id=run_id)
     repository = NonPdfExtractionRepository(
         settings.database_url, schema=settings.database_schema
     )

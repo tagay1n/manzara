@@ -83,13 +83,14 @@ Startup applies pending Alembic migrations before seeding panel and task definit
 Task artifact logs are written to:
 
 ```text
-~/.manzara/task_runs/<task_id>/run-<run_id>.log
+~/.manzara/logs/task-runs/<task_id>/run-<run_id>.log
 ```
 
 The shared verified document cache is stored under
-`~/.manzara/0_entry_point`. Other numbered runtime directories and task
-artifacts live under the same `~/.manzara` root. The browser uses
-PostgreSQL-backed API/SSE state; artifact files are for durable inspection.
+`~/.manzara/cache/source-documents`. Local storage is grouped by retention
+under `cache/`, `workspaces/`, `logs/`, `durable/`, and `private/`; the generated
+`~/.manzara/STORAGE_LAYOUT.txt` explains what can be removed safely. The browser
+uses PostgreSQL-backed API/SSE state; artifact files are for durable inspection.
 
 ## Database migrations
 

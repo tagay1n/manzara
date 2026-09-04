@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlalchemy import create_engine
 
-from app.artifacts import flow_artifacts_dir
+from app.artifacts import private_credentials_dir, workspace_dir
 from app.modules.maintenance.dump_state import StopRequested, run_dump
 from app.run_artifact_channel import emit_run_artifact
 from app.settings import load_settings
@@ -51,9 +51,8 @@ def main() -> int:
         print("dump state: graceful stop requested; finishing current operation", flush=True)
 
     signal.signal(signal.SIGINT, request_stop)
-    root = flow_artifacts_dir("maintenance") / "dump-state"
-    root.mkdir(parents=True, exist_ok=True)
-    credentials_dir = flow_artifacts_dir("maintenance") / "credentials"
+    root = workspace_dir("maintenance", "catalog-export")
+    credentials_dir = private_credentials_dir("google-drive")
     try:
         with tempfile.TemporaryDirectory(prefix="run-", dir=root) as temp_dir:
             summary = run_dump(

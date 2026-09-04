@@ -482,4 +482,14 @@ def test_preview_settings_use_backblaze_for_source_and_target(
     assert credentials["target_endpoint_url"] == (
         "https://s3.eu-central-003.backblazeb2.com"
     )
-    assert settings.model_cache_dir == tmp_path / "artifacts" / "models" / "huggingface"
+    assert settings.model_cache_dir == (
+        tmp_path / "artifacts" / "cache" / "downloaded-models" / "huggingface"
+    )
+    assert settings.workspace == (
+        tmp_path
+        / "artifacts"
+        / "workspaces"
+        / "library"
+        / "book-preview-generation"
+        / "run-77"
+    )

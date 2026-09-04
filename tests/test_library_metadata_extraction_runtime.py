@@ -163,7 +163,7 @@ def test_metadata_extraction_reuses_shared_verified_pdf_cache(
 ) -> None:
     content = b"shared-pdf"
     digest = hashlib.md5(content).hexdigest()  # noqa: S324
-    cache_path = tmp_path / "0_entry_point"
+    cache_path = tmp_path / "source-documents"
     cache_path.mkdir()
     cached = cache_path / f"{digest}.pdf"
     cached.write_bytes(content)

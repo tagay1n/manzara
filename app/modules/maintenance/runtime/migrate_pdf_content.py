@@ -22,7 +22,7 @@ import requests  # noqa: E402
 from boto3 import Session  # noqa: E402
 from botocore.config import Config  # noqa: E402
 
-from app.artifacts import flow_artifacts_dir  # noqa: E402
+from app.artifacts import workspace_dir  # noqa: E402
 from app.db import Database  # noqa: E402
 from app.document_storage import (  # noqa: E402
     DocumentStorageSettings,
@@ -136,8 +136,8 @@ def main() -> int:
         )
 
     signal.signal(signal.SIGINT, request_stop)
-    workspace = (
-        flow_artifacts_dir("maintenance") / "content-migration" / f"run-{run_id}"
+    workspace = workspace_dir(
+        "maintenance", "pdf-content-migration", run_id=run_id
     )
     try:
         summary = run_content_storage_migration(

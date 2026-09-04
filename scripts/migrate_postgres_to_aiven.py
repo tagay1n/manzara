@@ -20,7 +20,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 import psycopg2
 
-from app.artifacts import artifacts_root
+from app.artifacts import durable_dir
 
 
 SOURCE_ENV = "MANZARA_SOURCE_DATABASE_URL"
@@ -469,7 +469,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--migration-root",
         type=Path,
         default=None,
-        help="Default: ~/.manzara/migrations",
+        help="Default: ~/.manzara/durable/database-migrations",
     )
     parser.add_argument("--max-target-bytes", type=int, default=DEFAULT_MAX_BYTES)
     return parser
@@ -491,7 +491,7 @@ def main() -> int:
         )
         return 0
 
-    root = args.migration_root or (artifacts_root() / "migrations")
+    root = args.migration_root or durable_dir("database-migrations")
     manifest = apply_migration(
         source_url,
         target_url,

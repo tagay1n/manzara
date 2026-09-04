@@ -64,8 +64,8 @@ def test_collection_excerpt_uses_shared_manzara_workdir(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     digest = "a" * 32
-    content_dir = tmp_path / "1_result"
-    content_dir.mkdir()
+    content_dir = tmp_path / "cache" / "extracted-document-content"
+    content_dir.mkdir(parents=True)
     with zipfile.ZipFile(content_dir / f"{digest}.zip", "w") as archive:
         archive.writestr("document.md", "First line\n\nSecond line")
     monkeypatch.setattr(run_collection_validate, "workdir", str(tmp_path))

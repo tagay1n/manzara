@@ -10,8 +10,9 @@ and never changes the source database.
 
 Rotate any database password that has appeared in chat, terminal history, or a
 log. Download the Aiven project CA outside the repository, for example under
-`~/.manzara/credentials/`, and use `sslmode=verify-full` with `sslrootcert` in
-the target URL. Keep both URLs out of command arguments and repository files.
+`~/.manzara/private/credentials/database-migration/`, and use
+`sslmode=verify-full` with `sslrootcert` in the target URL. Keep both URLs out
+of command arguments and repository files.
 
 The target must be empty, offer `pg_trgm`, run the same or a newer PostgreSQL
 major version than the source, and contain no user tables in `monocorpus` or
@@ -39,10 +40,11 @@ PYTHONPATH=. .venv/bin/python scripts/migrate_postgres_to_aiven.py --apply
 ```
 
 The helper creates a timestamped directory under
-`~/.manzara/migrations/`, uses a temporary mode-0600 libpq service file, runs a
-parallel directory-format dump, restores in single-worker schema, data, and
-post-data phases to limit free-tier WAL pressure, copies retained events,
-advances the event identity sequence, runs `ANALYZE`, and verifies row counts.
+`~/.manzara/durable/database-migrations/`, uses a temporary mode-0600 libpq
+service file, runs a parallel directory-format dump, restores in single-worker
+schema, data, and post-data phases to limit free-tier WAL pressure, copies
+retained events, advances the event identity sequence, runs `ANALYZE`, and
+verifies row counts.
 A masked `migration-manifest.json` is the completion record.
 
 After a successful restore, configure the runtime with the rotated target URL,

@@ -10,7 +10,7 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
-from app.artifacts import flow_artifacts_dir
+from app.artifacts import durable_dir
 from app.document_storage import load_document_storage_settings
 from app.modules.library.site_export import (
     EXPORT_FORMAT,
@@ -105,7 +105,7 @@ def main() -> int:
         settings.database_url,
         schema=settings.database_schema,
     )
-    destination = flow_artifacts_dir("library") / "site-exports" / f"run-{run_id}"
+    destination = durable_dir("library", "site-exports", f"run-{run_id}")
     storage = ExportStorage(
         endpoint_url=document_storage.primary.endpoint_url,
         public_document_bucket=document_storage.public_bucket,

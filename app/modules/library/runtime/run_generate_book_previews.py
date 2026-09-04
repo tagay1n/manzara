@@ -23,6 +23,7 @@ _bootstrap_repo_root()
 from boto3 import Session  # noqa: E402
 from botocore.config import Config  # noqa: E402
 
+from app.artifacts import cache_dir, workspace_dir  # noqa: E402
 from app.db import Database  # noqa: E402
 from app.document_storage import (  # noqa: E402
     load_document_storage_settings,
@@ -83,9 +84,6 @@ def _run_id() -> int:
 def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[PreviewGenerationSettings, dict[str, str]]:
     documents = _mapping(payload.get("documents"))
     document_storage = load_document_storage_settings(payload)
-    artifacts_root = Path(
-        os.environ.get("MANZARA_ARTIFACTS_ROOT", "~/.manzara")
-    ).expanduser()
     settings = PreviewGenerationSettings(
         source_bucket=document_storage.public_bucket,
         target_bucket=(
@@ -99,8 +97,10 @@ def _resolved_settings(payload: Mapping[str, Any], *, run_id: int) -> tuple[Prev
         cache_dir=Path(
             _required(documents, "cache_path", "documents")
         ).expanduser(),
-        workspace=artifacts_root / "library" / "book-previews" / f"run-{run_id}",
-        model_cache_dir=artifacts_root / "models" / "huggingface",
+        workspace=workspace_dir(
+            "library", "book-preview-generation", run_id=run_id
+        ),
+        model_cache_dir=cache_dir("downloaded-models", "huggingface"),
         source_endpoint_url=document_storage.primary.endpoint_url,
         source_region_name=document_storage.primary.region_name,
         encryption_key=_required(payload, "encryption_key", "config"),

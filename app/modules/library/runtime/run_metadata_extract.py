@@ -29,6 +29,7 @@ _bootstrap_repo_root()
 from boto3 import Session
 from botocore.config import Config
 
+from app.artifacts import workspace_dir
 from app.db import Database
 from app.document_storage import load_document_storage_settings, prune_document_cache
 from app.gemini_config import load_required_gemini_model_pool
@@ -580,10 +581,7 @@ def main() -> int:
         storage.cache_path,
         max_bytes=storage.cache_max_bytes,
     )
-    workspace = Path(
-        os.environ.get("MANZARA_ARTIFACTS_ROOT", "~/.manzara")
-    ).expanduser() / "library" / "metadata-extraction" / f"run-{run_id}"
-    workspace.mkdir(parents=True, exist_ok=True)
+    workspace = workspace_dir("library", "metadata-extraction", run_id=run_id)
     repository = MetadataExtractionRepository(
         app_settings.database_url,
         schema=app_settings.database_schema,

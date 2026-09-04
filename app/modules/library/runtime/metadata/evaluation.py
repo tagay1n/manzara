@@ -39,7 +39,7 @@ from app.gemini_runtime import (
 )
 from app.gemini_workers import emit_gemini_worker_log
 from app.settings import load_settings
-from app.artifacts import flow_artifacts_dir
+from app.artifacts import durable_path
 from app.modules.library.metadata_contract import CONTRACT_VERSION, metadata_contract_issues
 from integrations.s3 import create_document_session, create_session
 from dirs import Dirs
@@ -85,8 +85,12 @@ LEGAL_DOC_PATTERNS = [
     re.compile(r"^(?=.*common_crawl)(?=.*npa_ta_).*\.pdf$"),
     re.compile(r"^(?=.*pdf законов с pravo\.gov).*\.pdf$"),
 ]
-ARTIFACTS_DIR = str(flow_artifacts_dir("library"))
-UNPROCESSABLES_DIR = os.path.join(ARTIFACTS_DIR, "unprocessables")
+
+
+def _unprocessables_dir() -> str:
+    return str(durable_path("library", "metadata-evaluation"))
+
+
 DEFAULT_KNOWN_CLASSIFICATIONS_LIMIT = 500
 HIGH_DEMAND_SLEEP_SECONDS = 60
 ERROR_BACKOFF_SECONDS = 5
@@ -848,7 +852,9 @@ class Channel:
     def __init__(self, dry_run: bool):
         self.lock = threading.Lock()
         self.dry_run = dry_run
-        self.unprocessable_docs = self._load_file(UNPROCESSABLES_DIR, "unprocessables_eval.txt")
+        self.unprocessable_docs = self._load_file(
+            _unprocessables_dir(), "unprocessables_eval.txt"
+        )
         self.fatal_error: str | None = None
         self.deferred_docs: set[str] = set()
 
@@ -867,7 +873,11 @@ class Channel:
         if self.dry_run:
             return
         with self.lock:
-            self._dump_to_file(UNPROCESSABLES_DIR, "unprocessables_eval.txt", self.unprocessable_docs)
+            self._dump_to_file(
+                _unprocessables_dir(),
+                "unprocessables_eval.txt",
+                self.unprocessable_docs,
+            )
 
     def _load_file(self, dir_name: str, file_name: str) -> set[str]:
         candidates = [os.path.join(dir_name, file_name)]
@@ -902,4 +912,8 @@ class Channel:
         with self.lock:
             self.unprocessable_docs.add(md5)
             if not self.dry_run:
-                self._dump_to_file(UNPROCESSABLES_DIR, "unprocessables_eval.txt", self.unprocessable_docs)
+                self._dump_to_file(
+                    _unprocessables_dir(),
+                    "unprocessables_eval.txt",
+                    self.unprocessable_docs,
+                )

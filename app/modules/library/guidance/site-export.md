@@ -23,7 +23,7 @@ must not query Manzara tables directly.
 ## Version 1 bundle
 
 The task writes
-`$MANZARA_ARTIFACTS_ROOT/library/site-exports/run-<run-id>/library-export-v1.tar.gz`
+`$MANZARA_ARTIFACTS_ROOT/durable/library/site-exports/run-<run-id>/library-export-v1.tar.gz`
 (default artifacts root: `~/.manzara`). The tarball contains, in stable order:
 
 1. `manifest.json`

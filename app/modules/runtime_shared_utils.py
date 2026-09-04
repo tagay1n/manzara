@@ -19,10 +19,13 @@ import yaml
 
 prefix = "enc:"
 
-workdir = "~/.manzara"
+workdir = (
+    str(os.environ.get("MANZARA_ARTIFACTS_ROOT") or "~/.manzara").strip()
+    or "~/.manzara"
+)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REDACTED_SENTINEL = "<REDACTED>"
-ENTRY_POINT_DIR = "0_entry_point"
+ENTRY_POINT_DIR = "cache/source-documents"
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 

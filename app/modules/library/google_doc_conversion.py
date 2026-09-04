@@ -10,7 +10,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
-from app.artifacts import flow_artifacts_dir
+from app.artifacts import private_credentials_dir
 
 
 DRIVE_SCOPES = ("https://www.googleapis.com/auth/drive",)
@@ -18,7 +18,7 @@ OPERATIVE_FOLDER_ID = "1WFYCcbrtKGv3KTwyKdcKHKxXwmr9iFHE"
 
 
 def _load_credentials() -> Credentials:
-    credentials_dir = flow_artifacts_dir("library") / "credentials"
+    credentials_dir = private_credentials_dir("google-drive")
     legacy_root = Path(
         os.environ.get("MONOCORPUS_REPO_PATH", "/home/tans1q/projects/monocorpus")
     ).expanduser()
