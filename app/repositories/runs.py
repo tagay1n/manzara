@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.repositories.core import utc_now
 from app.runtime_states import (
@@ -607,6 +607,64 @@ class RunRepository:
                 (panel_id,),
             ).fetchall()
         return {str(row["status"]): int(row["count"]) for row in rows}
+
+
+    def get_panel_run_summaries(
+        self, panel_ids: Sequence[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return status counts and latest outcomes for several panels at once."""
+        panels = self._normalize_id_list(panel_ids)
+        if not panels:
+            return {}
+        placeholders = self._placeholders(len(panels))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                WITH scoped AS (
+                    SELECT run_id, panel_id, status, finished_at
+                    FROM runs
+                    WHERE panel_id IN ({placeholders})
+                ),
+                counts AS (
+                    SELECT panel_id, status, COUNT(*) AS count
+                    FROM scoped
+                    GROUP BY panel_id, status
+                ),
+                latest AS (
+                    SELECT DISTINCT ON (panel_id) panel_id, status AS latest_status
+                    FROM scoped
+                    ORDER BY panel_id, run_id DESC
+                ),
+                successes AS (
+                    SELECT panel_id, MAX(finished_at) AS last_success_at
+                    FROM scoped
+                    WHERE status = 'completed'
+                    GROUP BY panel_id
+                )
+                SELECT c.panel_id, c.status, c.count,
+                       l.latest_status, s.last_success_at
+                FROM counts c
+                LEFT JOIN latest l USING (panel_id)
+                LEFT JOIN successes s USING (panel_id)
+                ORDER BY c.panel_id, c.status
+                """,
+                panels,
+            ).fetchall()
+        summaries: Dict[str, Dict[str, Any]] = {
+            panel_id: {
+                "status_counts": {},
+                "latest_status": None,
+                "last_success_at": None,
+            }
+            for panel_id in panels
+        }
+        for row in rows:
+            panel_id = str(row["panel_id"])
+            summary = summaries[panel_id]
+            summary["status_counts"][str(row["status"])] = int(row["count"])
+            summary["latest_status"] = row.get("latest_status")
+            summary["last_success_at"] = row.get("last_success_at")
+        return summaries
 
 
     def last_successful_run(self, panel_id: str) -> Optional[str]:

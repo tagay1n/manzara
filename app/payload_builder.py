@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
@@ -37,6 +38,19 @@ class PayloadBuilder:
     def _ops(self) -> PayloadBuilderOperations:
         return self._ops_provider()
 
+    @staticmethod
+    def _get_collection_overview(
+        ops: PayloadBuilderOperations,
+        state: Any,
+    ) -> Dict[str, Any]:
+        operation = ops.get_collection_overview
+        parameters = inspect.signature(operation).parameters.values()
+        accepts_db = any(
+            parameter.name == "db" or parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        return operation(db=state.db) if accepts_db else operation()
+
     def _begin_snapshot(self) -> tuple[Any, int]:
         """Capture the stream cursor before composing the corresponding DB snapshot."""
         state = self._state()
@@ -49,11 +63,14 @@ class PayloadBuilder:
         text = re.sub(r"-{2,}", "-", text)
         return text.strip("-")
 
-    def _task_slug_maps(self) -> tuple[Dict[str, str], Dict[str, str]]:
+    def _task_slug_maps(
+        self,
+        tasks: Optional[Iterable[Mapping[str, Any]]] = None,
+    ) -> tuple[Dict[str, str], Dict[str, str]]:
         """Return deterministic task_id<->slug maps."""
         state = self._state()
-        tasks = sorted(
-            state.db.list_tasks(),
+        task_rows = sorted(
+            tasks if tasks is not None else state.db.list_tasks(),
             key=lambda item: (
                 str(item.get("panel_id") or ""),
                 str(item.get("title") or ""),
@@ -64,7 +81,7 @@ class PayloadBuilder:
         task_to_slug: Dict[str, str] = {}
         slug_to_task: Dict[str, str] = {}
 
-        for task in tasks:
+        for task in task_rows:
             task_id = str(task["task_id"])
             base = self._slugify(task.get("title")) or self._slugify(task_id) or "task"
             panel_slug = self._slugify(task.get("panel_id")) or "flow"
@@ -174,6 +191,7 @@ class PayloadBuilder:
         *,
         active_runs: Optional[list[Dict[str, Any]]] = None,
         include_failed_runs: bool = False,
+        recent_runs: Optional[list[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         state = self._state()
         runs = active_runs if active_runs is not None else state.db.list_active_runs()
@@ -183,7 +201,15 @@ class PayloadBuilder:
         }
         if include_failed_runs:
             payload["failed_runs"] = len(
-                [run for run in state.db.list_recent_runs(50) if run["status"] == "failed"]
+                [
+                    run
+                    for run in (
+                        recent_runs
+                        if recent_runs is not None
+                        else state.db.list_recent_runs(50)
+                    )
+                    if run["status"] == "failed"
+                ]
             )
         return payload
 
@@ -195,39 +221,45 @@ class PayloadBuilder:
     ) -> Dict[str, Dict[str, Any]]:
         ops = self._ops()
         state = self._state()
+        run_summaries = state.db.get_panel_run_summaries(
+            ["maintenance", "backup", "library", "metadata", "collections"]
+        )
         maintenance_panel = ops.build_maintenance_panel(
             db=state.db,
             maintenance=state.settings.maintenance,
             tasks=tasks_by_panel.get("maintenance", []),
             title=panel_titles.get("maintenance", "Yandex disk"),
+            run_summary=run_summaries["maintenance"],
         )
         backup_panel = ops.build_backup_panel(
             db=state.db,
             maintenance=state.settings.maintenance,
             tasks=tasks_by_panel.get("backup", []),
             title=panel_titles.get("backup", "Backup"),
+            run_summary=run_summaries["backup"],
         )
         library_panel = ops.build_library_panel(
             db=state.db,
             maintenance=state.settings.maintenance,
             tasks=tasks_by_panel.get("library", []),
             title=panel_titles.get("library", "Library"),
+            run_summary=run_summaries["library"],
         )
         metadata_panel = {
             "panel_id": "metadata",
             "title": panel_titles.get("metadata", "Metadata"),
             "description": "Metadata evaluation, extraction, and validation.",
-            "status_counts": state.db.run_count_by_status("metadata"),
+            "status_counts": run_summaries["metadata"]["status_counts"],
             "stats_cards": [],
             "tasks": tasks_by_panel.get("metadata", []),
         }
-        collection_overview = ops.get_collection_overview()
+        collection_overview = self._get_collection_overview(ops, state)
         collection_stats = collection_overview.get("stats") or {}
         collections_panel = {
             "panel_id": "collections",
             "title": panel_titles.get("collections", "Collections"),
             "description": "Discover, validate, and apply document collections.",
-            "status_counts": state.db.run_count_by_status("collections"),
+            "status_counts": run_summaries["collections"]["status_counts"],
             "stats_cards": [
                 {"label": "Needs Review", "value": str(collection_stats.get("suggested_collections") or 0)},
                 {"label": "Awaiting AI", "value": str(collection_stats.get("awaiting_validation") or 0)},
@@ -257,13 +289,12 @@ class PayloadBuilder:
         """Compose dashboard payload from DB and flow artifacts."""
         state, event_cursor = self._begin_snapshot()
         panel_titles = state.db.get_panel_title_map()
-        task_slug_map, _ = self._task_slug_maps()
-
         tasks = [
             task
             for task in state.db.list_tasks_with_latest_run()
             if task_is_available(state.settings, str(task.get("task_id") or ""))
         ]
+        task_slug_map, _ = self._task_slug_maps(tasks)
         tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
         for task in tasks:
             panel_id = task["panel_id"]
@@ -283,7 +314,8 @@ class PayloadBuilder:
             panel_payloads["collections"],
         ]
         active_runs = state.db.list_active_runs()
-        recent_runs = state.db.list_recent_runs(20)
+        recent_runs_for_status = state.db.list_recent_runs(50)
+        recent_runs = recent_runs_for_status[:20]
         for run in recent_runs:
             task_id = str(run.get("task_id") or "")
             run["task_slug"] = task_slug_map.get(task_id, task_id)
@@ -295,6 +327,7 @@ class PayloadBuilder:
             "global": self._build_global_payload(
                 active_runs=active_runs,
                 include_failed_runs=True,
+                recent_runs=recent_runs_for_status,
             ),
             "panels": ordered_panels,
             "recent_runs": recent_runs,
@@ -304,12 +337,12 @@ class PayloadBuilder:
         """Compose tasks page payload grouped by flow."""
         state, event_cursor = self._begin_snapshot()
         panel_titles = state.db.get_panel_title_map()
-        task_slug_map, _ = self._task_slug_maps()
         tasks = [
             task
             for task in state.db.list_tasks_with_latest_run()
             if task_is_available(state.settings, str(task.get("task_id") or ""))
         ]
+        task_slug_map, _ = self._task_slug_maps(tasks)
         task_groups: Dict[str, Dict[str, Any]] = {}
         for task in tasks:
             panel_id = str(task["panel_id"])
@@ -332,6 +365,7 @@ class PayloadBuilder:
             "conveyor": self._build_conveyor_payload(
                 state,
                 panel_titles=panel_titles,
+                task_definitions=tasks,
             ),
         }
 
@@ -340,13 +374,15 @@ class PayloadBuilder:
         state: Any,
         *,
         panel_titles: Optional[Mapping[str, str]] = None,
+        task_definitions: Optional[Iterable[Mapping[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Compose the global conveyor snapshot and its task palette."""
         titles = dict(panel_titles or state.db.get_panel_title_map())
         conveyor = state.conveyor_service.snapshot()
         available_tasks: list[Dict[str, Any]] = []
         task_map: Dict[str, Dict[str, Any]] = {}
-        for task in state.db.list_tasks():
+        tasks = task_definitions if task_definitions is not None else state.db.list_tasks()
+        for task in tasks:
             task_id = str(task["task_id"])
             if not task_is_available(state.settings, task_id):
                 continue
@@ -550,5 +586,5 @@ class PayloadBuilder:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "event_cursor": event_cursor,
             "global": self._build_global_payload(active_runs=active_runs),
-            "overview": ops.get_collection_overview(),
+            "overview": self._get_collection_overview(ops, state),
         }

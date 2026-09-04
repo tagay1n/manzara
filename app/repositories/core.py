@@ -4,16 +4,173 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from alembic import command
 from alembic.config import Config
 import psycopg2
 from psycopg2 import sql
+from psycopg2.extensions import TRANSACTION_STATUS_UNKNOWN
 from psycopg2.extras import RealDictCursor
+
+
+DEFAULT_POOL_SIZE = 4
+MAX_POOL_SIZE = 8
+
+
+class _PersistentConnectionPool:
+    """Small blocking pool with lazy creation and deterministic cleanup."""
+
+    def __init__(
+        self,
+        database_url: str,
+        schema: str,
+        *,
+        max_size: int,
+        connection_factory: Callable[[str], psycopg2.extensions.connection],
+    ) -> None:
+        self._database_url = database_url
+        self._schema = schema
+        self._max_size = max_size
+        self._connection_factory = connection_factory
+        self._condition = threading.Condition()
+        self._idle: list[psycopg2.extensions.connection] = []
+        self._in_use: set[psycopg2.extensions.connection] = set()
+        self._connection_count = 0
+        self._connections_created = 0
+        self._checkouts = 0
+        self._queries = 0
+        self._closed = False
+
+    @staticmethod
+    def _is_broken(conn: psycopg2.extensions.connection) -> bool:
+        if bool(getattr(conn, "closed", False)):
+            return True
+        try:
+            return conn.get_transaction_status() == TRANSACTION_STATUS_UNKNOWN
+        except Exception:
+            return True
+
+    @staticmethod
+    def _close_connection(conn: psycopg2.extensions.connection) -> None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    def _create_connection(self) -> psycopg2.extensions.connection:
+        conn = self._connection_factory(self._database_url)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("SET search_path TO {}, public").format(
+                        sql.Identifier(self._schema)
+                    )
+                )
+            conn.commit()
+            return conn
+        except Exception:
+            self._close_connection(conn)
+            raise
+
+    def checkout(self) -> psycopg2.extensions.connection:
+        """Wait for a healthy connection without exceeding the configured bound."""
+        while True:
+            create_new = False
+            with self._condition:
+                if self._closed:
+                    raise RuntimeError("PostgreSQL connection pool is closed")
+                while self._idle:
+                    conn = self._idle.pop()
+                    if not self._is_broken(conn):
+                        self._in_use.add(conn)
+                        self._checkouts += 1
+                        return conn
+                    self._connection_count -= 1
+                    self._close_connection(conn)
+                if self._connection_count < self._max_size:
+                    self._connection_count += 1
+                    create_new = True
+                else:
+                    self._condition.wait()
+
+            if not create_new:
+                continue
+            try:
+                conn = self._create_connection()
+            except Exception:
+                with self._condition:
+                    self._connection_count -= 1
+                    self._condition.notify()
+                raise
+            with self._condition:
+                if self._closed:
+                    self._connection_count -= 1
+                    self._close_connection(conn)
+                    self._condition.notify_all()
+                    raise RuntimeError("PostgreSQL connection pool is closed")
+                self._in_use.add(conn)
+                self._connections_created += 1
+                self._checkouts += 1
+                return conn
+
+    def record_query(self) -> None:
+        with self._condition:
+            self._queries += 1
+
+    def metrics(self) -> Dict[str, int]:
+        """Return credential-free cumulative lifecycle counters."""
+        with self._condition:
+            return {
+                "max_size": self._max_size,
+                "physical_connections_open": self._connection_count,
+                "physical_connections_created": self._connections_created,
+                "connections_in_use": len(self._in_use),
+                "idle_connections": len(self._idle),
+                "checkouts": self._checkouts,
+                "queries": self._queries,
+            }
+
+    def checkin(
+        self,
+        conn: psycopg2.extensions.connection,
+        *,
+        discard: bool = False,
+    ) -> None:
+        """Return one connection, discarding it when cleanup or transport failed."""
+        with self._condition:
+            if conn not in self._in_use:
+                return
+            self._in_use.remove(conn)
+            should_close = self._closed or discard or self._is_broken(conn)
+            if should_close:
+                self._connection_count -= 1
+                self._close_connection(conn)
+            else:
+                self._idle.append(conn)
+            self._condition.notify_all()
+
+    def close(self, *, timeout_seconds: float = 5.0) -> None:
+        """Stop checkouts, wait briefly for borrowers, then close every connection."""
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+        with self._condition:
+            self._closed = True
+            while self._in_use:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._condition.wait(remaining)
+            connections = [*self._idle, *self._in_use]
+            self._idle.clear()
+            self._in_use.clear()
+            self._connection_count = 0
+            self._condition.notify_all()
+        for conn in connections:
+            self._close_connection(conn)
 
 def utc_now() -> str:
     """Return current UTC timestamp in ISO format."""
@@ -60,8 +217,14 @@ class _CursorResult:
 class _ConnectionAdapter:
     """Connection wrapper with qmark placeholder compatibility."""
 
-    def __init__(self, conn: psycopg2.extensions.connection):
+    def __init__(
+        self,
+        conn: psycopg2.extensions.connection,
+        *,
+        on_execute: Optional[Callable[[], None]] = None,
+    ):
         self._conn = conn
+        self._on_execute = on_execute
 
     @staticmethod
     def _convert_qmark(query: str) -> str:
@@ -72,6 +235,8 @@ class _ConnectionAdapter:
         query: str,
         params: Optional[Sequence[Any]] = None,
     ) -> _CursorResult:
+        if self._on_execute is not None:
+            self._on_execute()
         cursor = self._conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(self._convert_qmark(query), tuple(params or ()))
         return _CursorResult(self._conn, cursor)
@@ -80,7 +245,14 @@ class _ConnectionAdapter:
 class CoreRepository:
     """Connection lifecycle and shared conversion helpers."""
 
-    def __init__(self, database_url: str, schema: str = "monocorpus"):
+    def __init__(
+        self,
+        database_url: str,
+        schema: str = "monocorpus",
+        *,
+        pool_size: int = DEFAULT_POOL_SIZE,
+        connection_factory: Callable[[str], psycopg2.extensions.connection] = psycopg2.connect,
+    ):
         self.database_url = str(database_url).strip()
         if not self.database_url:
             raise ValueError("database_url must be non-empty")
@@ -89,28 +261,47 @@ class CoreRepository:
         if self.database_url.startswith("postgresql+psycopg://"):
             self.database_url = "postgresql://" + self.database_url.split("://", 1)[1]
         self.schema = str(schema or "monocorpus").strip() or "monocorpus"
+        requested_pool_size = int(pool_size)
+        if not 1 <= requested_pool_size <= MAX_POOL_SIZE:
+            raise ValueError(f"pool_size must be between 1 and {MAX_POOL_SIZE}")
+        self.pool_size = requested_pool_size
+        self._pool = _PersistentConnectionPool(
+            self.database_url,
+            self.schema,
+            max_size=self.pool_size,
+            connection_factory=connection_factory,
+        )
         self._lock = threading.Lock()
         self._progress_last_published: dict[int, float] = {}
 
 
     @contextmanager
     def _connect(self) -> Iterable[_ConnectionAdapter]:
-        conn = psycopg2.connect(self.database_url)
+        conn = self._pool.checkout()
+        discard = False
         try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema))
-                )
-                cursor.execute(
-                    sql.SQL("SET search_path TO {}, public").format(sql.Identifier(self.schema))
-                )
-            yield _ConnectionAdapter(conn)
+            yield _ConnectionAdapter(conn, on_execute=self._pool.record_query)
             conn.commit()
         except Exception:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                discard = True
+            discard = discard or self._pool._is_broken(conn)
             raise
         finally:
-            conn.close()
+            discard = discard or self._pool._is_broken(conn)
+            self._pool.checkin(conn, discard=discard)
+
+
+    def close(self) -> None:
+        """Close all persistent PostgreSQL connections."""
+        self._pool.close()
+
+
+    def get_pool_metrics(self) -> Dict[str, int]:
+        """Return connection/query counters for diagnostics and benchmarks."""
+        return self._pool.metrics()
 
 
     def init_schema(self) -> None:

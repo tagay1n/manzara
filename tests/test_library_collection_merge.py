@@ -102,11 +102,15 @@ def test_merge_collection_moves_memberships_and_signatures(
         "create_runtime_engine",
         lambda: (create_engine(database_url), "test"),
     )
-    result = collection_catalog.merge_collections(
-        Database(database_url, schema=schema),
-        source_collection_id=ids["Variant"],
-        target_collection_id=ids["Canonical"],
-    )
+    database = Database(database_url, schema=schema)
+    try:
+        result = collection_catalog.merge_collections(
+            database,
+            source_collection_id=ids["Variant"],
+            target_collection_id=ids["Canonical"],
+        )
+    finally:
+        database.close()
 
     assert result["moved_items"] == 1
     with engine.connect() as conn:

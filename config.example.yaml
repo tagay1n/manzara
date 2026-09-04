@@ -55,12 +55,12 @@ yandex:
       document: ttdoc
       document_private: ttdoc-private
       content: ttcontent
-      content_chunks: ttcontent-chunks
       image: ttimg
 
 encryption_key: "<REDACTED>"
 
 database_url: "<REDACTED>"
+database_pool_size: 4
 
 sup_langs:
   tt:

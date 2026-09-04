@@ -260,8 +260,13 @@ class GeminiRuntimeManager:
 
     def _ensure_cycle(self, now_utc: datetime) -> Dict[str, Any]:
         cycle_label = self._cycle_label(now_utc)
-        control = self.db.ensure_gemini_runtime_control(cycle_label)
-        rolled = self.db.rollover_gemini_cycle(cycle_label)
+        ensure_cycle = getattr(self.db, "ensure_gemini_runtime_cycle", None)
+        if ensure_cycle is None:
+            control = self.db.ensure_gemini_runtime_control(cycle_label)
+            rolled = self.db.rollover_gemini_cycle(cycle_label)
+        else:
+            control = ensure_cycle(cycle_label)
+            rolled = bool(control.pop("rolled", False))
         if rolled:
             self._emit(
                 "gemini.all_reset",
@@ -270,7 +275,8 @@ class GeminiRuntimeManager:
                     "reason": "daily_reset",
                 },
             )
-            control = self.db.ensure_gemini_runtime_control(cycle_label)
+            if ensure_cycle is None:
+                control = self.db.ensure_gemini_runtime_control(cycle_label)
         return control
 
     def _clear_elapsed_pause_if_needed(

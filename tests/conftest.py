@@ -200,6 +200,7 @@ def prepared_test_schema() -> tuple[str, str]:
     try:
         yield database_url, schema_name
     finally:
+        db.close()
         _drop_schema(database_url, schema_name)
 
 
@@ -234,15 +235,16 @@ def test_client(
     monkeypatch.setattr(main_app.state.db, "init_schema", lambda: None)
 
     with TestClient(main_app.app) as client:
-        yield client, main_app
-
-    # Best-effort teardown: request graceful then force until no active runs.
-    for _ in range(20):
-        active = main_app.state.db.list_active_runs()
-        if not active:
-            break
-        main_app.state.runner.stop_all_toggle()
-        time.sleep(0.15)
+        try:
+            yield client, main_app
+        finally:
+            # Stop tasks while the application pool is still accepting checkouts.
+            for _ in range(20):
+                active = main_app.state.db.list_active_runs()
+                if not active:
+                    break
+                main_app.state.runner.stop_all_toggle()
+                time.sleep(0.15)
     _truncate_schema(database_url, schema_name)
 
 

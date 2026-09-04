@@ -141,11 +141,22 @@ def _build_ops_panel(
     title: str,
     description: str,
     tasks: List[Dict[str, Any]],
+    run_summary: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build a dashboard payload for an operations panel."""
-    counts = db.run_count_by_status(panel_id)
+    summary = run_summary or {}
+    counts = summary.get("status_counts") if run_summary is not None else None
+    counts = dict(counts or {}) if counts is not None else db.run_count_by_status(panel_id)
     total_runs = _sum_counts(counts)
-    last_run = _last_run_for_panel(db, panel_id)
+    last_status = summary.get("latest_status") if run_summary is not None else None
+    if run_summary is None:
+        last_run = _last_run_for_panel(db, panel_id)
+        last_status = (last_run or {}).get("status")
+    last_success = (
+        summary.get("last_success_at")
+        if run_summary is not None
+        else db.last_successful_run(panel_id)
+    )
 
     stats_cards = [
         {
@@ -154,11 +165,11 @@ def _build_ops_panel(
         },
         {
             "label": "Last Status",
-            "value": str((last_run or {}).get("status") or "-").replace("_", " "),
+            "value": str(last_status or "-").replace("_", " "),
         },
         {
             "label": "Last Success",
-            "value": db.last_successful_run(panel_id) or "-",
+            "value": last_success or "-",
         },
         {
             "label": "Repo Exists",
@@ -182,6 +193,7 @@ def build_maintenance_panel(
     tasks: List[Dict[str, Any]],
     *,
     title: str = "Yandex disk",
+    run_summary: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build dashboard panel payload for maintenance tasks."""
     return _build_ops_panel(
@@ -191,6 +203,7 @@ def build_maintenance_panel(
         title=title,
         description="Yandex Disk synchronization, migration, and cleanup.",
         tasks=tasks,
+        run_summary=run_summary,
     )
 
 
@@ -200,6 +213,7 @@ def build_backup_panel(
     tasks: List[Dict[str, Any]],
     *,
     title: str = "Backup",
+    run_summary: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build dashboard panel payload for database backup tasks."""
     return _build_ops_panel(
@@ -209,6 +223,7 @@ def build_backup_panel(
         title=title,
         description="PostgreSQL backup operations.",
         tasks=tasks,
+        run_summary=run_summary,
     )
 
 
@@ -218,6 +233,7 @@ def build_library_panel(
     tasks: List[Dict[str, Any]],
     *,
     title: str = "Library",
+    run_summary: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build dashboard panel payload for library-related tasks."""
     return _build_ops_panel(
@@ -227,4 +243,5 @@ def build_library_panel(
         title=title,
         description="Library ingestion and curation workflows.",
         tasks=tasks,
+        run_summary=run_summary,
     )

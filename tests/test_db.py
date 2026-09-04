@@ -59,6 +59,7 @@ def _isolated_database() -> Database:
     try:
         yield db
     finally:
+        db.close()
         engine = create_engine(database_url)
         try:
             with engine.begin() as conn:

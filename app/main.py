@@ -198,7 +198,11 @@ class AppState:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.db = Database(settings.database_url, schema=settings.database_schema)
+        self.db = Database(
+            settings.database_url,
+            schema=settings.database_schema,
+            pool_size=settings.database_pool_size,
+        )
         self.runner = TaskRunner(self.db)
         self.shutting_down = False
         self.conveyor_service = ConveyorService(self.db, self.runner)

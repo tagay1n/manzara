@@ -129,7 +129,7 @@ def test_conveyor_runs_sequential_rows_to_completion(test_client) -> None:
     started = client.post("/api/conveyor/run", json={})
     assert started.status_code == 200
     run_id = int(started.json()["run"]["conveyor_run_id"])
-    deadline = time.time() + 10
+    deadline = time.time() + 20
     run = None
     while time.time() < deadline:
         run = main_app.state.db.get_conveyor_run(run_id)

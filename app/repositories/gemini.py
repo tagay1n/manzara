@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 
 from app.repositories.core import utc_now
@@ -11,41 +12,124 @@ class GeminiRepository:
     def upsert_gemini_keys(self, keys: List[Dict[str, Any]]) -> None:
         """Synchronize configured Gemini keys into runtime registry."""
         now = utc_now()
+        encoded_keys = json.dumps(
+            [
+                {
+                    "key_id": str(item.get("key_id") or ""),
+                    "account_id": str(item.get("account_id") or "default"),
+                    "masked_key": str(item.get("masked_key") or ""),
+                }
+                for item in keys
+            ]
+        )
         with self._lock:
             with self._connect() as conn:
                 conn.execute(
-                    "UPDATE gemini_keys SET active = 0, updated_at = ?",
-                    (now,),
+                    """
+                    UPDATE gemini_keys AS stored
+                    SET active = 0, updated_at = ?
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM jsonb_to_recordset(?::jsonb)
+                            AS incoming(key_id text, account_id text, masked_key text)
+                        WHERE incoming.key_id = stored.key_id
+                    )
+                    """,
+                    (now, encoded_keys),
                 )
-                for item in keys:
-                    conn.execute(
-                        """
+                conn.execute(
+                    """
+                    WITH incoming AS (
+                        SELECT key_id, account_id, masked_key
+                        FROM jsonb_to_recordset(?::jsonb)
+                            AS rows(key_id text, account_id text, masked_key text)
+                    ), upserted AS (
                         INSERT INTO gemini_keys (
                             key_id, account_id, masked_key, active, created_at, updated_at
-                        ) VALUES (?, ?, ?, 1, ?, ?)
+                        )
+                        SELECT key_id, account_id, masked_key, 1, ?, ?
+                        FROM incoming
                         ON CONFLICT(key_id) DO UPDATE SET
                             account_id=excluded.account_id,
                             masked_key=excluded.masked_key,
                             active=excluded.active,
                             updated_at=excluded.updated_at
-                        """,
-                        (
-                            str(item.get("key_id") or ""),
-                            str(item.get("account_id") or "default"),
-                            str(item.get("masked_key") or ""),
-                            now,
-                            now,
-                        ),
+                        RETURNING account_id
                     )
-                    conn.execute(
-                        """
-                        INSERT INTO gemini_account_leases (
-                            account_id, created_at, updated_at
-                        ) VALUES (?, ?, ?)
+                    INSERT INTO gemini_account_leases (
+                        account_id, created_at, updated_at
+                    )
+                        SELECT DISTINCT account_id, ?, ?
+                        FROM upserted
                         ON CONFLICT(account_id) DO NOTHING
+                    """,
+                    (encoded_keys, now, now, now, now),
+                )
+
+    def ensure_gemini_runtime_cycle(self, cycle_label: str) -> Dict[str, Any]:
+        """Read the current cycle cheaply and reset it atomically when needed."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT control_id, cycle_label, pause_until, last_pause_reason,
+                           blackout_override_until, updated_at
+                    FROM gemini_runtime_control
+                    WHERE control_id = 1
+                    FOR UPDATE
+                    """
+                ).fetchone()
+                if row is None:
+                    row = conn.execute(
+                        """
+                        INSERT INTO gemini_runtime_control (
+                            control_id, cycle_label, pause_until, last_pause_reason,
+                            blackout_override_until, updated_at
+                        ) VALUES (1, ?, NULL, NULL, NULL, ?)
+                        RETURNING control_id, cycle_label, pause_until,
+                                  last_pause_reason, blackout_override_until,
+                                  updated_at
                         """,
-                        (str(item.get("account_id") or "default"), now, now),
-                    )
+                        (cycle_label, now),
+                    ).fetchone()
+                    return {**dict(row or {}), "rolled": False}
+                if str(row.get("cycle_label") or "") == cycle_label:
+                    return {**dict(row), "rolled": False}
+
+                row = conn.execute(
+                    """
+                    UPDATE gemini_runtime_control
+                    SET cycle_label = ?, pause_until = NULL,
+                        blackout_override_until = NULL, updated_at = ?
+                    WHERE control_id = 1
+                    RETURNING control_id, cycle_label, pause_until,
+                              last_pause_reason, blackout_override_until,
+                              updated_at
+                    """,
+                    (cycle_label, now),
+                ).fetchone()
+                conn.execute(
+                    """
+                    UPDATE gemini_key_model_state
+                        SET exhausted = 0,
+                            exhausted_at = NULL,
+                            cooldown_until = NULL,
+                            attempts_cycle = 0,
+                            success_cycle = 0,
+                            updated_at = ?
+                    """,
+                    (now,),
+                )
+        return {**dict(row), "rolled": True} if row else {
+            "control_id": 1,
+            "cycle_label": cycle_label,
+            "pause_until": None,
+            "last_pause_reason": None,
+            "blackout_override_until": None,
+            "updated_at": now,
+            "rolled": True,
+        }
 
     def list_gemini_account_leases(self) -> List[Dict[str, Any]]:
         """List account leases in least-recently-used order."""

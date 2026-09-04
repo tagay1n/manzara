@@ -45,5 +45,14 @@ def startup_app(
 
 
 def shutdown_app(*, state: Any) -> None:
-    """Mark runtime as shutting down."""
+    """Mark runtime as shutting down and release database connections."""
     state.shutting_down = True
+    conveyor = getattr(state, "conveyor_service", None)
+    if conveyor is not None:
+        conveyor.shutdown()
+    runner = getattr(state, "runner", None)
+    if runner is not None:
+        runner.shutdown()
+    if conveyor is not None:
+        conveyor.shutdown(timeout_seconds=3.0)
+    state.db.close()

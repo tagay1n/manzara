@@ -16,7 +16,7 @@ from app.modules.library.collection_detection import (
     title_core,
 )
 from app.modules.library.collection_constants import COLLECTIONS_PANEL_ID
-from app.modules.library.stats import create_runtime_engine
+from app.modules.library.stats import create_runtime_engine, get_runtime_database_url
 
 
 def _now() -> str:
@@ -66,16 +66,19 @@ def _json(value: Any, default: Any) -> Any:
         return deepcopy(default)
 
 
-def get_collection_overview(top_limit: int = 12) -> dict[str, Any]:
+def get_collection_overview(
+    top_limit: int = 12,
+    *,
+    db: Database | None = None,
+) -> dict[str, Any]:
     del top_limit
-    engine, source = create_runtime_engine()
+    engine = None
+    if db is None:
+        engine, source = create_runtime_engine()
+    else:
+        _database_url, source = get_runtime_database_url()
     try:
-        with engine.connect() as conn:
-            _set_search_path(conn)
-            row = (
-                conn.execute(
-                    text(
-                        """
+        query = """
                     SELECT
                         (SELECT COUNT(*) FROM library_collections) AS approved_collections,
                         (SELECT COUNT(*) FROM library_collection_items) AS items_linked,
@@ -83,11 +86,14 @@ def get_collection_overview(top_limit: int = 12) -> dict[str, Any]:
                         (SELECT COUNT(*) FROM library_collection_proposals WHERE status = 'queued_validation') AS awaiting_validation,
                         (SELECT COUNT(*) FROM library_collection_proposals WHERE status = 'rejected') AS rejected_proposals
                     """
-                    )
-                )
-                .mappings()
-                .one()
-            )
+        if db is not None:
+            with db._connect() as conn:
+                row = conn.execute(query).fetchone() or {}
+        else:
+            assert engine is not None
+            with engine.connect() as conn:
+                _set_search_path(conn)
+                row = conn.execute(text(query)).mappings().one()
         return {
             "available": True,
             "error": None,
@@ -102,7 +108,8 @@ def get_collection_overview(top_limit: int = 12) -> dict[str, Any]:
             "stats": {},
         }
     finally:
-        engine.dispose()
+        if engine is not None:
+            engine.dispose()
 
 
 def list_collections(

@@ -222,6 +222,19 @@ def test_gemini_400_rejection_does_not_exhaust_or_pause_key(test_client, monkeyp
             ),
         ],
     )
+    monkeypatch.setattr(
+        GeminiRuntimeManager,
+        "_blackout_window",
+        staticmethod(
+            lambda _now: {
+                "active": False,
+                "start_utc": "2026-03-25T06:00:00+00:00",
+                "end_utc": "2026-03-25T08:00:00+00:00",
+                "reset_utc": "2026-03-25T07:00:00+00:00",
+                "wait_until_utc": None,
+            }
+        ),
+    )
 
     manager = GeminiRuntimeManager(
         main_app.state.db,

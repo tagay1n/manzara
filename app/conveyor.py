@@ -49,6 +49,8 @@ class ConveyorService:
         self.runner = runner
         self.poll_seconds = poll_seconds
         self._trigger_lock = threading.Lock()
+        self._thread_lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
 
     def normalize_stages(self, raw_stages: Any) -> List[Dict[str, Any]]:
         if not isinstance(raw_stages, list):
@@ -164,6 +166,9 @@ class ConveyorService:
         return definition
 
     def snapshot(self) -> Dict[str, Any]:
+        get_snapshot = getattr(self.db, "get_conveyor_snapshot", None)
+        if get_snapshot is not None:
+            return get_snapshot()
         definition = self.db.get_conveyor_definition()
         active = self.db.get_active_conveyor_run()
         latest = active or self.db.get_latest_conveyor_run()
@@ -221,13 +226,36 @@ class ConveyorService:
             payload={"conveyor_run_id": run_id},
         )
         thread = threading.Thread(
-            target=self._run,
+            target=self._run_and_clear,
             args=(run_id, sudo_password),
             name=f"conveyor-run-{run_id}",
             daemon=True,
         )
+        with self._thread_lock:
+            self._thread = thread
         thread.start()
         return {"action": "start", "run": self.db.get_conveyor_run(run_id)}
+
+    def shutdown(self, *, timeout_seconds: float = 10.0) -> None:
+        """Request a safe conveyor stop and wait before database shutdown."""
+        with self._thread_lock:
+            thread = self._thread
+        if thread is None or not thread.is_alive():
+            return
+        self.stop()
+        thread.join(timeout=max(0.0, float(timeout_seconds)))
+
+    def _run_and_clear(
+        self,
+        conveyor_run_id: int,
+        sudo_password: Optional[str],
+    ) -> None:
+        try:
+            self._run(conveyor_run_id, sudo_password)
+        finally:
+            with self._thread_lock:
+                if self._thread is threading.current_thread():
+                    self._thread = None
 
     def stop(self) -> Dict[str, Any]:
         active = self.db.get_active_conveyor_run()

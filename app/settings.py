@@ -22,6 +22,7 @@ class Settings:
     database_url: str
     database_schema: str
     maintenance: MaintenanceSettings
+    database_pool_size: int = 4
     postgres_backup_mode: str = "local_pgbackrest"
 
 
@@ -119,6 +120,33 @@ def _load_postgres_backup_mode() -> str:
     return value
 
 
+def _load_database_pool_size() -> int:
+    """Load a conservative per-process PostgreSQL connection bound."""
+    raw_value = str(os.environ.get("MANZARA_DB_POOL_SIZE") or "").strip()
+    if not raw_value:
+        config_override = os.environ.get("MANZARA_CONFIG_PATH")
+        candidates = (
+            [Path(config_override).expanduser()]
+            if config_override
+            else [Path("config.local.yaml"), Path("config.yaml")]
+        )
+        for candidate in candidates:
+            if not candidate.exists():
+                continue
+            data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+            if isinstance(data, dict) and data.get("database_pool_size") is not None:
+                raw_value = str(data["database_pool_size"]).strip()
+                break
+    raw_value = raw_value or "4"
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError("MANZARA_DB_POOL_SIZE must be an integer from 1 to 8") from exc
+    if not 1 <= value <= 8:
+        raise RuntimeError("MANZARA_DB_POOL_SIZE must be an integer from 1 to 8")
+    return value
+
+
 def load_settings() -> Settings:
     """Load runtime settings from env with practical local defaults."""
     database_url = _load_database_url()
@@ -127,5 +155,6 @@ def load_settings() -> Settings:
         database_url=database_url,
         database_schema=database_schema,
         maintenance=load_maintenance_settings(),
+        database_pool_size=_load_database_pool_size(),
         postgres_backup_mode=_load_postgres_backup_mode(),
     )

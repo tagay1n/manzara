@@ -496,7 +496,7 @@ def test_task_completion_not_blocked_by_open_stdout_fd(test_client, wait_for_ter
                     "mode": "shell",
                     "value": (
                         "python3 -c \"import subprocess,sys; "
-                        "subprocess.Popen(['python3','-c','import time; time.sleep(3)'], "
+                        "subprocess.Popen(['python3','-c','import time; time.sleep(8)'], "
                         "stdout=sys.stdout, stderr=sys.stderr); "
                         "print('parent-exit', flush=True)\""
                     ),
@@ -508,7 +508,7 @@ def test_task_completion_not_blocked_by_open_stdout_fd(test_client, wait_for_ter
     response = client.post("/api/tasks/maintenance.stdout_fd_open/toggle")
     assert response.status_code == 200
     run_id = int(response.json()["run"]["run_id"])
-    run = wait_for_terminal_run(main_app, run_id, timeout_seconds=3.0)
+    run = wait_for_terminal_run(main_app, run_id, timeout_seconds=5.0)
     assert run["status"] == "completed"
 
 

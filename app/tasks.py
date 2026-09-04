@@ -7,6 +7,7 @@ import re
 import signal
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, TextIO
 
@@ -93,6 +94,7 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
         self._lock = threading.Lock()
         self._log_write_lock = threading.Lock()
         self._processes: Dict[int, ProcessHandle] = {}
+        self._threads: Dict[int, threading.Thread] = {}
         self._run_log_files: Dict[int, TextIO] = {}
         self._artifacts_root = task_runs_dir()
         self._artifacts_root.mkdir(parents=True, exist_ok=True)
@@ -169,6 +171,8 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
             daemon=True,
             name=f"run-{run_id}",
         )
+        with self._lock:
+            self._threads[run_id] = thread
         thread.start()
 
         run = self.db.get_run(run_id)
@@ -243,6 +247,30 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
             "mode": mode,
             "affected_runs": [int(r["run_id"]) for r in active_runs],
         }
+
+
+    def shutdown(self, *, graceful_timeout_seconds: float = 8.0) -> None:
+        """Stop active work and wait for task threads before database shutdown."""
+        active_runs = self.db.list_active_runs()
+        for run in active_runs:
+            self._request_stop(int(run["run_id"]), mode="graceful")
+
+        deadline = time.monotonic() + max(0.0, float(graceful_timeout_seconds))
+        while True:
+            with self._lock:
+                threads = list(self._threads.items())
+            alive = [(run_id, thread) for run_id, thread in threads if thread.is_alive()]
+            if not alive:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            alive[0][1].join(timeout=min(remaining, 0.25))
+
+        for run_id, _thread in alive:
+            self._request_stop(run_id, mode="force")
+        for _run_id, thread in alive:
+            thread.join(timeout=2.0)
 
 
     def request_stop_run(self, run_id: int, *, mode: str = "graceful") -> None:
@@ -609,6 +637,7 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
             with self._lock:
                 self._processes.pop(run_id, None)
                 self._run_log_files.pop(run_id, None)
+                self._threads.pop(run_id, None)
 
 
     def _validate_success_conditions(

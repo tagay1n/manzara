@@ -35,6 +35,64 @@ class ConveyorRepository:
         payload["stages"] = stages if isinstance(stages, list) else []
         return payload
 
+    def get_conveyor_snapshot(self) -> Dict[str, Any]:
+        """Return definition, latest relevant run, and its items in one query."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                WITH selected_run AS (
+                    SELECT *
+                    FROM conveyor_runs
+                    ORDER BY
+                        CASE WHEN status IN ('starting', 'running') THEN 0 ELSE 1 END,
+                        conveyor_run_id DESC
+                    LIMIT 1
+                )
+                SELECT
+                    (SELECT row_to_json(definition_row)
+                     FROM conveyor_definitions AS definition_row
+                     WHERE conveyor_id = 'default') AS definition,
+                    (SELECT row_to_json(run_row)
+                     FROM selected_run AS run_row) AS run,
+                    COALESCE(
+                        (
+                            SELECT json_agg(item_row ORDER BY stage_order, task_order)
+                            FROM (
+                                SELECT cri.*, r.progress_json
+                                FROM conveyor_run_items cri
+                                LEFT JOIN runs r ON r.run_id = cri.task_run_id
+                                WHERE cri.conveyor_run_id = (
+                                    SELECT conveyor_run_id FROM selected_run
+                                )
+                            ) AS item_row
+                        ),
+                        '[]'::json
+                    ) AS items
+                """
+            ).fetchone() or {}
+
+        definition_row = row.get("definition")
+        if definition_row:
+            definition = dict(definition_row)
+            stages = self._decode_json(definition.pop("stages_json", "[]"), [])
+            definition["stages"] = stages if isinstance(stages, list) else []
+        else:
+            definition = {"conveyor_id": "default", "revision": 0, "stages": []}
+
+        run_row = row.get("run")
+        run = self._conveyor_run_payload(run_row) if run_row else None
+        items: List[Dict[str, Any]] = []
+        for raw_item in row.get("items") or []:
+            item = dict(raw_item)
+            output = self._decode_json(item.pop("output_json", "{}"), {})
+            progress = self._decode_json(item.pop("progress_json", "{}"), {})
+            item["output"] = output if isinstance(output, dict) else {}
+            item["progress"] = progress if isinstance(progress, dict) else {}
+            if item.get("meaningful") is not None:
+                item["meaningful"] = bool(item["meaningful"])
+            items.append(item)
+        return {"definition": definition, "run": run, "items": items}
+
     def save_conveyor_definition(
         self,
         *,
