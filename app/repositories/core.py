@@ -10,13 +10,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
-from alembic import command
-from alembic.config import Config
 import psycopg2
+from alembic.config import Config
 from psycopg2 import sql
 from psycopg2.extensions import TRANSACTION_STATUS_UNKNOWN
 from psycopg2.extras import RealDictCursor
 
+from alembic import command
+from app.postgres_engine import (
+    acquire_postgres_engine,
+    configured_postgres_pool_size,
+    get_postgres_engine_metrics,
+    record_postgres_query,
+    release_postgres_engine,
+)
 
 DEFAULT_POOL_SIZE = 4
 MAX_POOL_SIZE = 8
@@ -172,6 +179,53 @@ class _PersistentConnectionPool:
         for conn in connections:
             self._close_connection(conn)
 
+
+class _SharedEnginePool:
+    """Adapt the process-shared SQLAlchemy pool to the core repository API."""
+
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+        self._closed = False
+
+    def checkout(self) -> Any:
+        if self._closed:
+            raise RuntimeError("PostgreSQL connection pool is closed")
+        return self.engine.raw_connection()
+
+    @staticmethod
+    def _is_broken(conn: Any) -> bool:
+        """Inspect the proxied DBAPI connection without checking it out again."""
+        if hasattr(conn, "is_valid") and not bool(conn.is_valid):
+            return True
+        dbapi_connection = getattr(conn, "dbapi_connection", conn)
+        if dbapi_connection is None or bool(getattr(dbapi_connection, "closed", False)):
+            return True
+        try:
+            return (
+                dbapi_connection.get_transaction_status()
+                == TRANSACTION_STATUS_UNKNOWN
+            )
+        except Exception:
+            return True
+
+    def record_query(self) -> None:
+        record_postgres_query(self.engine)
+
+    def metrics(self) -> Dict[str, int]:
+        return get_postgres_engine_metrics(self.engine)
+
+    def checkin(self, conn: Any, *, discard: bool = False) -> None:
+        if discard:
+            try:
+                conn.invalidate()
+            except Exception:
+                pass
+        conn.close()
+
+    def close(self, *, timeout_seconds: float = 5.0) -> None:
+        del timeout_seconds
+        self._closed = True
+
 def utc_now() -> str:
     """Return current UTC timestamp in ISO format."""
     return datetime.now(timezone.utc).isoformat()
@@ -250,8 +304,8 @@ class CoreRepository:
         database_url: str,
         schema: str = "monocorpus",
         *,
-        pool_size: int = DEFAULT_POOL_SIZE,
-        connection_factory: Callable[[str], psycopg2.extensions.connection] = psycopg2.connect,
+        pool_size: int | None = None,
+        connection_factory: Callable[[str], psycopg2.extensions.connection] | None = None,
     ):
         self.database_url = str(database_url).strip()
         if not self.database_url:
@@ -261,16 +315,29 @@ class CoreRepository:
         if self.database_url.startswith("postgresql+psycopg://"):
             self.database_url = "postgresql://" + self.database_url.split("://", 1)[1]
         self.schema = str(schema or "monocorpus").strip() or "monocorpus"
-        requested_pool_size = int(pool_size)
+        requested_pool_size = (
+            configured_postgres_pool_size()
+            if pool_size is None
+            else int(pool_size)
+        )
         if not 1 <= requested_pool_size <= MAX_POOL_SIZE:
             raise ValueError(f"pool_size must be between 1 and {MAX_POOL_SIZE}")
         self.pool_size = requested_pool_size
-        self._pool = _PersistentConnectionPool(
-            self.database_url,
-            self.schema,
-            max_size=self.pool_size,
-            connection_factory=connection_factory,
-        )
+        if connection_factory is None:
+            self._engine = acquire_postgres_engine(
+                self.database_url,
+                schema=self.schema,
+                pool_size=self.pool_size,
+            )
+            self._pool = _SharedEnginePool(self._engine)
+        else:
+            self._engine = None
+            self._pool = _PersistentConnectionPool(
+                self.database_url,
+                self.schema,
+                max_size=self.pool_size,
+                connection_factory=connection_factory,
+            )
         self._lock = threading.Lock()
         self._progress_last_published: dict[int, float] = {}
 
@@ -297,6 +364,9 @@ class CoreRepository:
     def close(self) -> None:
         """Close all persistent PostgreSQL connections."""
         self._pool.close()
+        if self._engine is not None:
+            release_postgres_engine(self._engine)
+            self._engine = None
 
 
     def get_pool_metrics(self) -> Dict[str, int]:

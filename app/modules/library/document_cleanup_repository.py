@@ -6,20 +6,19 @@ import hashlib
 import json
 from typing import Any, Iterable, Mapping
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
+
+from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 
 class DocumentCleanupRepository:
     """Own cleanup planning, review, claiming, and status transitions."""
 
     def __init__(self, database_url: str, *, schema: str) -> None:
-        self.engine = create_engine(
-            database_url,
-            connect_args={"options": f"-csearch_path={schema},public"},
-        )
+        self.engine = acquire_postgres_engine(database_url, schema=schema)
 
     def dispose(self) -> None:
-        self.engine.dispose()
+        release_postgres_engine(self.engine)
 
     def list_documents_for_planning(self) -> list[dict[str, Any]]:
         with self.engine.connect() as conn:

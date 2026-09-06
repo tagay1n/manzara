@@ -21,7 +21,8 @@ from app.modules.library.classification_insights import (
     _serialize_value,
 )
 from app.modules.library.response_envelope import available_payload, unavailable_payload
-from app.modules.library.stats import create_runtime_engine
+from app.modules.library.stats import create_runtime_engine, dispose_runtime_engine
+
 
 def _normalize_text(value: str) -> str:
     text = str(value or "").strip().lower()
@@ -384,7 +385,7 @@ def merge_classifications(
             reason=str(reason or "").strip(),
         )
     finally:
-        engine.dispose()
+        dispose_runtime_engine(engine)
 
 
 def get_classification_detail(
@@ -486,7 +487,7 @@ def get_classification_detail(
                 ),
                 {"classification_id": classification_id},
             ).mappings().all()
-        engine.dispose()
+        dispose_runtime_engine(engine)
 
         total_pages = max(1, (docs_total + docs_page_size - 1) // docs_page_size)
         return available_payload(

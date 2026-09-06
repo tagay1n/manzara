@@ -18,6 +18,23 @@ After-change counts come from the credential-free cumulative pool metrics in
 `manzara_test_*` schema. "Checkout" means a borrow from the pool; "new physical"
 means a TCP/TLS PostgreSQL connection created during the warm request.
 
+## Runtime ownership
+
+`app.postgres_engine` owns the sole SQLAlchemy engine for each database/schema
+pair inside a process. The shared `Database` facade and flow-specific
+repositories use that same bounded pool; application code must not call
+`sqlalchemy.create_engine()` directly. Pools use pre-ping, recycle stale cloud
+connections, and disable overflow.
+
+Task subprocesses cannot share live DBAPI connections with the web process.
+The task runner therefore sets `MANZARA_DB_POOL_SIZE=1` for every child process.
+Worker threads serialize their short PostgreSQL sections through that one
+connection, while network/model work remains concurrent. The web process keeps
+the configured `database_pool_size` (four by default).
+
+Tests use one local PostgreSQL Testcontainer per pytest session. Production or
+cloud database URLs are not a test fallback.
+
 | Endpoint | Baseline physical connections | Baseline repository/business SQL | Baseline request-time setup SQL | Warm checkouts after | Warm SQL after | New physical after |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `/api/health` | 0 | 0 | 0 | 0 | 0 | 0 |

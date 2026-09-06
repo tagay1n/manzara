@@ -4,20 +4,19 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
+
+from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 
 class PostgresDocumentSyncRepository:
     """Own the pending document queue and verified storage checkpoints."""
 
     def __init__(self, database_url: str, *, schema: str) -> None:
-        self.engine = create_engine(
-            database_url,
-            connect_args={"options": f"-csearch_path={schema},public"},
-        )
+        self.engine = acquire_postgres_engine(database_url, schema=schema)
 
     def dispose(self) -> None:
-        self.engine.dispose()
+        release_postgres_engine(self.engine)
 
     def list_pending_documents(self) -> list[dict[str, Any]]:
         """Return null-URL rows while detecting any ambiguous MD5 identity."""

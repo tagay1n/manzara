@@ -13,7 +13,7 @@ from typing import Any, Mapping, Sequence
 
 import pymupdf
 import requests
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.document_storage import (
@@ -26,8 +26,11 @@ from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     PasswordProtectedDocumentError,
 )
+from app.modules.library.metadata_contract import (
+    CONTRACT_VERSION,
+    metadata_contract_issues,
+)
 from app.modules.library.metadata_normalization import normalize_base_schema_org
-from app.modules.library.metadata_contract import CONTRACT_VERSION, metadata_contract_issues
 from app.modules.library.metadata_prompt import (
     DEFINE_META_PROMPT_BODY,
     DEFINE_META_PROMPT_NON_PDF_HEADER,
@@ -36,7 +39,7 @@ from app.modules.library.metadata_prompt import (
 )
 from app.modules.library.runtime.metadata.schema import Book
 from app.modules.library.upstream_metadata import sanitize_upstream_metadata
-
+from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 TEXT_SLICE_CHARS = 20_000
 PDF_EDGE_PAGES = 4
@@ -121,13 +124,12 @@ class MetadataExtractionRepository:
         normalized = str(schema or "monocorpus").strip() or "monocorpus"
         if not _SCHEMA_RE.fullmatch(normalized):
             raise ValueError(f"Invalid database schema: {normalized!r}")
-        self.engine: Engine = create_engine(
-            str(database_url),
-            connect_args={"options": f"-csearch_path={normalized},public"},
+        self.engine: Engine = acquire_postgres_engine(
+            str(database_url), schema=normalized
         )
 
     def dispose(self) -> None:
-        self.engine.dispose()
+        release_postgres_engine(self.engine)
 
     def list_candidates(
         self, *, limit: int | None = None

@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -19,13 +20,12 @@ class LibrarySiteExportRepository:
         normalized = str(schema or "monocorpus").strip() or "monocorpus"
         if not _SCHEMA_RE.fullmatch(normalized):
             raise ValueError(f"Invalid database schema: {normalized!r}")
-        self._engine: Engine = create_engine(
-            str(database_url),
-            connect_args={"options": f"-csearch_path={normalized},public"},
+        self._engine: Engine = acquire_postgres_engine(
+            str(database_url), schema=normalized
         )
 
     def dispose(self) -> None:
-        self._engine.dispose()
+        release_postgres_engine(self._engine)
 
     def load_snapshot(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Load candidates and reviewed aliases in one repeatable-read transaction."""

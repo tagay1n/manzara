@@ -11,12 +11,16 @@ from typing import Any, Mapping
 from sqlalchemy import text
 
 from app.db import Database
+from app.modules.library.collection_constants import COLLECTIONS_PANEL_ID
 from app.modules.library.collection_detection import (
     normalize_collection_text,
     title_core,
 )
-from app.modules.library.collection_constants import COLLECTIONS_PANEL_ID
-from app.modules.library.stats import create_runtime_engine, get_runtime_database_url
+from app.modules.library.stats import (
+    create_runtime_engine,
+    dispose_runtime_engine,
+    get_runtime_database_url,
+)
 
 
 def _now() -> str:
@@ -109,7 +113,7 @@ def get_collection_overview(
         }
     finally:
         if engine is not None:
-            engine.dispose()
+            dispose_runtime_engine(engine)
 
 
 def list_collections(
@@ -184,7 +188,7 @@ def list_collections(
             "total_pages": 1,
         }
     finally:
-        engine.dispose()
+            dispose_runtime_engine(engine)
 
 
 def list_collection_proposals(
@@ -281,7 +285,7 @@ def list_collection_proposals(
             "total_pages": 1,
         }
     finally:
-        engine.dispose()
+            dispose_runtime_engine(engine)
 
 
 def get_collection_proposal_review(proposal_id: int) -> dict[str, Any]:
@@ -365,7 +369,7 @@ def get_collection_proposal_review(proposal_id: int) -> dict[str, Any]:
             "items": [],
         }
     finally:
-        engine.dispose()
+            dispose_runtime_engine(engine)
 
 
 def decide_collection_proposal(
@@ -531,7 +535,7 @@ def decide_collection_proposal(
         )
         return {"ok": True, **payload}
     finally:
-        engine.dispose()
+            dispose_runtime_engine(engine)
 
 
 def list_collection_items(collection_id: int, *, limit: int = 400) -> dict[str, Any]:
@@ -589,7 +593,7 @@ def list_collection_items(collection_id: int, *, limit: int = 400) -> dict[str, 
             "items": [],
         }
     finally:
-        engine.dispose()
+            dispose_runtime_engine(engine)
 
 
 def get_collection_review(collection_id: int, **_: Any) -> dict[str, Any]:
@@ -682,7 +686,7 @@ def update_collection(
             "updated_fields": sorted(clean),
         }
     finally:
-        engine.dispose()
+            dispose_runtime_engine(engine)
 
 
 def merge_collections(
@@ -745,7 +749,7 @@ def merge_collections(
         )
         return {"ok": True, "error": None, **payload}
     finally:
-        engine.dispose()
+            dispose_runtime_engine(engine)
 
 
 def apply_collection_overrides(*, collection_limit: int = 500) -> dict[str, Any]:
@@ -822,7 +826,7 @@ def apply_collection_overrides(*, collection_limit: int = 500) -> dict[str, Any]
             "forced_include_count": forced,
         }
     finally:
-        engine.dispose()
+            dispose_runtime_engine(engine)
 
 
 __all__ = [

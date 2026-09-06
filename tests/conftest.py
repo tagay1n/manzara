@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import time
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import suppress
 from pathlib import Path
-from typing import Iterator, Tuple
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from typing import Any
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
@@ -18,6 +17,8 @@ from app.db import ACTIVE_STATUSES, Database
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.maintenance.tasks import maintenance_task_definitions
 from app.settings import Settings
+
+TEST_POSTGRES_IMAGE = "postgres:18.6-alpine3.24"
 
 
 def _test_task_defs(maintenance: MaintenanceSettings):
@@ -101,62 +102,46 @@ def _test_task_defs(maintenance: MaintenanceSettings):
     ]
 
 
-def _contains_redacted(node: object) -> bool:
-    if isinstance(node, str):
-        return "<REDACTED>" in node
-    if isinstance(node, dict):
-        return any(_contains_redacted(value) for value in node.values())
-    if isinstance(node, list):
-        return any(_contains_redacted(value) for value in node)
-    return False
+def _start_test_postgres(
+    container_factory: Callable[..., Any] | None = None,
+) -> tuple[Any, str]:
+    """Start the sole PostgreSQL test backend and return its generated URL."""
+    container = None
+    try:
+        if container_factory is None:
+            from testcontainers.postgres import PostgresContainer
 
-
-def _resolve_test_database_url() -> str:
-    def _with_connect_timeout(database_url: str, seconds: int = 3) -> str:
-        split = urlsplit(database_url)
-        params = dict(parse_qsl(split.query, keep_blank_values=True))
-        if "connect_timeout" not in params:
-            params["connect_timeout"] = str(int(seconds))
-        return urlunsplit(
-            (
-                split.scheme,
-                split.netloc,
-                split.path,
-                urlencode(params),
-                split.fragment,
-            )
+            container_factory = PostgresContainer
+        container = container_factory(
+            TEST_POSTGRES_IMAGE,
+            driver="psycopg2",
+            username="manzara_test",
+            password="manzara_test",
+            dbname="manzara_test",
         )
+        container.start()
+        database_url = str(container.get_connection_url()).strip()
+        if not database_url:
+            raise RuntimeError("Testcontainers returned an empty PostgreSQL URL")
+    except Exception:  # noqa: BLE001 - normalize container/runtime boundary failures.
+        if container is not None:
+            with suppress(Exception):
+                container.stop()
+        raise RuntimeError(
+            "Docker and Testcontainers are required for PostgreSQL-backed tests; "
+            "ensure Docker is installed, running, and accessible to this user"
+        ) from None
+    return container, database_url
 
-    for env_name in ("MANZARA_TEST_DATABASE_URL", "MANZARA_DATABASE_URL"):
-        value = str(os.environ.get(env_name) or "").strip()
-        if value:
-            return _with_connect_timeout(value)
 
-    config_override = os.environ.get("MANZARA_CONFIG_PATH")
-    candidates: list[Path]
-    if config_override:
-        candidates = [Path(config_override).expanduser()]
-    else:
-        candidates = [
-            Path("config.local.yaml"),
-            Path("config.yaml"),
-            Path("config.example.yaml"),
-        ]
-
-    for candidate in candidates:
-        if not candidate.exists():
-            continue
-        data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-        if not isinstance(data, dict):
-            continue
-        if _contains_redacted(data):
-            continue
-        database_url = str(data.get("database_url") or "").strip()
-        if database_url:
-            return _with_connect_timeout(database_url)
-    raise RuntimeError(
-        "Tests require database_url. Set MANZARA_TEST_DATABASE_URL or MANZARA_DATABASE_URL."
-    )
+@pytest.fixture(scope="session")
+def test_database_url() -> Iterator[str]:
+    """Yield the URL for one fresh PostgreSQL container per pytest session."""
+    container, database_url = _start_test_postgres()
+    try:
+        yield database_url
+    finally:
+        container.stop()
 
 
 def _drop_schema(database_url: str, schema_name: str) -> None:
@@ -190,9 +175,9 @@ def _truncate_schema(database_url: str, schema_name: str) -> None:
 
 
 @pytest.fixture(scope="session")
-def prepared_test_schema() -> tuple[str, str]:
+def prepared_test_schema(test_database_url: str) -> tuple[str, str]:
     """Create one migrated schema for the full test session."""
-    database_url = _resolve_test_database_url()
+    database_url = test_database_url
     schema_name = f"manzara_test_{uuid.uuid4().hex[:10]}"
     _drop_schema(database_url, schema_name)
     db = Database(database_url, schema=schema_name)
@@ -209,7 +194,7 @@ def test_client(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     prepared_test_schema: tuple[str, str],
-) -> Iterator[Tuple[TestClient, object]]:
+) -> Iterator[tuple[TestClient, object]]:
     """Return isolated TestClient and app.main module with temporary state."""
     from app import main as main_app
 

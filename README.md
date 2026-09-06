@@ -30,7 +30,8 @@ See `docs/architecture.md` for the ownership map. Operational invariants live in
 ## Requirements and setup
 
 - Python 3.10+
-- PostgreSQL
+- PostgreSQL for application runtime
+- Docker Engine or Docker Desktop for PostgreSQL-backed tests
 - The local Monocorpus repository when running embedded Library/Maintenance workflows
 - External binaries required by enabled document converters
 
@@ -103,6 +104,13 @@ PYTHONPATH=. .venv/bin/alembic upgrade head
 The direct SQLite-to-PostgreSQL migration reference is retained in `docs/postgres-cutover.md` for historical operations only.
 
 ## Tests
+
+PostgreSQL-backed tests start one fresh PostgreSQL 18 container per pytest
+session through Testcontainers. The generated container URL is the only test
+database URL; runtime environment variables and local configuration files are
+never used for test database provisioning. Docker must be installed, running,
+and accessible to the current user. Database-free focused tests do not start a
+container.
 
 ```bash
 PYTHONPATH=. .venv/bin/python -m pytest -q

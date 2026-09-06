@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from typing import Any, Mapping
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_AUTOMATIC_ATTEMPTS = 3
@@ -32,13 +33,12 @@ class NonPdfExtractionRepository:
         normalized = str(schema or "monocorpus").strip() or "monocorpus"
         if not _SCHEMA_RE.fullmatch(normalized):
             raise ValueError(f"Invalid database schema: {normalized!r}")
-        self.engine: Engine = create_engine(
-            str(database_url),
-            connect_args={"options": f"-csearch_path={normalized},public"},
+        self.engine: Engine = acquire_postgres_engine(
+            str(database_url), schema=normalized
         )
 
     def dispose(self) -> None:
-        self.engine.dispose()
+        release_postgres_engine(self.engine)
 
     def list_candidates(
         self,

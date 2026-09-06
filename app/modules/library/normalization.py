@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from sqlalchemy import text
 
 from app.db import Database
-from app.modules.library.stats import create_runtime_engine
+from app.modules.library.stats import create_runtime_engine, dispose_runtime_engine
 
 ENTITY_TYPES = {"personality", "publisher"}
 
@@ -192,7 +192,7 @@ def _query_aggregated_mentions(
             ),
             params,
         ).mappings().all()
-    engine.dispose()
+    dispose_runtime_engine(engine)
 
     return [dict(row) for row in rows], str(config_source)
 
@@ -209,7 +209,7 @@ def _query_docs_with_entities_count(entity_type: str) -> int:
                 """
             )
         ).scalar()
-    engine.dispose()
+    dispose_runtime_engine(engine)
     return int(value or 0)
 
 
@@ -1022,7 +1022,7 @@ def get_evidence(
                 ),
                 {"raw_name": raw, "limit": limit},
             ).mappings().all()
-        engine.dispose()
+        dispose_runtime_engine(engine)
         return {
             "available": True,
             "error": None,

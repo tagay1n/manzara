@@ -30,5 +30,6 @@ yadisk_client @ git+https://github.com/tagay1n/yadisk-client@dd7e957bf56837cb82a
 
 # Testing tools (single-file dependency policy).
 pytest==9.0.2
+testcontainers[postgres]==4.14.2
 # Required by FastAPI/Starlette TestClient during backend tests.
 httpx==0.28.1

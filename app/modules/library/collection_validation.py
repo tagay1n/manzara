@@ -28,14 +28,13 @@ from app.gemini_runtime import (
     GeminiTransportError,
 )
 from app.gemini_workers import emit_gemini_worker_log
+from app.modules.library.collection_constants import COLLECTIONS_PANEL_ID
 from app.modules.library.collection_detection import (
-    AdaptiveBatchSizer,
     PROMPT_VERSION,
+    AdaptiveBatchSizer,
     parse_validation_response,
 )
-from app.modules.library.collection_constants import COLLECTIONS_PANEL_ID
-from app.modules.library.stats import create_runtime_engine
-
+from app.modules.library.stats import create_runtime_engine, dispose_runtime_engine
 
 TASK_ID = "library.collection_validate"
 PANEL_ID = COLLECTIONS_PANEL_ID
@@ -662,7 +661,7 @@ def _validate_collection_proposals_worker(
         )
         return summary
     finally:
-        engine.dispose()
+        dispose_runtime_engine(engine)
 
 
 def validate_collection_proposals(
@@ -702,7 +701,7 @@ def validate_collection_proposals(
                 {"now": _now()},
             )
     finally:
-        recovery_engine.dispose()
+        dispose_runtime_engine(recovery_engine)
     with ThreadPoolExecutor(
         max_workers=worker_count, thread_name_prefix="collection-worker"
     ) as executor:

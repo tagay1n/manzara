@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from app.repositories.core import CoreRepository
 from app.bootstrap import shutdown_app
+from app.repositories.core import CoreRepository, _SharedEnginePool
 
 
 class _FakeCursor:
@@ -63,6 +63,16 @@ class _ConnectionFactory:
             connection = _FakeConnection(len(self.connections) + 1)
             self.connections.append(connection)
             return connection
+
+
+def test_shared_engine_pool_recognizes_healthy_and_broken_connections() -> None:
+    pool = _SharedEnginePool(engine=object())
+    healthy = _FakeConnection(1)
+    broken = _FakeConnection(2)
+    broken.closed = 1
+
+    assert pool._is_broken(healthy) is False
+    assert pool._is_broken(broken) is True
 
 
 def _repository(factory: _ConnectionFactory, *, pool_size: int = 4) -> CoreRepository:

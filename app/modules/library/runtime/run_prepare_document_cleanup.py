@@ -10,10 +10,10 @@ from app.db import Database
 from app.document_storage import load_document_storage_settings
 from app.modules.library.document_cleanup_repository import DocumentCleanupRepository
 from app.modules.library.document_cleanup_service import prepare_document_cleanup
+from app.postgres_engine import is_transient_postgres_error
 from app.run_artifact_channel import emit_run_artifact
 from app.runtime_config import load_runtime_config
 from app.settings import load_settings
-
 
 TASK_ID = "library.prepare_document_cleanup"
 PANEL_ID = "maintenance"
@@ -39,6 +39,31 @@ def _progress(current: int, total: int, counters: Mapping[str, int]) -> dict[str
     }
 
 
+def _publish_progress(
+    db: Database,
+    *,
+    run_id: int,
+    current: int,
+    total: int,
+    counters: Mapping[str, int],
+) -> None:
+    """Publish progress without aborting durable planning on a DB outage."""
+    try:
+        db.publish_run_progress(
+            task_id=TASK_ID,
+            run_id=run_id,
+            panel_id=PANEL_ID,
+            progress=_progress(current, total, counters),
+        )
+    except Exception as exc:
+        if not is_transient_postgres_error(exc):
+            raise
+        print(
+            f"document cleanup preparation: progress deferred; PostgreSQL unavailable: {exc}",
+            flush=True,
+        )
+
+
 def main() -> int:
     run_id = _run_id()
     app_settings = load_settings()
@@ -54,12 +79,12 @@ def main() -> int:
         print("document cleanup preparation: graceful stop requested", flush=True)
 
     def publish(current: int, total: int, counters: Mapping[str, int]) -> None:
-        payload = _progress(current, total, counters)
-        db.publish_run_progress(
-            task_id=TASK_ID,
+        _publish_progress(
+            db,
             run_id=run_id,
-            panel_id=PANEL_ID,
-            progress=payload,
+            current=current,
+            total=total,
+            counters=counters,
         )
 
     signal.signal(signal.SIGINT, request_stop)

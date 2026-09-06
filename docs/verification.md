@@ -4,6 +4,10 @@ Do not record test counts, migration heads, or line-number evidence here; those 
 
 ## Automated checks
 
+The backend suite uses one session-scoped PostgreSQL 18 Testcontainer. Docker
+must be installed, running, and accessible to the current user. Test database
+provisioning never reads application database URLs or configuration files.
+
 ```bash
 PYTHONPATH=. .venv/bin/python -m pytest -q
 node --test tests/frontend/*.mjs

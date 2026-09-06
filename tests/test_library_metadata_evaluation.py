@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 
-import inspect
 import hashlib
+import inspect
 import json
 from queue import Queue
 from types import SimpleNamespace
 
+import psycopg2
 import pytest
 
-from app.gemini_model_pool import GeminiModelResponseError
-from app.gemini_model_pool import GeminiModelPoolOperationalError
-from app.gemini_model_pool import GeminiModelPoolResult
-from app.gemini_model_pool import GeminiModelPoolUnavailableError
+from app.gemini_model_pool import (
+    GeminiModelPoolOperationalError,
+    GeminiModelPoolResult,
+    GeminiModelPoolUnavailableError,
+    GeminiModelResponseError,
+)
 from app.modules.library.runtime.run_meta_evaluate import _bootstrap_import_paths
-
 
 _bootstrap_import_paths()
 
+from metadata import evaluation as evaluation_module  # noqa: E402
+from metadata import evaluation_helpers as evaluation_helpers_module  # noqa: E402
 from metadata.evaluation import (  # noqa: E402
     Channel,
     Evaluation,
@@ -26,8 +30,6 @@ from metadata.evaluation import (  # noqa: E402
     LibraryApplicabilityWorker,
     _parse_evaluation_response,
 )
-from metadata import evaluation as evaluation_module  # noqa: E402
-from metadata import evaluation_helpers as evaluation_helpers_module  # noqa: E402
 from metadata.repository import fetch_docs_for_evaluation  # noqa: E402
 
 
@@ -273,6 +275,42 @@ def test_worker_defers_retryable_service_error_and_continues(monkeypatch) -> Non
     assert db.progress[-1]["succeeded"] == 1
     assert db.progress[-1]["service_deferred"] == 1
     assert db.progress[-1]["remaining"] == 1
+
+
+def test_worker_defers_postgres_outage_without_marking_document_terminal(
+    monkeypatch,
+) -> None:
+    doc = _document()
+    tasks = Queue()
+    tasks.put(doc)
+    channel = Channel(dry_run=False)
+    worker = LibraryApplicabilityWorker(
+        tasks_queue=tasks,
+        config={"sup_langs": {"tt": {"codes": ["tt-Cyrl"]}}},
+        channel=channel,
+        dry_run=False,
+        excerpt_chars=0,
+        gemini_manager=object(),
+        models=["model-first"],
+    )
+    terminal_calls: list[str] = []
+    monkeypatch.setattr(
+        worker,
+        "_evaluate",
+        lambda _doc: (_ for _ in ()).throw(
+            psycopg2.OperationalError("remaining connection slots are reserved")
+        ),
+    )
+    monkeypatch.setattr(
+        evaluation_module,
+        "mark_evaluation_terminal",
+        lambda md5, **_kwargs: terminal_calls.append(md5),
+    )
+
+    worker()
+
+    assert channel.get_deferred_docs() == {doc.md5}
+    assert terminal_calls == []
 
 
 def test_worker_stops_cleanly_when_all_models_are_quota_unavailable(

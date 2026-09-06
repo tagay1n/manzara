@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Any, Dict, Iterable
 
 import yaml
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from app.modules.library.response_envelope import available_payload, unavailable_payload
+from app.document_storage import load_document_storage_settings
 from app.modules.library.preview_repository import LibraryPreviewRepository
 from app.modules.library.previews import PREVIEW_RECIPE_VERSION
-from app.document_storage import load_document_storage_settings
+from app.modules.library.response_envelope import available_payload, unavailable_payload
+from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _REDACTED_SENTINEL = "<REDACTED>"
@@ -53,9 +54,15 @@ def get_runtime_database_url() -> tuple[str, str]:
 
 
 def create_runtime_engine() -> tuple[Engine, str]:
-    """Create SQLAlchemy engine for monocorpus runtime database."""
+    """Return the process-shared engine for the runtime database."""
     db_url, config_source = get_runtime_database_url()
-    return create_engine(db_url), config_source
+    schema = str(os.environ.get("MANZARA_DB_SCHEMA") or "monocorpus")
+    return acquire_postgres_engine(db_url, schema=schema), config_source
+
+
+def dispose_runtime_engine(engine: Engine) -> None:
+    """Release an engine acquired by :func:`create_runtime_engine`."""
+    release_postgres_engine(engine)
 
 
 def _parse_json_path(path_value: Any) -> str:
@@ -131,8 +138,7 @@ def get_library_dataset_stats(top_limit: int = 8) -> Dict[str, Any]:
                 ),
                 {"limit": max(1, int(top_limit))},
             ).mappings().all()
-        engine.dispose()
-
+        dispose_runtime_engine(engine)
         database_url, _ = get_runtime_database_url()
         storage = load_document_storage_settings(_load_runtime_config()[0])
         preview_repository = LibraryPreviewRepository(

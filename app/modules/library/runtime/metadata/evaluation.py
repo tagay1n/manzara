@@ -17,10 +17,17 @@ try:
     import pymupdf as fitz
 except ModuleNotFoundError:  # pragma: no cover - compatibility fallback
     import fitz  # type: ignore[no-redef]
-from pydantic import BaseModel
+from core.config import read_config
+from core.db import get_session
+from core.paths import get_in_workdir
+from dirs import Dirs
+from integrations.s3 import create_document_session, create_session
+from models import Classification, Metadata
 from prompts.metadata_evaluation import build_library_applicability_prompt
+from pydantic import BaseModel
 from sqlalchemy import func, select
 
+from app.artifacts import durable_path
 from app.db import Database
 from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_model_pool import (
@@ -33,33 +40,19 @@ from app.gemini_model_pool import (
 )
 from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import (
-    GeminiRuntimeManager,
     GeminiRuntimeError,
+    GeminiRuntimeManager,
     GeminiStopRequestedError,
 )
 from app.gemini_workers import emit_gemini_worker_log
-from app.settings import load_settings
-from app.artifacts import durable_path
-from app.modules.library.metadata_contract import CONTRACT_VERSION, metadata_contract_issues
-from integrations.s3 import create_document_session, create_session
-from dirs import Dirs
-from .fields import extract_flat_fields
-from .schema import BookPatch
-from models import Classification, Metadata
-from core.paths import get_in_workdir
-from core.config import read_config
-from core.db import get_session
-from app.modules.library.upstream_metadata import sanitize_upstream_metadata
-from .repository import (
-    EVALUATION_PROMPT_VERSION,
-    clear_evaluation_state,
-    count_docs_for_evaluation,
-    fetch_docs_for_evaluation,
-    get_evaluation_attempted_models,
-    mark_docs_as_non_applicable,
-    mark_evaluation_terminal,
-    record_evaluation_model_failure,
+from app.modules.library.metadata_contract import (
+    CONTRACT_VERSION,
+    metadata_contract_issues,
 )
+from app.modules.library.upstream_metadata import sanitize_upstream_metadata
+from app.postgres_engine import is_transient_postgres_error
+from app.settings import load_settings
+
 from .evaluation_helpers import (
     _apply_metadata_patch,
     _build_content_excerpt,
@@ -79,7 +72,18 @@ from .evaluation_helpers import (
     _sanitize_schema_urls,
     _sync_auxiliary_terms_in_about,
 )
-
+from .fields import extract_flat_fields
+from .repository import (
+    EVALUATION_PROMPT_VERSION,
+    clear_evaluation_state,
+    count_docs_for_evaluation,
+    fetch_docs_for_evaluation,
+    get_evaluation_attempted_models,
+    mark_docs_as_non_applicable,
+    mark_evaluation_terminal,
+    record_evaluation_model_failure,
+)
+from .schema import BookPatch
 
 LEGAL_DOC_PATTERNS = [
     re.compile(r"^(?=.*common_crawl)(?=.*npa_ta_).*\.pdf$"),
@@ -405,6 +409,8 @@ def evaluate(args) -> None:
 
             if is_interrupt:
                 return
+            if is_transient_postgres_error(e):
+                time.sleep(ERROR_BACKOFF_SECONDS)
             continue
 
 
@@ -639,6 +645,12 @@ class LibraryApplicabilityWorker:
                 import traceback
 
                 self.log(f"Unhandled error for {doc.md5}: {e}\n{traceback.format_exc()}")
+                if is_transient_postgres_error(e):
+                    self.log(
+                        f"PostgreSQL unavailable; deferring evaluation md5={doc.md5}"
+                    )
+                    self.channel.defer_document(doc.md5)
+                    continue
                 if not self.dry_run:
                     mark_evaluation_terminal(
                         doc.md5,

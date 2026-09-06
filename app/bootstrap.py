@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 
-
 def startup_app(
     *,
     state: Any,
@@ -56,3 +55,6 @@ def shutdown_app(*, state: Any) -> None:
     if conveyor is not None:
         conveyor.shutdown(timeout_seconds=3.0)
     state.db.close()
+    from app.postgres_engine import dispose_all_postgres_engines
+
+    dispose_all_postgres_engines()

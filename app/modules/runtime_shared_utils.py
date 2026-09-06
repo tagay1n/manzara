@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import base64
-from collections import deque
 import hashlib
-import json
 import os
-from pathlib import Path
 import re
 import sys
+from collections import deque
+from pathlib import Path
 from typing import Any
 
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
 import yaml
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
+
+from app.postgres_engine import get_postgres_engine
 
 prefix = "enc:"
 
@@ -75,17 +76,14 @@ def _contains_redacted(node: Any) -> bool:
 
 
 def get_engine(echo: bool = False):
-    """Create a SQLAlchemy engine from the configured database URL."""
+    """Return the process-shared engine for the configured database."""
     config = read_config()
     schema = str(os.environ.get("MANZARA_DB_SCHEMA") or "monocorpus").strip()
     if not _SCHEMA_RE.fullmatch(schema):
         raise ValueError(f"Invalid database schema: {schema!r}")
-    return create_engine(
-        config["database_url"],
-        echo=echo,
-        json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
-        connect_args={"options": f"-csearch_path={schema},public"},
-    )
+    if echo:
+        raise ValueError("echo is not supported by the shared PostgreSQL engine")
+    return get_postgres_engine(config["database_url"], schema=schema)
 
 
 def get_session():

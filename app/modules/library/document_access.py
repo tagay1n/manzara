@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 import re
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from boto3 import Session
 from botocore.config import Config
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
 from app.document_storage import (
     DocumentStorageSettings,
@@ -17,8 +17,8 @@ from app.document_storage import (
     parse_object_url,
 )
 from app.modules.runtime_shared_utils import decrypt
+from app.postgres_engine import get_postgres_engine
 from app.runtime_config import load_runtime_config
-
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -75,11 +75,13 @@ def resolve_document_open_url(state: Any, md5: str) -> str | None:
     schema = str(state.settings.database_schema or "monocorpus")
     if not _SCHEMA_RE.fullmatch(schema):
         raise RuntimeError(f"Invalid database schema: {schema!r}")
-    engine = create_engine(state.settings.database_url)
-    try:
-        with engine.connect() as conn:
-            conn.execute(text(f'SET search_path TO "{schema}", public'))
-            row = conn.execute(
+    engine = get_postgres_engine(
+        state.settings.database_url,
+        schema=schema,
+        pool_size=state.settings.database_pool_size,
+    )
+    with engine.connect() as conn:
+        row = conn.execute(
                 text(
                     """
                     SELECT document_url, ya_public_url, primary_storage_verified_at
@@ -89,12 +91,10 @@ def resolve_document_open_url(state: Any, md5: str) -> str | None:
                 ),
                 {"md5": md5},
             ).mappings().first()
-        if not row:
-            return None
-        settings = load_document_storage_settings(load_runtime_config())
-        return resolve_stored_document_url(row, settings=settings)
-    finally:
-        engine.dispose()
+    if not row:
+        return None
+    settings = load_document_storage_settings(load_runtime_config())
+    return resolve_stored_document_url(row, settings=settings)
 
 
 __all__ = ["resolve_document_open_url", "resolve_stored_document_url"]

@@ -13,6 +13,10 @@ from typing import Any, Dict, Optional, TextIO
 
 from app.artifacts import task_runs_dir
 from app.db import Database
+from app.modules.maintenance.backup_s3_verify import wait_for_pgbackrest_s3_change
+from app.run_artifact_channel import RUN_ARTIFACT_PATH_ENV, read_run_artifact
+from app.run_artifacts import capture_pre_run_artifacts, collect_post_run_artifacts
+from app.run_summary import build_structured_run_summary
 from app.runtime_states import (
     TASK_RUN_STATUS_FAILED,
     TASK_RUN_STATUS_RUNNING,
@@ -20,10 +24,6 @@ from app.runtime_states import (
     resolve_task_terminal_status,
     task_terminal_event_type,
 )
-from app.modules.maintenance.backup_s3_verify import wait_for_pgbackrest_s3_change
-from app.run_artifacts import capture_pre_run_artifacts, collect_post_run_artifacts
-from app.run_artifact_channel import RUN_ARTIFACT_PATH_ENV, read_run_artifact
-from app.run_summary import build_structured_run_summary
 from app.task_runtime.commands import TaskCommandMixin
 from app.task_runtime.logging import TaskLoggingMixin
 from app.task_runtime.process import ProcessHandle
@@ -393,6 +393,9 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
             proc_env["MANZARA_TASK_RUN_ID"] = str(run_id)
             proc_env["MANZARA_TASK_ID"] = str(task.get("task_id") or "")
             proc_env["MANZARA_PANEL_ID"] = str(task.get("panel_id") or "")
+            # Every task subprocess has one process-shared engine. Serializing its
+            # short DB sections keeps concurrent tasks within small cloud plans.
+            proc_env["MANZARA_DB_POOL_SIZE"] = "1"
             if task.get("gemini_workers") is not None:
                 proc_env["MANZARA_GEMINI_WORKERS"] = str(task["gemini_workers"])
             proc_env[RUN_ARTIFACT_PATH_ENV] = str(artifact_output_path)

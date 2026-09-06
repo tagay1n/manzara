@@ -5,12 +5,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.document_storage import object_url, parse_object_url
 from app.modules.maintenance.content_storage_migration import ContentMigrationCandidate
-
+from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -26,16 +26,13 @@ class ContentStorageMigrationRepository:
     ) -> None:
         if not _SCHEMA_RE.fullmatch(schema):
             raise ValueError(f"Invalid database schema: {schema!r}")
-        self.engine: Engine = create_engine(
-            database_url,
-            connect_args={"options": f"-csearch_path={schema},public"},
-        )
+        self.engine: Engine = acquire_postgres_engine(database_url, schema=schema)
         self.legacy_endpoint = legacy_endpoint
         self.legacy_bucket = legacy_bucket
         self.legacy_prefix = object_url(legacy_endpoint, legacy_bucket, "")
 
     def dispose(self) -> None:
-        self.engine.dispose()
+        release_postgres_engine(self.engine)
 
     def list_work(
         self, *, md5: str | None = None, limit: int | None = None

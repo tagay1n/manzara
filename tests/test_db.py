@@ -2,57 +2,17 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-import yaml
 from sqlalchemy import create_engine, text
 
 from app.db import Database
 
 
-def _contains_redacted(node: object) -> bool:
-    if isinstance(node, str):
-        return "<REDACTED>" in node
-    if isinstance(node, dict):
-        return any(_contains_redacted(value) for value in node.values())
-    if isinstance(node, list):
-        return any(_contains_redacted(value) for value in node)
-    return False
-
-
-def _resolve_database_url() -> str:
-    for env_name in ("MANZARA_TEST_DATABASE_URL", "MANZARA_DATABASE_URL"):
-        value = str(os.environ.get(env_name) or "").strip()
-        if value:
-            return value
-
-    for candidate in (
-        Path("config.local.yaml"),
-        Path("config.yaml"),
-        Path("config.example.yaml"),
-    ):
-        if not candidate.exists():
-            continue
-        data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-        if not isinstance(data, dict):
-            continue
-        if _contains_redacted(data):
-            continue
-        database_url = str(data.get("database_url") or "").strip()
-        if database_url:
-            return database_url
-
-    raise RuntimeError(
-        "Tests require MANZARA_TEST_DATABASE_URL or an unmasked local config."
-    )
-
-
 @contextmanager
-def _isolated_database() -> Database:
-    database_url = _resolve_database_url()
+def _isolated_database(database_url: str) -> Database:
     schema_name = f"manzara_test_{uuid.uuid4().hex[:10]}"
     db = Database(database_url, schema=schema_name)
     db.init_schema()
@@ -68,8 +28,10 @@ def _isolated_database() -> Database:
             engine.dispose()
 
 
-def test_recover_active_runs_marks_running_as_failed(tmp_path: Path) -> None:
-    with _isolated_database() as db:
+def test_recover_active_runs_marks_running_as_failed(
+    tmp_path: Path, test_database_url: str
+) -> None:
+    with _isolated_database(test_database_url) as db:
         db.seed_tasks(
             [
                 {
@@ -97,8 +59,8 @@ def test_recover_active_runs_marks_running_as_failed(tmp_path: Path) -> None:
         assert "Recovered after Manzara restart" in (run["error_text"] or "")
 
 
-def test_run_progress_round_trip(tmp_path: Path) -> None:
-    with _isolated_database() as db:
+def test_run_progress_round_trip(tmp_path: Path, test_database_url: str) -> None:
+    with _isolated_database(test_database_url) as db:
         db.seed_tasks(
             [
                 {
@@ -123,8 +85,10 @@ def test_run_progress_round_trip(tmp_path: Path) -> None:
         )
 
 
-def test_run_progress_is_coalesced_and_removed_from_event_history(tmp_path: Path) -> None:
-    with _isolated_database() as db:
+def test_run_progress_is_coalesced_and_removed_from_event_history(
+    tmp_path: Path, test_database_url: str
+) -> None:
+    with _isolated_database(test_database_url) as db:
         task = {
             "task_id": "maintenance.coalesced_progress",
             "panel_id": "maintenance",
@@ -161,8 +125,10 @@ def test_run_progress_is_coalesced_and_removed_from_event_history(tmp_path: Path
         ] == []
 
 
-def test_prune_runtime_definitions_removes_stale_flow_rows(tmp_path: Path) -> None:
-    with _isolated_database() as db:
+def test_prune_runtime_definitions_removes_stale_flow_rows(
+    tmp_path: Path, test_database_url: str
+) -> None:
+    with _isolated_database(test_database_url) as db:
         db.seed_panels(
             [
                 {"panel_id": "maintenance", "title": "Maintenance"},

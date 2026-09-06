@@ -12,9 +12,8 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from sqlalchemy import text
 
-from app.modules.library.stats import create_runtime_engine
 from app.modules.library.metadata_terms import termset_name
-
+from app.modules.library.stats import create_runtime_engine, dispose_runtime_engine
 
 DETECTOR_VERSION = "metadata-v1"
 PROMPT_VERSION = "collection-validation-v1"
@@ -939,7 +938,7 @@ def discover_collections(
             **dict(counters),
         }
     finally:
-        engine.dispose()
+        dispose_runtime_engine(engine)
 
 
 __all__ = [

@@ -9,7 +9,7 @@ from typing import Any, Dict
 from sqlalchemy import text
 
 from app.modules.library.response_envelope import available_payload, unavailable_payload
-from app.modules.library.stats import create_runtime_engine
+from app.modules.library.stats import create_runtime_engine, dispose_runtime_engine
 
 _DEFAULT_PAGE_SIZE = 25
 _MAX_PAGE_SIZE = 100
@@ -89,7 +89,7 @@ def get_entity_overview(
                 ),
                 {"limit": max(1, min(int(top_limit), 50))},
             ).mappings().all()
-        engine.dispose()
+        dispose_runtime_engine(engine)
         return available_payload(
             config_source=config_source,
             generated_at=datetime.utcnow().isoformat() + "Z",
@@ -176,7 +176,7 @@ def list_entities(
                 ),
                 params,
             ).mappings().all()
-        engine.dispose()
+        dispose_runtime_engine(engine)
         return available_payload(
             config_source=config_source,
             page=page,
@@ -310,7 +310,7 @@ def get_entity_insights(
                 ),
                 {"limit": queue_limit},
             ).mappings().all()
-        engine.dispose()
+        dispose_runtime_engine(engine)
         queue_items = []
         for row in queue_rows:
             item = _row_to_item(row, config)

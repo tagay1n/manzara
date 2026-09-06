@@ -9,13 +9,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import create_engine
-
 from app.artifacts import private_credentials_dir, workspace_dir
 from app.modules.maintenance.dump_state import StopRequested, run_dump
+from app.postgres_engine import get_postgres_engine
 from app.run_artifact_channel import emit_run_artifact
 from app.settings import load_settings
-
 
 SCHEMA_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -38,11 +36,10 @@ def main() -> int:
     settings = load_settings()
     if not SCHEMA_PATTERN.fullmatch(settings.database_schema):
         raise ValueError(f"Invalid database schema: {settings.database_schema!r}")
-    engine = create_engine(
+    engine = get_postgres_engine(
         settings.database_url,
-        connect_args={
-            "options": f"-csearch_path={settings.database_schema},public"
-        },
+        schema=settings.database_schema,
+        pool_size=settings.database_pool_size,
     )
     stop_state = {"requested": False}
 
@@ -67,8 +64,6 @@ def main() -> int:
     except StopRequested as exc:
         print(f"dump state: stopped: {exc}", flush=True)
         return 130
-    finally:
-        engine.dispose()
 
 
 if __name__ == "__main__":

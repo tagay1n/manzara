@@ -6,11 +6,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.modules.library.previews import PreviewPage
-
+from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _STATUSES = {"pending", "processing", "ready", "partial", "failed"}
@@ -28,14 +28,12 @@ class LibraryPreviewRepository:
         if not _SCHEMA_RE.fullmatch(normalized_schema):
             raise ValueError(f"Invalid database schema: {normalized_schema!r}")
         self.schema = normalized_schema
-        self._engine: Engine = create_engine(
-            str(database_url),
-            connect_args={"options": f"-csearch_path={normalized_schema},public"},
+        self._engine: Engine = acquire_postgres_engine(
+            str(database_url), schema=normalized_schema
         )
 
     def dispose(self) -> None:
-        """Release pooled database connections."""
-        self._engine.dispose()
+        release_postgres_engine(self._engine)
 
     def list_candidates(
         self,

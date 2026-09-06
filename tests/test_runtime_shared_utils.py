@@ -53,17 +53,15 @@ def test_get_engine_uses_manzara_schema_before_public(monkeypatch) -> None:
         lambda: {"database_url": "postgresql://example.test/database"},
     )
 
-    def create_engine(database_url, **kwargs):  # noqa: ANN001, ANN003
+    def get_postgres_engine(database_url, **kwargs):  # noqa: ANN001, ANN003
         captured.update(database_url=database_url, **kwargs)
         return object()
 
-    monkeypatch.setattr(shared_utils, "create_engine", create_engine)
+    monkeypatch.setattr(shared_utils, "get_postgres_engine", get_postgres_engine)
 
     shared_utils.get_engine()
 
-    assert captured["connect_args"] == {
-        "options": "-csearch_path=runtime_state,public"
-    }
+    assert captured["schema"] == "runtime_state"
 
 
 def test_library_utils_export_shared_common_functions() -> None:

@@ -9,9 +9,9 @@ from typing import Any, Dict, Iterable, List
 
 from sqlalchemy import text
 
-from app.modules.library.response_envelope import available_payload, unavailable_payload
-from app.modules.library.stats import create_runtime_engine
 from app.modules.library.metadata_terms import defined_term, termset_name
+from app.modules.library.response_envelope import available_payload, unavailable_payload
+from app.modules.library.stats import create_runtime_engine, dispose_runtime_engine
 
 _DEFAULT_PAGE_SIZE = 25
 _MAX_PAGE_SIZE = 100
@@ -229,7 +229,7 @@ def list_classifications(
                 ),
                 {**params, "limit": page_size, "offset": offset},
             ).mappings().all()
-        engine.dispose()
+        dispose_runtime_engine(engine)
 
         items = [_row_to_classification_item(dict(row)) for row in rows]
         return available_payload(
@@ -279,7 +279,7 @@ def _all_classification_usage_rows(limit: int = _DEFAULT_ALL_ROWS_LIMIT) -> tupl
             ),
             {"limit": max(1, int(limit))},
         ).mappings().all()
-    engine.dispose()
+    dispose_runtime_engine(engine)
     return [dict(row) for row in rows], config_source
 
 
@@ -419,7 +419,7 @@ def _fetch_unclassified_applicable(limit: int) -> Dict[str, Any]:
             ),
             {"limit": max(1, int(limit))},
         ).mappings().all()
-    engine.dispose()
+    dispose_runtime_engine(engine)
     return {
         "total": total,
         "items": [
