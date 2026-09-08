@@ -10,8 +10,9 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 from fastapi import HTTPException
 
 from app.contracts import PayloadBuilderOperations
-from app.gemini_workers import configured_gemini_account_count
 from app.settings import task_is_available
+
+GEMINI_WORKERS_UI_MAX = 9
 
 
 class PayloadBuilder:
@@ -165,7 +166,6 @@ class PayloadBuilder:
             return None
         active = task.get("gemini_workers")
         next_run = task.get("gemini_workers_next")
-        maximum = configured_gemini_account_count()
         is_active = str(task.get("run_status") or "") in {
             "starting", "running", "stopping_graceful", "stopping_force"
         }
@@ -174,8 +174,8 @@ class PayloadBuilder:
             "next_run": int(next_run or default),
             "override_pending": next_run is not None,
             "active": int(active) if is_active and active is not None else None,
-            "max": maximum,
-            "editable": bool(maximum >= 1 and not is_active),
+            "max": GEMINI_WORKERS_UI_MAX,
+            "editable": not is_active,
         }
 
     @staticmethod

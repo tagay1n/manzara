@@ -8,9 +8,6 @@ import sys
 import threading
 from typing import Any, TextIO
 
-from app.gemini_config import load_gemini_keys
-
-
 GEMINI_WORKERS_ENV = "MANZARA_GEMINI_WORKERS"
 GEMINI_WORKERS_DEFAULT = 1
 _WORKER_LOG_LOCK = threading.Lock()
@@ -25,25 +22,17 @@ GEMINI_TASK_IDS = frozenset(
 )
 
 
-def configured_gemini_account_count() -> int:
-    """Return the number of distinct configured accounts that have keys."""
-    return len({item.account_id for item in load_gemini_keys()})
-
-
-def validate_gemini_workers(value: Any, *, maximum: int | None = None) -> int:
-    """Validate a strict integral worker count within configured capacity."""
+def validate_gemini_workers(value: Any) -> int:
+    """Validate a strict positive integral worker count."""
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError("workers must be an integer")
-    limit = configured_gemini_account_count() if maximum is None else int(maximum)
-    if limit < 1:
-        raise ValueError("No Gemini accounts are configured")
-    if value < 1 or value > limit:
-        raise ValueError(f"workers must be between 1 and {limit}")
+    if value < 1:
+        raise ValueError("workers must be at least 1")
     return value
 
 
 def resolve_gemini_workers(explicit: int | None = None) -> int:
-    """Resolve CLI > environment > one, then validate against account count."""
+    """Resolve CLI > environment > one, then validate the worker count."""
     if explicit is not None:
         return validate_gemini_workers(explicit)
     raw = str(os.environ.get(GEMINI_WORKERS_ENV) or "").strip()
@@ -90,7 +79,6 @@ __all__ = [
     "GEMINI_TASK_IDS",
     "GEMINI_WORKERS_DEFAULT",
     "GEMINI_WORKERS_ENV",
-    "configured_gemini_account_count",
     "current_gemini_worker_id",
     "emit_gemini_worker_log",
     "resolve_gemini_workers",

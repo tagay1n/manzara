@@ -8,6 +8,8 @@ const state = {
   conveyorController: null,
 };
 
+const GEMINI_WORKERS_UI_MAX = 9;
+
 const viewState = window.ManzaraCore.attachViewState(state, "loading");
 const taskReviewStore = window.ManzaraTaskReview.createStore();
 
@@ -49,8 +51,7 @@ function renderGeminiWorkers(task) {
   const config = task.gemini_workers;
   if (!config) return "";
   const value = config.active ?? config.next_run ?? config.default;
-  const maximum = Math.max(1, Number(config.max || 1));
-  return `<input class="gemini-worker-spinner" type="number" min="1" max="${window.ManzaraCore.escapeHtml(String(maximum))}" step="1" value="${window.ManzaraCore.escapeHtml(String(value))}" data-gemini-workers-task="${window.ManzaraCore.escapeHtml(task.task_id)}" aria-label="Gemini workers" title="Gemini workers" ${config.editable ? "" : "disabled"}>`;
+  return `<input class="gemini-worker-spinner" type="number" min="1" max="${GEMINI_WORKERS_UI_MAX}" step="1" value="${window.ManzaraCore.escapeHtml(String(value))}" data-gemini-workers-task="${window.ManzaraCore.escapeHtml(task.task_id)}" aria-label="Gemini workers" title="Gemini workers" ${config.editable ? "" : "disabled"}>`;
 }
 
 function renderTaskItem(task) {
@@ -191,11 +192,15 @@ async function toggleTask(taskId, button) {
 
 async function setGeminiWorkers(taskId, workers, input) {
   if (!taskId || input?.disabled) return;
+  const requestedWorkers = Number(workers);
+  if (!Number.isInteger(requestedWorkers)) return;
+  const uiWorkers = Math.min(GEMINI_WORKERS_UI_MAX, Math.max(1, requestedWorkers));
+  if (input) input.value = String(uiWorkers);
   if (input) input.disabled = true;
   try {
     await api(`/api/tasks/${encodeURIComponent(taskId)}/gemini-workers`, {
       method: "PATCH",
-      body: JSON.stringify({ workers: Number(workers) }),
+      body: JSON.stringify({ workers: uiWorkers }),
     });
   } finally {
     if (input) input.disabled = false;

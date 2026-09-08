@@ -295,6 +295,21 @@ def test_gemini_worker_override_is_shared_and_consumed_by_next_run(test_client) 
     assert detail["task"]["gemini_workers"]["editable"] is False
 
 
+def test_gemini_worker_override_is_not_limited_by_configured_accounts(test_client) -> None:
+    client, _main_app = test_client
+
+    response = client.patch(
+        "/api/tasks/library.metadata_extract/gemini-workers",
+        json={"workers": 12},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["workers"] == 12
+    task = client.get("/api/tasks/library.metadata_extract").json()["task"]
+    assert task["gemini_workers"]["next_run"] == 12
+    assert task["gemini_workers"]["max"] == 9
+
+
 def test_gemini_worker_override_rejects_bool_fraction_and_unsupported_task(test_client) -> None:
     client, _main_app = test_client
     for value in (True, 1.5):

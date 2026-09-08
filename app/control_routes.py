@@ -7,14 +7,14 @@ from typing import Any, Callable, Dict, Optional
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
-from app.gemini_runtime import GeminiRuntimeManager
-from app.gemini_workers import configured_gemini_account_count, validate_gemini_workers
-from app.settings import task_is_available
 from app.conveyor import (
     ConveyorEditConflict,
     ConveyorRevisionConflict,
     ConveyorValidationError,
 )
+from app.gemini_runtime import GeminiRuntimeManager
+from app.gemini_workers import validate_gemini_workers
+from app.settings import task_is_available
 
 def _parse_title(payload: Dict[str, Any], *, title_max_length: int, field_name: str = "title") -> str:
     value = payload.get(field_name)
@@ -126,9 +126,7 @@ def register_control_routes(
         if "workers" not in payload:
             raise HTTPException(status_code=400, detail="workers is required")
         try:
-            workers = validate_gemini_workers(
-                payload["workers"], maximum=configured_gemini_account_count()
-            )
+            workers = validate_gemini_workers(payload["workers"])
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         updated = state.db.set_task_gemini_workers_next(task_id, workers)

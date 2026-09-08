@@ -30,7 +30,6 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
               default: 1,
               next_run: 2,
               active: null,
-              max: 4,
               editable: true,
             },
             run: {
@@ -69,7 +68,7 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /data-task-toggle-id="maintenance.quick"/);
   assert.match(
     harness.elements.get("task-flow-grid").innerHTML,
-    /<input[^>]+type="number"[^>]+min="1"[^>]+max="4"[^>]+value="2"/,
+    /<input[^>]+type="number"[^>]+min="1"[^>]+max="9"[^>]+value="2"/,
   );
   assert.doesNotMatch(harness.elements.get("task-flow-grid").innerHTML, />Workers</);
   assert.doesNotMatch(harness.elements.get("task-flow-grid").innerHTML, /<select|<option/);
@@ -95,6 +94,17 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
       (call) => call.path === "/api/tasks/maintenance.quick/gemini-workers",
     ).options.body),
     { workers: 3 },
+  );
+
+  workerInput.value = "12";
+  harness.elements.get("task-flow-grid").dispatch("change", { target: workerInput });
+  await harness.flush();
+  assert.equal(workerInput.value, "9");
+  assert.deepEqual(
+    JSON.parse(harness.apiCalls.filter(
+      (call) => call.path === "/api/tasks/maintenance.quick/gemini-workers",
+    ).at(-1).options.body),
+    { workers: 9 },
   );
 
   harness.elements.get("task-flow-grid").dispatch("click", {
@@ -561,6 +571,12 @@ test("task page normalizes idle icon names for lucide glyph rendering", async ()
       title: "Scan for changes",
       task_type: "scan",
       icon_idle: "RefreshCw",
+      gemini_workers: {
+        default: 1,
+        next_run: 3,
+        active: null,
+        editable: true,
+      },
     },
     panel: { title: "Operations" },
     stats: {
@@ -596,6 +612,7 @@ test("task page normalizes idle icon names for lucide glyph rendering", async ()
       "task-stat-grid",
       "task-run-list",
       "run-result",
+      "gemini-worker-control",
       "last-event",
       "copy-logs",
       "log-title",
@@ -613,6 +630,9 @@ test("task page normalizes idle icon names for lucide glyph rendering", async ()
   await harness.flush();
   const toggleBtn = harness.elements.get("task-toggle-btn");
   assert.match(toggleBtn.innerHTML, /data-lucide="refresh-cw"/);
+  const workerControl = harness.elements.get("gemini-worker-control").innerHTML;
+  assert.match(workerControl, /<option value="9"/);
+  assert.doesNotMatch(workerControl, /<option value="10"/);
 });
 
 test("task page renders structured run artifacts from backend summary", async () => {

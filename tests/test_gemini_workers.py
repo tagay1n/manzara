@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import pytest
 import io
 import threading
 import time
 
-from app.gemini_config import GeminiKey
+import pytest
+
 from app.gemini_workers import (
     emit_gemini_worker_log,
     resolve_gemini_workers,
@@ -13,25 +13,20 @@ from app.gemini_workers import (
 )
 
 
-def _keys() -> list[GeminiKey]:
-    return [
-        GeminiKey(f"account-{index}", f"key-{index}", "secret", "masked")
-        for index in range(1, 4)
-    ]
-
-
 def test_worker_resolution_uses_cli_then_environment(monkeypatch) -> None:
-    monkeypatch.setattr("app.gemini_workers.load_gemini_keys", _keys)
     monkeypatch.setenv("MANZARA_GEMINI_WORKERS", "2")
     assert resolve_gemini_workers() == 2
-    assert resolve_gemini_workers(3) == 3
+    assert resolve_gemini_workers(12) == 12
 
 
-@pytest.mark.parametrize("value", [True, 1.5, 0, 4])
-def test_worker_validation_is_strict_and_account_bounded(monkeypatch, value) -> None:  # noqa: ANN001
-    monkeypatch.setattr("app.gemini_workers.load_gemini_keys", _keys)
+@pytest.mark.parametrize("value", [True, 1.5, 0, -1])
+def test_worker_validation_requires_a_positive_integer(value) -> None:
     with pytest.raises(ValueError):
         validate_gemini_workers(value)
+
+
+def test_worker_validation_has_no_account_based_upper_limit() -> None:
+    assert validate_gemini_workers(12) == 12
 
 
 def test_worker_log_prefixes_every_physical_line() -> None:

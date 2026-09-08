@@ -11,6 +11,8 @@ const state = {
   soundNotifier: null,
 };
 
+const GEMINI_WORKERS_UI_MAX = 9;
+
 const viewState = window.ManzaraCore.attachViewState(state, "loading");
 const taskReviewStore = window.ManzaraTaskReview.createStore();
 
@@ -166,7 +168,7 @@ function renderGeminiWorkerControl(task) {
     target.innerHTML = `<span class="gemini-worker-badge">${escapeHtml(String(value))} workers</span>`;
     return;
   }
-  const options = Array.from({ length: Number(config.max || 0) }, (_, index) => index + 1)
+  const options = Array.from({ length: GEMINI_WORKERS_UI_MAX }, (_, index) => index + 1)
     .map((count) => `<option value="${count}" ${count === Number(value) ? "selected" : ""}>${count}</option>`)
     .join("");
   target.innerHTML = `<label class="gemini-worker-control">Workers <select id="gemini-workers-select">${options}</select></label>`;
