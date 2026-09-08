@@ -26,23 +26,19 @@ class GeminiRepository:
             with self._connect() as conn:
                 conn.execute(
                     """
-                    UPDATE gemini_keys AS stored
-                    SET active = 0, updated_at = ?
-                    WHERE NOT EXISTS (
-                        SELECT 1
-                        FROM jsonb_to_recordset(?::jsonb)
-                            AS incoming(key_id text, account_id text, masked_key text)
-                        WHERE incoming.key_id = stored.key_id
-                    )
-                    """,
-                    (now, encoded_keys),
-                )
-                conn.execute(
-                    """
                     WITH incoming AS (
                         SELECT key_id, account_id, masked_key
                         FROM jsonb_to_recordset(?::jsonb)
                             AS rows(key_id text, account_id text, masked_key text)
+                    ), deactivated AS (
+                        UPDATE gemini_keys AS stored
+                        SET active = 0, updated_at = ?
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM incoming
+                            WHERE incoming.key_id = stored.key_id
+                        )
+                        RETURNING stored.key_id
                     ), upserted AS (
                         INSERT INTO gemini_keys (
                             key_id, account_id, masked_key, active, created_at, updated_at
@@ -63,7 +59,7 @@ class GeminiRepository:
                         FROM upserted
                         ON CONFLICT(account_id) DO NOTHING
                     """,
-                    (encoded_keys, now, now, now, now),
+                    (encoded_keys, now, now, now, now, now),
                 )
 
     def ensure_gemini_runtime_cycle(self, cycle_label: str) -> Dict[str, Any]:
@@ -141,6 +137,24 @@ class GeminiRepository:
                    ORDER BY last_acquired_at NULLS FIRST, account_id"""
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_gemini_snapshot_metadata(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Read account leases and model runtime through one pool checkout."""
+        with self._connect() as conn:
+            account_leases = conn.execute(
+                """SELECT account_id, lease_token, task_id, run_id, worker_id,
+                          lease_expires_at, last_acquired_at, created_at, updated_at
+                   FROM gemini_account_leases
+                   ORDER BY last_acquired_at NULLS FIRST, account_id"""
+            ).fetchall()
+            model_runtime = conn.execute(
+                """SELECT model_name, pause_until, last_pause_reason, created_at, updated_at
+                   FROM gemini_model_runtime ORDER BY model_name"""
+            ).fetchall()
+        return {
+            "account_leases": [dict(row) for row in account_leases],
+            "model_runtime": [dict(row) for row in model_runtime],
+        }
 
     def try_claim_gemini_account(
         self,

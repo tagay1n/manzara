@@ -810,6 +810,20 @@ class GeminiRuntimeManager:
         )
         state_rows = self.db.list_gemini_model_states(model_name=None)
         configured_models = load_configured_gemini_model_names()
+        get_snapshot_metadata = getattr(
+            self.db, "get_gemini_snapshot_metadata", None
+        )
+        if get_snapshot_metadata is None:
+            account_leases = getattr(
+                self.db, "list_gemini_account_leases", lambda: []
+            )()
+            model_runtime = getattr(
+                self.db, "list_gemini_model_runtime", lambda: []
+            )()
+        else:
+            snapshot_metadata = get_snapshot_metadata()
+            account_leases = list(snapshot_metadata.get("account_leases") or [])
+            model_runtime = list(snapshot_metadata.get("model_runtime") or [])
 
         models_by_key: Dict[str, List[Dict[str, Any]]] = {}
         for row in state_rows:
@@ -879,10 +893,9 @@ class GeminiRuntimeManager:
             }
             for account_id, items in sorted(grouped.items(), key=lambda item: item[0])
         ]
-        list_leases = getattr(self.db, "list_gemini_account_leases", lambda: [])
         leases_by_account = {
             str(row.get("account_id") or ""): row
-            for row in list_leases()
+            for row in account_leases
         }
         for account in accounts:
             lease = leases_by_account.get(str(account["account_id"])) or {}
@@ -962,7 +975,7 @@ class GeminiRuntimeManager:
                 "exhausted_rows": exhausted_rows,
             },
             "configured_models": configured_models,
-            "model_runtime": getattr(self.db, "list_gemini_model_runtime", lambda: [])(),
+            "model_runtime": model_runtime,
             "model_usage": list(usage_by_model.values()),
             "accounts": accounts,
         }
