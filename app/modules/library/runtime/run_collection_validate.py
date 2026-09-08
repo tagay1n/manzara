@@ -56,7 +56,10 @@ def main() -> None:
     if run_id <= 0:
         raise RuntimeError("MANZARA_TASK_RUN_ID is required")
     settings = load_settings()
-    db = Database(settings.database_url, schema=settings.database_schema)
+    db = Database(
+        settings.database_url, schema=settings.database_schema,
+        local_state_path=settings.local_state_path,
+    )
     print("library collection validation: start max_batch=20 adaptive=true", flush=True)
     summary = validate_collection_proposals(
         db,

@@ -249,11 +249,7 @@ def test_completed_run_does_not_persist_verbose_telemetry(
     run_id = int(response.json()["run"]["run_id"])
     wait_for_terminal_run(main_app, run_id)
 
-    with main_app.state.db._connect() as conn:
-        log_count = conn.execute(
-            "SELECT COUNT(*) AS count FROM run_logs WHERE run_id = ?",
-            (run_id,),
-        ).scalar()
+    with main_app.state.db._runtime_connect() as conn:
         verbose_event_count = conn.execute(
             """
             SELECT COUNT(*) AS count
@@ -263,7 +259,6 @@ def test_completed_run_does_not_persist_verbose_telemetry(
             (run_id,),
         ).scalar()
 
-    assert int(log_count or 0) == 0
     assert int(verbose_event_count or 0) == 0
 
 

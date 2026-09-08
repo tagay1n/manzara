@@ -10,7 +10,7 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
 
-def test_metadata_evaluation_state_table_exists(
+def test_metadata_evaluation_state_is_removed_from_cloud(
     prepared_test_schema,  # noqa: ANN001
 ) -> None:
     database_url, schema = prepared_test_schema
@@ -18,26 +18,10 @@ def test_metadata_evaluation_state_table_exists(
     inspector = inspect(engine)
 
     try:
-        assert inspector.has_table(
+        assert not inspector.has_table(
             "library_metadata_evaluation_state",
             schema=schema,
         )
-        columns = {
-            item["name"]
-            for item in inspector.get_columns(
-                "library_metadata_evaluation_state",
-                schema=schema,
-            )
-        }
-        assert {
-            "md5",
-            "status",
-            "attempts_json",
-            "model_pool_json",
-            "last_run_id",
-            "terminal_reason",
-            "prompt_version",
-        } <= columns
     finally:
         engine.dispose()
 
@@ -59,7 +43,7 @@ def test_metadata_evaluation_state_table_is_repaired_when_head_is_missing_it(
                 text(f'DROP TABLE "{schema}".library_metadata_evaluation_state')
             )
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "20260820_0030")
 
         assert inspect(engine).has_table(
             "library_metadata_evaluation_state",

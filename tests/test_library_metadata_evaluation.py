@@ -85,7 +85,7 @@ def test_evaluation_selection_reopens_only_incomplete_or_inconsistent_rows() -> 
     assert "Metadata.lib.is_(None)" in source
     assert "Metadata.classification_id.is_(None)" in source
     assert "Metadata.lib_eval_method" not in source
-    assert "LibraryMetadataEvaluationState" in source
+    assert "_checkpoints().get" in source
     assert "LibraryUpstreamMetadata" in source
     assert "model_pool" in inspect.signature(fetch_docs_for_evaluation).parameters
 

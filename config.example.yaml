@@ -61,6 +61,8 @@ encryption_key: "<REDACTED>"
 
 database_url: "<REDACTED>"
 database_pool_size: 4
+# Optional; defaults to ~/.manzara/state/runtime.sqlite3.
+local_state_path: ~/.manzara/state/runtime.sqlite3
 
 sup_langs:
   tt:

@@ -5,7 +5,7 @@ Last updated: 2026-08-21
 ## Current State
 
 - The direct SQLite-to-PostgreSQL cutover is complete.
-- PostgreSQL is the only runtime state store. SQLite is not supported by application runtime or tests.
+- This document describes the retired all-PostgreSQL runtime design. Current Manzara stores disposable operational state in `~/.manzara/state/runtime.sqlite3`; see `docs/architecture.md`.
 - `MANZARA_DATABASE_URL` selects the database.
 - `MANZARA_DB_SCHEMA` selects the Manzara operational schema and defaults to `monocorpus`.
 - Schema changes are Alembic-only. Application startup runs `upgrade head` before panel and task definitions are seeded.
@@ -15,7 +15,7 @@ The repository still contains the historical one-time import script, but it is n
 
 ## Schema Topology
 
-Manzara operational tables live in the configured schema. They include task/flow definitions, runs and logs, SSE events, conveyor state, normalization state, Gemini runtime state, and Library collection/preview state.
+Before revision `20260908_0046`, Manzara operational tables lived in the configured schema. That revision deletes cloud definitions, runs, events, conveyor, Gemini coordination, and AI retry tables. Normalization, Library domain data, previews, and safety-critical migration checkpoints remain durable.
 
 Revision `20260827_0036` removes the retired workflow scheduler, its five tables, and its historical SSE events. Conveyor and task-run history are retained.
 
@@ -76,7 +76,7 @@ For the filtered Aiven free-tier migration and its cutover checklist, see
 ## Invariants
 
 - Do not add runtime `CREATE TABLE` or `ALTER TABLE` statements to application source.
-- Do not reintroduce SQLite configuration or dual writes.
+- Do not dual-write or fall back between the current local SQLite runtime store and durable PostgreSQL.
 - Keep database-data compatibility explicit in Alembic revisions.
 - Ask the owner before deciding whether a persisted-data change requires compatibility or destructive cleanup.
 - Verify there is exactly one Alembic head before release.

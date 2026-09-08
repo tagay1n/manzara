@@ -4,36 +4,33 @@ from __future__ import annotations
 
 from sqlalchemy import create_engine, inspect, text
 
+from app.local_state import AIItemCheckpointStore, LocalStateStore
 from app.modules.library.metadata_extraction import MetadataExtractionRepository
 
 
-def test_metadata_extraction_state_table_is_migrated(prepared_test_schema) -> None:
+def test_disposable_runtime_state_is_removed_from_cloud(prepared_test_schema) -> None:
     database_url, schema = prepared_test_schema
     engine = create_engine(database_url)
     try:
         inspector = inspect(engine)
-        assert inspector.has_table("library_metadata_extraction_state", schema=schema)
-        columns = {
-            item["name"]
-            for item in inspector.get_columns(
-                "library_metadata_extraction_state", schema=schema
-            )
-        }
-        assert {
-            "md5",
-            "status",
-            "attempts_json",
-            "model_pool_json",
-            "last_run_id",
-            "terminal_reason",
-            "prompt_version",
-            "prompt_version",
-            "retry_after",
-            "operational_failure_count",
-            "last_operational_error",
-            "created_at",
-            "updated_at",
-        }.issubset(columns)
+        for table_name in (
+            "panel_definitions",
+            "task_definitions",
+            "runs",
+            "events",
+            "run_logs",
+            "conveyor_definitions",
+            "conveyor_runs",
+            "conveyor_run_items",
+            "gemini_keys",
+            "gemini_key_model_state",
+            "gemini_runtime_control",
+            "gemini_account_leases",
+            "gemini_model_runtime",
+            "library_metadata_extraction_state",
+            "library_metadata_evaluation_state",
+        ):
+            assert not inspector.has_table(table_name, schema=schema), table_name
         assert inspector.has_table("library_metadata_quality_state", schema=schema)
         quality_columns = {
             item["name"]
@@ -57,6 +54,7 @@ def test_metadata_extraction_state_table_is_migrated(prepared_test_schema) -> No
 
 def test_metadata_success_is_transactional_against_json_column(
     prepared_test_schema,
+    tmp_path,
 ) -> None:
     database_url, schema = prepared_test_schema
     engine = create_engine(database_url)
@@ -114,7 +112,13 @@ def test_metadata_success_is_transactional_against_json_column(
                 {"md5": "a" * 32},
             )
 
-        repository = MetadataExtractionRepository(database_url, schema=schema)
+        local_path = tmp_path / "runtime.sqlite3"
+        LocalStateStore(local_path).initialize()
+        repository = MetadataExtractionRepository(
+            database_url,
+            schema=schema,
+            checkpoint_store=AIItemCheckpointStore(local_path),
+        )
         assert repository.save_success(
             "a" * 32,
             schema_org={

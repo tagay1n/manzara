@@ -69,7 +69,7 @@ def test_document_dependents_are_cleaned_and_cascade(
                 {"md5": existing_md5},
             )
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "20260830_0042")
 
         inspector = inspect(engine)
         unique_columns = {

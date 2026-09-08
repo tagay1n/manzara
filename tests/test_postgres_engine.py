@@ -35,6 +35,30 @@ def test_engine_is_shared_by_database_url_and_schema(monkeypatch) -> None:
     assert created[0][1]["pool_pre_ping"] is True
 
 
+def test_equivalent_sqlalchemy_urls_share_one_engine(monkeypatch) -> None:
+    from app import postgres_engine
+
+    created = []
+
+    def create_engine(_database_url, **_kwargs):
+        engine = Mock()
+        created.append(engine)
+        return engine
+
+    monkeypatch.setattr(postgres_engine, "create_engine", create_engine)
+    postgres_engine.dispose_all_postgres_engines()
+
+    core = postgres_engine.get_postgres_engine(
+        "postgresql://example.test/manzara", schema="monocorpus"
+    )
+    flow = postgres_engine.get_postgres_engine(
+        "postgresql+psycopg2://example.test/manzara", schema="monocorpus"
+    )
+
+    assert core is flow
+    assert len(created) == 1
+
+
 def test_different_schema_gets_an_isolated_engine(monkeypatch) -> None:
     from app import postgres_engine
 

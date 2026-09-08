@@ -178,7 +178,7 @@ def _record_attempt(
                 requested_md5_json,batch_size,status,response_json,error_text,
                 latency_ms,created_at,completed_at
             ) VALUES (
-                :proposal_id,:run_id,:model,:prompt_version,:input_hash,
+                :proposal_id,NULL,:model,:prompt_version,:input_hash,
                 CAST(:md5s AS JSONB),:batch_size,:status,CAST(:response AS JSONB),:error,
                 :latency_ms,:created_at,:completed_at
             )
@@ -186,7 +186,6 @@ def _record_attempt(
         ),
         {
             "proposal_id": proposal_id,
-            "run_id": run_id,
             "model": model,
             "prompt_version": PROMPT_VERSION,
             "input_hash": _attempt_hash(proposal_id, model, documents),

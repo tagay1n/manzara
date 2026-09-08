@@ -396,6 +396,7 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
             # Every task subprocess has one process-shared engine. Serializing its
             # short DB sections keeps concurrent tasks within small cloud plans.
             proc_env["MANZARA_DB_POOL_SIZE"] = "1"
+            proc_env["MANZARA_LOCAL_STATE_PATH"] = str(self.db.local_state_path)
             if task.get("gemini_workers") is not None:
                 proc_env["MANZARA_GEMINI_WORKERS"] = str(task["gemini_workers"])
             proc_env[RUN_ARTIFACT_PATH_ENV] = str(artifact_output_path)

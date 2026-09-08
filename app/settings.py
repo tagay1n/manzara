@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from app.artifacts import local_state_path
 from app.modules.maintenance.config import (
     MaintenanceSettings,
     load_maintenance_settings,
@@ -24,6 +25,7 @@ class Settings:
     maintenance: MaintenanceSettings
     database_pool_size: int = 4
     postgres_backup_mode: str = "local_pgbackrest"
+    local_state_path: Path | None = None
 
 
 POSTGRES_BACKUP_MODES = frozenset({"local_pgbackrest", "managed"})
@@ -147,6 +149,26 @@ def _load_database_pool_size() -> int:
     return value
 
 
+def _load_local_state_path() -> Path:
+    """Resolve the sole local SQLite path without legacy-location fallbacks."""
+    raw_value = str(os.environ.get("MANZARA_LOCAL_STATE_PATH") or "").strip()
+    if not raw_value:
+        config_override = os.environ.get("MANZARA_CONFIG_PATH")
+        candidates = (
+            [Path(config_override).expanduser()]
+            if config_override
+            else [Path("config.local.yaml"), Path("config.yaml")]
+        )
+        for candidate in candidates:
+            if not candidate.exists():
+                continue
+            data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+            if isinstance(data, dict) and data.get("local_state_path") is not None:
+                raw_value = str(data["local_state_path"]).strip()
+                break
+    return Path(raw_value).expanduser() if raw_value else local_state_path()
+
+
 def load_settings() -> Settings:
     """Load runtime settings from env with practical local defaults."""
     database_url = _load_database_url()
@@ -157,4 +179,5 @@ def load_settings() -> Settings:
         maintenance=load_maintenance_settings(),
         database_pool_size=_load_database_pool_size(),
         postgres_backup_mode=_load_postgres_backup_mode(),
+        local_state_path=_load_local_state_path(),
     )

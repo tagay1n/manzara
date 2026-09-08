@@ -12,9 +12,9 @@ from app.db import Database
 
 
 @contextmanager
-def _isolated_database(database_url: str) -> Database:
+def _isolated_database(database_url: str, local_state_path: Path) -> Database:
     schema_name = f"manzara_test_{uuid.uuid4().hex[:10]}"
-    db = Database(database_url, schema=schema_name)
+    db = Database(database_url, schema=schema_name, local_state_path=local_state_path)
     db.init_schema()
     try:
         yield db
@@ -31,7 +31,7 @@ def _isolated_database(database_url: str) -> Database:
 def test_recover_active_runs_marks_running_as_failed(
     tmp_path: Path, test_database_url: str
 ) -> None:
-    with _isolated_database(test_database_url) as db:
+    with _isolated_database(test_database_url, tmp_path / "runtime.sqlite3") as db:
         db.seed_tasks(
             [
                 {
@@ -60,7 +60,7 @@ def test_recover_active_runs_marks_running_as_failed(
 
 
 def test_run_progress_round_trip(tmp_path: Path, test_database_url: str) -> None:
-    with _isolated_database(test_database_url) as db:
+    with _isolated_database(test_database_url, tmp_path / "runtime.sqlite3") as db:
         db.seed_tasks(
             [
                 {
@@ -88,7 +88,7 @@ def test_run_progress_round_trip(tmp_path: Path, test_database_url: str) -> None
 def test_run_progress_is_coalesced_and_removed_from_event_history(
     tmp_path: Path, test_database_url: str
 ) -> None:
-    with _isolated_database(test_database_url) as db:
+    with _isolated_database(test_database_url, tmp_path / "runtime.sqlite3") as db:
         task = {
             "task_id": "maintenance.coalesced_progress",
             "panel_id": "maintenance",
@@ -128,7 +128,7 @@ def test_run_progress_is_coalesced_and_removed_from_event_history(
 def test_prune_runtime_definitions_removes_stale_flow_rows(
     tmp_path: Path, test_database_url: str
 ) -> None:
-    with _isolated_database(test_database_url) as db:
+    with _isolated_database(test_database_url, tmp_path / "runtime.sqlite3") as db:
         db.seed_panels(
             [
                 {"panel_id": "maintenance", "title": "Maintenance"},

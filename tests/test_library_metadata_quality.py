@@ -1,6 +1,40 @@
 """Metadata quality audit and invalidation behavior."""
 
-from app.modules.library.metadata_quality import assess_metadata
+from app.modules.library.metadata_quality import (
+    MetadataAssessment,
+    MetadataQualityRepository,
+    assess_metadata,
+)
+
+
+class _Connection:
+    def __init__(self, statements: list[str]) -> None:
+        self.statements = statements
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def execute(self, statement, _params=None):  # noqa: ANN001
+        self.statements.append(str(statement))
+
+
+class _Engine:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def begin(self):
+        return _Connection(self.statements)
+
+
+class _Checkpoints:
+    def __init__(self) -> None:
+        self.cleared: list[tuple[str, str]] = []
+
+    def clear(self, flow_id: str, item_id: str) -> None:
+        self.cleared.append((flow_id, item_id))
 
 
 def _book(**overrides):
@@ -12,6 +46,31 @@ def _book(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def test_quality_persistence_clears_retry_state_only_in_local_store() -> None:
+    repository = MetadataQualityRepository.__new__(MetadataQualityRepository)
+    repository.engine = _Engine()
+    repository.checkpoint_store = _Checkpoints()
+
+    repository._persist(
+        [
+            ("invalid", MetadataAssessment({}, "invalid", (), False)),
+            ("resolved", MetadataAssessment({}, "resolved", (), False)),
+        ],
+        run_id=12,
+    )
+
+    assert all(
+        "library_metadata_extraction_state" not in statement
+        and "library_metadata_evaluation_state" not in statement
+        for statement in repository.engine.statements
+    )
+    assert repository.checkpoint_store.cleared == [
+        ("library.metadata_extract", "invalid"),
+        ("library.metadata_evaluate", "invalid"),
+        ("library.metadata_extract", "resolved"),
+    ]
 
 
 def test_assessment_repairs_english_roles_without_reextracting() -> None:

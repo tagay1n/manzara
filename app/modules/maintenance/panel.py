@@ -108,6 +108,7 @@ def build_database_state_snapshot(db: Database) -> Dict[str, Any]:
             "disk": disk_info,
             "tables": storage.get("tables") or [],
             "backup": backup_info,
+            "local_state": db.get_local_state_snapshot(),
         }
     except Exception as exc:  # pragma: no cover - runtime fallback
         return {
@@ -130,6 +131,7 @@ def build_database_state_snapshot(db: Database) -> Dict[str, Any]:
                     task_id=MAINTENANCE_PGBACKREST_INCR_TASK_ID,
                 ),
             },
+            "local_state": db.get_local_state_snapshot(),
         }
 
 

@@ -437,3 +437,4 @@ def test_database_state_endpoint_returns_snapshot_shape(test_client) -> None:
     assert "backup" in snapshot
     assert "full" in snapshot["backup"]
     assert "incremental" in snapshot["backup"]
+    assert snapshot["local_state"]["journal_mode"] == "wal"

@@ -2,22 +2,31 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Sequence
 
-from sqlalchemy import and_
-from sqlalchemy import select
-
+from core.db import get_session
 from models import (
     Document,
-    LibraryMetadataEvaluationState,
     LibraryUpstreamMetadata,
     Metadata,
 )
-from core.db import get_session
+from sqlalchemy import and_, select
 
+from app.local_state import AIItemCheckpointStore
+from app.settings import _load_local_state_path
 
 EVALUATION_PROMPT_VERSION = "prompt.v3"
+_FLOW_ID = "library.metadata_evaluate"
+
+
+@lru_cache(maxsize=4)
+def _checkpoint_store(path: str) -> AIItemCheckpointStore:
+    return AIItemCheckpointStore(path)
+
+
+def _checkpoints() -> AIItemCheckpointStore:
+    return _checkpoint_store(str(_load_local_state_path()))
 
 
 def fetch_docs_for_metadata_extraction(limit: int, excluded_md5s: set[str]) -> list[Document]:
@@ -75,25 +84,25 @@ def fetch_docs_for_evaluation(
             select(
                 Document,
                 Metadata,
-                LibraryMetadataEvaluationState,
                 LibraryUpstreamMetadata.payload_json,
             )
             .join(Metadata, Metadata.md5 == Document.md5)
-            .outerjoin(
-                LibraryMetadataEvaluationState,
-                LibraryMetadataEvaluationState.md5 == Document.md5,
-            )
             .outerjoin(
                 LibraryUpstreamMetadata,
                 LibraryUpstreamMetadata.md5 == Document.md5,
             )
             .where(predicate)
         )
-        rows = session.execute(stmt)
+        rows = list(session.execute(stmt))
+        states = _checkpoints().get_many(
+            _FLOW_ID, [str(doc.md5) for doc, _meta, _upstream in rows]
+        )
         return [
             (doc, meta, upstream_metadata)
-            for doc, meta, state, upstream_metadata in rows
-            if _evaluation_state_allows_retry(state, model_pool)
+            for doc, meta, upstream_metadata in rows
+            if _evaluation_state_allows_retry(
+                states.get(str(doc.md5)), model_pool
+            )
         ][: max(0, int(batch_size))]
 
 
@@ -131,18 +140,17 @@ def mark_docs_as_non_applicable(
 
 
 def _evaluation_state_allows_retry(
-    state: LibraryMetadataEvaluationState | None,
-    model_pool: Sequence[str],
+    state: dict | None, model_pool: Sequence[str]
 ) -> bool:
     if state is None:
         return True
-    if getattr(state, "prompt_version", None) != EVALUATION_PROMPT_VERSION:
+    if state.get("contract_version") != EVALUATION_PROMPT_VERSION:
         return True
-    if str(state.status or "") != "terminal":
+    if str(state.get("status") or "") != "terminal":
         return True
     previous = {
         str(model)
-        for model in (state.model_pool_json or [])
+        for model in (state.get("model_pool") or [])
         if str(model or "").strip()
     }
     current = {str(model) for model in model_pool if str(model or "").strip()}
@@ -151,19 +159,17 @@ def _evaluation_state_allows_retry(
 
 def get_evaluation_attempted_models(md5: str) -> set[str]:
     """Return content-level models already tried for one document."""
-    with get_session() as session:
-        state = session.get(LibraryMetadataEvaluationState, str(md5))
-        attempts = (
-            state.attempts_json
-            if state is not None
-            and state.prompt_version == EVALUATION_PROMPT_VERSION
-            else []
-        )
-        return {
-            str(item.get("model") or "")
-            for item in (attempts or [])
-            if isinstance(item, dict) and str(item.get("model") or "").strip()
-        }
+    state = _checkpoints().get(_FLOW_ID, str(md5))
+    attempts = (
+        state.get("attempts") or []
+        if state and state.get("contract_version") == EVALUATION_PROMPT_VERSION
+        else []
+    )
+    return {
+        str(item.get("model") or "")
+        for item in attempts
+        if isinstance(item, dict) and str(item.get("model") or "").strip()
+    }
 
 
 def record_evaluation_model_failure(
@@ -176,40 +182,12 @@ def record_evaluation_model_failure(
     run_id: int | None,
 ) -> None:
     """Persist one evaluation response failure exactly once."""
-    now = datetime.now(timezone.utc)
-    attempt = {
-        "model": str(model_name),
-        "kind": str(kind),
-        "error": str(error or "")[:4000],
-        "recorded_at": now.isoformat(),
-    }
-    with get_session() as session:
-        state = session.get(LibraryMetadataEvaluationState, str(md5))
-        if state is None:
-            state = LibraryMetadataEvaluationState(
-                md5=str(md5),
-                status="partial",
-                attempts_json=[],
-                model_pool_json=list(models),
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(state)
-        attempts = [
-            dict(item) for item in (state.attempts_json or []) if isinstance(item, dict)
-        ]
-        if not any(str(item.get("model") or "") == str(model_name) for item in attempts):
-            attempts.append(attempt)
-        state.status = "partial"
-        if state.prompt_version != EVALUATION_PROMPT_VERSION:
-            attempts = [attempt]
-        state.prompt_version = EVALUATION_PROMPT_VERSION
-        state.attempts_json = attempts
-        state.model_pool_json = list(models)
-        state.last_run_id = run_id
-        state.terminal_reason = None
-        state.updated_at = now
-        session.commit()
+    _checkpoints().record_failure(
+        flow_id=_FLOW_ID, item_id=str(md5),
+        contract_version=EVALUATION_PROMPT_VERSION,
+        model_name=str(model_name), kind=str(kind), error=str(error),
+        models=models, run_id=run_id,
+    )
 
 
 def mark_evaluation_terminal(
@@ -220,29 +198,13 @@ def mark_evaluation_terminal(
     reason: str,
 ) -> None:
     """Defer a document until its configured model pool changes."""
-    now = datetime.now(timezone.utc)
-    with get_session() as session:
-        state = session.get(LibraryMetadataEvaluationState, str(md5))
-        if state is None:
-            state = LibraryMetadataEvaluationState(
-                md5=str(md5),
-                attempts_json=[],
-                created_at=now,
-            )
-            session.add(state)
-        state.status = "terminal"
-        state.prompt_version = EVALUATION_PROMPT_VERSION
-        state.model_pool_json = list(models)
-        state.last_run_id = run_id
-        state.terminal_reason = str(reason or "")[:4000]
-        state.updated_at = now
-        session.commit()
+    _checkpoints().mark_terminal(
+        flow_id=_FLOW_ID, item_id=str(md5),
+        contract_version=EVALUATION_PROMPT_VERSION,
+        models=models, reason=str(reason), run_id=run_id,
+    )
 
 
 def clear_evaluation_state(md5: str) -> None:
     """Remove retry state after one valid evaluation is stored."""
-    with get_session() as session:
-        state = session.get(LibraryMetadataEvaluationState, str(md5))
-        if state is not None:
-            session.delete(state)
-            session.commit()
+    _checkpoints().clear(_FLOW_ID, str(md5))

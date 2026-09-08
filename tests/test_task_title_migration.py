@@ -32,7 +32,7 @@ def test_existing_maintenance_task_titles_are_renamed(prepared_test_schema) -> N
                     {"task_id": task_id, "title": title},
                 )
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "20260902_0045")
 
         with engine.connect() as conn:
             titles = dict(

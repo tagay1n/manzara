@@ -509,7 +509,10 @@ def main() -> int:
     run_id = _run_id()
     app_settings = load_settings()
     settings = load_document_storage_settings(load_runtime_config())
-    state_db = Database(app_settings.database_url, schema=app_settings.database_schema)
+    state_db = Database(
+        app_settings.database_url, schema=app_settings.database_schema,
+        local_state_path=app_settings.local_state_path,
+    )
     repository = PostgresDocumentSyncRepository(
         app_settings.database_url, schema=app_settings.database_schema
     )

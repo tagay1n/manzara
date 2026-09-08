@@ -148,7 +148,7 @@ class NonPdfExtractionRepository:
                         md5, extractor_version, status, attempt_count, last_run_id,
                         created_at, updated_at
                     ) VALUES (
-                        :md5, :extractor_version, 'processing', 1, :run_id,
+                        :md5, :extractor_version, 'processing', 1, NULL,
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                     )
                     ON CONFLICT (md5) DO UPDATE SET
@@ -166,7 +166,7 @@ class NonPdfExtractionRepository:
                             THEN 1
                             ELSE library_non_pdf_extraction_state.attempt_count + 1
                         END,
-                        last_run_id = EXCLUDED.last_run_id,
+                        last_run_id = NULL,
                         error_text = NULL,
                         generated_at = NULL,
                         updated_at = CURRENT_TIMESTAMP
@@ -175,7 +175,6 @@ class NonPdfExtractionRepository:
                 {
                     "md5": str(md5),
                     "extractor_version": str(extractor_version),
-                    "run_id": int(run_id),
                 },
             )
 
@@ -200,7 +199,7 @@ class NonPdfExtractionRepository:
                     SET extractor_version=:extractor_version,
                         detected_format=:detected_format,
                         status=:status,
-                        last_run_id=:run_id,
+                        last_run_id=NULL,
                         error_text=:error_text,
                         generated_at=CASE WHEN :status='ready'
                                           THEN CURRENT_TIMESTAMP ELSE NULL END,
@@ -213,7 +212,6 @@ class NonPdfExtractionRepository:
                     "extractor_version": str(extractor_version),
                     "detected_format": str(detected_format or "").strip() or None,
                     "status": normalized,
-                    "run_id": int(run_id),
                     "error_text": str(error_text or "").strip()[:4000] or None,
                 },
             )
@@ -260,7 +258,7 @@ class NonPdfExtractionRepository:
                     UPDATE library_non_pdf_extraction_state
                     SET extractor_version=:extractor_version,
                         detected_format=:detected_format,
-                        status='ready', last_run_id=:run_id, error_text=NULL,
+                        status='ready', last_run_id=NULL, error_text=NULL,
                         generated_at=CURRENT_TIMESTAMP,
                         updated_at=CURRENT_TIMESTAMP
                     WHERE md5=:md5
@@ -270,7 +268,6 @@ class NonPdfExtractionRepository:
                     "md5": candidate.md5,
                     "extractor_version": str(extractor_version),
                     "detected_format": str(detected_format),
-                    "run_id": int(run_id),
                 },
             )
             if int(state.rowcount or 0) != 1:

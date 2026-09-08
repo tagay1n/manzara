@@ -8,12 +8,25 @@ import pytest
 import yaml
 
 from app.settings import (
-    _load_database_url,
     _load_database_pool_size,
+    _load_database_url,
+    _load_local_state_path,
     _load_postgres_backup_mode,
     normalize_database_url,
     task_is_available,
 )
+
+
+def test_local_state_path_defaults_under_artifacts_taxonomy(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MANZARA_LOCAL_STATE_PATH", raising=False)
+    monkeypatch.delenv("MANZARA_CONFIG_PATH", raising=False)
+    monkeypatch.setenv("MANZARA_ARTIFACTS_ROOT", str(tmp_path / "manzara"))
+    assert _load_local_state_path() == tmp_path / "manzara" / "state" / "runtime.sqlite3"
+
+    configured = tmp_path / "explicit.sqlite3"
+    monkeypatch.setenv("MANZARA_LOCAL_STATE_PATH", str(configured))
+    assert _load_local_state_path() == configured
 
 
 def test_load_database_url_ignores_config_example(monkeypatch, tmp_path: Path) -> None:

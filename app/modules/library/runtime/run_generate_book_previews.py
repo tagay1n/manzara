@@ -253,7 +253,10 @@ def main() -> int:
         app_settings.database_url,
         schema=app_settings.database_schema,
     )
-    db = Database(app_settings.database_url, schema=app_settings.database_schema)
+    db = Database(
+        app_settings.database_url, schema=app_settings.database_schema,
+        local_state_path=app_settings.local_state_path,
+    )
     source_s3 = Session().client(
         "s3",
         aws_access_key_id=credentials["source_access_key_id"],

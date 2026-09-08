@@ -54,8 +54,10 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("requested", True))
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
     settings = load_settings()
-    db = Database(settings.database_url, schema=settings.database_schema)
-    db.init_schema()
+    db = Database(
+        settings.database_url, schema=settings.database_schema,
+        local_state_path=settings.local_state_path,
+    )
     emit_gemini_worker_log(
         f"library normalization: start entity={args.entity_type} workers={workers}",
         worker_id="coordinator",

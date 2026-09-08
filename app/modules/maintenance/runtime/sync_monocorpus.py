@@ -624,7 +624,10 @@ def main() -> int:
     repository = MonocorpusSyncRepository(
         app_settings.database_url, schema=app_settings.database_schema
     )
-    db = Database(app_settings.database_url, schema=app_settings.database_schema)
+    db = Database(
+        app_settings.database_url, schema=app_settings.database_schema,
+        local_state_path=app_settings.local_state_path,
+    )
     yadisk = YaDisk(settings.yadisk_token)
     if yadisk.check_token() is False:
         raise RuntimeError("Yandex Disk token validation failed")

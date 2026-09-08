@@ -71,7 +71,10 @@ def main() -> int:
     repository = DocumentCleanupRepository(
         app_settings.database_url, schema=app_settings.database_schema
     )
-    db = Database(app_settings.database_url, schema=app_settings.database_schema)
+    db = Database(
+        app_settings.database_url, schema=app_settings.database_schema,
+        local_state_path=app_settings.local_state_path,
+    )
     stop_state = {"requested": False}
 
     def request_stop(_signum: int, _frame: Any) -> None:

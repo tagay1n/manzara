@@ -1,4 +1,4 @@
-"""PostgreSQL persistence for the singleton task conveyor."""
+"""Machine-local SQLite persistence for the singleton task conveyor."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class ConveyorRepository:
             return fallback
 
     def get_conveyor_definition(self) -> Dict[str, Any]:
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute(
                 "SELECT * FROM conveyor_definitions WHERE conveyor_id = 'default'"
             ).fetchone()
@@ -36,42 +36,29 @@ class ConveyorRepository:
         return payload
 
     def get_conveyor_snapshot(self) -> Dict[str, Any]:
-        """Return definition, latest relevant run, and its items in one query."""
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                WITH selected_run AS (
-                    SELECT *
-                    FROM conveyor_runs
-                    ORDER BY
-                        CASE WHEN status IN ('starting', 'running') THEN 0 ELSE 1 END,
-                        conveyor_run_id DESC
-                    LIMIT 1
-                )
-                SELECT
-                    (SELECT row_to_json(definition_row)
-                     FROM conveyor_definitions AS definition_row
-                     WHERE conveyor_id = 'default') AS definition,
-                    (SELECT row_to_json(run_row)
-                     FROM selected_run AS run_row) AS run,
-                    COALESCE(
-                        (
-                            SELECT json_agg(item_row ORDER BY stage_order, task_order)
-                            FROM (
-                                SELECT cri.*, r.progress_json
-                                FROM conveyor_run_items cri
-                                LEFT JOIN runs r ON r.run_id = cri.task_run_id
-                                WHERE cri.conveyor_run_id = (
-                                    SELECT conveyor_run_id FROM selected_run
-                                )
-                            ) AS item_row
-                        ),
-                        '[]'::json
-                    ) AS items
-                """
-            ).fetchone() or {}
+        """Return definition, latest relevant run, and items in one SQLite checkout."""
+        with self._runtime_connect() as conn:
+            definition_row = conn.execute(
+                "SELECT * FROM conveyor_definitions WHERE conveyor_id = 'default'"
+            ).fetchone()
+            run_row = conn.execute(
+                """SELECT * FROM conveyor_runs
+                   ORDER BY CASE WHEN status IN ('starting', 'running') THEN 0 ELSE 1 END,
+                            conveyor_run_id DESC LIMIT 1"""
+            ).fetchone()
+            raw_items = (
+                conn.execute(
+                    """SELECT cri.*, r.progress_json
+                       FROM conveyor_run_items cri
+                       LEFT JOIN runs r ON r.run_id = cri.task_run_id
+                       WHERE cri.conveyor_run_id = ?
+                       ORDER BY cri.stage_order, cri.task_order""",
+                    (int(run_row["conveyor_run_id"]),),
+                ).fetchall()
+                if run_row
+                else []
+            )
 
-        definition_row = row.get("definition")
         if definition_row:
             definition = dict(definition_row)
             stages = self._decode_json(definition.pop("stages_json", "[]"), [])
@@ -79,10 +66,9 @@ class ConveyorRepository:
         else:
             definition = {"conveyor_id": "default", "revision": 0, "stages": []}
 
-        run_row = row.get("run")
         run = self._conveyor_run_payload(run_row) if run_row else None
         items: List[Dict[str, Any]] = []
-        for raw_item in row.get("items") or []:
+        for raw_item in raw_items:
             item = dict(raw_item)
             output = self._decode_json(item.pop("output_json", "{}"), {})
             progress = self._decode_json(item.pop("progress_json", "{}"), {})
@@ -102,7 +88,7 @@ class ConveyorRepository:
         now = utc_now()
         encoded = json.dumps(stages, ensure_ascii=False, separators=(",", ":"))
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     INSERT INTO conveyor_definitions (
@@ -189,7 +175,7 @@ class ConveyorRepository:
 
     def get_active_conveyor_run(self) -> Optional[Dict[str, Any]]:
         placeholders = ", ".join("?" for _ in CONVEYOR_RUN_ACTIVE_STATUSES)
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute(
                 f"""
                 SELECT * FROM conveyor_runs
@@ -202,7 +188,7 @@ class ConveyorRepository:
         return self._conveyor_run_payload(row) if row else None
 
     def get_latest_conveyor_run(self) -> Optional[Dict[str, Any]]:
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute(
                 """
                 SELECT * FROM conveyor_runs
@@ -213,7 +199,7 @@ class ConveyorRepository:
         return self._conveyor_run_payload(row) if row else None
 
     def get_conveyor_run(self, conveyor_run_id: int) -> Optional[Dict[str, Any]]:
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute(
                 "SELECT * FROM conveyor_runs WHERE conveyor_run_id = ?",
                 (int(conveyor_run_id),),
@@ -231,7 +217,7 @@ class ConveyorRepository:
         stages = definition.get("stages") or []
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect(immediate=True) as conn:
                 row = conn.execute(
                     """
                     INSERT INTO conveyor_runs (
@@ -263,7 +249,7 @@ class ConveyorRepository:
         return run_id
 
     def list_conveyor_run_items(self, conveyor_run_id: int) -> List[Dict[str, Any]]:
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 """
                 SELECT cri.*, r.progress_json
@@ -288,7 +274,7 @@ class ConveyorRepository:
 
     def set_conveyor_run_running(self, conveyor_run_id: int) -> None:
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     "UPDATE conveyor_runs SET status = 'running' WHERE conveyor_run_id = ?",
                     (int(conveyor_run_id),),
@@ -297,7 +283,7 @@ class ConveyorRepository:
     def claim_next_conveyor_stage(self, conveyor_run_id: int) -> List[Dict[str, Any]]:
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect(immediate=True) as conn:
                 run = conn.execute(
                     """
                     SELECT stop_requested, status FROM conveyor_runs
@@ -343,7 +329,7 @@ class ConveyorRepository:
         task_run_id: int,
     ) -> None:
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE conveyor_run_items
@@ -364,7 +350,7 @@ class ConveyorRepository:
         error_text: Optional[str] = None,
     ) -> None:
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE conveyor_run_items
@@ -385,7 +371,7 @@ class ConveyorRepository:
 
     def request_conveyor_stop(self, conveyor_run_id: int) -> bool:
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     """
                     UPDATE conveyor_runs SET stop_requested = 1
@@ -413,7 +399,7 @@ class ConveyorRepository:
     ) -> None:
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE conveyor_run_items
@@ -440,7 +426,7 @@ class ConveyorRepository:
     def recover_active_conveyor_runs(self) -> int:
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     """
                     UPDATE conveyor_runs

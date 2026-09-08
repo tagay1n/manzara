@@ -55,7 +55,7 @@ def test_existing_metadata_tasks_and_history_are_moved(prepared_test_schema) -> 
                     {"task_id": task_id, "run_id": run_id, "panel_id": panel_id},
                 )
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "20260902_0045")
 
         with engine.connect() as conn:
             assert conn.execute(

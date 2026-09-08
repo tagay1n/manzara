@@ -8,10 +8,10 @@ import signal
 from typing import Any, Mapping
 
 from app.db import Database
+from app.local_state import AIItemCheckpointStore
 from app.modules.library.metadata_quality import MetadataQualityRepository
 from app.run_artifact_channel import emit_run_artifact
 from app.settings import load_settings
-
 
 TASK_ID = "library.metadata_validate"
 PANEL_ID = "metadata"
@@ -38,10 +38,15 @@ def main() -> int:
     run_id = _run_id(required=not args.dry_run)
     settings = load_settings()
     repository = MetadataQualityRepository(
-        settings.database_url, schema=settings.database_schema
+        settings.database_url,
+        schema=settings.database_schema,
+        checkpoint_store=AIItemCheckpointStore(settings.local_state_path),
     )
     db = (
-        Database(settings.database_url, schema=settings.database_schema)
+        Database(
+            settings.database_url, schema=settings.database_schema,
+            local_state_path=settings.local_state_path,
+        )
         if run_id
         else None
     )

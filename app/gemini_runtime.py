@@ -190,6 +190,8 @@ class GeminiRuntimeManager:
         self._rand = random.SystemRandom()
         self._local_lock = threading.Lock()
         self.worker_id = worker_id
+        self._configured_keys: Optional[List[GeminiKey]] = None
+        self._prepared_models: set[str] = set()
 
     def _emit(
         self, event_type: str, payload: Dict[str, Any], *, run_id: Optional[int] = None
@@ -204,6 +206,8 @@ class GeminiRuntimeManager:
 
     def _sync_key_registry(self) -> List[GeminiKey]:
         with self._local_lock:
+            if self._configured_keys is not None:
+                return list(self._configured_keys)
             keys = load_gemini_keys()
             self.db.upsert_gemini_keys(
                 [
@@ -215,7 +219,8 @@ class GeminiRuntimeManager:
                     for item in keys
                 ]
             )
-            return keys
+            self._configured_keys = list(keys)
+            return list(keys)
 
     @staticmethod
     def _cycle_label(now_utc: datetime) -> str:
@@ -260,13 +265,8 @@ class GeminiRuntimeManager:
 
     def _ensure_cycle(self, now_utc: datetime) -> Dict[str, Any]:
         cycle_label = self._cycle_label(now_utc)
-        ensure_cycle = getattr(self.db, "ensure_gemini_runtime_cycle", None)
-        if ensure_cycle is None:
-            control = self.db.ensure_gemini_runtime_control(cycle_label)
-            rolled = self.db.rollover_gemini_cycle(cycle_label)
-        else:
-            control = ensure_cycle(cycle_label)
-            rolled = bool(control.pop("rolled", False))
+        control = self.db.ensure_gemini_runtime_cycle(cycle_label)
+        rolled = bool(control.pop("rolled", False))
         if rolled:
             self._emit(
                 "gemini.all_reset",
@@ -275,8 +275,6 @@ class GeminiRuntimeManager:
                     "reason": "daily_reset",
                 },
             )
-            if ensure_cycle is None:
-                control = self.db.ensure_gemini_runtime_control(cycle_label)
         return control
 
     def _clear_elapsed_pause_if_needed(
@@ -320,11 +318,12 @@ class GeminiRuntimeManager:
         return None
 
     def _ensure_model_rows(self, keys: List[GeminiKey], model_name: str) -> None:
-        ensure_runtime = getattr(self.db, "ensure_gemini_model_runtime", None)
-        if ensure_runtime is not None:
-            ensure_runtime(model_name)
-        for key in keys:
-            self.db.ensure_gemini_model_state(key.key_id, model_name)
+        if model_name in self._prepared_models:
+            return
+        self.db.ensure_gemini_model_states(
+            [key.key_id for key in keys], model_name
+        )
+        self._prepared_models.add(model_name)
 
     def _pick_candidate(
         self,
@@ -369,10 +368,9 @@ class GeminiRuntimeManager:
                 "wait_until": earliest_cooldown,
             }
 
-        list_leases = getattr(self.db, "list_gemini_account_leases", lambda: [])
         leases = {
             str(row.get("account_id") or ""): row
-            for row in list_leases()
+            for row in self.db.list_gemini_account_leases()
         }
         account_choices = sorted(
             ready_by_account.keys(),
@@ -437,10 +435,9 @@ class GeminiRuntimeManager:
                 continue
 
             self._ensure_model_rows(keys, model_name)
-            list_model_runtime = getattr(self.db, "list_gemini_model_runtime", lambda: [])
             model_runtime = next(
                 (
-                    row for row in list_model_runtime()
+                    row for row in self.db.list_gemini_model_runtime()
                     if str(row.get("model_name") or "") == model_name
                 ),
                 {},
@@ -810,20 +807,9 @@ class GeminiRuntimeManager:
         )
         state_rows = self.db.list_gemini_model_states(model_name=None)
         configured_models = load_configured_gemini_model_names()
-        get_snapshot_metadata = getattr(
-            self.db, "get_gemini_snapshot_metadata", None
-        )
-        if get_snapshot_metadata is None:
-            account_leases = getattr(
-                self.db, "list_gemini_account_leases", lambda: []
-            )()
-            model_runtime = getattr(
-                self.db, "list_gemini_model_runtime", lambda: []
-            )()
-        else:
-            snapshot_metadata = get_snapshot_metadata()
-            account_leases = list(snapshot_metadata.get("account_leases") or [])
-            model_runtime = list(snapshot_metadata.get("model_runtime") or [])
+        snapshot_metadata = self.db.get_gemini_snapshot_metadata()
+        account_leases = list(snapshot_metadata.get("account_leases") or [])
+        model_runtime = list(snapshot_metadata.get("model_runtime") or [])
 
         models_by_key: Dict[str, List[Dict[str, Any]]] = {}
         for row in state_rows:

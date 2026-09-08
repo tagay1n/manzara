@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Sequence
 from app.repositories.core import utc_now
 from app.runtime_states import (
     TASK_RUN_ACTIVE_STATUSES as ACTIVE_STATUSES,
+)
+from app.runtime_states import (
     TASK_RUN_STATUS_FAILED,
     TASK_RUN_STATUS_RUNNING,
     TASK_RUN_STATUS_STARTING,
@@ -15,11 +17,11 @@ from app.runtime_states import (
 
 
 class RunRepository:
-    """PostgreSQL operations for the runs domain."""
+    """Machine-local SQLite operations plus cloud storage diagnostics."""
 
     def get_latest_run_for_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Return most recent run for task."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute(
                 """
                 SELECT *
@@ -37,7 +39,7 @@ class RunRepository:
         """Create a run and atomically consume its one-shot worker override."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect(immediate=True) as conn:
                 workers = None
                 if task.get("gemini_workers_default") is not None:
                     row = conn.execute(
@@ -84,7 +86,7 @@ class RunRepository:
         """Set run state to running with process id."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE runs
@@ -99,7 +101,7 @@ class RunRepository:
         """Update run heartbeat timestamp."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     "UPDATE runs SET heartbeat_at = ?, updated_at = ? WHERE run_id = ?",
                     (now, now, run_id),
@@ -112,7 +114,7 @@ class RunRepository:
             raise ValueError("progress must be an object")
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE runs
@@ -149,7 +151,7 @@ class RunRepository:
                 "status": str(status or "running"),
                 "progress": dict(progress),
             }
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE runs
@@ -186,7 +188,7 @@ class RunRepository:
         now = utc_now()
         placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     f"""
                     UPDATE runs
@@ -209,7 +211,7 @@ class RunRepository:
         """Finalize a run outcome."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE runs
@@ -229,7 +231,7 @@ class RunRepository:
     def update_run_summary(self, run_id: int, summary: Dict[str, Any]) -> None:
         """Persist structured summary payload for one run."""
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE runs
@@ -244,20 +246,6 @@ class RunRepository:
                 )
 
 
-    def append_log(self, run_id: int, stream: str, line: str) -> int:
-        """Append one log line and return inserted log id."""
-        with self._lock:
-            with self._connect() as conn:
-                cur = conn.execute(
-                    """
-                    INSERT INTO run_logs (run_id, ts, stream, line)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (run_id, utc_now(), stream, line),
-                )
-                return int(cur.lastrowid)
-
-
     def insert_event(
         self,
         event_type: str,
@@ -269,7 +257,7 @@ class RunRepository:
         """Persist an event row and return serialized event object."""
         timestamp = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     """
                     INSERT INTO events (ts, type, task_id, run_id, panel_id, payload_json)
@@ -298,7 +286,7 @@ class RunRepository:
 
     def get_events_after(self, after_event_id: int, limit: int = 200) -> List[Dict[str, Any]]:
         """Return events with id greater than marker."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 """
                 SELECT event_id, ts, type, task_id, run_id, panel_id, payload_json
@@ -327,7 +315,7 @@ class RunRepository:
 
     def get_latest_event_id(self) -> int:
         """Return the current end cursor for the operational event stream."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute(
                 "SELECT COALESCE(MAX(event_id), 0) AS event_id FROM events"
             ).fetchone()
@@ -336,84 +324,14 @@ class RunRepository:
 
     def get_run(self, run_id: int) -> Optional[Dict[str, Any]]:
         """Return one run by id."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
         return self._row_to_run(row) if row else None
 
 
-    def get_logs(
-        self,
-        run_id: int,
-        after_log_id: int = 0,
-        limit: int = 300,
-        *,
-        before_log_id: Optional[int] = None,
-        tail: bool = False,
-    ) -> List[Dict[str, Any]]:
-        """Return run log lines using cursor pagination (after/before) or tail mode."""
-        limit = max(1, min(int(limit), 5000))
-        with self._connect() as conn:
-            if before_log_id is not None and int(before_log_id) > 0:
-                rows = conn.execute(
-                    """
-                    SELECT log_id, run_id, ts, stream, line
-                    FROM run_logs
-                    WHERE run_id = ? AND log_id < ?
-                    ORDER BY log_id DESC
-                    LIMIT ?
-                    """,
-                    (run_id, int(before_log_id), limit),
-                ).fetchall()
-                lines = [dict(row) for row in rows]
-                lines.reverse()
-                return lines
-
-            if tail:
-                rows = conn.execute(
-                    """
-                    SELECT log_id, run_id, ts, stream, line
-                    FROM run_logs
-                    WHERE run_id = ?
-                    ORDER BY log_id DESC
-                    LIMIT ?
-                    """,
-                    (run_id, limit),
-                ).fetchall()
-                lines = [dict(row) for row in rows]
-                lines.reverse()
-                return lines
-
-            rows = conn.execute(
-                """
-                SELECT log_id, run_id, ts, stream, line
-                FROM run_logs
-                WHERE run_id = ? AND log_id > ?
-                ORDER BY log_id ASC
-                LIMIT ?
-                """,
-                (run_id, after_log_id, limit),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-
-    def has_logs_before(self, run_id: int, log_id: int) -> bool:
-        """Return True when older logs exist before cursor."""
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT 1 AS has_row
-                FROM run_logs
-                WHERE run_id = ? AND log_id < ?
-                LIMIT 1
-                """,
-                (run_id, int(log_id)),
-            ).fetchone()
-        return row is not None
-
-
     def list_active_runs(self) -> List[Dict[str, Any]]:
         """Return active runs across all tasks."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
             rows = conn.execute(
                 f"""
@@ -428,7 +346,7 @@ class RunRepository:
 
     def get_active_run_for_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Return active run for task, if any."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
             row = conn.execute(
                 f"""
@@ -444,7 +362,7 @@ class RunRepository:
 
     def list_tasks_with_latest_run(self) -> List[Dict[str, Any]]:
         """Return each task with latest run details if available."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 """
                 SELECT
@@ -494,7 +412,7 @@ class RunRepository:
 
     def list_recent_runs(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Return recent runs for dashboard and quick inspection."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 """
                 SELECT run_id, task_id, panel_id, status, stop_mode,
@@ -512,7 +430,7 @@ class RunRepository:
 
     def list_recent_runs_for_task(self, task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Return recent runs for one task."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 """
                 SELECT run_id, task_id, panel_id, status, stop_mode,
@@ -596,7 +514,7 @@ class RunRepository:
 
     def run_count_by_status(self, panel_id: str) -> Dict[str, int]:
         """Return run status counters for one panel."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 """
                 SELECT status, COUNT(*) AS count
@@ -617,7 +535,7 @@ class RunRepository:
         if not panels:
             return {}
         placeholders = self._placeholders(len(panels))
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 f"""
                 WITH scoped AS (
@@ -669,7 +587,7 @@ class RunRepository:
 
     def last_successful_run(self, panel_id: str) -> Optional[str]:
         """Return timestamp of most recent successful run."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute(
                 """
                 SELECT finished_at
@@ -690,7 +608,7 @@ class RunRepository:
         now = utc_now()
         placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     f"""
                     UPDATE runs

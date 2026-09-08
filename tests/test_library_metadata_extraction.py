@@ -5,23 +5,23 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-import pytest
 import pymupdf
+import pytest
 
-from app.modules.library.metadata_extraction import (
-    MetadataExtractionRepository,
-    create_pdf_slice,
-    PROMPT_VERSION,
-    build_pdf_prompt,
-    build_text_prompt,
-    parse_metadata_response,
-    select_pdf_pages,
-)
+from app.gemini_model_pool import GeminiModelResponseError
 from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     PasswordProtectedDocumentError,
 )
-from app.gemini_model_pool import GeminiModelResponseError
+from app.modules.library.metadata_extraction import (
+    PROMPT_VERSION,
+    MetadataExtractionRepository,
+    build_pdf_prompt,
+    build_text_prompt,
+    create_pdf_slice,
+    parse_metadata_response,
+    select_pdf_pages,
+)
 from app.modules.library.metadata_normalization import normalize_base_schema_org
 from app.modules.library.metadata_prompt import (
     DEFINE_META_PROMPT_BODY,
@@ -100,6 +100,17 @@ class _WriteEngine:
 
     def begin(self):
         return _WriteConnection(self)
+
+
+class _CheckpointStore:
+    def get_many(self, _flow_id, _item_ids):  # noqa: ANN001
+        return {}
+
+    def clear(self, _flow_id, _item_id):  # noqa: ANN001
+        return None
+
+
+MetadataExtractionRepository.checkpoint_store = _CheckpointStore()
 
 
 def test_metadata_prompt_matches_strict_schema_org_v7_contract() -> None:
@@ -259,7 +270,7 @@ def test_candidate_query_requires_verified_primary_storage() -> None:
     assert "NULLIF(BTRIM(m.schema_org->>'name'), '') IS NULL" in sql
     assert "quality.status <> 'resolved'" in sql
     assert "quality.contract_version IS DISTINCT FROM :contract_version" in sql
-    assert "library_metadata_extraction_state" in sql
+    assert "library_metadata_extraction_state" not in sql
     assert "library_metadata_quality_state" in sql
     assert "LEFT JOIN library_upstream_metadata upstream" in sql
     assert "upstream.payload_json AS upstream_metadata" in sql
@@ -319,19 +330,16 @@ def test_candidate_query_includes_existing_low_quality_metadata() -> None:
     assert "datePublished" in sql
 
 
-def test_candidate_query_excludes_terminal_failures_only() -> None:
+def test_candidate_query_leaves_retry_filtering_to_local_state() -> None:
     repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
     repository.engine = _Engine()
 
     repository.list_candidates(limit=25)
 
     sql = repository.engine.statements[0]
-    assert "state.prompt_version IS DISTINCT FROM :prompt_version" in sql
-    assert "state.status = 'partial'" in sql
-    assert "state.retry_after IS NULL" in sql
-    assert "state.retry_after <= CURRENT_TIMESTAMP" in sql
+    assert "library_metadata_extraction_state" not in sql
     assert "ORDER BY" in sql
-    assert "state.updated_at ASC NULLS FIRST" in sql
+    assert "d.md5 ASC" in sql
 
 
 def test_candidate_from_previous_prompt_retries_every_model_with_filename_hint() -> None:

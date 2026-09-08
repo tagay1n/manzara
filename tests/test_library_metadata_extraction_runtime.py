@@ -38,7 +38,8 @@ class _Repository:
         self.terminal: list[str] = []
         self.operational_deferrals: list[tuple[str, str, int]] = []
 
-    def list_candidates(self, *, limit=None):  # noqa: ANN001
+    def list_candidates(self, *, limit=None, models=None):  # noqa: ANN001
+        del models
         return [self.candidate] if limit is None or limit > 0 else []
 
     def save_success(self, md5, *, schema_org, model_name):  # noqa: ANN001

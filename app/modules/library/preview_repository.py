@@ -100,7 +100,7 @@ class LibraryPreviewRepository:
                     )
                     VALUES (
                         :md5, :recipe_version, 'processing', 1,
-                        :run_id, :now, :now
+                        NULL, :now, :now
                     )
                     ON CONFLICT (md5) DO UPDATE SET
                         source_page_count = CASE
@@ -126,7 +126,7 @@ class LibraryPreviewRepository:
                         recipe_version = EXCLUDED.recipe_version,
                         status = 'processing',
                         attempt_count = library_book_previews.attempt_count + 1,
-                        last_run_id = EXCLUDED.last_run_id,
+                        last_run_id = NULL,
                         error_text = NULL,
                         generated_at = NULL,
                         updated_at = EXCLUDED.updated_at
@@ -136,7 +136,6 @@ class LibraryPreviewRepository:
                 {
                     "md5": str(md5),
                     "recipe_version": str(recipe_version),
-                    "run_id": int(run_id) if run_id is not None else None,
                     "now": now,
                 },
             ).mappings().one()
@@ -176,7 +175,7 @@ class LibraryPreviewRepository:
                         second_preview_page = :second_preview_page,
                         last_preview_page = :last_preview_page,
                         status = :status,
-                        last_run_id = :run_id,
+                        last_run_id = NULL,
                         error_text = :error_text,
                         generated_at = :generated_at,
                         updated_at = :updated_at
@@ -193,7 +192,6 @@ class LibraryPreviewRepository:
                     "second_preview_page": selected_by_role.get("second"),
                     "last_preview_page": selected_by_role.get("last"),
                     "status": normalized_status,
-                    "run_id": int(run_id) if run_id is not None else None,
                     "error_text": str(error_text or "").strip()[:4000] or None,
                     "generated_at": generated_at,
                     "updated_at": now,

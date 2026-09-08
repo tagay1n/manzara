@@ -22,6 +22,7 @@ from app.document_storage import (
     verify_primary_document_object,
 )
 from app.gemini_model_pool import GeminiModelResponseError
+from app.local_state import AIItemCheckpointStore
 from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     PasswordProtectedDocumentError,
@@ -120,19 +121,32 @@ class MetadataRequest:
 class MetadataExtractionRepository:
     """Own metadata candidates, model checkpoints, and final DB writes."""
 
-    def __init__(self, database_url: str, *, schema: str = "monocorpus") -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        schema: str = "monocorpus",
+        checkpoint_store: AIItemCheckpointStore,
+    ) -> None:
         normalized = str(schema or "monocorpus").strip() or "monocorpus"
         if not _SCHEMA_RE.fullmatch(normalized):
             raise ValueError(f"Invalid database schema: {normalized!r}")
         self.engine: Engine = acquire_postgres_engine(
             str(database_url), schema=normalized
         )
+        self.checkpoint_store = checkpoint_store
+
+    def _checkpoints(self) -> AIItemCheckpointStore:
+        return self.checkpoint_store
 
     def dispose(self) -> None:
         release_postgres_engine(self.engine)
 
     def list_candidates(
-        self, *, limit: int | None = None
+        self,
+        *,
+        limit: int | None = None,
+        models: Sequence[str] | None = None,
     ) -> list[MetadataExtractionCandidate]:
         """Return only pending documents with a verified primary object."""
         sql = """
@@ -143,13 +157,10 @@ class MetadataExtractionRepository:
                 d.content_url,
                 upstream.payload_json AS upstream_metadata,
                 d.primary_storage_size,
-                d.ya_path,
-                state.attempts_json,
-                state.prompt_version
+                d.ya_path
             FROM document d
             LEFT JOIN metadata m ON m.md5 = d.md5
             LEFT JOIN library_metadata_quality_state quality ON quality.md5 = d.md5
-            LEFT JOIN library_metadata_extraction_state state ON state.md5 = d.md5
             LEFT JOIN library_upstream_metadata upstream ON upstream.md5 = d.md5
             WHERE (
                   m.md5 IS NULL
@@ -185,17 +196,6 @@ class MetadataExtractionRepository:
                   d.content_url IS NOT NULL
                   OR LOWER(COALESCE(d.mime_type, '')) = 'application/pdf'
               )
-              AND (
-                  state.status IS NULL
-                  OR state.prompt_version IS DISTINCT FROM :prompt_version
-                  OR (
-                      state.status = 'partial'
-                      AND (
-                          state.retry_after IS NULL
-                          OR state.retry_after <= CURRENT_TIMESTAMP
-                      )
-                  )
-              )
               AND NOT EXISTS (
                   SELECT 1
                   FROM document_cleanup_queue cleanup
@@ -204,28 +204,35 @@ class MetadataExtractionRepository:
                     AND cleanup.reason = 'corrupted'
                     AND cleanup.status IN ('planned', 'running', 'failed')
               )
-            ORDER BY
-                CASE
-                    WHEN state.md5 IS NULL
-                      OR state.prompt_version IS DISTINCT FROM :prompt_version
-                    THEN 0
-                    ELSE 1
-                END,
-                state.updated_at ASC NULLS FIRST,
-                d.md5 ASC
+            ORDER BY d.md5 ASC
         """
         params: dict[str, Any] = {
-            "prompt_version": PROMPT_VERSION,
             "contract_version": CONTRACT_VERSION,
         }
-        if limit is not None:
-            sql += " LIMIT :limit"
-            params["limit"] = max(0, int(limit))
         with self.engine.connect() as conn:
             rows = conn.execute(text(sql), params).mappings().all()
+        checkpoints = self._checkpoints().get_many(
+            "library.metadata_extract",
+            [str(row.get("md5") or "") for row in rows],
+        )
         candidates: list[MetadataExtractionCandidate] = []
         seen: set[str] = set()
         for row in rows:
+            checkpoint = checkpoints.get(str(row.get("md5") or ""))
+            if checkpoint and checkpoint.get("contract_version") == PROMPT_VERSION:
+                if checkpoint.get("status") == "terminal":
+                    previous = {
+                        str(value) for value in checkpoint.get("model_pool") or []
+                    }
+                    current = {str(value) for value in models or []}
+                    if models is None or previous == current:
+                        continue
+                retry_after = checkpoint.get("retry_after")
+                if retry_after:
+                    parsed = datetime.fromisoformat(str(retry_after).replace("Z", "+00:00"))
+                    if parsed > datetime.now(timezone.utc):
+                        continue
+                row = {**dict(row), "attempts_json": checkpoint.get("attempts") or [], "prompt_version": PROMPT_VERSION}
             candidate = self._candidate(row)
             if not candidate.md5:
                 raise RuntimeError("Metadata candidate has no MD5")
@@ -235,6 +242,8 @@ class MetadataExtractionRepository:
                 )
             seen.add(candidate.md5)
             candidates.append(candidate)
+            if limit is not None and len(candidates) >= max(0, int(limit)):
+                break
         return candidates
 
     @staticmethod
@@ -273,59 +282,12 @@ class MetadataExtractionRepository:
         models: Sequence[str],
         run_id: int,
     ) -> None:
-        """Checkpoint one content-level model failure exactly once."""
-        attempt = {
-            "model": str(model_name),
-            "kind": str(kind),
-            "error": str(error or "")[:4000],
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-        }
-        match = [{"model": str(model_name)}]
-        with self.engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO library_metadata_extraction_state (
-                        md5, status, attempts_json, model_pool_json,
-                        last_run_id, prompt_version, retry_after,
-                        operational_failure_count, last_operational_error,
-                        created_at, updated_at
-                    ) VALUES (
-                        :md5, 'partial', CAST(:attempt AS JSONB), CAST(:models AS JSONB),
-                        :run_id, :prompt_version, NULL, 0, NULL,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    )
-                    ON CONFLICT (md5) DO UPDATE SET
-                        status = 'partial',
-                        attempts_json = CASE
-                            WHEN library_metadata_extraction_state.prompt_version
-                                 IS DISTINCT FROM EXCLUDED.prompt_version
-                                THEN EXCLUDED.attempts_json
-                            WHEN library_metadata_extraction_state.attempts_json
-                                 @> CAST(:match AS JSONB)
-                                THEN library_metadata_extraction_state.attempts_json
-                            ELSE library_metadata_extraction_state.attempts_json
-                                 || CAST(:attempt AS JSONB)
-                        END,
-                        model_pool_json = EXCLUDED.model_pool_json,
-                        last_run_id = EXCLUDED.last_run_id,
-                        terminal_reason = NULL,
-                        prompt_version = EXCLUDED.prompt_version,
-                        retry_after = NULL,
-                        operational_failure_count = 0,
-                        last_operational_error = NULL,
-                        updated_at = CURRENT_TIMESTAMP
-                    """
-                ),
-                {
-                    "md5": str(md5),
-                    "attempt": json.dumps([attempt], ensure_ascii=False),
-                    "match": json.dumps(match, ensure_ascii=False),
-                    "models": json.dumps(list(models), ensure_ascii=False),
-                    "run_id": int(run_id),
-                    "prompt_version": PROMPT_VERSION,
-                },
-            )
+        """Checkpoint one content-level model failure in local SQLite."""
+        self._checkpoints().record_failure(
+            flow_id="library.metadata_extract", item_id=str(md5),
+            contract_version=PROMPT_VERSION, model_name=str(model_name),
+            kind=str(kind), error=str(error), models=models, run_id=int(run_id),
+        )
 
     def record_operational_deferral(
         self,
@@ -340,52 +302,11 @@ class MetadataExtractionRepository:
         retry_after = datetime.now(timezone.utc) + timedelta(
             seconds=max(60, int(retry_after_seconds))
         )
-        with self.engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO library_metadata_extraction_state (
-                        md5, status, attempts_json, model_pool_json, last_run_id,
-                        terminal_reason, prompt_version, retry_after,
-                        operational_failure_count, last_operational_error,
-                        created_at, updated_at
-                    ) VALUES (
-                        :md5, 'partial', '[]'::jsonb, CAST(:models AS JSONB), :run_id,
-                        NULL, :prompt_version, :retry_after, 1, :error,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    )
-                    ON CONFLICT (md5) DO UPDATE SET
-                        status = 'partial',
-                        attempts_json = CASE
-                            WHEN library_metadata_extraction_state.prompt_version
-                                 IS DISTINCT FROM EXCLUDED.prompt_version
-                                THEN '[]'::jsonb
-                            ELSE library_metadata_extraction_state.attempts_json
-                        END,
-                        model_pool_json = EXCLUDED.model_pool_json,
-                        last_run_id = EXCLUDED.last_run_id,
-                        terminal_reason = NULL,
-                        prompt_version = EXCLUDED.prompt_version,
-                        retry_after = EXCLUDED.retry_after,
-                        operational_failure_count = CASE
-                            WHEN library_metadata_extraction_state.prompt_version
-                                 IS DISTINCT FROM EXCLUDED.prompt_version
-                                THEN 1
-                            ELSE library_metadata_extraction_state.operational_failure_count + 1
-                        END,
-                        last_operational_error = EXCLUDED.last_operational_error,
-                        updated_at = CURRENT_TIMESTAMP
-                    """
-                ),
-                {
-                    "md5": str(md5),
-                    "models": json.dumps(list(models), ensure_ascii=False),
-                    "run_id": int(run_id),
-                    "prompt_version": PROMPT_VERSION,
-                    "retry_after": retry_after,
-                    "error": str(error or "")[:4000],
-                },
-            )
+        self._checkpoints().record_deferral(
+            flow_id="library.metadata_extract", item_id=str(md5),
+            contract_version=PROMPT_VERSION, models=models,
+            retry_after=retry_after.isoformat(), error=str(error), run_id=int(run_id),
+        )
 
     def mark_terminal(
         self,
@@ -396,40 +317,11 @@ class MetadataExtractionRepository:
         reason: str,
     ) -> None:
         """Exclude one document after every configured model failed."""
-        with self.engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO library_metadata_extraction_state (
-                        md5, status, attempts_json, model_pool_json, last_run_id,
-                        terminal_reason, prompt_version, retry_after,
-                        operational_failure_count, last_operational_error,
-                        created_at, updated_at
-                    ) VALUES (
-                        :md5, 'terminal', '[]'::jsonb, CAST(:models AS JSONB),
-                        :run_id, :reason, :prompt_version, NULL, 0, NULL,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    )
-                    ON CONFLICT (md5) DO UPDATE SET
-                        status = 'terminal',
-                        model_pool_json = EXCLUDED.model_pool_json,
-                        last_run_id = EXCLUDED.last_run_id,
-                        terminal_reason = EXCLUDED.terminal_reason,
-                        prompt_version = EXCLUDED.prompt_version,
-                        retry_after = NULL,
-                        operational_failure_count = 0,
-                        last_operational_error = NULL,
-                        updated_at = CURRENT_TIMESTAMP
-                    """
-                ),
-                {
-                    "md5": str(md5),
-                    "models": json.dumps(list(models), ensure_ascii=False),
-                    "run_id": int(run_id),
-                    "reason": str(reason or "")[:4000],
-                    "prompt_version": PROMPT_VERSION,
-                },
-            )
+        self._checkpoints().mark_terminal(
+            flow_id="library.metadata_extract", item_id=str(md5),
+            contract_version=PROMPT_VERSION, models=models,
+            reason=str(reason), run_id=int(run_id),
+        )
 
     def save_success(
         self,
@@ -475,10 +367,6 @@ class MetadataExtractionRepository:
                 conn.execute(
                     text(
                         """
-                        WITH extraction AS (
-                            DELETE FROM library_metadata_extraction_state
-                            WHERE md5 = :md5
-                        )
                         INSERT INTO library_metadata_quality_state (
                             md5, contract_version, status, issues_json,
                             detected_at, resolved_at, updated_at
@@ -496,6 +384,8 @@ class MetadataExtractionRepository:
                     ),
                     {"md5": str(md5), "contract_version": CONTRACT_VERSION},
                 )
+                self._checkpoints().clear("library.metadata_extract", str(md5))
+                self._checkpoints().clear("library.metadata_evaluate", str(md5))
                 return False
             if issue := metadata_quality_issue(schema_org):
                 raise ValueError(f"Refusing low-quality metadata write: {issue}")
@@ -543,11 +433,6 @@ class MetadataExtractionRepository:
             conn.execute(
                 text(
                     """
-                    WITH extraction AS (
-                        DELETE FROM library_metadata_extraction_state WHERE md5 = :md5
-                    ), evaluation AS (
-                        DELETE FROM library_metadata_evaluation_state WHERE md5 = :md5
-                    )
                     INSERT INTO library_metadata_quality_state (
                         md5, contract_version, status, issues_json,
                         detected_at, resolved_at, updated_at
@@ -565,6 +450,8 @@ class MetadataExtractionRepository:
                 ),
                 {"md5": str(md5), "contract_version": CONTRACT_VERSION},
             )
+        self._checkpoints().clear("library.metadata_extract", str(md5))
+        self._checkpoints().clear("library.metadata_evaluate", str(md5))
         return True
 
 

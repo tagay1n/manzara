@@ -22,18 +22,18 @@ def test_core_endpoints_reuse_connections_and_keep_query_counts_bounded(
         },
         "/api/tasks": {
             "keys": {"generated_at", "event_cursor", "global", "flows", "conveyor"},
-            "queries": 5,
-            "checkouts": 5,
+            "queries": 0,
+            "checkouts": 0,
         },
         "/api/dashboard": {
             "keys": {"generated_at", "event_cursor", "global", "panels", "recent_runs"},
-            "queries": 7,
-            "checkouts": 7,
+            "queries": 1,
+            "checkouts": 1,
         },
         "/api/gemini/state": {
             "keys": {"event_cursor", "gemini"},
-            "queries": 6,
-            "checkouts": 5,
+            "queries": 0,
+            "checkouts": 0,
         },
     }
 

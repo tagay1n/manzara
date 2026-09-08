@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 _STORAGE_GUIDE = """Manzara local storage layout
 
 cache/
@@ -17,6 +16,9 @@ workspaces/
 
 logs/
   Task run logs. Remove only when the corresponding run history is no longer needed.
+
+state/
+  Machine-local disposable runtime state. Remove only while all tasks are idle.
 
 durable/
   Exports, operational evidence, and migration snapshots. Keep unless intentionally
@@ -110,6 +112,15 @@ def task_runs_dir() -> Path:
     return _area_dir("logs", "task-runs")
 
 
+def local_state_path() -> Path:
+    """Return the sole machine-local runtime database path."""
+    root = artifacts_root()
+    state = root / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    state.chmod(0o700)
+    return state / "runtime.sqlite3"
+
+
 __all__ = [
     "artifacts_root",
     "cache_dir",
@@ -117,5 +128,6 @@ __all__ = [
     "durable_path",
     "private_credentials_dir",
     "task_runs_dir",
+    "local_state_path",
     "workspace_dir",
 ]

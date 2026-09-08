@@ -11,7 +11,7 @@ Read `docs/architecture.md` for the ownership and focused-test index. Before cha
 
 ## Global invariants
 
-- PostgreSQL is the only runtime state store (`MANZARA_DATABASE_URL`), using `monocorpus` by default (`MANZARA_DB_SCHEMA`). Do not add SQLite runtime paths.
+- PostgreSQL stores durable domain data and safety-critical workflow checkpoints (`MANZARA_DATABASE_URL`), using `monocorpus` by default (`MANZARA_DB_SCHEMA`). Disposable runtime state (definitions, runs, events, conveyor, Gemini leases/cooldowns, and AI retry exclusions) lives only in local SQLite at `~/.manzara/state/runtime.sqlite3`, or `MANZARA_LOCAL_STATE_PATH` when explicitly configured. Never fall back between stores or dual-write them.
 - The backend owns business and persisted data truth. Frontend state is rendering, transport, interaction, and transient UI state only.
 - Task artifacts live under `~/.manzara`, or `MANZARA_ARTIFACTS_ROOT` when explicitly configured. Never add repository-root runtime artifact directories.
 - Keep secrets out of git and logs. `config.yaml` is local-only; keep masked `config.example.yaml` structurally current and never load it at runtime.

@@ -66,11 +66,8 @@ def test_manual_blackout_override_disables_current_window(monkeypatch) -> None:
             }
             self.events = []
 
-        def ensure_gemini_runtime_control(self, _cycle_label):  # noqa: ANN001
-            return dict(self.control)
-
-        def rollover_gemini_cycle(self, _cycle_label):  # noqa: ANN001
-            return False
+        def ensure_gemini_runtime_cycle(self, _cycle_label):  # noqa: ANN001
+            return {**self.control, "rolled": False}
 
         def set_gemini_blackout_override(self, override_until):  # noqa: ANN001
             self.control["blackout_override_until"] = override_until
@@ -107,6 +104,9 @@ def test_snapshot_calculates_exhausted_key_capacity_for_configured_models(
                     "success_cycle": 3,
                 }
             ]
+
+        def get_gemini_snapshot_metadata(self):
+            return {"account_leases": [], "model_runtime": []}
 
     keys = [
         GeminiKey("acc", "acc:key-1", "secret-1", "secr...et-1"),

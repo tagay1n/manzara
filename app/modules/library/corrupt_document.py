@@ -51,7 +51,6 @@ def build_corrupt_cleanup_plan(
             "source_size": int(source_size),
             "mime_type": str(mime_type or ""),
             "task_id": str(task_id),
-            "run_id": int(run_id),
         },
     }
 

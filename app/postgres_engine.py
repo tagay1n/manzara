@@ -11,6 +11,7 @@ import json
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass
 
 import psycopg2
@@ -31,6 +32,8 @@ class _EngineEntry:
     physical_connections_created: int = 0
     checkouts: int = 0
     queries: int = 0
+    total_query_time_ms: float = 0.0
+    max_query_time_ms: float = 0.0
     owners: int = 0
 
 
@@ -42,10 +45,9 @@ def _normalize_url(database_url: str) -> str:
     value = str(database_url or "").strip()
     if not value:
         raise ValueError("database_url must be non-empty")
-    if value.startswith("postgres://"):
-        return "postgresql://" + value[len("postgres://") :]
-    if value.startswith("postgresql+psycopg://"):
-        return "postgresql+psycopg2://" + value.split("://", 1)[1]
+    for prefix in ("postgres://", "postgresql://", "postgresql+psycopg://"):
+        if value.startswith(prefix):
+            return "postgresql+psycopg2://" + value[len(prefix) :]
     return value
 
 
@@ -111,6 +113,18 @@ def get_postgres_engine(
             event.listen(engine, "connect", lambda *_args: _record_connect(entry))
             event.listen(engine, "close", lambda *_args: _record_close(entry))
             event.listen(engine, "checkout", lambda *_args: _record_checkout(entry))
+            event.listen(
+                engine,
+                "before_cursor_execute",
+                lambda _conn, _cursor, _statement, _parameters, context, _many:
+                    setattr(context, "_manzara_started_at", time.perf_counter()),
+            )
+            event.listen(
+                engine,
+                "after_cursor_execute",
+                lambda _conn, _cursor, _statement, _parameters, context, _many:
+                    _record_query_duration(entry, context),
+            )
         _engines[key] = entry
         return engine
 
@@ -169,13 +183,22 @@ def _record_checkout(entry: _EngineEntry) -> None:
         entry.checkouts += 1
 
 
-def record_postgres_query(engine: Engine) -> None:
-    """Record one core-facade query against a registered engine."""
+def _record_query_duration(entry: _EngineEntry, context: object) -> None:
+    started_at = getattr(context, "_manzara_started_at", None)
+    elapsed_ms = (
+        max(0.0, (time.perf_counter() - float(started_at)) * 1000.0)
+        if started_at is not None
+        else 0.0
+    )
     with _lock:
-        for entry in _engines.values():
-            if entry.engine is engine:
-                entry.queries += 1
-                return
+        entry.queries += 1
+        entry.total_query_time_ms += elapsed_ms
+        entry.max_query_time_ms = max(entry.max_query_time_ms, elapsed_ms)
+
+
+def record_postgres_query(engine: Engine) -> None:
+    """Compatibility no-op; SQLAlchemy events count every statement."""
+    del engine
 
 
 def get_postgres_engine_metrics(engine: Engine) -> dict[str, int]:
@@ -195,6 +218,8 @@ def get_postgres_engine_metrics(engine: Engine) -> dict[str, int]:
                     ),
                     "checkouts": entry.checkouts,
                     "queries": entry.queries,
+                    "total_query_time_ms": int(round(entry.total_query_time_ms)),
+                    "max_query_time_ms": int(round(entry.max_query_time_ms)),
                 }
     raise RuntimeError("PostgreSQL engine is not registered")
 

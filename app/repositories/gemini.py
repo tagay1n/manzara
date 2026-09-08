@@ -1,72 +1,60 @@
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List, Optional
 
 from app.repositories.core import utc_now
 
 
 class GeminiRepository:
-    """PostgreSQL operations for the gemini domain."""
+    """Machine-local SQLite operations for Gemini coordination."""
 
     def upsert_gemini_keys(self, keys: List[Dict[str, Any]]) -> None:
         """Synchronize configured Gemini keys into runtime registry."""
         now = utc_now()
-        encoded_keys = json.dumps(
-            [
-                {
-                    "key_id": str(item.get("key_id") or ""),
-                    "account_id": str(item.get("account_id") or "default"),
-                    "masked_key": str(item.get("masked_key") or ""),
-                }
-                for item in keys
-            ]
-        )
+        normalized = [
+            {
+                "key_id": str(item.get("key_id") or ""),
+                "account_id": str(item.get("account_id") or "default"),
+                "masked_key": str(item.get("masked_key") or ""),
+            }
+            for item in keys
+        ]
         with self._lock:
-            with self._connect() as conn:
-                conn.execute(
-                    """
-                    WITH incoming AS (
-                        SELECT key_id, account_id, masked_key
-                        FROM jsonb_to_recordset(?::jsonb)
-                            AS rows(key_id text, account_id text, masked_key text)
-                    ), deactivated AS (
-                        UPDATE gemini_keys AS stored
-                        SET active = 0, updated_at = ?
-                        WHERE NOT EXISTS (
-                            SELECT 1
-                            FROM incoming
-                            WHERE incoming.key_id = stored.key_id
-                        )
-                        RETURNING stored.key_id
-                    ), upserted AS (
-                        INSERT INTO gemini_keys (
-                            key_id, account_id, masked_key, active, created_at, updated_at
-                        )
-                        SELECT key_id, account_id, masked_key, 1, ?, ?
-                        FROM incoming
-                        ON CONFLICT(key_id) DO UPDATE SET
-                            account_id=excluded.account_id,
-                            masked_key=excluded.masked_key,
-                            active=excluded.active,
-                            updated_at=excluded.updated_at
-                        RETURNING account_id
+            with self._runtime_connect(immediate=True) as conn:
+                key_ids = [item["key_id"] for item in normalized]
+                if key_ids:
+                    placeholders = ", ".join("?" for _ in key_ids)
+                    conn.execute(
+                        f"UPDATE gemini_keys SET active=0, updated_at=? "
+                        f"WHERE key_id NOT IN ({placeholders})",
+                        (now, *key_ids),
                     )
-                    INSERT INTO gemini_account_leases (
-                        account_id, created_at, updated_at
+                else:
+                    conn.execute("UPDATE gemini_keys SET active=0, updated_at=?", (now,))
+                for item in normalized:
+                    conn.execute(
+                        """INSERT INTO gemini_keys (
+                               key_id, account_id, masked_key, active, created_at, updated_at
+                           ) VALUES (?, ?, ?, 1, ?, ?)
+                           ON CONFLICT(key_id) DO UPDATE SET
+                               account_id=excluded.account_id,
+                               masked_key=excluded.masked_key,
+                               active=1, updated_at=excluded.updated_at""",
+                        (item["key_id"], item["account_id"], item["masked_key"], now, now),
                     )
-                        SELECT DISTINCT account_id, ?, ?
-                        FROM upserted
-                        ON CONFLICT(account_id) DO NOTHING
-                    """,
-                    (encoded_keys, now, now, now, now, now),
-                )
+                    conn.execute(
+                        """INSERT INTO gemini_account_leases (
+                               account_id, created_at, updated_at
+                           ) VALUES (?, ?, ?)
+                           ON CONFLICT(account_id) DO NOTHING""",
+                        (item["account_id"], now, now),
+                    )
 
     def ensure_gemini_runtime_cycle(self, cycle_label: str) -> Dict[str, Any]:
         """Read the current cycle cheaply and reset it atomically when needed."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect(immediate=True) as conn:
                 row = conn.execute(
                     """
                     SELECT control_id, cycle_label, pause_until, last_pause_reason,
@@ -129,7 +117,7 @@ class GeminiRepository:
 
     def list_gemini_account_leases(self) -> List[Dict[str, Any]]:
         """List account leases in least-recently-used order."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 """SELECT account_id, lease_token, task_id, run_id, worker_id,
                           lease_expires_at, last_acquired_at, created_at, updated_at
@@ -140,7 +128,7 @@ class GeminiRepository:
 
     def get_gemini_snapshot_metadata(self) -> Dict[str, List[Dict[str, Any]]]:
         """Read account leases and model runtime through one pool checkout."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             account_leases = conn.execute(
                 """SELECT account_id, lease_token, task_id, run_id, worker_id,
                           lease_expires_at, last_acquired_at, created_at, updated_at
@@ -168,7 +156,7 @@ class GeminiRepository:
         expires_at: str,
     ) -> bool:
         """Atomically claim an idle, expired, or orphaned account lease."""
-        with self._connect() as conn:
+        with self._runtime_connect(immediate=True) as conn:
             cur = conn.execute(
                 """
                 UPDATE gemini_account_leases
@@ -199,7 +187,7 @@ class GeminiRepository:
         self, account_id: str, lease_token: str, *, expires_at: str, now_ts: str
     ) -> bool:
         """Extend a lease only while its ownership token still matches."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             cur = conn.execute(
                 """UPDATE gemini_account_leases
                    SET lease_expires_at = ?, updated_at = ?
@@ -211,7 +199,7 @@ class GeminiRepository:
     def release_gemini_account_lease(self, account_id: str, lease_token: str) -> bool:
         """Release an account lease without disturbing a newer owner."""
         now = utc_now()
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             cur = conn.execute(
                 """UPDATE gemini_account_leases
                    SET lease_token = NULL, task_id = NULL, run_id = NULL,
@@ -223,7 +211,7 @@ class GeminiRepository:
 
     def ensure_gemini_model_runtime(self, model_name: str) -> None:
         now = utc_now()
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             conn.execute(
                 """INSERT INTO gemini_model_runtime (
                        model_name, pause_until, last_pause_reason, created_at, updated_at
@@ -233,7 +221,7 @@ class GeminiRepository:
             )
 
     def list_gemini_model_runtime(self) -> List[Dict[str, Any]]:
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 """SELECT model_name, pause_until, last_pause_reason, created_at, updated_at
                    FROM gemini_model_runtime ORDER BY model_name"""
@@ -244,7 +232,7 @@ class GeminiRepository:
         self, model_name: str, pause_until: Optional[str], reason: Optional[str]
     ) -> Dict[str, Any]:
         now = utc_now()
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute(
                 """INSERT INTO gemini_model_runtime (
                        model_name, pause_until, last_pause_reason, created_at, updated_at
@@ -263,7 +251,7 @@ class GeminiRepository:
         """Ensure one key+model runtime row exists."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect(immediate=True) as conn:
                 conn.execute(
                     """
                     INSERT INTO gemini_key_model_state (
@@ -274,11 +262,34 @@ class GeminiRepository:
                     (key_id, model_name, now),
                 )
 
+    def ensure_gemini_model_states(
+        self, key_ids: List[str], model_name: str
+    ) -> None:
+        """Bulk-initialize one model for all configured keys in one checkout."""
+        now = utc_now()
+        with self._lock:
+            with self._runtime_connect(immediate=True) as conn:
+                conn.execute(
+                    """INSERT INTO gemini_model_runtime (
+                           model_name, pause_until, last_pause_reason, created_at, updated_at
+                       ) VALUES (?, NULL, NULL, ?, ?)
+                       ON CONFLICT(model_name) DO NOTHING""",
+                    (model_name, now, now),
+                )
+                for key_id in key_ids:
+                    conn.execute(
+                        """INSERT INTO gemini_key_model_state (
+                               key_id, model_name, exhausted, updated_at
+                           ) VALUES (?, ?, 0, ?)
+                           ON CONFLICT(key_id, model_name) DO NOTHING""",
+                        (str(key_id), model_name, now),
+                    )
+
 
     def list_gemini_keys(self, *, active_only: bool = True) -> List[Dict[str, Any]]:
         """List Gemini key registry rows."""
         where = "WHERE active = 1" if active_only else ""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 f"""
                 SELECT key_id, account_id, masked_key, active, created_at, updated_at
@@ -297,7 +308,7 @@ class GeminiRepository:
         if model_name:
             where += " AND s.model_name = ?"
             params.append(model_name)
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 f"""
                 SELECT
@@ -335,7 +346,7 @@ class GeminiRepository:
         """Ensure one global Gemini runtime control row exists."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     INSERT INTO gemini_runtime_control (
@@ -368,7 +379,7 @@ class GeminiRepository:
         """Reset exhausted/cycle counters when Gemini day cycle changes."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 row = conn.execute(
                     """
                     SELECT cycle_label
@@ -419,7 +430,7 @@ class GeminiRepository:
         """Set or clear global Gemini pause timestamp."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE gemini_runtime_control
@@ -452,7 +463,7 @@ class GeminiRepository:
         """Set or clear the current global Gemini blackout override."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE gemini_runtime_control
@@ -489,7 +500,7 @@ class GeminiRepository:
     ) -> bool:
         """Atomically reserve one key+model usage slot if ready and not exhausted."""
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     """
                     UPDATE gemini_key_model_state
@@ -524,7 +535,7 @@ class GeminiRepository:
     ) -> None:
         """Persist successful Gemini call for one key+model."""
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE gemini_key_model_state
@@ -551,7 +562,7 @@ class GeminiRepository:
     ) -> None:
         """Persist failed Gemini call metadata for one key+model."""
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 conn.execute(
                     """
                     UPDATE gemini_key_model_state
@@ -579,7 +590,7 @@ class GeminiRepository:
         """Clear exhaustion marker for all models of one key."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     """
                     UPDATE gemini_key_model_state
@@ -595,7 +606,7 @@ class GeminiRepository:
         """Clear exhaustion marker for all key+model rows."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     """
                     UPDATE gemini_key_model_state

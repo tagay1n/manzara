@@ -118,7 +118,7 @@ class ContentStorageMigrationRepository:
                         md5, source_content_url, source_mime_type, status,
                         attempt_count, last_run_id, created_at, updated_at
                     ) VALUES (
-                        :md5, :source_url, :mime_type, 'copying', 1, :run_id,
+                        :md5, :source_url, :mime_type, 'copying', 1, NULL,
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                     )
                     ON CONFLICT (md5) DO UPDATE SET
@@ -130,7 +130,7 @@ class ContentStorageMigrationRepository:
                         END,
                         attempt_count =
                             maintenance_content_migration.attempt_count + 1,
-                        last_run_id = EXCLUDED.last_run_id,
+                        last_run_id = NULL,
                         error_text = NULL,
                         updated_at = CURRENT_TIMESTAMP
                     """
@@ -156,7 +156,7 @@ class ContentStorageMigrationRepository:
                     ) VALUES (
                         :md5, :image_key, :source_etag, :source_size,
                         :destination_etag, :destination_size, :sha256,
-                        :source_deleted, :run_id, CURRENT_TIMESTAMP,
+                        :source_deleted, NULL, CURRENT_TIMESTAMP,
                         CURRENT_TIMESTAMP
                     )
                     ON CONFLICT (md5, image_key) DO UPDATE SET
@@ -166,7 +166,7 @@ class ContentStorageMigrationRepository:
                         destination_size=EXCLUDED.destination_size,
                         sha256=EXCLUDED.sha256,
                         source_deleted=EXCLUDED.source_deleted,
-                        last_run_id=EXCLUDED.last_run_id,
+                        last_run_id=NULL,
                         updated_at=CURRENT_TIMESTAMP
                     """
                 ),
@@ -242,7 +242,7 @@ class ContentStorageMigrationRepository:
                         destination_archive_size=:destination_size,
                         destination_archive_sha256=:sha256,
                         markdown_member=:markdown_member,
-                        last_run_id=:run_id,
+                        last_run_id=NULL,
                         updated_at=CURRENT_TIMESTAMP
                     WHERE md5=:md5
                     """
@@ -283,7 +283,7 @@ class ContentStorageMigrationRepository:
                 text(
                     """
                     UPDATE maintenance_content_migration
-                    SET status='cutover', last_run_id=:run_id,
+                    SET status='cutover', last_run_id=NULL,
                         error_text=NULL, updated_at=CURRENT_TIMESTAMP
                     WHERE md5=:md5
                     """
@@ -299,7 +299,7 @@ class ContentStorageMigrationRepository:
                     """
                     UPDATE maintenance_content_migration
                     SET source_archive_deleted=TRUE, status='deleting',
-                        last_run_id=:run_id, updated_at=CURRENT_TIMESTAMP
+                        last_run_id=NULL, updated_at=CURRENT_TIMESTAMP
                     WHERE md5=:md5
                     """
                 ),
@@ -326,7 +326,7 @@ class ContentStorageMigrationRepository:
                     """
                     UPDATE maintenance_content_migration
                     SET status='completed', completed_at=CURRENT_TIMESTAMP,
-                        last_run_id=:run_id, error_text=NULL,
+                        last_run_id=NULL, error_text=NULL,
                         updated_at=CURRENT_TIMESTAMP
                     WHERE md5=:md5
                     """
@@ -342,7 +342,7 @@ class ContentStorageMigrationRepository:
                     UPDATE maintenance_content_migration
                     SET status=CASE WHEN status IN ('cutover', 'deleting')
                                     THEN 'deleting' ELSE 'failed' END,
-                        last_run_id=:run_id, error_text=:error_text,
+                        last_run_id=NULL, error_text=:error_text,
                         updated_at=CURRENT_TIMESTAMP
                     WHERE md5=:md5
                     """

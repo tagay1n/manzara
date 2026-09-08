@@ -107,7 +107,8 @@ def main() -> int:
     storage = load_document_storage_settings(load_runtime_config())
     _validate_settings(storage)
     state_db = Database(
-        app_settings.database_url, schema=app_settings.database_schema
+        app_settings.database_url, schema=app_settings.database_schema,
+        local_state_path=app_settings.local_state_path,
     )
     repository = ContentStorageMigrationRepository(
         app_settings.database_url,

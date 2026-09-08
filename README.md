@@ -6,8 +6,8 @@ The name means a panorama or landscape opening before the viewer (`Манзар�
 
 ## Architecture
 
-- FastAPI backend and PostgreSQL runtime state
-- Alembic-managed schema; no runtime DDL or SQLite runtime path
+- FastAPI backend with durable PostgreSQL data and disposable local SQLite runtime state
+- Alembic-managed PostgreSQL schema and a versioned local SQLite schema
 - Modular Library and Maintenance flows in one monorepo
 - Server-sent events for live task state, progress, artifacts, and logs
 - S3-compatible primary document storage with Yandex Disk as legacy upstream storage
@@ -56,6 +56,7 @@ Common environment variables:
 - `MANZARA_DB_SCHEMA` — defaults to `monocorpus`
 - `MANZARA_CONFIG_PATH` — explicit YAML path
 - `MANZARA_ARTIFACTS_ROOT` — defaults to `~/.manzara`
+- `MANZARA_LOCAL_STATE_PATH` — defaults to `~/.manzara/state/runtime.sqlite3`
 - `MONOCORPUS_REPO_PATH` — defaults to `/home/tans1q/projects/monocorpus`
 - `PG_BACKREST_STANZA` — pgBackRest stanza name, default `monocorpus`
 - `MANZARA_POSTGRES_BACKUP_MODE` — `local_pgbackrest` (default) or `managed`;
@@ -79,7 +80,8 @@ Gemini configuration contains one ordered `gemini.model_pool` and account-groupe
   --timeout-graceful-shutdown 10
 ```
 
-Startup applies pending Alembic migrations before seeding panel and task definitions.
+Startup initializes the required local SQLite store, applies pending PostgreSQL
+Alembic migrations, then seeds local panel and task definitions.
 
 Task artifact logs are written to:
 
@@ -89,9 +91,11 @@ Task artifact logs are written to:
 
 The shared verified document cache is stored under
 `~/.manzara/cache/source-documents`. Local storage is grouped by retention
-under `cache/`, `workspaces/`, `logs/`, `durable/`, and `private/`; the generated
+under `cache/`, `workspaces/`, `logs/`, `state/`, `durable/`, and `private/`; the generated
 `~/.manzara/STORAGE_LAYOUT.txt` explains what can be removed safely. The browser
-uses PostgreSQL-backed API/SSE state; artifact files are for durable inspection.
+uses local SQLite-backed API/SSE state; artifact files are for durable inspection.
+The `state/` subtree is disposable, machine-local, and must only be removed while
+all Manzara processes are stopped. It is never reconstructed from PostgreSQL.
 
 ## Database migrations
 

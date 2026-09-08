@@ -57,12 +57,12 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                 text(
                     """
                     UPDATE document_cleanup_queue SET status='running', phase=:phase,
-                        run_id=:run_id, attempts=attempts+1, last_error=NULL,
+                        run_id=NULL, attempts=attempts+1, last_error=NULL,
                         updated_at=CURRENT_TIMESTAMP
                     WHERE cleanup_id=:cleanup_id
                     """
                 ),
-                {"cleanup_id": cleanup_id, "run_id": run_id, "phase": phase},
+                {"cleanup_id": cleanup_id, "phase": phase},
             )
 
     def mark_cleanup_phase(self, cleanup_id: int, phase: str) -> None:

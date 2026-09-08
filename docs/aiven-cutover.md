@@ -1,10 +1,10 @@
 # Aiven PostgreSQL cutover
 
-Manzara can fit its durable production state in Aiven's 1 GiB PostgreSQL tier
-only when verbose runtime telemetry is excluded. The migration keeps every
-table in `monocorpus` and `public`, all compact `runs` rows, and every event
-except historical `task.log` and `task.progress`. It copies no `run_logs` data
-and never changes the source database.
+Manzara keeps only durable domain data and safety-critical workflow checkpoints
+in Aiven PostgreSQL. Alembic revision `20260908_0046` irreversibly removes cloud
+task definitions, run history, SSE events, conveyor state, Gemini coordination,
+and per-item AI retry state. It also clears run provenance from retained durable
+rows. The source database is not changed by the cutover helper.
 
 ## Security prerequisites
 
@@ -50,9 +50,10 @@ A masked `migration-manifest.json` is the completion record.
 After a successful restore, configure the runtime with the rotated target URL,
 `MANZARA_DB_SCHEMA=monocorpus`, and
 `MANZARA_POSTGRES_BACKUP_MODE=managed`. Run the normal application startup so
-Alembic verifies head and definitions are seeded. Confirm dashboard reads, SSE,
-file-log pagination, task stop/recovery, and one representative workflow before
-allowing routine writes.
+Alembic reaches head and initializes `~/.manzara/state/runtime.sqlite3` before
+local definitions are seeded. Confirm dashboard reads, SSE, file-log pagination,
+task stop/recovery, and one representative workflow before allowing routine
+writes. There is no PostgreSQL fallback for missing local state.
 
 Do not delete or upgrade the local source during the rollback window. Before
 new cloud writes begin, rollback is a configuration switch. After new writes

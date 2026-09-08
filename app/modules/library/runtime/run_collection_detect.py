@@ -30,7 +30,10 @@ def main() -> None:
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
     run_id = int(os.environ.get("MANZARA_TASK_RUN_ID") or 0)
     settings = load_settings()
-    db = Database(settings.database_url, schema=settings.database_schema)
+    db = Database(
+        settings.database_url, schema=settings.database_schema,
+        local_state_path=settings.local_state_path,
+    )
 
     def publish(progress: dict) -> None:
         if not run_id:

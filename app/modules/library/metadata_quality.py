@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from app.local_state import AIItemCheckpointStore
 from app.modules.library.metadata_contract import (
     ACCESS_MODES,
     CONTRACT_VERSION,
@@ -174,13 +175,20 @@ def assess_metadata(schema_org: Any) -> MetadataAssessment:
 class MetadataQualityRepository:
     """Batch PostgreSQL audit with resumable, non-destructive invalidation."""
 
-    def __init__(self, database_url: str, *, schema: str = "monocorpus") -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        schema: str = "monocorpus",
+        checkpoint_store: AIItemCheckpointStore,
+    ) -> None:
         normalized = str(schema or "monocorpus").strip() or "monocorpus"
         if not _SCHEMA_RE.fullmatch(normalized):
             raise ValueError(f"Invalid database schema: {normalized!r}")
         self.engine: Engine = acquire_postgres_engine(
             str(database_url), schema=normalized
         )
+        self.checkpoint_store = checkpoint_store
 
     def dispose(self) -> None:
         release_postgres_engine(self.engine)
@@ -276,7 +284,6 @@ class MetadataQualityRepository:
                     "contract_version": CONTRACT_VERSION,
                     "status": decision.status,
                     "issues": json.dumps(decision.issues, ensure_ascii=False),
-                    "run_id": run_id,
                 }
                 for md5, decision in decisions
             ]
@@ -288,7 +295,7 @@ class MetadataQualityRepository:
                             detected_at, resolved_at, updated_at
                         ) VALUES (
                             :md5, :contract_version, :status, CAST(:issues AS JSONB),
-                            :run_id, CURRENT_TIMESTAMP,
+                            NULL, CURRENT_TIMESTAMP,
                             CASE WHEN :status = 'resolved' THEN CURRENT_TIMESTAMP END,
                             CURRENT_TIMESTAMP
                         )
@@ -296,42 +303,17 @@ class MetadataQualityRepository:
                             contract_version = EXCLUDED.contract_version,
                             status = EXCLUDED.status,
                             issues_json = EXCLUDED.issues_json,
-                            last_run_id = EXCLUDED.last_run_id,
+                            last_run_id = NULL,
                             resolved_at = EXCLUDED.resolved_at,
                             updated_at = CURRENT_TIMESTAMP
                         """
                 ),
                 quality_rows,
             )
-            invalid_md5s = [
-                md5 for md5, decision in decisions if decision.status == "invalid"
-            ]
-            if invalid_md5s:
-                conn.execute(
-                    text(
-                        "DELETE FROM library_metadata_extraction_state "
-                        "WHERE md5 = ANY(:md5s)"
-                    ),
-                    {"md5s": invalid_md5s},
-                )
-                conn.execute(
-                    text(
-                        "DELETE FROM library_metadata_evaluation_state "
-                        "WHERE md5 = ANY(:md5s)"
-                    ),
-                    {"md5s": invalid_md5s},
-                )
-            resolved_md5s = [
-                md5 for md5, decision in decisions if decision.status == "resolved"
-            ]
-            if resolved_md5s:
-                conn.execute(
-                    text(
-                        "DELETE FROM library_metadata_extraction_state "
-                        "WHERE md5 = ANY(:md5s)"
-                    ),
-                    {"md5s": resolved_md5s},
-                )
+        for md5, decision in decisions:
+            self.checkpoint_store.clear("library.metadata_extract", md5)
+            if decision.status == "invalid":
+                self.checkpoint_store.clear("library.metadata_evaluate", md5)
 
 
 __all__ = ["MetadataAssessment", "MetadataQualityRepository", "assess_metadata"]

@@ -7,7 +7,7 @@ from app.repositories.core import utc_now
 
 
 class DefinitionsRepository:
-    """PostgreSQL operations for the definitions domain."""
+    """Machine-local SQLite operations for task and panel definitions."""
 
     def prune_runtime_definitions(
         self,
@@ -27,7 +27,7 @@ class DefinitionsRepository:
         }
 
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 obsolete_task_ids = self._select_obsolete_ids(
                     conn,
                     table="task_definitions",
@@ -101,7 +101,7 @@ class DefinitionsRepository:
         """Insert or update known task definitions."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 for item in task_defs:
                     conn.execute(
                         """
@@ -144,7 +144,7 @@ class DefinitionsRepository:
         """Set the one-shot worker override for a supported task."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     """
                     UPDATE task_definitions
@@ -162,7 +162,7 @@ class DefinitionsRepository:
         """Insert panel definitions when missing; preserve user-renamed titles."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 for item in panel_defs:
                     conn.execute(
                         """
@@ -182,7 +182,7 @@ class DefinitionsRepository:
 
     def get_panel(self, panel_id: str) -> Optional[Dict[str, Any]]:
         """Return one panel definition by id."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute(
                 "SELECT * FROM panel_definitions WHERE panel_id = ?",
                 (panel_id,),
@@ -192,7 +192,7 @@ class DefinitionsRepository:
 
     def get_panel_title_map(self) -> Dict[str, str]:
         """Return mapping of panel id to display title."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 "SELECT panel_id, title FROM panel_definitions ORDER BY panel_id"
             ).fetchall()
@@ -203,7 +203,7 @@ class DefinitionsRepository:
         """Update one panel title and return updated panel row."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     """
                     UPDATE panel_definitions
@@ -221,7 +221,7 @@ class DefinitionsRepository:
         """Update one task title and return updated task definition."""
         now = utc_now()
         with self._lock:
-            with self._connect() as conn:
+            with self._runtime_connect() as conn:
                 cur = conn.execute(
                     """
                     UPDATE task_definitions
@@ -237,7 +237,7 @@ class DefinitionsRepository:
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Return task definition by id."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             row = conn.execute(
                 "SELECT * FROM task_definitions WHERE task_id = ?",
                 (task_id,),
@@ -247,7 +247,7 @@ class DefinitionsRepository:
 
     def list_tasks(self) -> List[Dict[str, Any]]:
         """Return all task definitions."""
-        with self._connect() as conn:
+        with self._runtime_connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM task_definitions ORDER BY panel_id, title"
             ).fetchall()

@@ -202,6 +202,7 @@ class AppState:
             settings.database_url,
             schema=settings.database_schema,
             pool_size=settings.database_pool_size,
+            local_state_path=settings.local_state_path,
         )
         self.runner = TaskRunner(self.db)
         self.shutting_down = False

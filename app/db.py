@@ -19,7 +19,7 @@ class Database(
     NormalizationRepository,
     CoreRepository,
 ):
-    """PostgreSQL facade preserving the historical ``app.db.Database`` API."""
+    """Facade over durable PostgreSQL and disposable local SQLite state."""
 
 
 __all__ = ["ACTIVE_STATUSES", "Database", "utc_now"]

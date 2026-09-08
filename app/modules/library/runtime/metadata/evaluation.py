@@ -306,8 +306,10 @@ def evaluate(args) -> None:
     """Run batch evaluation and save results into `metadata.lib`."""
     config = read_config()
     settings = load_settings()
-    state_db = Database(settings.database_url, schema=settings.database_schema)
-    state_db.init_schema()
+    state_db = Database(
+        settings.database_url, schema=settings.database_schema,
+        local_state_path=settings.local_state_path,
+    )
     models = load_required_gemini_model_pool()
     run_id = _run_id()
     stop_event = threading.Event()

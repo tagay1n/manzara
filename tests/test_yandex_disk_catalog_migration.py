@@ -69,7 +69,7 @@ def test_existing_maintenance_catalog_and_cleanup_history_are_migrated(
                 {"task_id": task_id, "run_id": run_id},
             )
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "20260902_0045")
 
         with engine.connect() as conn:
             assert conn.execute(

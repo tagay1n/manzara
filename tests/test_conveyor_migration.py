@@ -21,7 +21,7 @@ def test_conveyor_tables_and_meaningful_result_column_exist(
     config.set_main_option("manzara_alembic_version_schema", schema)
     engine = create_engine(database_url)
     try:
-        command.upgrade(config, "head")
+        command.upgrade(config, "20260902_0045")
         inspector = inspect(engine)
         assert inspector.has_table("conveyor_definitions", schema=schema)
         assert inspector.has_table("conveyor_runs", schema=schema)

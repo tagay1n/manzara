@@ -42,6 +42,7 @@ from app.gemini_model_pool import (
 from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
 from app.gemini_workers import emit_gemini_worker_log, resolve_gemini_workers
+from app.local_state import AIItemCheckpointStore
 from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     build_corrupt_cleanup_plan,
@@ -248,7 +249,7 @@ def run_metadata_extraction(
     candidates = (
         list(_candidates)
         if _candidates is not None
-        else repository.list_candidates(limit=limit)
+        else repository.list_candidates(limit=limit, models=models)
     )
     worker_count = max(1, min(int(workers), len(candidates) or 1))
     if worker_count > 1 and _candidates is None:
@@ -582,15 +583,21 @@ def main() -> int:
         max_bytes=storage.cache_max_bytes,
     )
     workspace = workspace_dir("library", "metadata-extraction", run_id=run_id)
+    checkpoints = AIItemCheckpointStore(app_settings.local_state_path)
     repository = MetadataExtractionRepository(
         app_settings.database_url,
         schema=app_settings.database_schema,
+        checkpoint_store=checkpoints,
     )
     cleanup_repository = DocumentCleanupRepository(
         app_settings.database_url,
         schema=app_settings.database_schema,
     )
-    db = Database(app_settings.database_url, schema=app_settings.database_schema)
+    db = Database(
+        app_settings.database_url,
+        schema=app_settings.database_schema,
+        local_state_path=app_settings.local_state_path,
+    )
     primary_s3 = Session().client(
         "s3",
         aws_access_key_id=storage.primary.access_key_id,

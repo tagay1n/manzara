@@ -1,8 +1,9 @@
-"""Shared PostgreSQL connection and row-mapping primitives."""
+"""Shared durable PostgreSQL and disposable local-state primitives."""
 
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -17,6 +18,7 @@ from psycopg2.extensions import TRANSACTION_STATUS_UNKNOWN
 from psycopg2.extras import RealDictCursor
 
 from alembic import command
+from app.local_state import LocalStateStore
 from app.postgres_engine import (
     acquire_postgres_engine,
     configured_postgres_pool_size,
@@ -306,6 +308,7 @@ class CoreRepository:
         *,
         pool_size: int | None = None,
         connection_factory: Callable[[str], psycopg2.extensions.connection] | None = None,
+        local_state_path: Path | str | None = None,
     ):
         self.database_url = str(database_url).strip()
         if not self.database_url:
@@ -340,6 +343,16 @@ class CoreRepository:
             )
         self._lock = threading.Lock()
         self._progress_last_published: dict[int, float] = {}
+        self._local_state = LocalStateStore(
+            local_state_path
+            if local_state_path is not None
+            else Path(
+                str(
+                    os.environ.get("MANZARA_LOCAL_STATE_PATH")
+                    or "~/.manzara/state/runtime.sqlite3"
+                )
+            ).expanduser()
+        )
 
 
     @contextmanager
@@ -361,6 +374,13 @@ class CoreRepository:
             self._pool.checkin(conn, discard=discard)
 
 
+    @contextmanager
+    def _runtime_connect(self, *, immediate: bool = False) -> Iterable[Any]:
+        """Open one short transaction against mandatory machine-local state."""
+        with self._local_state.connect(immediate=immediate) as conn:
+            yield conn
+
+
     def close(self) -> None:
         """Close all persistent PostgreSQL connections."""
         self._pool.close()
@@ -374,8 +394,29 @@ class CoreRepository:
         return self._pool.metrics()
 
 
+    @property
+    def local_state_path(self) -> Path:
+        return self._local_state.path
+
+    def get_local_state_snapshot(self) -> Dict[str, Any]:
+        """Return diagnostics for the required machine-local runtime store."""
+        with self._runtime_connect() as conn:
+            schema_version = int(conn.execute("PRAGMA user_version").scalar() or 0)
+            journal_mode = str(conn.execute("PRAGMA journal_mode").scalar() or "")
+        return {
+            "path": str(self.local_state_path),
+            "schema_version": schema_version,
+            "journal_mode": journal_mode,
+            "size_bytes": (
+                int(self.local_state_path.stat().st_size)
+                if self.local_state_path.exists()
+                else 0
+            ),
+        }
+
+
     def init_schema(self) -> None:
-        """Apply Alembic migrations up to head for the configured schema."""
+        """Apply domain migrations and initialize mandatory local runtime state."""
         repo_root = Path(__file__).resolve().parents[2]
         alembic_ini = repo_root / "alembic.ini"
         if not alembic_ini.exists():
@@ -387,6 +428,9 @@ class CoreRepository:
         config.set_main_option("manzara_alembic_version_schema", self.schema)
 
         with self._lock:
+            # Establish the mandatory local runtime store before a destructive
+            # domain migration can remove the former cloud runtime tables.
+            self._local_state.initialize()
             command.upgrade(config, "head")
 
 

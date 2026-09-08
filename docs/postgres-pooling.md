@@ -17,6 +17,8 @@ After-change counts come from the credential-free cumulative pool metrics in
 `tests/test_postgres_endpoint_efficiency.py` against a generated
 `manzara_test_*` schema. "Checkout" means a borrow from the pool; "new physical"
 means a TCP/TLS PostgreSQL connection created during the warm request.
+The counters now come from SQLAlchemy cursor events, so they include every
+durable-store statement issued by flow repositories as well as the facade.
 
 ## Runtime ownership
 
@@ -32,20 +34,22 @@ Worker threads serialize their short PostgreSQL sections through that one
 connection, while network/model work remains concurrent. The web process keeps
 the configured `database_pool_size` (four by default).
 
+Task/run/SSE, conveyor, Gemini coordination, and per-item AI retry state do not
+use this pool. They use `~/.manzara/state/runtime.sqlite3` in WAL mode and are
+intentionally absent from cloud PostgreSQL.
+
 Tests use one local PostgreSQL Testcontainer per pytest session. Production or
 cloud database URLs are not a test fallback.
 
 | Endpoint | Baseline physical connections | Baseline repository/business SQL | Baseline request-time setup SQL | Warm checkouts after | Warm SQL after | New physical after |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `/api/health` | 0 | 0 | 0 | 0 | 0 | 0 |
-| `/api/tasks` | 8-9 | 8-9 | 16-18 | 5 | 5 | 0 |
-| `/api/gemini/state` | 6 | 107 | 12 | 5 | 6 | 0 |
-| `/api/dashboard` | 19 | 19 | 37 | 7 | 7 | 0 |
+| `/api/tasks` | 8-9 | 8-9 | 16-18 | 0 | 0 | 0 |
+| `/api/gemini/state` | 6 | 107 | 12 | 0 | 0 | 0 |
+| `/api/dashboard` | 19 | 19 | 37 | 1 | 1 | 0 |
 
-The Tasks range depends on whether a previous conveyor run exists. The baseline
-dashboard count includes the Collections overview, which created one separate
-SQLAlchemy connection and ran its own `SET search_path`; that read now uses the
-shared pool.
+The sole dashboard cloud query is the durable Collections overview. All other
+dashboard operational reads are local.
 
 ## Timing evidence
 

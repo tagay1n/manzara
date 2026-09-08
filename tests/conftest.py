@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import tempfile
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import suppress
@@ -180,13 +181,18 @@ def prepared_test_schema(test_database_url: str) -> tuple[str, str]:
     database_url = test_database_url
     schema_name = f"manzara_test_{uuid.uuid4().hex[:10]}"
     _drop_schema(database_url, schema_name)
-    db = Database(database_url, schema=schema_name)
-    db.init_schema()
-    try:
-        yield database_url, schema_name
-    finally:
-        db.close()
-        _drop_schema(database_url, schema_name)
+    with tempfile.TemporaryDirectory(prefix="manzara-runtime-test-") as runtime_dir:
+        db = Database(
+            database_url,
+            schema=schema_name,
+            local_state_path=Path(runtime_dir) / "runtime.sqlite3",
+        )
+        db.init_schema()
+        try:
+            yield database_url, schema_name
+        finally:
+            db.close()
+            _drop_schema(database_url, schema_name)
 
 
 @pytest.fixture()
@@ -211,12 +217,14 @@ def test_client(
         database_url=database_url,
         database_schema=schema_name,
         maintenance=maintenance,
+        local_state_path=tmp_path / "manzara" / "state" / "runtime.sqlite3",
     )
 
     monkeypatch.setattr(main_app, "maintenance_task_definitions", _test_task_defs)
     main_app.state = main_app.AppState(settings)
     main_app.state.runner._artifacts_root = tmp_path / "_artifacts" / "task_runs"
     main_app.state.runner._artifacts_root.mkdir(parents=True, exist_ok=True)
+    main_app.state.db._local_state.initialize()
     monkeypatch.setattr(main_app.state.db, "init_schema", lambda: None)
 
     with TestClient(main_app.app) as client:

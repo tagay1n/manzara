@@ -78,7 +78,10 @@ def load_run_logs(db: Database, run_id: int) -> List[str]:
 def main() -> int:
     args = build_parser().parse_args()
     settings = load_settings()
-    db = Database(settings.database_url, schema=settings.database_schema)
+    db = Database(
+        settings.database_url, schema=settings.database_schema,
+        local_state_path=settings.local_state_path,
+    )
     run_id = resolve_run_id(db, args.run_id, args.task_id)
     log_lines = load_run_logs(db, run_id)
 
