@@ -70,6 +70,32 @@ For the filtered Aiven free-tier migration, see `docs/aiven-cutover.md`.
 
 Gemini configuration contains one ordered `gemini.model_pool` and account-grouped keys. Models have no code default. See `docs/gemini-runtime.md` for runtime behavior.
 
+## Nightly Google catalog export
+
+The `Nightly Google Sheets & Drive Export` GitHub Actions workflow exports the
+PostgreSQL document catalog to the established Google Drive folder and Google Sheets
+worksheet every day at 03:00 Europe/Moscow (00:00 UTC). It can also be started
+manually with the workflow's **Run workflow** action.
+
+Configure these repository Actions secrets before the first run:
+
+- `MANZARA_DATABASE_URL` — the complete cloud PostgreSQL URL beginning with
+  `postgres://` or `postgresql://`, including required TLS options.
+- `GOOGLE_OAUTH_TOKEN_JSON_BASE64` — a base64-encoded `personal_token.json` with a
+  refresh token authorized for the Google Drive and Sheets scopes.
+
+For a token stored in Manzara's default credentials directory, set the Google secret
+with:
+
+```bash
+base64 -w 0 ~/.manzara/private/credentials/google-drive/personal_token.json \
+  | gh secret set GOOGLE_OAUTH_TOKEN_JSON_BASE64
+```
+
+Set `MANZARA_DATABASE_URL` through the GitHub repository settings or interactively
+with `gh secret set MANZARA_DATABASE_URL`, then manually run the workflow once and
+verify both the new timestamped Drive ZIP and the refreshed `tt` worksheet.
+
 ## Run
 
 ```bash

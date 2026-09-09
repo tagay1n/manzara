@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from app.modules.maintenance.config import MaintenanceSettings
-
 
 MONOCORPUS_META_EVALUATE_TASK_ID = "maintenance.monocorpus_meta_evaluate"
 LIBRARY_PERSONALITY_SUGGESTIONS_REFRESH_TASK_ID = (
@@ -18,11 +17,10 @@ MAINTENANCE_PGBACKREST_FULL_TASK_ID = "maintenance.pgbackrest_backup_full"
 MAINTENANCE_PGBACKREST_INCR_TASK_ID = "maintenance.pgbackrest_backup_incr"
 MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID = "maintenance.sync_documents_s3"
 MAINTENANCE_MONOCORPUS_SYNC_TASK_ID = "maintenance.monocorpus_sync"
-MAINTENANCE_DUMP_STATE_TASK_ID = "maintenance.dump_state"
 MAINTENANCE_MIGRATE_PDF_CONTENT_TASK_ID = "maintenance.migrate_pdf_content"
 
 
-def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str, Any]]:
+def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str, Any]]:
     """Return Maintenance task definitions for dashboard and runtime."""
     app_root = Path(__file__).resolve().parents[3]
     meta_eval_runner = (
@@ -58,14 +56,6 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
     )
     monocorpus_sync_cmd = (
         py_bootstrap + '"$PY_BIN" -m app.modules.maintenance.runtime.sync_monocorpus'
-    )
-    legacy_credentials_dir = shlex.quote(
-        str(settings.monocorpus_repo_path / "_artifacts" / "credentials")
-    )
-    dump_state_cmd = (
-        py_bootstrap
-        + '"$PY_BIN" -m app.modules.maintenance.runtime.dump_state '
-        + f"--legacy-credentials-dir {legacy_credentials_dir}"
     )
     content_migration_cmd = (
         py_bootstrap
@@ -122,16 +112,6 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> List[Dict[str
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": backup_incr_cmd},
-        },
-        {
-            "task_id": MAINTENANCE_DUMP_STATE_TASK_ID,
-            "panel_id": "backup",
-            "title": "Upload to GSheets",
-            "task_type": "backup",
-            "icon_idle": "TableProperties",
-            "icon_running": "Square",
-            "cwd": str(app_root),
-            "command": {"mode": "shell", "value": dump_state_cmd},
         },
         {
             "task_id": MONOCORPUS_META_EVALUATE_TASK_ID,

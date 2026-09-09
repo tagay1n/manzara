@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from app.constants import PANEL_DEFS
 from app.dependencies import (
     build_classification_operations,
     build_entities_operations,
     build_normalization_operations,
     build_route_payload_builders,
 )
-from app.constants import PANEL_DEFS
 from app.modules.library.collection_tasks import collection_task_definitions
 from app.modules.library.tasks import library_task_definitions
 from app.modules.maintenance.config import MaintenanceSettings
@@ -40,6 +40,7 @@ def test_maintenance_task_definitions_include_guarded_sync_task(tmp_path) -> Non
     assert by_id["maintenance.pgbackrest_backup_incr"]["command"]["value"] == (
         "sudo -n -u postgres pgbackrest --stanza=monocorpus --type=incr backup"
     )
+    assert "maintenance.dump_state" not in task_ids
     assert not any(task_id.startswith("library.collection_") for task_id in task_ids)
 
 
@@ -110,16 +111,16 @@ def test_managed_postgres_preserves_local_pgbackrest_definitions() -> None:
         maintenance_task_definitions=lambda _cfg: [
             {"task_id": "maintenance.pgbackrest_backup_full"},
             {"task_id": "maintenance.pgbackrest_backup_incr"},
-            {"task_id": "maintenance.dump_state"},
+            {"task_id": "maintenance.sync_documents_s3"},
         ],
-        library_task_definitions=lambda: [],
-        collection_task_definitions=lambda: [],
+        library_task_definitions=list,
+        collection_task_definitions=list,
     )
 
     assert [item["task_id"] for item in registry.task_defs] == [
         "maintenance.pgbackrest_backup_full",
         "maintenance.pgbackrest_backup_incr",
-        "maintenance.dump_state"
+        "maintenance.sync_documents_s3",
     ]
 
 

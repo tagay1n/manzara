@@ -92,4 +92,4 @@ def test_managed_mode_disables_only_local_pgbackrest_tasks() -> None:
 
     assert not task_is_available(settings, "maintenance.pgbackrest_backup_full")
     assert not task_is_available(settings, "maintenance.pgbackrest_backup_incr")
-    assert task_is_available(settings, "maintenance.dump_state")
+    assert task_is_available(settings, "maintenance.sync_documents_s3")
