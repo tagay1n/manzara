@@ -10,7 +10,6 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 from fastapi import HTTPException
 
 from app.contracts import PayloadBuilderOperations
-from app.settings import task_is_available
 
 GEMINI_WORKERS_UI_MAX = 9
 
@@ -222,7 +221,7 @@ class PayloadBuilder:
         ops = self._ops()
         state = self._state()
         run_summaries = state.db.get_panel_run_summaries(
-            ["maintenance", "backup", "library", "metadata", "collections"]
+            ["maintenance", "library", "metadata", "collections"]
         )
         maintenance_panel = ops.build_maintenance_panel(
             db=state.db,
@@ -230,13 +229,6 @@ class PayloadBuilder:
             tasks=tasks_by_panel.get("maintenance", []),
             title=panel_titles.get("maintenance", "Yandex disk"),
             run_summary=run_summaries["maintenance"],
-        )
-        backup_panel = ops.build_backup_panel(
-            db=state.db,
-            maintenance=state.settings.maintenance,
-            tasks=tasks_by_panel.get("backup", []),
-            title=panel_titles.get("backup", "Backup"),
-            run_summary=run_summaries["backup"],
         )
         library_panel = ops.build_library_panel(
             db=state.db,
@@ -270,7 +262,6 @@ class PayloadBuilder:
         }
         return {
             "maintenance": maintenance_panel,
-            "backup": backup_panel,
             "library": library_panel,
             "metadata": metadata_panel,
             "collections": collections_panel,
@@ -289,11 +280,7 @@ class PayloadBuilder:
         """Compose dashboard payload from DB and flow artifacts."""
         state, event_cursor = self._begin_snapshot()
         panel_titles = state.db.get_panel_title_map()
-        tasks = [
-            task
-            for task in state.db.list_tasks_with_latest_run()
-            if task_is_available(state.settings, str(task.get("task_id") or ""))
-        ]
+        tasks = state.db.list_tasks_with_latest_run()
         task_slug_map, _ = self._task_slug_maps(tasks)
         tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
         for task in tasks:
@@ -308,7 +295,6 @@ class PayloadBuilder:
         )
         ordered_panels = [
             panel_payloads["maintenance"],
-            panel_payloads["backup"],
             panel_payloads["library"],
             panel_payloads["metadata"],
             panel_payloads["collections"],
@@ -337,11 +323,7 @@ class PayloadBuilder:
         """Compose tasks page payload grouped by flow."""
         state, event_cursor = self._begin_snapshot()
         panel_titles = state.db.get_panel_title_map()
-        tasks = [
-            task
-            for task in state.db.list_tasks_with_latest_run()
-            if task_is_available(state.settings, str(task.get("task_id") or ""))
-        ]
+        tasks = state.db.list_tasks_with_latest_run()
         task_slug_map, _ = self._task_slug_maps(tasks)
         task_groups: Dict[str, Dict[str, Any]] = {}
         for task in tasks:
@@ -384,8 +366,6 @@ class PayloadBuilder:
         tasks = task_definitions if task_definitions is not None else state.db.list_tasks()
         for task in tasks:
             task_id = str(task["task_id"])
-            if not task_is_available(state.settings, task_id):
-                continue
             panel_id = str(task["panel_id"])
             item = {
                 "task_id": task_id,

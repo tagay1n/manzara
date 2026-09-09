@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import Any, Dict, List
-
-
-_BACKUP_LABEL_RE = re.compile(r"new backup label\s*=\s*([^\s]+)", re.IGNORECASE)
-_BACKUP_SIZE_RE = re.compile(r"\b(?:full|incr)\s+backup size\s*=\s*([^,]+)", re.IGNORECASE)
 
 
 def _parse_iso(value: Any) -> datetime | None:
@@ -86,34 +81,6 @@ def build_structured_run_summary(
     summary["kind"] = task_id
     if isinstance(artifacts, dict) and artifacts:
         summary["artifacts"] = artifacts
-
-    if task_id.startswith("maintenance.pgbackrest_backup_"):
-        summary["kind"] = "maintenance.pgbackrest_backup"
-        backup_label = None
-        backup_size = None
-        s3_verified = False
-        for line in log_lines:
-            if backup_label is None:
-                match = _BACKUP_LABEL_RE.search(line)
-                if match:
-                    backup_label = match.group(1).strip()
-            if backup_size is None:
-                match = _BACKUP_SIZE_RE.search(line)
-                if match:
-                    backup_size = match.group(1).strip()
-            if "S3 backup verification passed" in line:
-                s3_verified = True
-        if backup_label:
-            summary["highlights"].append({"label": "Backup Label", "value": backup_label})
-        if backup_size:
-            summary["highlights"].append({"label": "Backup Size", "value": backup_size})
-        if s3_verified:
-            summary["highlights"].append({"label": "S3 Verify", "value": "passed"})
-        if status == "completed" and backup_label:
-            summary["message"] = f"Backup completed: {backup_label}"
-        elif status == "completed":
-            summary["message"] = "Backup completed."
-        return summary
 
     if task_id == "maintenance.sync_documents_s3":
         sync_artifacts = artifacts if isinstance(artifacts, dict) else {}

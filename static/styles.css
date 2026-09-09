@@ -368,30 +368,6 @@ button {
   color: #ffb8c0;
 }
 
-.db-backup-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.db-backup-row {
-  border: 1px solid #223a62;
-  border-radius: 8px;
-  padding: 7px;
-  background: rgba(15, 28, 52, 0.6);
-}
-
-.db-backup-title {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.db-backup-meta {
-  margin-top: 3px;
-  color: #89a6cf;
-  font-size: 11px;
-}
-
 .db-table-wrap {
   border: 1px solid #223a62;
   border-radius: 10px;
@@ -2448,8 +2424,7 @@ button {
     grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
   }
 
-  .db-state-metrics,
-  .db-backup-grid {
+  .db-state-metrics {
     grid-template-columns: 1fr;
   }
 

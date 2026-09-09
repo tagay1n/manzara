@@ -273,8 +273,7 @@ pre,
 
 .task-list-item,
 .run-row,
-.library-stat-card,
-.db-backup-row {
+.library-stat-card {
   border-color: var(--line-soft);
   background: rgba(21, 27, 37, 0.62);
   box-shadow: none;

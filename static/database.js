@@ -71,16 +71,6 @@ function renderGlobalState(payload) {
   window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
 }
 
-function renderBackupItem(title, item) {
-  const run = item?.run || {};
-  return `
-    <div class="db-backup-row">
-      <div class="db-backup-title">${escapeHtml(title)}</div>
-      <div class="db-backup-meta">Run: ${escapeHtml(run.status || "idle")} (${escapeHtml(formatDateTime(run.finished_at || run.started_at))})</div>
-    </div>
-  `;
-}
-
 function renderDatabaseState(payload) {
   viewState.set("ready");
   state.payload = payload;
@@ -90,7 +80,6 @@ function renderDatabaseState(payload) {
   const warningNode = document.getElementById("db-warning-pill");
   const statusNode = document.getElementById("db-status");
   const statsNode = document.getElementById("db-stat-grid");
-  const backupsNode = document.getElementById("db-backup-grid");
   const tableBodyNode = document.getElementById("db-table-body");
   const footnoteNode = document.getElementById("db-table-footnote");
 
@@ -99,10 +88,6 @@ function renderDatabaseState(payload) {
     warningNode.textContent = "Unavailable";
     statusNode.textContent = db.error || "Database snapshot unavailable";
     statsNode.innerHTML = "";
-    backupsNode.innerHTML = `
-      ${renderBackupItem("Full backup", db.backup?.full)}
-      ${renderBackupItem("Incremental backup", db.backup?.incremental)}
-    `;
     tableBodyNode.innerHTML = '<tr><td colspan="3">No table data.</td></tr>';
     footnoteNode.textContent = `Snapshot: ${formatDateTime(db.captured_at)}`;
     lucide.createIcons();
@@ -124,11 +109,6 @@ function renderDatabaseState(payload) {
     <div class="stat"><div class="stat-label">Disk Free</div><div class="stat-value">${escapeHtml(diskFree)}</div></div>
     <div class="stat"><div class="stat-label">Disk Free %</div><div class="stat-value">${escapeHtml(diskFreePct)}</div></div>
     <div class="stat"><div class="stat-label">Data Directory</div><div class="stat-value">${escapeHtml(db.data_directory || "-")}</div></div>
-  `;
-
-  backupsNode.innerHTML = `
-    ${renderBackupItem("Full backup", db.backup?.full)}
-    ${renderBackupItem("Incremental backup", db.backup?.incremental)}
   `;
 
   const rows = (db.tables || [])
@@ -154,7 +134,6 @@ function renderDatabaseLoading() {
   document.getElementById("db-warning-pill").textContent = "Loading";
   document.getElementById("db-status").textContent = "Loading database state...";
   document.getElementById("db-stat-grid").innerHTML = '<div class="run-row">Loading database metrics...</div>';
-  document.getElementById("db-backup-grid").innerHTML = '<div class="run-row">Loading backup state...</div>';
   document.getElementById("db-table-body").innerHTML = '<tr><td colspan="3">Loading table metrics...</td></tr>';
   document.getElementById("db-table-footnote").textContent = "";
 }
@@ -167,7 +146,6 @@ function renderDatabaseError(error) {
   document.getElementById("db-warning-pill").textContent = "Unavailable";
   document.getElementById("db-status").textContent = `Database state unavailable: ${message}`;
   document.getElementById("db-stat-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
-  document.getElementById("db-backup-grid").innerHTML = `<div class="run-row">Error: ${safe}</div>`;
   document.getElementById("db-table-body").innerHTML = `<tr><td colspan="3">Error: ${safe}</td></tr>`;
   document.getElementById("db-table-footnote").textContent = "";
 }
@@ -220,7 +198,7 @@ function setupEventStream() {
       const taskFinished = ["task.artifact", "task.completed", "task.failed", "task.stopped"]
         .includes(eventType);
       if (
-        (["maintenance", "backup"].includes(String(payload?.panel_id || "")) && taskFinished)
+        (String(payload?.panel_id || "") === "maintenance" && taskFinished)
       ) {
         queueRefresh(100);
       }

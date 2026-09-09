@@ -14,18 +14,6 @@ from app.contracts import (
     PayloadBuilderOperations,
     RoutePayloadBuilders,
 )
-from app.modules.library.collections import (
-    decide_collection_proposal,
-    get_collection_insights,
-    get_collection_overview,
-    get_collection_proposal_review,
-    get_collection_review,
-    list_collection_items,
-    list_collection_proposals,
-    list_collections as list_library_collections,
-    merge_collections,
-    update_collection,
-)
 from app.modules.library.classification_insights import (
     get_classification_insights,
     list_classifications,
@@ -36,22 +24,44 @@ from app.modules.library.classification_operations import (
     get_normalization_preview,
     merge_classifications,
 )
+from app.modules.library.collections import (
+    decide_collection_proposal,
+    get_collection_insights,
+    get_collection_overview,
+    get_collection_proposal_review,
+    get_collection_review,
+    list_collection_items,
+    list_collection_proposals,
+    merge_collections,
+    update_collection,
+)
+from app.modules.library.collections import (
+    list_collections as list_library_collections,
+)
 from app.modules.library.normalization import (
     bulk_link_aliases,
     bulk_reject_aliases,
     create_and_link_alias,
     create_canonical,
-    get_evidence as get_normalization_evidence,
-    get_merge_candidates as get_normalization_merge_candidates,
     get_normalization_dashboard,
-    get_quality as get_normalization_quality,
     get_review_queue,
     link_alias,
     list_canonicals,
-    list_history as list_normalization_history,
     merge_canonicals,
     reject_alias,
     undo_event,
+)
+from app.modules.library.normalization import (
+    get_evidence as get_normalization_evidence,
+)
+from app.modules.library.normalization import (
+    get_merge_candidates as get_normalization_merge_candidates,
+)
+from app.modules.library.normalization import (
+    get_quality as get_normalization_quality,
+)
+from app.modules.library.normalization import (
+    list_history as list_normalization_history,
 )
 from app.modules.library.normalization_suggestions import (
     list_suggestions,
@@ -69,7 +79,6 @@ from app.modules.library.publishers import (
 )
 from app.modules.library.stats import get_library_dataset_stats
 from app.modules.maintenance.panel import (
-    build_backup_panel,
     build_database_state_snapshot,
     build_library_panel,
     build_maintenance_panel,
@@ -83,7 +92,6 @@ from app.run_summary import build_default_run_summary
 class PayloadBuilderOperationsService:
     build_default_run_summary: Callable[[JSONDict], JSONDict]
     build_maintenance_panel: Callable[..., JSONDict]
-    build_backup_panel: Callable[..., JSONDict]
     build_library_panel: Callable[..., JSONDict]
     get_library_dataset_stats: Callable[..., JSONDict]
     build_database_state_snapshot: Callable[..., JSONDict]
@@ -180,7 +188,6 @@ def build_payload_builder_operations() -> PayloadBuilderOperations:
     return PayloadBuilderOperationsService(
         build_default_run_summary=build_default_run_summary,
         build_maintenance_panel=build_maintenance_panel,
-        build_backup_panel=build_backup_panel,
         build_library_panel=build_library_panel,
         get_library_dataset_stats=get_library_dataset_stats,
         build_database_state_snapshot=build_database_state_snapshot,

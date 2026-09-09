@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 
 
-
 def _wait_for_status(main_app, run_id: int, expected: set[str], timeout_seconds: float = 4.0):
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
@@ -168,21 +167,13 @@ def test_dashboard_lists_operational_tasks(test_client) -> None:
 
     panels = {panel["panel_id"]: panel for panel in payload["panels"]}
     assert "maintenance" in panels
-    assert "backup" in panels
 
     maintenance = panels["maintenance"]
     maintenance_task_ids = {task["task_id"] for task in maintenance["tasks"]}
     assert {"maintenance.quick", "maintenance.long", "maintenance.ignore_sigint"} <= maintenance_task_ids
     assert {"maintenance.scan_test", "maintenance.download_test"} <= maintenance_task_ids
     assert "maintenance.monocorpus_sync" in maintenance_task_ids
-    assert "maintenance.pgbackrest_backup_full" not in maintenance_task_ids
-    assert "maintenance.pgbackrest_backup_incr" not in maintenance_task_ids
     assert "maintenance.monocorpus_meta_evaluate" not in maintenance_task_ids
-
-    backup = panels["backup"]
-    backup_tasks = {task["task_id"]: task for task in backup["tasks"]}
-    assert backup_tasks["maintenance.pgbackrest_backup_full"]["title"] == "Full backup"
-    assert backup_tasks["maintenance.pgbackrest_backup_incr"]["title"] == "Incremental backup"
 
     library = panels["library"]
     library_task_ids = {task["task_id"] for task in library["tasks"]}
@@ -434,7 +425,4 @@ def test_database_state_endpoint_returns_snapshot_shape(test_client) -> None:
     assert "database_state" in payload
     snapshot = payload["database_state"]
     assert "available" in snapshot
-    assert "backup" in snapshot
-    assert "full" in snapshot["backup"]
-    assert "incremental" in snapshot["backup"]
     assert snapshot["local_state"]["journal_mode"] == "wal"

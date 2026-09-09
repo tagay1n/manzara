@@ -22,7 +22,6 @@ def test_maintenance_task_definitions_include_guarded_sync_task(tmp_path) -> Non
     tasks = maintenance_task_definitions(
         MaintenanceSettings(
             monocorpus_repo_path=tmp_path,
-            pgbackrest_stanza="monocorpus",
         )
     )
 
@@ -33,12 +32,6 @@ def test_maintenance_task_definitions_include_guarded_sync_task(tmp_path) -> Non
     assert (
         by_id["maintenance.sync_documents_s3"]["title"]
         == "Upload to Backblaze S3"
-    )
-    assert by_id["maintenance.pgbackrest_backup_full"]["command"]["value"] == (
-        "sudo -n -u postgres pgbackrest --stanza=monocorpus --type=full backup"
-    )
-    assert by_id["maintenance.pgbackrest_backup_incr"]["command"]["value"] == (
-        "sudo -n -u postgres pgbackrest --stanza=monocorpus --type=incr backup"
     )
     assert "maintenance.dump_state" not in task_ids
     assert not any(task_id.startswith("library.collection_") for task_id in task_ids)
@@ -59,7 +52,6 @@ def test_metadata_tasks_belong_to_dedicated_catalog(tmp_path) -> None:
     maintenance_tasks = maintenance_task_definitions(
         MaintenanceSettings(
             monocorpus_repo_path=tmp_path,
-            pgbackrest_stanza="monocorpus",
         )
     )
     tasks = [*maintenance_tasks, *library_task_definitions(app_root=tmp_path)]
@@ -97,31 +89,6 @@ def test_startup_seed_registry_contains_only_panels_and_tasks() -> None:
     assert registry.panel_defs == panel_defs
     assert [item["task_id"] for item in registry.task_defs] == ["a", "b", "c"]
     assert not hasattr(registry, "workflow_bundles")
-
-
-def test_managed_postgres_preserves_local_pgbackrest_definitions() -> None:
-    settings = SimpleNamespace(
-        maintenance=SimpleNamespace(),
-        postgres_backup_mode="managed",
-    )
-
-    registry = build_startup_seed_registry(
-        settings,
-        panel_defs=[{"panel_id": "backup", "title": "Backup"}],
-        maintenance_task_definitions=lambda _cfg: [
-            {"task_id": "maintenance.pgbackrest_backup_full"},
-            {"task_id": "maintenance.pgbackrest_backup_incr"},
-            {"task_id": "maintenance.sync_documents_s3"},
-        ],
-        library_task_definitions=list,
-        collection_task_definitions=list,
-    )
-
-    assert [item["task_id"] for item in registry.task_defs] == [
-        "maintenance.pgbackrest_backup_full",
-        "maintenance.pgbackrest_backup_incr",
-        "maintenance.sync_documents_s3",
-    ]
 
 
 def test_route_payload_builders_bind_payload_builder_methods() -> None:

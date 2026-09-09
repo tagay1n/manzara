@@ -549,9 +549,15 @@ class RunRepository:
                     GROUP BY panel_id, status
                 ),
                 latest AS (
-                    SELECT DISTINCT ON (panel_id) panel_id, status AS latest_status
-                    FROM scoped
-                    ORDER BY panel_id, run_id DESC
+                    SELECT panel_id, status AS latest_status
+                    FROM (
+                        SELECT panel_id, status,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY panel_id ORDER BY run_id DESC
+                               ) AS position
+                        FROM scoped
+                    ) ranked
+                    WHERE position = 1
                 ),
                 successes AS (
                     SELECT panel_id, MAX(finished_at) AS last_success_at

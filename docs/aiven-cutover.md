@@ -47,9 +47,8 @@ retained events, advances the event identity sequence, runs `ANALYZE`, and
 verifies row counts.
 A masked `migration-manifest.json` is the completion record.
 
-After a successful restore, configure the runtime with the rotated target URL,
-`MANZARA_DB_SCHEMA=monocorpus`, and
-`MANZARA_POSTGRES_BACKUP_MODE=managed`. Run the normal application startup so
+After a successful restore, configure the runtime with the rotated target URL
+and `MANZARA_DB_SCHEMA=monocorpus`. Run the normal application startup so
 Alembic reaches head and initializes `~/.manzara/state/runtime.sqlite3` before
 local definitions are seeded. Confirm dashboard reads, SSE, file-log pagination,
 task stop/recovery, and one representative workflow before allowing routine

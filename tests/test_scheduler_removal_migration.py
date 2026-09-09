@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import uuid
+from pathlib import Path
 
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+
+from alembic import command
 
 
 def test_alembic_head_drops_legacy_workflow_scheduler_tables(
@@ -62,7 +63,7 @@ def test_alembic_head_drops_legacy_workflow_scheduler_tables(
                 )
             )
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "20260827_0036")
 
         inspector = inspect(engine)
         for table in (

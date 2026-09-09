@@ -178,7 +178,6 @@ test("database page renders loading then API error state", async () => {
       "db-warning-pill",
       "db-status",
       "db-stat-grid",
-      "db-backup-grid",
       "db-table-body",
       "db-table-footnote",
     ],
@@ -216,7 +215,6 @@ test("database page refreshes after a Backup catalog task finishes", async () =>
       "db-warning-pill",
       "db-status",
       "db-stat-grid",
-      "db-backup-grid",
       "db-table-body",
       "db-table-footnote",
     ],
@@ -230,8 +228,8 @@ test("database page refreshes after a Backup catalog task finishes", async () =>
 
   harness.sse.config.onEvent({
     type: "task.completed",
-    task_id: "maintenance.pgbackrest_backup_full",
-    panel_id: "backup",
+    task_id: "maintenance.quick",
+    panel_id: "maintenance",
     payload: { status: "completed" },
   }, { lastEventId: "81" });
   await harness.timer.runAllTimeouts();

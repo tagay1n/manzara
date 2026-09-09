@@ -8,12 +8,10 @@ import signal
 import subprocess
 import threading
 import time
-from pathlib import Path
 from typing import Any, Dict, Optional, TextIO
 
 from app.artifacts import task_runs_dir
 from app.db import Database
-from app.modules.maintenance.backup_s3_verify import wait_for_pgbackrest_s3_change
 from app.run_artifact_channel import RUN_ARTIFACT_PATH_ENV, read_run_artifact
 from app.run_artifacts import capture_pre_run_artifacts, collect_post_run_artifacts
 from app.run_summary import build_structured_run_summary
@@ -36,18 +34,6 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
         (
             re.compile(
                 r"(?i)(\bauthorization\b\s*:\s*(?:bearer|basic)\s+)([^\s,;]+)"
-            ),
-            r"\1<redacted>",
-        ),
-        (
-            re.compile(
-                r"(?i)(--repo1-s3-key-secret=)([^\s]+)"
-            ),
-            r"\1<redacted>",
-        ),
-        (
-            re.compile(
-                r"(?i)(--repo1-s3-key=)([^\s]+)"
             ),
             r"\1<redacted>",
         ),
@@ -351,43 +337,6 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
             pre_artifacts = capture_pre_run_artifacts(task)
             artifact_output_path = self._artifact_output_path(task, run_id)
 
-            backup_s3_state_before: Optional[Dict[str, Any]] = None
-            if self._is_pgbackrest_backup_task(task):
-                backup_kind = self._pgbackrest_backup_kind(task)
-                self._emit_task_log(
-                    run_id=run_id,
-                    task_id=task["task_id"],
-                    panel_id=task["panel_id"],
-                    line=(
-                        f"Preparing {backup_kind} pgBackRest backup; "
-                        "capturing Backblaze repository state."
-                    ),
-                )
-                backup_s3_state_before = self._capture_pgbackrest_s3_state(
-                    command_value=command["value"],
-                )
-                if backup_s3_state_before.get("ok"):
-                    self._emit_task_log(
-                        run_id=run_id,
-                        task_id=task["task_id"],
-                        panel_id=task["panel_id"],
-                        line=(
-                            "Backblaze repository state captured: "
-                            f"bucket={backup_s3_state_before.get('bucket')}, "
-                            f"existing_backup_labels={backup_s3_state_before.get('label_count', 0)}."
-                        ),
-                    )
-                else:
-                    self._emit_task_log(
-                        run_id=run_id,
-                        task_id=task["task_id"],
-                        panel_id=task["panel_id"],
-                        line=(
-                            "Backblaze repository preflight failed; the task will report "
-                            "the detailed verification error after pgBackRest exits."
-                        ),
-                    )
-
             command_text, stdin_text = self._prepare_command(command["value"], sudo_password)
             proc_env = os.environ.copy()
             proc_env["MANZARA_TASK_RUN_ID"] = str(run_id)
@@ -400,17 +349,6 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
             if task.get("gemini_workers") is not None:
                 proc_env["MANZARA_GEMINI_WORKERS"] = str(task["gemini_workers"])
             proc_env[RUN_ARTIFACT_PATH_ENV] = str(artifact_output_path)
-
-            if self._is_pgbackrest_backup_task(task):
-                self._emit_task_log(
-                    run_id=run_id,
-                    task_id=task["task_id"],
-                    panel_id=task["panel_id"],
-                    line=(
-                        f"Starting {self._pgbackrest_backup_kind(task)} pgBackRest backup; "
-                        "live pgBackRest progress will follow."
-                    ),
-                )
 
             proc = subprocess.Popen(
                 command_text,
@@ -500,30 +438,12 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
 
             final_run = self.db.get_run(run_id)
             stop_mode = final_run.get("stop_mode") if final_run else None
-            validation_error = None
-
-            if stop_mode is None and exit_code == 0:
-                validation_error = self._validate_success_conditions(
-                    run_id=run_id,
-                    task=task,
-                    command_value=command["value"],
-                    backup_s3_state_before=backup_s3_state_before,
-                )
-                if validation_error:
-                    self._emit_task_log(
-                        run_id=run_id,
-                        task_id=task["task_id"],
-                        panel_id=task["panel_id"],
-                        line=validation_error,
-                    )
-                    exit_code = 90
-
             status = resolve_task_terminal_status(exit_code=exit_code, stop_mode=stop_mode)
             event_type = task_terminal_event_type(status)
 
             error_text = None
             if status == TASK_RUN_STATUS_FAILED:
-                error_text = validation_error or f"Process exited with code {exit_code}"
+                error_text = f"Process exited with code {exit_code}"
 
             self._write_run_log(
                 run_id=run_id,
@@ -642,53 +562,3 @@ class TaskRunner(TaskCommandMixin, TaskLoggingMixin):
                 self._processes.pop(run_id, None)
                 self._run_log_files.pop(run_id, None)
                 self._threads.pop(run_id, None)
-
-
-    def _validate_success_conditions(
-        self,
-        *,
-        run_id: int,
-        task: Dict[str, Any],
-        command_value: str,
-        backup_s3_state_before: Optional[Dict[str, Any]],
-    ) -> Optional[str]:
-        """Return error message when task-specific success criteria are not met."""
-        task_id = str(task.get("task_id") or "")
-        if not task_id.startswith("maintenance.pgbackrest_backup_"):
-            return None
-
-        if not backup_s3_state_before or not backup_s3_state_before.get("ok"):
-            reason = str((backup_s3_state_before or {}).get("error") or "unable to capture pre-backup S3 state")
-            return f"S3 backup verification failed before run: {reason}"
-
-        s3_result = wait_for_pgbackrest_s3_change(
-            before_state=backup_s3_state_before,
-            command_value=command_value,
-            monocorpus_repo_path=Path(
-                str(os.environ.get("MONOCORPUS_REPO_PATH") or "/home/tans1q/projects/monocorpus")
-            ),
-        )
-        if not s3_result.get("ok"):
-            reason = str(s3_result.get("error") or "backup files not found in S3")
-            return f"S3 backup verification failed: {reason}"
-
-        labels_before = backup_s3_state_before.get("labels") or []
-        labels_added = s3_result.get("labels_added") or []
-        labels_updated = s3_result.get("labels_updated") or []
-
-        self._emit_task_log(
-            run_id=run_id,
-            task_id=task["task_id"],
-            panel_id=task["panel_id"],
-            line=(
-                "S3 backup verification passed: "
-                f"labels_before={len(labels_before)}, "
-                f"labels_added={labels_added if labels_added else '[]'}, "
-                f"labels_updated={labels_updated if labels_updated else '[]'}, "
-                f"mode={s3_result.get('verification_mode') or 'new_label'}, "
-                f"bucket={s3_result.get('bucket')}, "
-                f"prefix={s3_result.get('prefix')}, "
-                f"objects={s3_result.get('object_count')}"
-            ),
-        )
-        return None

@@ -18,7 +18,6 @@ SLUG_CLEAN_PATTERN = re.compile(r"[^\w-]+", flags=re.UNICODE)
 
 PANEL_DEFS: list[dict[str, Any]] = [
     {"panel_id": "maintenance", "title": "Yandex disk"},
-    {"panel_id": "backup", "title": "Backup"},
     {"panel_id": "library", "title": "Library"},
     {"panel_id": "metadata", "title": "Metadata"},
     {"panel_id": "collections", "title": "Collections"},

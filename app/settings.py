@@ -24,25 +24,7 @@ class Settings:
     database_schema: str
     maintenance: MaintenanceSettings
     database_pool_size: int = 4
-    postgres_backup_mode: str = "local_pgbackrest"
     local_state_path: Path | None = None
-
-
-POSTGRES_BACKUP_MODES = frozenset({"local_pgbackrest", "managed"})
-LOCAL_PGBACKREST_TASK_IDS = frozenset(
-    {
-        "maintenance.pgbackrest_backup_full",
-        "maintenance.pgbackrest_backup_incr",
-    }
-)
-
-
-def task_is_available(settings: Settings | Any, task_id: str) -> bool:
-    """Return whether a task may be exposed or started in this deployment."""
-    return not (
-        str(getattr(settings, "postgres_backup_mode", "local_pgbackrest")) == "managed"
-        and str(task_id) in LOCAL_PGBACKREST_TASK_IDS
-    )
 
 
 def normalize_database_url(value: str) -> str:
@@ -94,32 +76,6 @@ def _load_database_url() -> str:
         "Database URL is not configured. Set MANZARA_DATABASE_URL or provide an unmasked "
         "database_url in config.local.yaml/config.yaml."
     )
-
-
-def _load_postgres_backup_mode() -> str:
-    value = str(os.environ.get("MANZARA_POSTGRES_BACKUP_MODE") or "").strip()
-    if not value:
-        config_override = os.environ.get("MANZARA_CONFIG_PATH")
-        candidates = (
-            [Path(config_override).expanduser()]
-            if config_override
-            else [Path("config.local.yaml"), Path("config.yaml")]
-        )
-        for candidate in candidates:
-            if not candidate.exists():
-                continue
-            data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-            if isinstance(data, dict):
-                value = str(data.get("postgres_backup_mode") or "").strip()
-            if value:
-                break
-    value = value or "local_pgbackrest"
-    if value not in POSTGRES_BACKUP_MODES:
-        allowed = ", ".join(sorted(POSTGRES_BACKUP_MODES))
-        raise RuntimeError(
-            f"MANZARA_POSTGRES_BACKUP_MODE must be one of: {allowed}"
-        )
-    return value
 
 
 def _load_database_pool_size() -> int:
@@ -178,6 +134,5 @@ def load_settings() -> Settings:
         database_schema=database_schema,
         maintenance=load_maintenance_settings(),
         database_pool_size=_load_database_pool_size(),
-        postgres_backup_mode=_load_postgres_backup_mode(),
         local_state_path=_load_local_state_path(),
     )

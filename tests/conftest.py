@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import time
 import tempfile
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import suppress
@@ -211,7 +211,6 @@ def test_client(
     monocorpus_repo.mkdir(parents=True, exist_ok=True)
     maintenance = MaintenanceSettings(
         monocorpus_repo_path=monocorpus_repo,
-        pgbackrest_stanza="monocorpus",
     )
     settings = Settings(
         database_url=database_url,

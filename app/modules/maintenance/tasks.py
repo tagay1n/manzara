@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shlex
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +12,6 @@ LIBRARY_PERSONALITY_SUGGESTIONS_REFRESH_TASK_ID = (
     "library.personality_suggestions_refresh"
 )
 LIBRARY_PUBLISHER_SUGGESTIONS_REFRESH_TASK_ID = "library.publisher_suggestions_refresh"
-MAINTENANCE_PGBACKREST_FULL_TASK_ID = "maintenance.pgbackrest_backup_full"
-MAINTENANCE_PGBACKREST_INCR_TASK_ID = "maintenance.pgbackrest_backup_incr"
 MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID = "maintenance.sync_documents_s3"
 MAINTENANCE_MONOCORPUS_SYNC_TASK_ID = "maintenance.monocorpus_sync"
 MAINTENANCE_MIGRATE_PDF_CONTENT_TASK_ID = "maintenance.migrate_pdf_content"
@@ -34,15 +31,8 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str
         / "runtime"
         / "run_normalization_refresh.py"
     )
-    stanza = shlex.quote(settings.pgbackrest_stanza)
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
     meta_eval_cmd = py_bootstrap + f'"$PY_BIN" "{meta_eval_runner}"'
-    backup_full_cmd = (
-        f"sudo -n -u postgres pgbackrest --stanza={stanza} --type=full backup"
-    )
-    backup_incr_cmd = (
-        f"sudo -n -u postgres pgbackrest --stanza={stanza} --type=incr backup"
-    )
     personality_refresh_cmd = (
         py_bootstrap
         + f'"$PY_BIN" "{norm_refresh_runner}" --entity-type personality --limit 180'
@@ -92,26 +82,6 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": document_sync_cmd},
-        },
-        {
-            "task_id": MAINTENANCE_PGBACKREST_FULL_TASK_ID,
-            "panel_id": "backup",
-            "title": "Full backup",
-            "task_type": "backup",
-            "icon_idle": "Database",
-            "icon_running": "Square",
-            "cwd": str(app_root),
-            "command": {"mode": "shell", "value": backup_full_cmd},
-        },
-        {
-            "task_id": MAINTENANCE_PGBACKREST_INCR_TASK_ID,
-            "panel_id": "backup",
-            "title": "Incremental backup",
-            "task_type": "backup",
-            "icon_idle": "Clock3",
-            "icon_running": "Square",
-            "cwd": str(app_root),
-            "command": {"mode": "shell", "value": backup_incr_cmd},
         },
         {
             "task_id": MONOCORPUS_META_EVALUATE_TASK_ID,

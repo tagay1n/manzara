@@ -20,52 +20,6 @@ def _wait_for_status(main_app, run_id: int, expected: set[str], timeout_seconds:
     raise AssertionError(f"Run {run_id} did not reach expected status: {expected}")
 
 
-def test_toggle_task_reports_sudo_password_required(test_client, monkeypatch) -> None:
-    client, main_app = test_client
-
-    def _always_require(_task, *, sudo_password=None):
-        _ = sudo_password
-        return {
-            "ok": False,
-            "reason": "sudo_password_required",
-            "message": "Sudo password is required for this command.",
-        }
-
-    monkeypatch.setattr(main_app.state.runner, "_check_sudo_requirements", _always_require)
-    response = client.post("/api/tasks/maintenance.pgbackrest_backup_full/toggle")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["action"] == "sudo_password_required"
-    assert payload["reason"] == "sudo_password_required"
-
-
-def test_sudo_preflight_checks_exact_command_policy(test_client, monkeypatch) -> None:
-    client, _main_app = test_client
-    captured = {}
-
-    class _Result:
-        returncode = 1
-        stdout = ""
-        stderr = "sudo: a password is required"
-
-    def _fake_run(cmd, **kwargs):
-        captured["cmd"] = list(cmd)
-        captured["kwargs"] = dict(kwargs)
-        return _Result()
-
-    monkeypatch.setattr(task_runtime.subprocess, "run", _fake_run)
-
-    response = client.post("/api/tasks/maintenance.pgbackrest_backup_incr/toggle")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["action"] == "sudo_password_required"
-
-    probe_cmd = captured["cmd"]
-    assert "-l" in probe_cmd
-    assert "--" in probe_cmd
-    assert any("pgbackrest" in token for token in probe_cmd)
-
-
 def test_toggle_task_start_and_complete(test_client, wait_for_terminal_run) -> None:
     client, main_app = test_client
 
@@ -78,49 +32,6 @@ def test_toggle_task_start_and_complete(test_client, wait_for_terminal_run) -> N
 
     logs = client.get(f"/api/runs/{run_id}/logs").json()["lines"]
     assert any("quick-ok" in line["line"] for line in logs)
-
-
-def test_pgbackrest_backup_emits_preflight_and_start_logs(
-    test_client,
-    wait_for_terminal_run,
-    monkeypatch,
-) -> None:
-    client, main_app = test_client
-    main_app.state.db.seed_tasks(
-        [
-            {
-                "task_id": "maintenance.pgbackrest_backup_full",
-                "panel_id": "backup",
-                "title": "Full backup",
-                "task_type": "backup",
-                "icon_idle": "Database",
-                "icon_running": "Square",
-                "cwd": ".",
-                "command": {"mode": "shell", "value": "printf 'pgBackRest progress\\n'"},
-            }
-        ]
-    )
-    monkeypatch.setattr(
-        main_app.state.runner,
-        "_capture_pgbackrest_s3_state",
-        lambda **_: {"ok": True, "bucket": "ttbackups", "label_count": 2},
-    )
-    monkeypatch.setattr(
-        task_runtime,
-        "wait_for_pgbackrest_s3_change",
-        lambda **_: {"ok": True, "labels_added": ["20260829-010101F"]},
-    )
-
-    response = client.post("/api/tasks/maintenance.pgbackrest_backup_full/toggle")
-    assert response.status_code == 200
-    run = wait_for_terminal_run(main_app, int(response.json()["run"]["run_id"]))
-    assert run["status"] == "completed"
-
-    logs = client.get(f"/api/runs/{run['run_id']}/logs").json()["lines"]
-    messages = [str(item["line"]) for item in logs]
-    assert any("Preparing full pgBackRest backup" in message for message in messages)
-    assert any("Starting full pgBackRest backup" in message for message in messages)
-    assert "pgBackRest progress" in messages
 
 
 def test_task_artifact_event_and_summary_without_log_parsing(
@@ -353,7 +264,7 @@ def test_task_logs_are_redacted_in_db_and_artifact_files(
                 "task_id": "maintenance.secret_log_redaction",
                 "panel_id": "maintenance",
                 "title": "Secret log redaction",
-                "task_type": "backup",
+                "task_type": "test",
                 "icon_idle": "Play",
                 "icon_running": "Square",
                 "cwd": ".",
@@ -362,8 +273,6 @@ def test_task_logs_are_redacted_in_db_and_artifact_files(
                     "value": (
                         "python3 -c \"print('token=abc123 "
                         "aws_secret_access_key=SECRETVALUE "
-                        "--repo1-s3-key-secret=SECRETKEY "
-                        "--repo1-s3-key=ACCESSKEY "
                         "Authorization: Bearer VERYSECRETTOKEN "
                         "https://example.com/path?token=QUERYTOKEN&x=1 "
                         "https://user:plainpass@example.com/path')\""
@@ -384,8 +293,6 @@ def test_task_logs_are_redacted_in_db_and_artifact_files(
     assert "<redacted>" in combined
     assert "abc123" not in combined
     assert "SECRETVALUE" not in combined
-    assert "SECRETKEY" not in combined
-    assert "ACCESSKEY" not in combined
     assert "VERYSECRETTOKEN" not in combined
     assert "QUERYTOKEN" not in combined
     assert "plainpass" not in combined
@@ -396,8 +303,6 @@ def test_task_logs_are_redacted_in_db_and_artifact_files(
     assert "<redacted>" in artifact_text
     assert "abc123" not in artifact_text
     assert "SECRETVALUE" not in artifact_text
-    assert "SECRETKEY" not in artifact_text
-    assert "ACCESSKEY" not in artifact_text
     assert "VERYSECRETTOKEN" not in artifact_text
     assert "QUERYTOKEN" not in artifact_text
     assert "plainpass" not in artifact_text
@@ -483,7 +388,7 @@ def test_task_completion_not_blocked_by_open_stdout_fd(test_client, wait_for_ter
                 "task_id": "maintenance.stdout_fd_open",
                 "panel_id": "maintenance",
                 "title": "stdout fd open",
-                "task_type": "backup",
+                "task_type": "test",
                 "icon_idle": "Play",
                 "icon_running": "Square",
                 "cwd": ".",

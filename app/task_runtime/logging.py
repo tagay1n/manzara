@@ -1,14 +1,11 @@
 """Task log streaming, redaction, and artifact helpers."""
 
-from datetime import datetime, timezone
-import os
-from pathlib import Path
-import re
 import subprocess
 import threading
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional, TextIO
 
-from app.modules.maintenance.backup_s3_verify import capture_pgbackrest_s3_state
 from app.run_log_store import (
     has_run_log_before,
     read_run_log,
@@ -37,30 +34,6 @@ class TaskLoggingMixin:
             level="INFO",
             source="runtime",
             message=safe_line,
-        )
-
-
-    def _is_pgbackrest_backup_task(self, task: Dict[str, Any]) -> bool:
-        task_id = str(task.get("task_id") or "")
-        return task_id.startswith("maintenance.pgbackrest_backup_")
-
-
-    def _pgbackrest_backup_kind(self, task: Dict[str, Any]) -> str:
-        """Return the human-visible kind for a pgBackRest backup task."""
-        task_id = str(task.get("task_id") or "")
-        return "incremental" if task_id.endswith("_incr") else "full"
-
-
-    def _capture_pgbackrest_s3_state(
-        self,
-        *,
-        command_value: str,
-    ) -> Dict[str, Any]:
-        return capture_pgbackrest_s3_state(
-            command_value=command_value,
-            monocorpus_repo_path=Path(
-                str(os.environ.get("MONOCORPUS_REPO_PATH") or "/home/tans1q/projects/monocorpus")
-            ),
         )
 
 

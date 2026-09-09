@@ -14,7 +14,7 @@ from app.conveyor import (
 )
 from app.gemini_runtime import GeminiRuntimeManager
 from app.gemini_workers import validate_gemini_workers
-from app.settings import task_is_available
+
 
 def _parse_title(payload: Dict[str, Any], *, title_max_length: int, field_name: str = "title") -> str:
     value = payload.get(field_name)
@@ -75,8 +75,6 @@ def register_control_routes(
     def toggle_task(task_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)) -> JSONResponse:
         """Start task or request stop/force-stop for active run."""
         state = state_provider()
-        if not task_is_available(state.settings, task_id):
-            raise HTTPException(status_code=404, detail="Task not found")
         task = state.db.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")

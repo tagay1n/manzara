@@ -9,10 +9,6 @@ from typing import Any, Dict, List
 
 from app.db import Database
 from app.modules.maintenance.config import MaintenanceSettings
-from app.modules.maintenance.tasks import (
-    MAINTENANCE_PGBACKREST_FULL_TASK_ID,
-    MAINTENANCE_PGBACKREST_INCR_TASK_ID,
-)
 
 
 def _sum_counts(counts: Dict[str, int]) -> int:
@@ -24,25 +20,6 @@ def _last_run_for_panel(db: Database, panel_id: str) -> Dict[str, Any] | None:
         if run.get("panel_id") == panel_id:
             return run
     return None
-
-
-def _backup_task_state(
-    db: Database,
-    *,
-    task_id: str,
-) -> Dict[str, Any]:
-    run = (db.list_recent_runs_for_task(task_id, limit=1) or [None])[0]
-    return {
-        "task_id": task_id,
-        "run": {
-            "run_id": int(run["run_id"]) if run else None,
-            "status": str(run.get("status") or "idle") if run else "idle",
-            "started_at": run.get("started_at") if run else None,
-            "finished_at": run.get("finished_at") if run else None,
-            "exit_code": run.get("exit_code") if run else None,
-            "error_text": run.get("error_text") if run else None,
-        },
-    }
 
 
 def _disk_warning_level(
@@ -87,16 +64,6 @@ def build_database_state_snapshot(db: Database) -> Dict[str, Any]:
                 "warning_level": warning_level,
                 "warning_text": warning_text,
             }
-        backup_info = {
-            "full": _backup_task_state(
-                db,
-                task_id=MAINTENANCE_PGBACKREST_FULL_TASK_ID,
-            ),
-            "incremental": _backup_task_state(
-                db,
-                task_id=MAINTENANCE_PGBACKREST_INCR_TASK_ID,
-            ),
-        }
         return {
             "available": True,
             "error": None,
@@ -107,7 +74,6 @@ def build_database_state_snapshot(db: Database) -> Dict[str, Any]:
             "data_directory": data_directory or None,
             "disk": disk_info,
             "tables": storage.get("tables") or [],
-            "backup": backup_info,
             "local_state": db.get_local_state_snapshot(),
         }
     except Exception as exc:  # pragma: no cover - runtime fallback
@@ -121,16 +87,6 @@ def build_database_state_snapshot(db: Database) -> Dict[str, Any]:
             "data_directory": None,
             "disk": None,
             "tables": [],
-            "backup": {
-                "full": _backup_task_state(
-                    db,
-                    task_id=MAINTENANCE_PGBACKREST_FULL_TASK_ID,
-                ),
-                "incremental": _backup_task_state(
-                    db,
-                    task_id=MAINTENANCE_PGBACKREST_INCR_TASK_ID,
-                ),
-            },
             "local_state": db.get_local_state_snapshot(),
         }
 
@@ -204,26 +160,6 @@ def build_maintenance_panel(
         panel_id="maintenance",
         title=title,
         description="Yandex Disk synchronization, migration, and cleanup.",
-        tasks=tasks,
-        run_summary=run_summary,
-    )
-
-
-def build_backup_panel(
-    db: Database,
-    maintenance: MaintenanceSettings,
-    tasks: List[Dict[str, Any]],
-    *,
-    title: str = "Backup",
-    run_summary: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    """Build dashboard panel payload for database backup tasks."""
-    return _build_ops_panel(
-        db=db,
-        maintenance=maintenance,
-        panel_id="backup",
-        title=title,
-        description="PostgreSQL backup operations.",
         tasks=tasks,
         run_summary=run_summary,
     )

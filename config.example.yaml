@@ -1,5 +1,3 @@
-postgres_backup_mode: local_pgbackrest
-
 gemini:
   metadata_extraction_operational_retry_cooldown_seconds: 21600
   model_pool:
@@ -29,15 +27,6 @@ documents:
       book_previews: ttpreviews
       content: ttcontent
       content_images: ttimgs
-
-backups:
-  pgbackrest:
-    endpoint_url: https://s3.eu-central-003.backblazeb2.com
-    region_name: eu-central-003
-    bucket: ttbackups
-    repository_path: /pgbackrest
-    access_key_id: "<REDACTED>"
-    secret_access_key: "<REDACTED>"
 
 yandex:
   disk:

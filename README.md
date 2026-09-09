@@ -58,18 +58,11 @@ Common environment variables:
 - `MANZARA_ARTIFACTS_ROOT` — defaults to `~/.manzara`
 - `MANZARA_LOCAL_STATE_PATH` — defaults to `~/.manzara/state/runtime.sqlite3`
 - `MONOCORPUS_REPO_PATH` — defaults to `/home/tans1q/projects/monocorpus`
-- `PG_BACKREST_STANZA` — pgBackRest stanza name, default `monocorpus`
-- `MANZARA_POSTGRES_BACKUP_MODE` — `local_pgbackrest` (default) or `managed`;
-  managed mode hides local physical-backup tasks for hosted PostgreSQL
-- `MANZARA_PGBACKREST_S3_BUCKET`, `MANZARA_PGBACKREST_S3_ENDPOINT`, and
-  `MANZARA_PGBACKREST_S3_REGION` — optional overrides for `backups.pgbackrest`
 - `MANZARA_LOGICAL_BACKUP_S3_BUCKET`, `MANZARA_LOGICAL_BACKUP_S3_ENDPOINT`, and
   `MANZARA_LOGICAL_BACKUP_S3_REGION` — GitHub Actions logical-backup destination
 
-PostgreSQL physical backups use the dedicated `backups.pgbackrest` S3 contract.
-See `docs/postgres-backup-recovery.md` for migration, validation, and recovery.
-That guide also covers the independent nightly Aiven logical backup, Backblaze
-retention, and restore drills.
+See `docs/postgres-backup-recovery.md` for nightly Aiven logical backups,
+Backblaze retention, validation, and restore drills.
 For the filtered Aiven free-tier migration, see `docs/aiven-cutover.md`.
 
 Gemini configuration contains one ordered `gemini.model_pool` and account-grouped keys. Models have no code default. See `docs/gemini-runtime.md` for runtime behavior.
@@ -152,7 +145,7 @@ node --test tests/frontend/*.mjs
 PYTHONPATH=. .venv/bin/python -m ruff check app tests
 ```
 
-Use focused files while iterating. Credential-backed Gemini, Backblaze, Yandex, converter, and pgBackRest workflows still require deliberate smoke testing against configured services. The stable verification checklist is in `docs/verification.md`.
+Use focused files while iterating. Credential-backed Gemini, Backblaze, Yandex, and converter workflows still require deliberate smoke testing against configured services. The stable verification checklist is in `docs/verification.md`.
 
 ## API entry points
 

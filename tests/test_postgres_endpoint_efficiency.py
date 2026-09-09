@@ -27,7 +27,7 @@ def test_core_endpoints_reuse_connections_and_keep_query_counts_bounded(
         },
         "/api/dashboard": {
             "keys": {"generated_at", "event_cursor", "global", "panels", "recent_runs"},
-            "queries": 1,
+            "queries": 0,
             "checkouts": 1,
         },
         "/api/gemini/state": {
@@ -38,7 +38,10 @@ def test_core_endpoints_reuse_connections_and_keep_query_counts_bounded(
     }
 
     # Establish one warm physical connection before measuring endpoint deltas.
-    main_app.state.db.get_latest_event_id()
+    main_app.state.db.get_database_storage_snapshot(
+        schema_name=main_app.state.db.schema,
+        table_limit=1,
+    )
     assert client.get("/api/gemini/state").status_code == 200
     for path, expected in expectations.items():
         before = main_app.state.db.get_pool_metrics()

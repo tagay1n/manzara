@@ -13,7 +13,7 @@ Detailed invariants live in the nearest `AGENTS.md` or its routed guidance file.
 | Library flow | `app/modules/library/`; read its routing `AGENTS.md` | `tests/test_library_*.py` |
 | Static Library publishing export | `app/modules/library/site_export*.py`, `app/modules/library/runtime/run_site_export.py` | `tests/test_library_site_export.py` |
 | Maintenance flow | `app/modules/maintenance/`; read its routing `AGENTS.md` | Maintenance/storage-specific tests |
-| PostgreSQL backup/recovery | `app/modules/maintenance/backup_s3_verify.py`, `scripts/migrate_pgbackrest_to_backblaze.py`, `scripts/backup_postgres_to_b2.py` | `tests/test_backup_s3_verify.py`, `tests/test_pgbackrest_migration.py`, `tests/test_postgres_logical_backup.py` |
+| PostgreSQL backup/recovery | `.github/workflows/nightly-postgres-backup.yml`, `scripts/backup_postgres_to_b2.py` | `tests/test_postgres_logical_backup.py` |
 | PostgreSQL cloud migration | `scripts/migrate_postgres_to_aiven.py` | `tests/test_aiven_migration.py` |
 | Frontend | `static/`; read `static/AGENTS.md` | `tests/frontend/` |
 | Migrations | `alembic/versions/` for durable PostgreSQL; `app/local_state.py` for disposable SQLite | migration tests, `tests/test_local_state.py`, `alembic heads` |

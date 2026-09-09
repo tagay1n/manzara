@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import zipfile
 from io import BytesIO
 from pathlib import Path
-import zipfile
 
 from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
+from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.maintenance.content_storage_migration import (
     ContentMigrationCandidate,
     rewrite_content_archive,
@@ -15,7 +16,6 @@ from app.modules.maintenance.tasks import (
     MAINTENANCE_MIGRATE_PDF_CONTENT_TASK_ID,
     maintenance_task_definitions,
 )
-from app.modules.maintenance.config import MaintenanceSettings
 
 
 def _archive(md5: str, markdown: str) -> bytes:
@@ -304,7 +304,7 @@ def test_stop_before_first_document_makes_no_remote_changes(tmp_path: Path) -> N
 
 def test_task_is_registered_in_library_catalog_without_worker_option(tmp_path: Path) -> None:
     settings = MaintenanceSettings(
-        monocorpus_repo_path=tmp_path, pgbackrest_stanza="monocorpus"
+        monocorpus_repo_path=tmp_path
     )
     task = next(
         item
