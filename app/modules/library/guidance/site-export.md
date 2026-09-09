@@ -23,7 +23,7 @@ must not query Manzara tables directly.
 ## Version 1 bundle
 
 The task writes
-`$MANZARA_ARTIFACTS_ROOT/durable/library/site-exports/run-<run-id>/library-export-v1.tar.gz`
+`$MANZARA_ARTIFACTS_ROOT/durable/library/site-exports/library-export-v1.tar.gz`
 (default artifacts root: `~/.manzara`). The tarball contains, in stable order:
 
 1. `manifest.json`
@@ -32,6 +32,10 @@ The task writes
 4. `collections.jsonl`
 5. `classifications.jsonl`
 6. `redirects.jsonl`
+
+Each successful run replaces all previous contents of the generated
+`site-exports` directory. The replacement bundle is fully prepared first, so a
+failure or graceful stop before publication leaves the prior export intact.
 
 The manifest identifies `manzara-library-export` version `1`, the active
 metadata contract, record counts, SHA-256 checksums, a semantic bundle revision,

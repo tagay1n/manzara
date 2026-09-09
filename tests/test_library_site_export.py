@@ -209,6 +209,26 @@ def test_bundle_has_versioned_manifest_and_deterministic_jsonl(tmp_path: Path) -
     assert document["md5"] == MD5
 
 
+def test_bundle_replaces_all_previous_export_directory_contents(tmp_path: Path) -> None:
+    destination = tmp_path / "site-exports"
+    destination.mkdir()
+    (destination / "stale.txt").write_text("old", encoding="utf-8")
+    old_run = destination / "run-1788932142803"
+    old_run.mkdir()
+    (old_run / "old.tar.gz").write_bytes(b"old")
+
+    bundle = write_export_bundle(
+        build_library_export([_candidate()], aliases=[], storage=_storage()),
+        destination=destination,
+        generated_at="2026-09-09T08:55:00Z",
+    )
+
+    assert bundle == destination / "library-export-v1.tar.gz"
+    assert [item.name for item in destination.iterdir()] == [
+        "library-export-v1.tar.gz"
+    ]
+
+
 def test_runtime_publishes_bundle_summary_and_structured_artifact(tmp_path: Path) -> None:
     class Repository:
         def load_snapshot(self):

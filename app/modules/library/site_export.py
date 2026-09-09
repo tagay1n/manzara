@@ -560,11 +560,13 @@ def write_export_bundle(
     destination: Path,
     generated_at: str | None = None,
 ) -> Path:
-    """Atomically publish one checksummed export bundle to a new directory."""
+    """Build a complete bundle, then replace the generated export directory."""
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        raise FileExistsError(f"Export destination already exists: {destination}")
+    if destination.is_symlink():
+        raise RuntimeError(f"Export destination must not be a symlink: {destination}")
+    if destination.exists() and not destination.is_dir():
+        raise RuntimeError(f"Export destination must be a directory: {destination}")
     stage = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent))
     try:
         record_sets: dict[str, Sequence[Mapping[str, Any]]] = {
@@ -608,6 +610,8 @@ def write_export_bundle(
             payloads,
             ("manifest.json", *EXPORT_FILES),
         )
+        if destination.exists():
+            shutil.rmtree(destination)
         os.replace(stage, destination)
         return destination / EXPORT_BUNDLE_NAME
     except Exception:
