@@ -13,6 +13,9 @@ class _Result:
     def scalar_one(self) -> bool:
         return True
 
+    def scalar_one_or_none(self) -> int:
+        return 1
+
 
 class _Connection:
     def __init__(self, statements: list[str]) -> None:
@@ -45,6 +48,17 @@ def test_document_cleanup_delegates_dependents_to_database_cascade() -> None:
 
     sql = "\n".join(repository.engine.statements)
     assert sql.strip() == "DELETE FROM document WHERE md5=:md5"
+
+
+def test_cleanup_claim_excludes_plans_canceled_by_review_undo() -> None:
+    repository = MonocorpusSyncRepository.__new__(MonocorpusSyncRepository)
+    repository.engine = _Engine()
+
+    assert repository.mark_cleanup_running(7, run_id=4, phase="yandex") is True
+
+    sql = repository.engine.statements[0]
+    assert "status IN ('planned', 'running', 'failed')" in sql
+    assert "RETURNING cleanup_id" in sql
 
 
 def test_catalog_update_clears_storage_checkpoint_when_source_identity_changes() -> None:

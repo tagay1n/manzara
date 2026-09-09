@@ -34,6 +34,25 @@ def _enrich_review_page_counts(
     return enriched_reviews
 
 
+def _removed_review_md5s(review: Mapping[str, Any]) -> set[str]:
+    kept = {
+        str(value).strip().lower()
+        for value in review.get("keep_md5s_json") or []
+    }
+    return {
+        str(candidate.get("md5") or "").strip().lower()
+        for candidate in review.get("candidates_json") or []
+        if candidate.get("md5")
+    } - kept
+
+
+def _shared_removed_md5s(reviews: Iterable[Mapping[str, Any]]) -> set[str]:
+    shared: set[str] = set()
+    for review in reviews:
+        shared.update(_removed_review_md5s(review))
+    return shared
+
+
 class DocumentCleanupRepository:
     """Own cleanup planning, review, claiming, and status transitions."""
 
@@ -295,6 +314,107 @@ class DocumentCleanupRepository:
             "isbn": str(review["isbn"]),
             "keep_md5s": list(keep),
             "remove_candidates": [item for md5, item in by_md5.items() if md5 not in keep],
+        }
+
+    def undo_review(self, review_id: int) -> dict[str, Any]:
+        """Reopen one decision when its exclusive cleanup plans remain reversible."""
+        normalized_review_id = int(review_id)
+        with self.engine.begin() as conn:
+            review = conn.execute(
+                text(
+                    """
+                    SELECT review_id, isbn, candidates_json, keep_md5s_json, status
+                    FROM library_isbn_duplicate_reviews
+                    WHERE review_id=:review_id FOR UPDATE
+                    """
+                ),
+                {"review_id": normalized_review_id},
+            ).mappings().one_or_none()
+            if review is None:
+                raise ValueError("ISBN review not found")
+            if str(review["status"]) != "decided":
+                raise ValueError("Only a decided ISBN review can be undone")
+
+            removed_md5s = sorted(_removed_review_md5s(review))
+            other_decisions = conn.execute(
+                text(
+                    """
+                    SELECT review_id, candidates_json, keep_md5s_json
+                    FROM library_isbn_duplicate_reviews
+                    WHERE status='decided' AND review_id<>:review_id
+                    FOR SHARE
+                    """
+                ),
+                {"review_id": normalized_review_id},
+            ).mappings()
+            shared_removed_md5s = _shared_removed_md5s(other_decisions)
+
+            plans = []
+            if removed_md5s:
+                plans = list(
+                    conn.execute(
+                        text(
+                            """
+                            SELECT cleanup_id, md5, status, evidence_json
+                            FROM document_cleanup_queue
+                            WHERE reason='duplicate_isbn' AND md5=ANY(:md5s)
+                            FOR UPDATE
+                            """
+                        ),
+                        {"md5s": removed_md5s},
+                    ).mappings()
+                )
+            exclusive_plans = [
+                plan
+                for plan in plans
+                if int((plan["evidence_json"] or {}).get("review_id") or 0)
+                == normalized_review_id
+                and str(plan["md5"]).strip().lower() not in shared_removed_md5s
+            ]
+            if any(
+                str(plan["status"]) in {"running", "completed", "recovered"}
+                for plan in exclusive_plans
+            ):
+                raise ValueError(
+                    "Cleanup has already started; this ISBN decision can no longer be undone"
+                )
+            cancel_ids = sorted(
+                int(plan["cleanup_id"])
+                for plan in exclusive_plans
+                if str(plan["status"]) in {"planned", "failed"}
+            )
+            if cancel_ids:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE document_cleanup_queue SET
+                            status='canceled', phase='canceled', last_error=NULL,
+                            completed_at=COALESCE(completed_at, CURRENT_TIMESTAMP),
+                            updated_at=CURRENT_TIMESTAMP,
+                            evidence_json=evidence_json || jsonb_build_object(
+                                'cancellation', 'isbn_review_undo'
+                            )
+                        WHERE cleanup_id=ANY(:cleanup_ids)
+                        """
+                    ),
+                    {"cleanup_ids": cancel_ids},
+                )
+            conn.execute(
+                text(
+                    """
+                    UPDATE library_isbn_duplicate_reviews SET
+                        keep_md5s_json='[]'::jsonb, status='pending',
+                        decided_at=NULL, updated_at=CURRENT_TIMESTAMP
+                    WHERE review_id=:review_id
+                    """
+                ),
+                {"review_id": normalized_review_id},
+            )
+        return {
+            "review_id": normalized_review_id,
+            "isbn": str(review["isbn"]),
+            "status": "pending",
+            "canceled_cleanup_ids": cancel_ids,
         }
 
 

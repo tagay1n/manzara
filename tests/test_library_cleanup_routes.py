@@ -39,6 +39,13 @@ class _FakeRepository:
     def list_reviews(self, *, status: str, limit: int):
         return [{"review_id": 3, "status": status, "limit": limit}]
 
+    def undo_review(self, review_id: int):
+        return {
+            "review_id": review_id,
+            "status": "pending",
+            "canceled_cleanup_ids": [9],
+        }
+
     def dispose(self) -> None:
         self.disposed = True
 
@@ -83,3 +90,54 @@ def test_cleanup_api_rejects_invalid_review_selection(monkeypatch) -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "keep_md5s must be an array of strings"
+
+
+def test_cleanup_api_undoes_review_and_emits_change_event(monkeypatch) -> None:
+    monkeypatch.setattr(
+        library_cleanup_routes, "DocumentCleanupRepository", _FakeRepository
+    )
+    state = SimpleNamespace(
+        settings=SimpleNamespace(database_url="postgresql://unused", database_schema="test"),
+        db=_FakeDb(),
+    )
+    app = FastAPI()
+    library_cleanup_routes.register_library_cleanup_routes(app, state_provider=lambda: state)
+
+    response = TestClient(app).post(
+        "/api/library/document-cleanup/isbn-reviews/3/undo"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+    assert state.db.events[-1][0] == "library.document_cleanup_changed"
+    assert state.db.events[-1][1]["payload"] == {
+        "review_id": 3,
+        "action": "undo",
+        "canceled_cleanup_ids": [9],
+    }
+
+
+def test_cleanup_api_reports_unsafe_undo_as_conflict(monkeypatch) -> None:
+    class _UnsafeUndoRepository(_FakeRepository):
+        def undo_review(self, review_id: int):
+            raise ValueError(
+                "Cleanup has already started; this ISBN decision can no longer be undone"
+            )
+
+    monkeypatch.setattr(
+        library_cleanup_routes, "DocumentCleanupRepository", _UnsafeUndoRepository
+    )
+    state = SimpleNamespace(
+        settings=SimpleNamespace(database_url="postgresql://unused", database_schema="test"),
+        db=_FakeDb(),
+    )
+    app = FastAPI()
+    library_cleanup_routes.register_library_cleanup_routes(app, state_provider=lambda: state)
+
+    response = TestClient(app).post(
+        "/api/library/document-cleanup/isbn-reviews/3/undo"
+    )
+
+    assert response.status_code == 409
+    assert "already started" in response.json()["detail"]
+    assert state.db.events == []

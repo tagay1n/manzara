@@ -1,8 +1,11 @@
 const cleanupState = {
   overview: null,
   list: null,
+  recent: null,
   eventCursor: 0,
   eventStreamController: null,
+  savingReviewIds: new Set(),
+  undoingReviewIds: new Set(),
 };
 
 const cleanupApi = (path, options = {}) => window.ManzaraCore.api(path, options);
@@ -45,31 +48,98 @@ function renderCleanupList(payload) {
   window.lucide?.createIcons?.();
 }
 
-async function refreshCleanup() {
+function cleanupRecentCard(item) {
+  const candidates = item.candidates_json || [];
+  const kept = new Set(item.keep_md5s_json || []);
+  return `<article class="collection-queue-card cleanup-recent-card">
+    <div class="collection-static-row cleanup-review-head">
+      <span class="collection-queue-copy">
+        <span class="collection-queue-title">ISBN ${cleanupEscape(item.isbn)}</span>
+        <span class="collection-queue-meta">Resolved · ${kept.size} of ${candidates.length} kept · ${cleanupEscape(window.ManzaraCore.formatDateTime(item.decided_at))}</span>
+      </span>
+      <button class="small-btn" data-review-undo="${Number(item.review_id)}">Undo</button>
+    </div>
+  </article>`;
+}
+
+function renderRecentReviews(payload, { reveal = false } = {}) {
+  cleanupState.recent = payload;
+  const items = payload.items || [];
+  const section = document.getElementById("cleanup-recent");
+  section.hidden = items.length === 0;
+  if (reveal && items.length) section.open = true;
+  document.getElementById("cleanup-recent-count").textContent = String(items.length);
+  document.getElementById("cleanup-recent-list").innerHTML = items
+    .map(cleanupRecentCard)
+    .join("");
+  window.lucide?.createIcons?.();
+}
+
+async function refreshCleanup({ revealRecent = false } = {}) {
   const overview = await cleanupApi("/api/library/document-cleanup");
   cleanupState.overview = overview;
   cleanupState.eventCursor = Math.max(cleanupState.eventCursor, Number(overview.event_cursor || 0));
-  renderCleanupList(await cleanupApi("/api/library/document-cleanup/isbn-reviews?status=pending&limit=500"));
+  const [pending, recent] = await Promise.all([
+    cleanupApi("/api/library/document-cleanup/isbn-reviews?status=pending&limit=500"),
+    cleanupApi("/api/library/document-cleanup/isbn-reviews?status=decided&limit=20"),
+  ]);
+  renderCleanupList(pending);
+  renderRecentReviews(recent, { reveal: revealRecent });
 }
 
-async function decideCleanupReview(reviewId) {
+async function decideCleanupReview(reviewId, button) {
+  if (cleanupState.savingReviewIds.has(reviewId)) return;
   const selected = [...document.querySelectorAll(`[data-review-candidate="${reviewId}"]:checked`)]
     .map((node) => node.value);
   const all = [...document.querySelectorAll(`[data-review-candidate="${reviewId}"]`)];
+  if (!selected.length) {
+    window.ManzaraUI.toast("Keep at least one document.", { tone: "warning" });
+    return;
+  }
   const removed = all.length - selected.length;
-  const confirmed = await window.ManzaraUI.confirm({
-    title: "Resolve duplicate ISBN",
-    message: `${selected.length} document(s) will remain. ${removed} document(s) will be queued for verified cleanup.`,
-    acceptLabel: "Save decision",
-    destructive: removed > 0,
-  });
-  if (!confirmed) return;
-  await cleanupApi(`/api/library/document-cleanup/isbn-reviews/${reviewId}/decision`, {
-    method: "POST",
-    body: JSON.stringify({ keep_md5s: selected }),
-  });
-  await refreshCleanup();
-  window.ManzaraUI.toast("ISBN decision saved and cleanup plans created.");
+  cleanupState.savingReviewIds.add(reviewId);
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Saving...";
+  }
+  try {
+    await cleanupApi(`/api/library/document-cleanup/isbn-reviews/${reviewId}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ keep_md5s: selected }),
+    });
+    await refreshCleanup({ revealRecent: true });
+    window.ManzaraUI.toast(
+      `ISBN resolved: ${selected.length} kept, ${Math.max(0, removed)} queued for cleanup.`
+    );
+  } finally {
+    cleanupState.savingReviewIds.delete(reviewId);
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Keep selected";
+    }
+  }
+}
+
+async function undoCleanupReview(reviewId, button) {
+  if (cleanupState.undoingReviewIds.has(reviewId)) return;
+  cleanupState.undoingReviewIds.add(reviewId);
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Undoing...";
+  }
+  try {
+    await cleanupApi(`/api/library/document-cleanup/isbn-reviews/${reviewId}/undo`, {
+      method: "POST",
+    });
+    await refreshCleanup();
+    window.ManzaraUI.toast("ISBN decision undone. The conflict is active again.");
+  } finally {
+    cleanupState.undoingReviewIds.delete(reviewId);
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Undo";
+    }
+  }
 }
 
 function setupCleanupEvents() {
@@ -93,7 +163,15 @@ function setupCleanupEvents() {
 
 document.getElementById("cleanup-list").addEventListener("click", (event) => {
   const action = event.target.closest("[data-review-decide]");
-  if (action) decideCleanupReview(Number(action.dataset.reviewDecide)).catch(console.error);
+  if (action) decideCleanupReview(Number(action.dataset.reviewDecide), action).catch((error) => {
+    window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
+  });
+});
+document.getElementById("cleanup-recent-list").addEventListener("click", (event) => {
+  const action = event.target.closest("[data-review-undo]");
+  if (action) undoCleanupReview(Number(action.dataset.reviewUndo), action).catch((error) => {
+    window.ManzaraUI.toast(error.message || String(error), { tone: "error" });
+  });
 });
 window.addEventListener("beforeunload", () => cleanupState.eventStreamController?.stop());
 

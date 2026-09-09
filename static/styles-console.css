@@ -1191,6 +1191,41 @@ textarea:focus,
   display: block;
 }
 
+.cleanup-recent {
+  margin-top: 18px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 12px;
+}
+
+.cleanup-recent > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.cleanup-recent > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cleanup-recent[open] > summary {
+  margin-bottom: 10px;
+}
+
+.cleanup-recent-card {
+  opacity: 0.72;
+}
+
+.cleanup-recent-card:hover,
+.cleanup-recent-card:focus-within {
+  opacity: 1;
+}
+
 @media (max-width: 720px) {
   .cleanup-task-links {
     width: 100%;

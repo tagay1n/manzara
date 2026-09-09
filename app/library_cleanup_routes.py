@@ -117,5 +117,25 @@ def register_library_cleanup_routes(
         )
         return JSONResponse(result)
 
+    @app.post("/api/library/document-cleanup/isbn-reviews/{review_id}/undo")
+    def undo_document_cleanup_review(review_id: int) -> JSONResponse:
+        repo = repository()
+        try:
+            result = repo.undo_review(review_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            repo.dispose()
+        state_provider().db.insert_event(
+            "library.document_cleanup_changed",
+            panel_id="library",
+            payload={
+                "review_id": review_id,
+                "action": "undo",
+                "canceled_cleanup_ids": result["canceled_cleanup_ids"],
+            },
+        )
+        return JSONResponse(result)
+
 
 __all__ = ["register_library_cleanup_routes"]

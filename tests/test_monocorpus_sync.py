@@ -147,6 +147,36 @@ class _Db:
         return None
 
 
+def test_cleanup_canceled_after_listing_is_not_executed() -> None:
+    yadisk = _YaDisk({"/documents/book.pdf": b"book"})
+    repository = _Repository(yadisk)
+    repository.mark_cleanup_running = lambda *_args, **_kwargs: False
+
+    removed, outcome = _apply_cleanup(
+        {
+            "cleanup_id": 7,
+            "scope": "document",
+            "action": "move",
+            "reason": "duplicate_isbn",
+            "md5": hashlib.md5(b"book").hexdigest(),  # noqa: S324
+            "source_path": "/documents/book.pdf",
+            "target_path": "/filtered/book.pdf",
+        },
+        repository=repository,
+        yadisk=yadisk,
+        primary_s3=None,
+        legacy_s3=None,
+        settings=None,
+        config={},
+        run_id=3,
+        missing_legacy_buckets=set(),
+    )
+
+    assert (removed, outcome) == (0, "canceled")
+    assert "/documents/book.pdf" in yadisk.files
+    assert repository.timeline == []
+
+
 def test_cleanup_progress_exposes_queue_position_and_total() -> None:
     db = _Db()
 

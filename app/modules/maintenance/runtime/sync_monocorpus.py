@@ -289,7 +289,16 @@ def _apply_cleanup(
 ) -> tuple[int, str]:
     cleanup_id = int(item["cleanup_id"])
     try:
-        repository.mark_cleanup_running(cleanup_id, run_id=run_id, phase="yandex")
+        claimed = repository.mark_cleanup_running(
+            cleanup_id, run_id=run_id, phase="yandex"
+        )
+        if claimed is False:
+            print(
+                f"monocorpus sync: cleanup skipped cleanup_id={cleanup_id} "
+                "reason=plan is no longer active",
+                flush=True,
+            )
+            return 0, "canceled"
         executable = {**dict(item), "status": "running"}
         if str(item["action"]) == "move":
             target = str(item.get("target_path") or "")

@@ -657,6 +657,9 @@ test("document cleanup page bootstraps from its snapshot cursor and pending ISBN
           ],
         };
       }
+      if (path === "/api/library/document-cleanup/isbn-reviews?status=decided&limit=20") {
+        return { items: [] };
+      }
       throw new Error(`unexpected path: ${path}`);
     },
   });
@@ -674,6 +677,85 @@ test("document cleanup page bootstraps from its snapshot cursor and pending ISBN
     harness.sse.config.eventTypes.includes("library.document_cleanup_changed"),
     true,
   );
+});
+
+test("document cleanup resolves immediately and offers undo in recent reviews", async () => {
+  let resolved = false;
+  const harness = createHarness({
+    source: LIBRARY_DOCUMENT_CLEANUP_SOURCE,
+    ids: [
+      ...DOCUMENT_CLEANUP_PAGE_IDS,
+      "cleanup-recent",
+      "cleanup-recent-count",
+      "cleanup-recent-list",
+    ],
+    confirmResult: false,
+    locationPathname: "/library/document-cleanup",
+    apiResolver(path, options = {}) {
+      if (path === "/api/library/document-cleanup") {
+        return { event_cursor: 73, stats: { pending_reviews: resolved ? 0 : 1 } };
+      }
+      if (path === "/api/library/document-cleanup/isbn-reviews?status=pending&limit=500") {
+        return { items: resolved ? [] : [{
+          review_id: 9,
+          isbn: "9781234567890",
+          candidates_json: [{ md5: "a".repeat(32), title: "Book one", full: true }],
+        }] };
+      }
+      if (path === "/api/library/document-cleanup/isbn-reviews?status=decided&limit=20") {
+        return { items: resolved ? [{
+          review_id: 9,
+          isbn: "9781234567890",
+          keep_md5s_json: ["a".repeat(32)],
+          candidates_json: [{ md5: "a".repeat(32), title: "Book one", full: true }],
+          decided_at: "2026-09-09T12:00:00Z",
+        }] : [] };
+      }
+      if (path.endsWith("/isbn-reviews/9/decision") && options.method === "POST") {
+        resolved = true;
+        return { review_id: 9, keep_md5s: ["a".repeat(32)], queued: 0 };
+      }
+      if (path.endsWith("/isbn-reviews/9/undo") && options.method === "POST") {
+        resolved = false;
+        return { review_id: 9, status: "pending", canceled_cleanup_ids: [] };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+  harness.document.querySelectorAll('[data-review-candidate="9"]:checked')[0].value =
+    "a".repeat(32);
+
+  harness.elements.get("cleanup-list").dispatch("click", {
+    target: {
+      closest(selector) {
+        return selector === "[data-review-decide]"
+          ? { dataset: { reviewDecide: "9" }, disabled: false }
+          : null;
+      },
+    },
+  });
+  await harness.flush();
+
+  assert.ok(harness.apiCalls.some((call) => call.path.endsWith("/9/decision")));
+  assert.equal(harness.elements.get("cleanup-status").textContent, "No pending ISBN conflicts.");
+  assert.match(harness.elements.get("cleanup-recent-list").innerHTML, /Resolved/);
+  assert.match(harness.elements.get("cleanup-recent-list").innerHTML, /Undo/);
+  assert.equal(harness.elements.get("cleanup-recent").open, true);
+
+  harness.elements.get("cleanup-recent-list").dispatch("click", {
+    target: {
+      closest(selector) {
+        return selector === "[data-review-undo]"
+          ? { dataset: { reviewUndo: "9" }, disabled: false }
+          : null;
+      },
+    },
+  });
+  await harness.flush();
+
+  assert.ok(harness.apiCalls.some((call) => call.path.endsWith("/9/undo")));
+  assert.match(harness.elements.get("cleanup-list").innerHTML, /ISBN 9781234567890/);
 });
 
 test("gemini page confirms and overrides an active blackout", async () => {

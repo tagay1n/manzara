@@ -51,19 +51,22 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                 ).mappings()
             ]
 
-    def mark_cleanup_running(self, cleanup_id: int, *, run_id: int, phase: str) -> None:
+    def mark_cleanup_running(self, cleanup_id: int, *, run_id: int, phase: str) -> bool:
         with self.engine.begin() as conn:
-            conn.execute(
+            claimed = conn.execute(
                 text(
                     """
                     UPDATE document_cleanup_queue SET status='running', phase=:phase,
                         run_id=NULL, attempts=attempts+1, last_error=NULL,
                         updated_at=CURRENT_TIMESTAMP
                     WHERE cleanup_id=:cleanup_id
+                      AND status IN ('planned', 'running', 'failed')
+                    RETURNING cleanup_id
                     """
                 ),
                 {"cleanup_id": cleanup_id, "phase": phase},
-            )
+            ).scalar_one_or_none()
+        return claimed is not None
 
     def mark_cleanup_phase(self, cleanup_id: int, phase: str) -> None:
         with self.engine.begin() as conn:
