@@ -15,21 +15,14 @@
       <section class="runs-card collections-review-page cleanup-page">
         <div class="collections-review-head">
           <div>
-            <h2>Document cleanup</h2>
-            <p>Inspect executable storage plans and resolve ambiguous duplicate ISBNs.</p>
+            <h2>ISBN conflict review</h2>
+            <p>Compare documents that share an ISBN and choose every copy that must remain.</p>
           </div>
           <div class="cleanup-task-links">
-            <a class="small-btn" href="/tasks/library.prepare_document_cleanup">Prepare</a>
-            <a class="small-btn" href="/tasks/maintenance.monocorpus_sync">Apply queue</a>
+            <a class="small-btn" href="/tasks/library.prepare_document_cleanup">Scan for conflicts</a>
           </div>
         </div>
-        <div id="cleanup-stat-grid" class="library-stat-grid collections-stat-grid"></div>
-        <div class="collections-mode-tabs" role="tablist" aria-label="Cleanup views">
-          <button class="small-btn is-active" data-cleanup-mode="queue" role="tab">Queue</button>
-          <button class="small-btn" data-cleanup-mode="reviews" role="tab">ISBN review</button>
-          <button class="small-btn" data-cleanup-mode="history" role="tab">History</button>
-        </div>
-        <div id="cleanup-status" class="workflow-footnote">Loading cleanup state...</div>
+        <div id="cleanup-status" class="workflow-footnote">Loading ISBN conflicts...</div>
         <div id="cleanup-list" class="collections-review-list"></div>
       </section>
     </main>

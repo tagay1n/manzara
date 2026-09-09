@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   TASKS_PAGE_SOURCE, TASK_SOURCE, DASHBOARD_SOURCE, LIBRARY_SOURCE, DATABASE_SOURCE,
   GEMINI_SOURCE, LIBRARY_CLASSIFICATIONS_SOURCE, LIBRARY_PERSONALITIES_SOURCE,
@@ -8,6 +9,11 @@ import {
   GEMINI_PAGE_IDS, CLASSIFICATIONS_PAGE_IDS, PERSONALITIES_PAGE_IDS, PUBLISHERS_PAGE_IDS,
   COLLECTIONS_PAGE_IDS, DOCUMENT_CLEANUP_PAGE_IDS, createHarness,
 } from "./support/page-harness.mjs";
+
+const DOCUMENT_CLEANUP_HTML = readFileSync(
+  new URL("../../static/library-document-cleanup.html", import.meta.url),
+  "utf-8",
+);
 
 test("library normalization page renders API error state", async () => {
   const harness = createHarness({
@@ -612,11 +618,14 @@ test("library normalization evidence action opens dialog and loads evidence text
   assert.equal(Boolean(evidenceCall), true);
 });
 
-test("document cleanup page bootstraps from its snapshot cursor and queue API", async () => {
+test("document cleanup page bootstraps from its snapshot cursor and pending ISBN reviews", async () => {
+  assert.match(DOCUMENT_CLEANUP_HTML, /<h2>ISBN conflict review<\/h2>/);
+  assert.doesNotMatch(DOCUMENT_CLEANUP_HTML, /data-cleanup-mode/);
+  assert.doesNotMatch(DOCUMENT_CLEANUP_HTML, />Apply queue</);
+
   const harness = createHarness({
     source: LIBRARY_DOCUMENT_CLEANUP_SOURCE,
     ids: DOCUMENT_CLEANUP_PAGE_IDS,
-    selectors: ["[data-cleanup-mode]"],
     locationPathname: "/library/document-cleanup",
     apiResolver(path) {
       if (path === "/api/library/document-cleanup") {
@@ -630,15 +639,20 @@ test("document cleanup page bootstraps from its snapshot cursor and queue API", 
           },
         };
       }
-      if (path === "/api/library/document-cleanup/queue?limit=200") {
+      if (path === "/api/library/document-cleanup/isbn-reviews?status=pending&limit=500") {
         return {
           items: [
             {
-              cleanup_id: 9,
-              action: "move",
-              reason: "non_tatar",
-              source_path: "/books/a.pdf",
-              status: "planned",
+              review_id: 9,
+              isbn: "9781234567890",
+              candidates_json: [{
+                md5: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                title: "Book one",
+                mime_type: "application/pdf",
+                full: true,
+                page_count: 321,
+                source_path: "/books/a.pdf",
+              }],
             },
           ],
         };
@@ -648,8 +662,13 @@ test("document cleanup page bootstraps from its snapshot cursor and queue API", 
   });
   await harness.flush();
 
-  assert.match(harness.elements.get("cleanup-stat-grid").innerHTML, /Active plans/);
-  assert.match(harness.elements.get("cleanup-list").innerHTML, /non_tatar/);
+  assert.match(harness.elements.get("cleanup-list").innerHTML, /ISBN 9781234567890/);
+  assert.match(harness.elements.get("cleanup-list").innerHTML, /321 pages/);
+  assert.match(harness.elements.get("cleanup-list").innerHTML, /Full document/);
+  assert.equal(
+    harness.apiCalls.some((call) => call.path.startsWith("/api/library/document-cleanup/queue")),
+    false,
+  );
   assert.equal(harness.sse.config.initialCursor, 73);
   assert.equal(
     harness.sse.config.eventTypes.includes("library.document_cleanup_changed"),

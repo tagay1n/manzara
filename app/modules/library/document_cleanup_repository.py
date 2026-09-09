@@ -4,11 +4,34 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from sqlalchemy import text
 
+from app.modules.library.runtime.metadata.fields import extract_page_count, parse_meta
 from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
+
+
+def _enrich_review_page_counts(
+    reviews: Iterable[Mapping[str, Any]],
+    page_counts: Mapping[str, int | None],
+) -> list[dict[str, Any]]:
+    """Attach current metadata page counts without changing persisted review identity."""
+    enriched_reviews: list[dict[str, Any]] = []
+    for review in reviews:
+        enriched = dict(review)
+        enriched["candidates_json"] = [
+            {
+                **dict(candidate),
+                "page_count": page_counts.get(
+                    str(candidate.get("md5") or "").strip().lower()
+                ),
+            }
+            for candidate in review.get("candidates_json") or []
+        ]
+        enriched_reviews.append(enriched)
+    return enriched_reviews
 
 
 class DocumentCleanupRepository:
@@ -195,19 +218,42 @@ class DocumentCleanupRepository:
 
     def list_reviews(self, *, status: str = "pending", limit: int = 100) -> list[dict[str, Any]]:
         with self.engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    """
-                    SELECT review_id, isbn, candidates_json, evidence_json,
-                           keep_md5s_json, status, created_at, updated_at, decided_at
-                    FROM library_isbn_duplicate_reviews
-                    WHERE (:status = '' OR status = :status)
-                    ORDER BY review_id DESC LIMIT :limit
-                    """
-                ),
-                {"status": status, "limit": max(1, min(int(limit), 500))},
+            reviews = [
+                dict(row)
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT review_id, isbn, candidates_json, evidence_json,
+                               keep_md5s_json, status, created_at, updated_at, decided_at
+                        FROM library_isbn_duplicate_reviews
+                        WHERE (:status = '' OR status = :status)
+                        ORDER BY review_id DESC LIMIT :limit
+                        """
+                    ),
+                    {"status": status, "limit": max(1, min(int(limit), 500))},
+                ).mappings()
+            ]
+            candidate_md5s = sorted(
+                {
+                    str(candidate.get("md5") or "").strip().lower()
+                    for review in reviews
+                    for candidate in review.get("candidates_json") or []
+                    if candidate.get("md5")
+                }
+            )
+            if not candidate_md5s:
+                return reviews
+            metadata_rows = conn.execute(
+                text("SELECT md5, schema_org FROM metadata WHERE md5 = ANY(:md5s)"),
+                {"md5s": candidate_md5s},
             ).mappings()
-            return [dict(row) for row in rows]
+            page_counts = {
+                str(row["md5"]).strip().lower(): extract_page_count(
+                    parse_meta(row.get("schema_org"))
+                )
+                for row in metadata_rows
+            }
+            return _enrich_review_page_counts(reviews, page_counts)
 
     def decide_review(self, review_id: int, *, keep_md5s: Iterable[str]) -> dict[str, Any]:
         keep = tuple(sorted({str(value).strip().lower() for value in keep_md5s if value}))

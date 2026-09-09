@@ -8,6 +8,7 @@ from app.modules.library.document_cleanup import (
     build_isbn_cleanup_decisions,
     cleanup_reasons,
 )
+from app.modules.library.document_cleanup_repository import _enrich_review_page_counts
 from app.modules.library.document_cleanup_service import (
     cleanup_target_path,
     prepare_document_cleanup,
@@ -131,6 +132,22 @@ def test_isbn_cleanup_keeps_ambiguous_complete_documents_for_review() -> None:
     assert decisions[0].requires_review is True
     assert decisions[0].keep_md5s == ()
     assert decisions[0].remove_md5s == ()
+
+
+def test_isbn_review_candidates_are_enriched_with_page_counts() -> None:
+    reviews = [{
+        "review_id": 7,
+        "candidates_json": [
+            {"md5": "a" * 32, "title": "First"},
+            {"md5": "b" * 32, "title": "Second"},
+        ],
+    }]
+
+    enriched = _enrich_review_page_counts(reviews, {"a" * 32: 321})
+
+    assert enriched[0]["candidates_json"][0]["page_count"] == 321
+    assert enriched[0]["candidates_json"][1]["page_count"] is None
+    assert "page_count" not in reviews[0]["candidates_json"][0]
 
 
 class _FakeYaDisk:
