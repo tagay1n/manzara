@@ -53,7 +53,9 @@ After a successful restore, configure the runtime with the rotated target URL,
 Alembic reaches head and initializes `~/.manzara/state/runtime.sqlite3` before
 local definitions are seeded. Confirm dashboard reads, SSE, file-log pagination,
 task stop/recovery, and one representative workflow before allowing routine
-writes. There is no PostgreSQL fallback for missing local state.
+writes. Configure and manually verify the independent GitHub Actions logical
+backup described in `docs/postgres-backup-recovery.md`. There is no PostgreSQL
+fallback for missing local state.
 
 Do not delete or upgrade the local source during the rollback window. Before
 new cloud writes begin, rollback is a configuration switch. After new writes

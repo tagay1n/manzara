@@ -63,9 +63,13 @@ Common environment variables:
   managed mode hides local physical-backup tasks for hosted PostgreSQL
 - `MANZARA_PGBACKREST_S3_BUCKET`, `MANZARA_PGBACKREST_S3_ENDPOINT`, and
   `MANZARA_PGBACKREST_S3_REGION` — optional overrides for `backups.pgbackrest`
+- `MANZARA_LOGICAL_BACKUP_S3_BUCKET`, `MANZARA_LOGICAL_BACKUP_S3_ENDPOINT`, and
+  `MANZARA_LOGICAL_BACKUP_S3_REGION` — GitHub Actions logical-backup destination
 
 PostgreSQL physical backups use the dedicated `backups.pgbackrest` S3 contract.
 See `docs/postgres-backup-recovery.md` for migration, validation, and recovery.
+That guide also covers the independent nightly Aiven logical backup, Backblaze
+retention, and restore drills.
 For the filtered Aiven free-tier migration, see `docs/aiven-cutover.md`.
 
 Gemini configuration contains one ordered `gemini.model_pool` and account-grouped keys. Models have no code default. See `docs/gemini-runtime.md` for runtime behavior.

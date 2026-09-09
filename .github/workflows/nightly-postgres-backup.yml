@@ -1,0 +1,44 @@
+name: 'Nightly PostgreSQL Logical Backup'
+
+on:
+  schedule:
+    # GitHub cron is UTC. This is 04:17 Europe/Moscow and avoids the busy hour boundary.
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-postgres-logical-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MANZARA_DATABASE_URL: ${{ secrets.MANZARA_DATABASE_URL }}
+      MANZARA_AIVEN_CA_CERT_BASE64: ${{ secrets.MANZARA_AIVEN_CA_CERT_BASE64 }}
+      MANZARA_LOGICAL_BACKUP_S3_ACCESS_KEY_ID: ${{ secrets.MANZARA_LOGICAL_BACKUP_S3_ACCESS_KEY_ID }}
+      MANZARA_LOGICAL_BACKUP_S3_SECRET_ACCESS_KEY: ${{ secrets.MANZARA_LOGICAL_BACKUP_S3_SECRET_ACCESS_KEY }}
+      MANZARA_LOGICAL_BACKUP_S3_ENDPOINT: ${{ vars.MANZARA_LOGICAL_BACKUP_S3_ENDPOINT }}
+      MANZARA_LOGICAL_BACKUP_S3_REGION: ${{ vars.MANZARA_LOGICAL_BACKUP_S3_REGION }}
+      MANZARA_LOGICAL_BACKUP_S3_BUCKET: ${{ vars.MANZARA_LOGICAL_BACKUP_S3_BUCKET }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install backup dependency
+        shell: bash
+        run: |
+          package="$(sed -n -E '/^boto3==/p' requirements.txt)"
+          test -n "$package"
+          python -m pip install "$package"
+
+      - name: Create and upload logical backup
+        run: python scripts/backup_postgres_to_b2.py
