@@ -12,100 +12,79 @@
   </head>
   <body class="console-body" data-manzara-page="library">
     <main class="dashboard" data-page-content>
-          <section class="runs-card">
-            <div class="library-overview-head">
-              <h2>Publishers</h2>
-              <div class="library-head-actions">
-                <a href="/library/normalization/publisher" class="small-btn">Normalization</a>
-              </div>
-            </div>
-            <div id="publisher-status" class="workflow-footnote">Loading publisher overview...</div>
-            <div id="publisher-stat-grid" class="library-stat-grid"></div>
-            <div id="publisher-top-list" class="library-top-list"></div>
+      <section class="runs-card publisher-curation-page">
+        <div class="library-overview-head">
+          <div>
+            <h2>Publishers</h2>
+            <p class="workflow-footnote">Group different spellings under one publisher. Original spellings are always kept as aliases.</p>
+          </div>
+          <div class="library-head-actions publisher-match-actions">
+            <span id="publisher-match-status" class="workflow-footnote">Loading match task…</span>
+            <button id="publisher-match-btn" class="small-btn"><i data-lucide="sparkles"></i> Find matches</button>
+            <a href="/tasks/library.publisher_suggestions_refresh" class="small-btn">Task details</a>
+          </div>
+        </div>
+        <div id="publisher-status" class="workflow-footnote">Loading publishers…</div>
+        <div id="publisher-stat-grid" class="library-stat-grid"></div>
 
-            <div class="classification-tabs" role="tablist" aria-label="Publisher views">
-              <button id="tab-btn-table" class="classification-tab active" data-tab="table" role="tab" aria-selected="true">
-                Publisher Table
-              </button>
-              <button id="tab-btn-scripts" class="classification-tab" data-tab="scripts" role="tab" aria-selected="false">
-                Script Mix
-                <span id="tab-badge-scripts" class="classification-tab-badge">0</span>
-              </button>
-              <button id="tab-btn-clusters" class="classification-tab" data-tab="clusters" role="tab" aria-selected="false">
-                Variant Clusters
-                <span id="tab-badge-clusters" class="classification-tab-badge">0</span>
-              </button>
-              <button id="tab-btn-queue" class="classification-tab" data-tab="queue" role="tab" aria-selected="false">
-                Ambiguous Queue
-                <span id="tab-badge-queue" class="classification-tab-badge">0</span>
-              </button>
-            </div>
+        <div class="classification-tabs" role="tablist" aria-label="Publisher views">
+          <button id="tab-btn-review" class="classification-tab active" data-tab="review" role="tab" aria-selected="true">Review names <span id="tab-badge-review" class="classification-tab-badge">0</span></button>
+          <button id="tab-btn-publishers" class="classification-tab" data-tab="publishers" role="tab" aria-selected="false">Publisher entities <span id="tab-badge-publishers" class="classification-tab-badge">0</span></button>
+          <button id="tab-btn-history" class="classification-tab" data-tab="history" role="tab" aria-selected="false">History</button>
+        </div>
 
-            <div id="tab-panel-table" class="classification-tab-panel active" role="tabpanel" aria-labelledby="tab-btn-table">
-              <div class="classification-filters publisher-filters">
-                <input id="filter-search" class="filter-input" type="text" placeholder="Search raw/normalized" />
-                <select id="filter-script" class="filter-select">
-                  <option value="">Any script</option>
-                  <option value="cyrillic">cyrillic</option>
-                  <option value="latin">latin</option>
-                  <option value="mixed">mixed</option>
-                  <option value="other">other</option>
-                </select>
-                <input id="filter-min-docs" class="filter-input" type="number" min="0" value="0" placeholder="Min docs" />
-                <select id="filter-sort" class="filter-select">
-                  <option value="docs_desc">Docs desc</option>
-                  <option value="docs_asc">Docs asc</option>
-                  <option value="mentions_desc">Mentions desc</option>
-                  <option value="mentions_asc">Mentions asc</option>
-                  <option value="name_asc">Name asc</option>
-                  <option value="name_desc">Name desc</option>
-                </select>
-                <button id="filter-apply" class="small-btn">Apply</button>
-              </div>
-              <div id="publisher-table-status" class="workflow-footnote">Loading table...</div>
-              <div class="classification-table-wrap">
-                <table class="classification-table">
-                  <thead>
-                    <tr>
-                      <th>Raw Name</th>
-                      <th>Normalized</th>
-                      <th>Script</th>
-                      <th>Docs</th>
-                      <th>Mentions</th>
-                      <th>Org Marker</th>
-                    </tr>
-                  </thead>
-                  <tbody id="publisher-table-body"></tbody>
-                </table>
-              </div>
-              <div class="classification-pagination">
-                <button id="page-prev" class="small-btn">Prev</button>
-                <span id="page-label" class="workflow-footnote">Page 1 / 1</span>
-                <button id="page-next" class="small-btn">Next</button>
-              </div>
-            </div>
+        <div id="tab-panel-review" class="classification-tab-panel active" role="tabpanel" aria-labelledby="tab-btn-review">
+          <div class="classification-filters publisher-filters">
+            <input id="filter-search" class="filter-input" type="search" placeholder="Search publisher spelling" />
+            <select id="filter-status" class="filter-select">
+              <option value="all">All names</option><option value="unreviewed">Unreviewed</option><option value="suggested">Has suggestion</option><option value="linked">Already linked</option><option value="rejected">Marked invalid</option>
+            </select>
+            <select id="filter-script" class="filter-select">
+              <option value="">Any script</option><option value="cyrillic">Cyrillic</option><option value="latin">Latin</option><option value="mixed">Mixed</option><option value="other">Other</option>
+            </select>
+            <input id="filter-min-docs" class="filter-input" type="number" min="0" value="0" aria-label="Minimum documents" />
+            <button id="filter-apply" class="small-btn">Apply</button>
+          </div>
 
-            <div id="tab-panel-scripts" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-scripts">
-              <h2>Script Distribution</h2>
-              <div id="scripts-root" class="distribution-root"></div>
+          <div id="publisher-selection-bar" class="publisher-selection-bar" hidden>
+            <div><strong id="publisher-selection-count">0 names selected</strong><div id="publisher-selection-preview" class="workflow-footnote"></div></div>
+            <div class="publisher-selection-actions">
+              <button id="publisher-create-group" class="small-btn">Create publisher</button>
+              <input id="publisher-existing-search" class="filter-input" type="search" placeholder="Filter existing publishers" />
+              <select id="publisher-existing-canonical" class="filter-select" aria-label="Existing publisher"><option value="">Add to existing…</option></select>
+              <button id="publisher-add-existing" class="small-btn">Add aliases</button>
+              <button id="publisher-clear-selection" class="small-btn">Clear</button>
             </div>
+          </div>
 
-            <div id="tab-panel-clusters" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-clusters">
-              <h2>Variant Clusters</h2>
-              <div id="clusters-root" class="duplicates-root"></div>
-            </div>
+          <div id="publisher-table-status" class="workflow-footnote">Loading names…</div>
+          <div class="classification-table-wrap">
+            <table class="classification-table publisher-review-table">
+              <thead><tr><th><input id="publisher-select-page" type="checkbox" aria-label="Select visible names" /></th><th>Publisher spelling</th><th>Documents</th><th>Status</th><th>Suggested match</th><th>Actions</th></tr></thead>
+              <tbody id="publisher-table-body"></tbody>
+            </table>
+          </div>
+          <div class="classification-pagination">
+            <button id="page-prev" class="small-btn">Prev</button><span id="page-label" class="workflow-footnote">Page 1 / 1</span><button id="page-next" class="small-btn">Next</button>
+          </div>
+        </div>
 
-            <div id="tab-panel-queue" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-queue">
-              <h2>Ambiguous Queue</h2>
-              <div id="queue-root" class="unclassified-root"></div>
-            </div>
-          </section>
-        </main>
+        <div id="tab-panel-publishers" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-publishers">
+          <div class="classification-filters compact"><input id="canonical-search" class="filter-input" type="search" placeholder="Search publisher entities" /><button id="canonical-search-apply" class="small-btn">Search</button></div>
+          <div id="canonical-status" class="workflow-footnote">Loading publisher entities…</div>
+          <div id="canonical-root" class="publisher-canonical-list"></div>
+        </div>
 
-    <script src="/static/sound-notifier.js"></script>
-    <script src="/static/core.js"></script>
-    <script src="/static/ui.js"></script>
-    <script src="/static/shell.js"></script>
-    <script src="/static/library-entities.js"></script>
+        <div id="tab-panel-history" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-history">
+          <div id="history-status" class="workflow-footnote">Loading history…</div><div id="history-root" class="runs-list"></div>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="publisher-evidence-dialog" class="log-dialog">
+      <header class="log-head"><h3 id="publisher-evidence-title">Publisher evidence</h3><button id="publisher-evidence-close" class="icon-btn" aria-label="Close"><i data-lucide="x"></i></button></header>
+      <pre id="publisher-evidence-content" class="log-content">Loading…</pre>
+    </dialog>
+    <script src="/static/sound-notifier.js"></script><script src="/static/core.js"></script><script src="/static/ui.js"></script><script src="/static/shell.js"></script><script src="/static/library-publishers.js"></script>
   </body>
 </html>

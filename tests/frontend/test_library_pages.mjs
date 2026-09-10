@@ -216,70 +216,56 @@ function createPersonalitiesResolver({
 }
 
 function createPublishersResolver({
-  summary = null,
+  groupCalls = [],
 } = {}) {
-  return (path) => {
-    if (path === "/api/library/publishers") {
+  return (path, options = {}) => {
+    if (path === "/api/library/normalization/publisher") {
       return {
         global: { active_tasks: 0, stop_all_state: "disabled" },
-        overview: {
+        dashboard: {
           available: true,
           config_source: "test",
           stats: {
-            total_mentions: 3,
-            docs_with_publishers: 2,
-            unique_raw_names: 2,
-            unique_normalized_names: 2,
-            mixed_script_mentions: 0,
-            org_marker_mentions: 0,
+            total_aliases: 2,
+            canonicals: 1,
+            linked: 0,
+            unreviewed: 1,
+            suggested: 1,
+            coverage_pct: 0,
           },
-          top_publishers: [],
         },
       };
     }
-    if (path.startsWith("/api/library/publishers/table?")) {
+    if (path.startsWith("/api/library/normalization/publisher/queue?")) {
       return {
         available: true,
         page: 1,
         total_pages: 1,
-        total: 1,
+        total: 2,
         items: [
           {
-            raw_name: "Publisher One",
-            normalized_name: "publisher one",
-            script_label: "latin",
-            docs_count: 1,
-            mentions_count: 1,
-            org_marker_mentions: 0,
+            raw_name: "Таткнигоиздат", normalized_name: "таткнигоиздат",
+            script_label: "cyrillic", docs_count: 4, mentions_count: 4,
+            queue_status: "unreviewed", canonical_id: null, canonical_name: null, suggestion: null,
           },
-        ],
-      };
-    }
-    if (path.startsWith("/api/library/publishers/insights")) {
-      return {
-        available: true,
-        script_distribution: [{ script_label: "latin", mentions_count: 1, share_pct: 100 }],
-        variant_clusters: [
           {
-            normalized_name: "publisher one",
-            variants_count: 1,
-            docs_count: 1,
-            mentions_count: 1,
-            variants: [],
+            raw_name: "Tatknigoizdat", normalized_name: "tatknigoizdat",
+            script_label: "latin", docs_count: 2, mentions_count: 2,
+            queue_status: "suggested", canonical_id: 1, canonical_name: "Tatar Book Publisher",
+            suggestion: { suggestion_id: 8, kind: "link", target_canonical_id: 1, confidence: 0.91 },
           },
         ],
-        ambiguous_queue: {
-          total: 1,
-          items: [{ raw_name: "Publisher One", script_label: "latin", reasons: ["manual_review"], docs_count: 1 }],
-        },
-        summary: summary || {
-          script_total_mentions: 1,
-          variant_cluster_count: 1,
-          ambiguous_queue_total: 1,
-        },
       };
     }
-    if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
+    if (path.startsWith("/api/library/normalization/publisher/canonicals?")) {
+      return { available: true, items: [{ canonical_id: 1, display_name: "Tatar Book Publisher", linked_aliases: 1 }] };
+    }
+    if (path === "/api/library/normalization/publisher/history?limit=100") return { available: true, items: [] };
+    if (path === "/api/tasks/library.publisher_suggestions_refresh?limit=1") return { task: { task_id: "library.publisher_suggestions_refresh" }, runs: [] };
+    if (path === "/api/library/normalization/publisher/groups") {
+      groupCalls.push(JSON.parse(options.body || "{}"));
+      return { canonical: { canonical_id: 2 }, aliases: [], event: { event_id: 1 } };
+    }
     throw new Error(`unexpected path: ${path}`);
   };
 }
@@ -575,12 +561,12 @@ test("library publishers page renders API error state", async () => {
     source: LIBRARY_PUBLISHERS_SOURCE,
     locationPathname: "/library/publishers",
     ids: PUBLISHERS_PAGE_IDS,
-    selectors: [".classification-tabs"],
+    selectors: [".classification-tabs", ".publisher-row-select"],
     apiResolver(path) {
-      if (path.startsWith("/api/library/publishers")) {
+      if (path.startsWith("/api/library/normalization/publisher")) {
         throw new Error("publishers unavailable");
       }
-      if (path === "/api/system/stop-all") return { action: "stop_all_graceful" };
+      if (path.startsWith("/api/tasks/")) return { task: {}, runs: [] };
       throw new Error(`unexpected path: ${path}`);
     },
   });
@@ -593,27 +579,33 @@ test("library publishers page renders API error state", async () => {
     harness.elements.get("publisher-table-status").textContent,
     /publishers unavailable/,
   );
-  assert.match(harness.elements.get("scripts-root").innerHTML, /publishers unavailable/);
 });
 
-test("library publishers page prefers backend summary counters for badges", async () => {
+test("library publishers page groups selected aliases with a manual canonical name", async () => {
+  const groupCalls = [];
   const harness = createHarness({
     source: LIBRARY_PUBLISHERS_SOURCE,
     locationPathname: "/library/publishers",
     ids: PUBLISHERS_PAGE_IDS,
-    selectors: [".classification-tabs"],
-    apiResolver: createPublishersResolver({
-      summary: {
-        script_total_mentions: 51,
-        variant_cluster_count: 41,
-        ambiguous_queue_total: 31,
-      },
-    }),
+    selectors: [".classification-tabs", ".publisher-row-select"],
+    promptResult: "Татарстан китап нәшрияты",
+    confirmResult: true,
+    apiResolver: createPublishersResolver({ groupCalls }),
   });
   await harness.flush();
-  assert.equal(harness.elements.get("tab-badge-scripts").textContent, "51");
-  assert.equal(harness.elements.get("tab-badge-clusters").textContent, "41");
-  assert.equal(harness.elements.get("tab-badge-queue").textContent, "31");
+
+  harness.elements.get("publisher-table-body").dispatch("change", { target: { closest: () => ({ checked: true, dataset: { raw: encodeURIComponent("Таткнигоиздат") } }) } });
+  harness.elements.get("filter-search").value = "Tat";
+  harness.elements.get("filter-apply").dispatch("click");
+  await harness.flush();
+  assert.equal(harness.elements.get("publisher-selection-count").textContent, "1 name selected");
+  harness.elements.get("publisher-create-group").dispatch("click");
+  await harness.flush();
+
+  assert.equal(groupCalls.length, 1);
+  assert.equal(groupCalls[0].display_name, "Татарстан китап нәшрияты");
+  assert.deepEqual(groupCalls[0].raw_names, ["Таткнигоиздат"]);
+  assert.equal(harness.elements.get("publisher-selection-bar").hidden, true);
 });
 
 test("library collections page renders API error state", async () => {

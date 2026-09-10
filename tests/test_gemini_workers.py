@@ -125,9 +125,55 @@ def test_normalization_preserves_order_while_gemini_calls_run_concurrently(monke
         def list_normalization_canonicals(self, _entity_type):  # noqa: ANN001
             return []
 
+        def list_normalization_aliases(self, _entity_type):  # noqa: ANN001
+            return []
+
     result = normalization._heuristic_suggestions(
         Db(), "publisher", limit=3, use_gemini=True, manager=object(), workers=2
     )
 
     assert maximum_active == 2
     assert [item["raw_name"] for item in result] == [item["raw_name"] for item in items]
+
+
+def test_normalization_matches_against_retained_aliases(monkeypatch) -> None:
+    from app.modules.library import normalization_suggestions as normalization
+
+    monkeypatch.setattr(
+        normalization,
+        "get_review_queue",
+        lambda *_args, **_kwargs: {
+            "items": [{
+                "raw_name": "Tatknigoizdat",
+                "normalized_name": "tatknigoizdat",
+                "docs_count": 1,
+                "mentions_count": 1,
+                "marker_count": 0,
+                "queue_status": "unreviewed",
+            }]
+        },
+    )
+
+    class Db:
+        def list_normalization_canonicals(self, _entity_type):  # noqa: ANN001
+            return [{
+                "canonical_id": 5,
+                "display_name": "Татарстан китап нәшрияты",
+                "normalized_name": "татарстан китап нәшрияты",
+                "linked_aliases": 1,
+            }]
+
+        def list_normalization_aliases(self, _entity_type):  # noqa: ANN001
+            return [{
+                "canonical_id": 5,
+                "raw_name": "Tatknigoizdat",
+                "decision_status": "linked",
+            }]
+
+    result = normalization._heuristic_suggestions(
+        Db(), "publisher", limit=1, use_gemini=False
+    )
+
+    assert result[0]["suggestion_kind"] == "link"
+    assert result[0]["target_canonical_id"] == 5
+    assert result[0]["confidence_band"] == "high"

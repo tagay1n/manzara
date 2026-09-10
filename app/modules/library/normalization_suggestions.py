@@ -68,7 +68,7 @@ def _gemini_suggest(
 
         candidates_block = "\n".join(
             [
-                f"- id={item['canonical_id']} name={item['display_name']} normalized={item['normalized_name']} aliases={item['linked_aliases']}"
+                f"- id={item['canonical_id']} name={item['display_name']} normalized={item['normalized_name']} aliases={item.get('alias_names') or []}"
                 for item in canonical_candidates[:10]
             ]
         )
@@ -164,6 +164,14 @@ def _heuristic_suggestions(
     workers: int = 1,
 ) -> List[Dict[str, Any]]:
     canonicals = db.list_normalization_canonicals(entity_type)
+    aliases_by_canonical: Dict[int, List[str]] = {}
+    for alias in db.list_normalization_aliases(entity_type):
+        if str(alias.get("decision_status") or "") != "linked":
+            continue
+        canonical_id = int(alias.get("canonical_id") or 0)
+        raw_name = str(alias.get("raw_name") or "").strip()
+        if canonical_id > 0 and raw_name:
+            aliases_by_canonical.setdefault(canonical_id, []).append(raw_name)
     queue = get_review_queue(
         db,
         entity_type,
@@ -199,7 +207,15 @@ def _heuristic_suggestions(
         best_score = 0.0
         ranked: List[Dict[str, Any]] = []
         for canonical in canonicals:
-            score = _similarity(normalized_name, canonical.get("normalized_name"))
+            canonical_id = int(canonical.get("canonical_id") or 0)
+            comparison_names = [
+                str(canonical.get("normalized_name") or ""),
+                *aliases_by_canonical.get(canonical_id, []),
+            ]
+            score = max(
+                (_similarity(normalized_name, candidate) for candidate in comparison_names),
+                default=0.0,
+            )
             if score <= 0.0:
                 continue
             ranked.append({"canonical": canonical, "score": score})
@@ -249,6 +265,9 @@ def _heuristic_suggestions(
                         "display_name": str(row["canonical"].get("display_name") or ""),
                         "normalized_name": str(row["canonical"].get("normalized_name") or ""),
                         "linked_aliases": int(row["canonical"].get("linked_aliases") or 0),
+                        "alias_names": aliases_by_canonical.get(
+                            int(row["canonical"].get("canonical_id") or 0), []
+                        )[:8],
                     }
                     for row in ranked[:10]
                 ],

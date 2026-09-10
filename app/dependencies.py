@@ -43,12 +43,16 @@ from app.modules.library.normalization import (
     bulk_reject_aliases,
     create_and_link_alias,
     create_canonical,
+    create_canonical_group,
+    dismiss_suggestion,
     get_normalization_dashboard,
     get_review_queue,
     link_alias,
+    list_canonical_aliases,
     list_canonicals,
     merge_canonicals,
     reject_alias,
+    rename_canonical,
     undo_event,
 )
 from app.modules.library.normalization import (
@@ -136,6 +140,10 @@ class NormalizationOperationsService:
     get_review_queue: Callable[..., Any]
     list_canonicals: Callable[..., Any]
     create_canonical: Callable[..., Any]
+    create_canonical_group: Callable[..., Any]
+    list_canonical_aliases: Callable[..., Any]
+    rename_canonical: Callable[..., Any]
+    dismiss_suggestion: Callable[..., Any]
     link_alias: Callable[..., Any]
     create_and_link_alias: Callable[..., Any]
     reject_alias: Callable[..., Any]
@@ -216,6 +224,10 @@ def build_normalization_operations() -> NormalizationOperations:
         get_review_queue=get_review_queue,
         list_canonicals=list_canonicals,
         create_canonical=create_canonical,
+        create_canonical_group=create_canonical_group,
+        list_canonical_aliases=list_canonical_aliases,
+        rename_canonical=rename_canonical,
+        dismiss_suggestion=dismiss_suggestion,
         link_alias=link_alias,
         create_and_link_alias=create_and_link_alias,
         reject_alias=reject_alias,

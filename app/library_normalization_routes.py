@@ -36,12 +36,10 @@ def register_library_normalization_routes(
             raise HTTPException(status_code=400, detail="suggestion_ids must be integers")
         suggestion_ids: list[int] = []
         for item in raw_value:
-            if str(item).strip() == "":
-                continue
-            try:
-                suggestion_ids.append(int(item))
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail="suggestion_ids must be integers") from exc
+            if isinstance(item, bool) or not isinstance(item, int):
+                raise HTTPException(status_code=400, detail="suggestion_ids must be integers")
+            if item > 0:
+                suggestion_ids.append(item)
         return suggestion_ids
 
     def _parse_raw_names(payload: Dict[str, Any]) -> list[str]:
@@ -52,10 +50,17 @@ def register_library_normalization_routes(
             raise HTTPException(status_code=400, detail="raw_names must be a list of strings")
         names: list[str] = []
         for item in raw_value:
-            value = str(item or "").strip()
+            if not isinstance(item, str):
+                raise HTTPException(status_code=400, detail="raw_names must be a list of strings")
+            value = item.strip()
             if value:
                 names.append(value)
         return names
+
+    def _positive_int(value: Any, field: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise HTTPException(status_code=400, detail=f"{field} must be a positive integer")
+        return value
 
     def _resolve_context(entity_type: str) -> tuple[Any, NormalizationOperations, str]:
         state = state_provider()
@@ -123,6 +128,84 @@ def register_library_normalization_routes(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result)
+
+    @app.post("/api/library/normalization/{entity_type}/groups")
+    def create_library_normalization_group(
+        entity_type: str,
+        payload: Dict[str, Any] = Body(...),
+    ) -> JSONResponse:
+        """Create one canonical and link a reviewed group of retained aliases."""
+        state, operations, normalized = _resolve_context(entity_type)
+        display_name = str(payload.get("display_name") or "").strip()
+        raw_names = _parse_raw_names(payload)
+        suggestion_ids = _parse_suggestion_ids(payload)
+        if not display_name:
+            raise HTTPException(status_code=400, detail="display_name is required")
+        try:
+            return JSONResponse(
+                operations.create_canonical_group(
+                    state.db,
+                    normalized,
+                    display_name=display_name,
+                    raw_names=raw_names,
+                    suggestion_ids=suggestion_ids,
+                )
+            )
+        except ValueError as exc:
+            status_code = 409 if "already linked" in str(exc).lower() else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+    @app.get("/api/library/normalization/{entity_type}/canonicals/{canonical_id}/aliases")
+    def get_library_normalization_canonical_aliases(
+        entity_type: str,
+        canonical_id: int,
+    ) -> JSONResponse:
+        state, operations, normalized = _resolve_context(entity_type)
+        try:
+            return JSONResponse(
+                operations.list_canonical_aliases(
+                    state.db, normalized, canonical_id=canonical_id
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/api/library/normalization/{entity_type}/canonicals/{canonical_id}")
+    def rename_library_normalization_canonical(
+        entity_type: str,
+        canonical_id: int,
+        payload: Dict[str, Any] = Body(...),
+    ) -> JSONResponse:
+        state, operations, normalized = _resolve_context(entity_type)
+        display_name = str(payload.get("display_name") or "").strip()
+        if not display_name:
+            raise HTTPException(status_code=400, detail="display_name is required")
+        try:
+            return JSONResponse(
+                operations.rename_canonical(
+                    state.db,
+                    normalized,
+                    canonical_id=canonical_id,
+                    display_name=display_name,
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/library/normalization/{entity_type}/suggestions/{suggestion_id}/dismiss")
+    def dismiss_library_normalization_suggestion(
+        entity_type: str,
+        suggestion_id: int,
+    ) -> JSONResponse:
+        state, operations, normalized = _resolve_context(entity_type)
+        try:
+            return JSONResponse(
+                operations.dismiss_suggestion(
+                    state.db, normalized, suggestion_id=suggestion_id
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/library/normalization/{entity_type}/decisions/link")
     def link_library_normalization_alias(
@@ -225,11 +308,9 @@ def register_library_normalization_routes(
         """Bulk-link aliases to a canonical."""
         state, operations, normalized = _resolve_context(entity_type)
         raw_names = _parse_raw_names(payload)
+        suggestion_ids = _parse_suggestion_ids(payload)
         canonical_id = payload.get("canonical_id")
-        try:
-            canonical_int = int(canonical_id)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="canonical_id must be an integer")
+        canonical_int = _positive_int(canonical_id, "canonical_id")
 
         try:
             result = operations.bulk_link_aliases(
@@ -237,9 +318,11 @@ def register_library_normalization_routes(
                 normalized,
                 raw_names=raw_names,
                 canonical_id=canonical_int,
+                suggestion_ids=suggestion_ids,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            status_code = 409 if "already linked" in str(exc).lower() else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
         return JSONResponse(result)
 
     @app.post("/api/library/normalization/{entity_type}/bulk/reject")

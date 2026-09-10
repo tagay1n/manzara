@@ -109,7 +109,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str
             "task_id": LIBRARY_PUBLISHER_SUGGESTIONS_REFRESH_TASK_ID,
             "gemini_workers_default": 1,
             "panel_id": "library",
-            "title": "Refresh publisher suggestions",
+            "title": "Find publisher matches",
             "task_type": "metadata",
             "icon_idle": "Sparkles",
             "icon_running": "Square",

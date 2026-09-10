@@ -193,6 +193,300 @@ class NormalizationRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_normalization_aliases_for_canonical(
+        self, entity_type: str, canonical_id: int
+    ) -> List[Dict[str, Any]]:
+        """Return retained aliases linked to one canonical entity."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM normalization_aliases
+                WHERE entity_type = ? AND canonical_id = ? AND decision_status = 'linked'
+                ORDER BY docs_count DESC, mentions_count DESC, raw_name ASC
+                """,
+                (entity_type, int(canonical_id)),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_normalization_group(
+        self,
+        entity_type: str,
+        display_name: str,
+        normalized_name: str,
+        alias_snapshots: List[Dict[str, Any]],
+        *,
+        suggestion_ids: List[int] | None = None,
+    ) -> Dict[str, Any]:
+        """Atomically create a canonical and retain raw names as linked aliases."""
+        names = [str(item["raw_name"]) for item in alias_snapshots]
+        placeholders = ", ".join("?" for _ in names)
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                existing = conn.execute(
+                    f"""
+                    SELECT raw_name, canonical_id FROM normalization_aliases
+                    WHERE entity_type = ? AND raw_name IN ({placeholders})
+                      AND decision_status = 'linked' AND canonical_id IS NOT NULL
+                    FOR UPDATE
+                    """,
+                    (entity_type, *names),
+                ).fetchall()
+                if existing:
+                    conflicts = ", ".join(str(row["raw_name"]) for row in existing)
+                    raise ValueError(f"Aliases already linked to another canonical: {conflicts}")
+
+                cur = conn.execute(
+                    """
+                    INSERT INTO normalization_canonicals (
+                        entity_type, display_name, normalized_name, status,
+                        merged_into_id, notes, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'active', NULL, '', ?, ?)
+                    """,
+                    (entity_type, display_name, normalized_name, now, now),
+                )
+                canonical_id = int(cur.lastrowid)
+                before_aliases = conn.execute(
+                    f"SELECT * FROM normalization_aliases WHERE entity_type = ? AND raw_name IN ({placeholders})",
+                    (entity_type, *names),
+                ).fetchall()
+
+                for item in alias_snapshots:
+                    conn.execute(
+                        """
+                        INSERT INTO normalization_aliases (
+                            entity_type, raw_name, normalized_name, script_label,
+                            docs_count, mentions_count, marker_count, decision_status,
+                            canonical_id, confidence, source, reason, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'linked', ?, 1.0,
+                                  'manual_group', 'group_create', ?, ?)
+                        ON CONFLICT(entity_type, raw_name) DO UPDATE SET
+                            normalized_name=excluded.normalized_name,
+                            script_label=excluded.script_label,
+                            docs_count=excluded.docs_count,
+                            mentions_count=excluded.mentions_count,
+                            marker_count=excluded.marker_count,
+                            decision_status='linked', canonical_id=excluded.canonical_id,
+                            confidence=1.0, source='manual_group', reason='group_create',
+                            updated_at=excluded.updated_at
+                        """,
+                        (
+                            entity_type,
+                            item["raw_name"],
+                            item["normalized_name"],
+                            item["script_label"],
+                            int(item["docs_count"]),
+                            int(item["mentions_count"]),
+                            int(item["marker_count"]),
+                            canonical_id,
+                            now,
+                            now,
+                        ),
+                    )
+
+                ids = [int(value) for value in (suggestion_ids or [])]
+                if ids:
+                    id_placeholders = ", ".join("?" for _ in ids)
+                    conn.execute(
+                        f"UPDATE normalization_suggestions SET status='accepted', updated_at=? WHERE entity_type=? AND suggestion_id IN ({id_placeholders})",
+                        (now, entity_type, *ids),
+                    )
+
+                after_aliases = conn.execute(
+                    f"SELECT * FROM normalization_aliases WHERE entity_type = ? AND raw_name IN ({placeholders}) ORDER BY raw_name",
+                    (entity_type, *names),
+                ).fetchall()
+                payload = {
+                    "created_canonical_id": canonical_id,
+                    "raw_names": names,
+                    "before_aliases": [dict(row) for row in before_aliases],
+                    "after_aliases": [dict(row) for row in after_aliases],
+                    "suggestion_ids": ids,
+                }
+                event_cur = conn.execute(
+                    """INSERT INTO normalization_events
+                       (entity_type, action, payload_json, reverted, created_at)
+                       VALUES (?, 'create_canonical_group', ?, 0, ?)""",
+                    (entity_type, json.dumps(payload, ensure_ascii=False), now),
+                )
+                canonical = conn.execute(
+                    "SELECT * FROM normalization_canonicals WHERE canonical_id = ?",
+                    (canonical_id,),
+                ).fetchone()
+                event_id = int(event_cur.lastrowid)
+        return {
+            "canonical": dict(canonical),
+            "aliases": [dict(row) for row in after_aliases],
+            "event": {
+                "event_id": event_id,
+                "entity_type": entity_type,
+                "action": "create_canonical_group",
+                "payload": payload,
+                "reverted": False,
+                "created_at": now,
+            },
+        }
+
+    def link_normalization_alias_group(
+        self,
+        entity_type: str,
+        canonical_id: int,
+        alias_snapshots: List[Dict[str, Any]],
+        *,
+        suggestion_ids: List[int] | None = None,
+    ) -> Dict[str, Any]:
+        """Atomically attach raw aliases without stealing them from another entity."""
+        names = [str(item["raw_name"]) for item in alias_snapshots]
+        placeholders = ", ".join("?" for _ in names)
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                canonical = conn.execute(
+                    "SELECT * FROM normalization_canonicals WHERE canonical_id=? FOR UPDATE",
+                    (int(canonical_id),),
+                ).fetchone()
+                if not canonical or str(canonical["entity_type"]) != entity_type:
+                    raise ValueError("Canonical not found for entity type")
+                if str(canonical["status"]) != "active":
+                    raise ValueError("Canonical is not active")
+                before_aliases = conn.execute(
+                    f"SELECT * FROM normalization_aliases WHERE entity_type=? AND raw_name IN ({placeholders}) FOR UPDATE",
+                    (entity_type, *names),
+                ).fetchall()
+                conflicts = [
+                    str(row["raw_name"])
+                    for row in before_aliases
+                    if str(row.get("decision_status") or "") == "linked"
+                    and int(row.get("canonical_id") or 0) != int(canonical_id)
+                ]
+                if conflicts:
+                    raise ValueError(
+                        "Aliases already linked to another canonical: " + ", ".join(conflicts)
+                    )
+                for item in alias_snapshots:
+                    conn.execute(
+                        """
+                        INSERT INTO normalization_aliases (
+                            entity_type, raw_name, normalized_name, script_label,
+                            docs_count, mentions_count, marker_count, decision_status,
+                            canonical_id, confidence, source, reason, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'linked', ?, 1.0,
+                                  'manual_bulk', 'bulk_link', ?, ?)
+                        ON CONFLICT(entity_type, raw_name) DO UPDATE SET
+                            normalized_name=excluded.normalized_name,
+                            script_label=excluded.script_label,
+                            docs_count=excluded.docs_count,
+                            mentions_count=excluded.mentions_count,
+                            marker_count=excluded.marker_count,
+                            decision_status='linked', canonical_id=excluded.canonical_id,
+                            confidence=1.0, source='manual_bulk', reason='bulk_link',
+                            updated_at=excluded.updated_at
+                        """,
+                        (
+                            entity_type,
+                            item["raw_name"],
+                            item["normalized_name"],
+                            item["script_label"],
+                            int(item["docs_count"]),
+                            int(item["mentions_count"]),
+                            int(item["marker_count"]),
+                            int(canonical_id),
+                            now,
+                            now,
+                        ),
+                    )
+                ids = [int(value) for value in (suggestion_ids or [])]
+                if ids:
+                    id_placeholders = ", ".join("?" for _ in ids)
+                    conn.execute(
+                        f"UPDATE normalization_suggestions SET status='accepted', updated_at=? WHERE entity_type=? AND suggestion_id IN ({id_placeholders})",
+                        (now, entity_type, *ids),
+                    )
+                after_aliases = conn.execute(
+                    f"SELECT * FROM normalization_aliases WHERE entity_type=? AND raw_name IN ({placeholders}) ORDER BY raw_name",
+                    (entity_type, *names),
+                ).fetchall()
+                payload = {
+                    "canonical_id": int(canonical_id),
+                    "raw_names": names,
+                    "before_aliases": [dict(row) for row in before_aliases],
+                    "after_aliases": [dict(row) for row in after_aliases],
+                    "suggestion_ids": ids,
+                }
+                cur = conn.execute(
+                    """INSERT INTO normalization_events
+                       (entity_type, action, payload_json, reverted, created_at)
+                       VALUES (?, 'bulk_link_aliases', ?, 0, ?)""",
+                    (entity_type, json.dumps(payload, ensure_ascii=False), now),
+                )
+                event_id = int(cur.lastrowid)
+        return {
+            "updated": len(after_aliases),
+            "aliases": [dict(row) for row in after_aliases],
+            "event": {"event_id": event_id, "entity_type": entity_type, "action": "bulk_link_aliases", "payload": payload, "reverted": False, "created_at": now},
+        }
+
+    def rename_normalization_canonical(
+        self,
+        entity_type: str,
+        canonical_id: int,
+        display_name: str,
+        normalized_name: str,
+    ) -> Dict[str, Any]:
+        """Atomically rename a canonical and append a reversible event."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                before = conn.execute(
+                    "SELECT * FROM normalization_canonicals WHERE canonical_id=? FOR UPDATE",
+                    (int(canonical_id),),
+                ).fetchone()
+                if not before or str(before["entity_type"]) != entity_type:
+                    raise ValueError("Canonical not found for entity type")
+                if str(before["status"]) != "active":
+                    raise ValueError("Canonical is not active")
+                conn.execute(
+                    "UPDATE normalization_canonicals SET display_name=?, normalized_name=?, updated_at=? WHERE canonical_id=?",
+                    (display_name, normalized_name, now, int(canonical_id)),
+                )
+                after = conn.execute(
+                    "SELECT * FROM normalization_canonicals WHERE canonical_id=?",
+                    (int(canonical_id),),
+                ).fetchone()
+                payload = {"canonical_id": int(canonical_id), "before": dict(before), "after": dict(after)}
+                cur = conn.execute(
+                    """INSERT INTO normalization_events
+                       (entity_type, action, payload_json, reverted, created_at)
+                       VALUES (?, 'rename_canonical', ?, 0, ?)""",
+                    (entity_type, json.dumps(payload, ensure_ascii=False), now),
+                )
+                event_id = int(cur.lastrowid)
+        return {
+            "canonical": dict(after),
+            "event": {"event_id": event_id, "entity_type": entity_type, "action": "rename_canonical", "payload": payload, "reverted": False, "created_at": now},
+        }
+
+    def dismiss_normalization_suggestion(
+        self, entity_type: str, suggestion_id: int
+    ) -> Dict[str, Any]:
+        """Dismiss a proposal without rejecting its raw alias."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT * FROM normalization_suggestions WHERE suggestion_id=? AND entity_type=? FOR UPDATE",
+                    (int(suggestion_id), entity_type),
+                ).fetchone()
+                if not row:
+                    raise ValueError("Suggestion not found for entity type")
+                if str(row["status"]) != "open":
+                    raise ValueError("Suggestion is not open")
+                conn.execute(
+                    "UPDATE normalization_suggestions SET status='dismissed', updated_at=? WHERE suggestion_id=?",
+                    (now, int(suggestion_id)),
+                )
+        return {**dict(row), "status": "dismissed", "updated_at": now}
+
 
     def get_normalization_alias(
         self,

@@ -540,6 +540,80 @@ def create_canonical(
     }
 
 
+def create_canonical_group(
+    db: Database,
+    entity_type: str,
+    *,
+    display_name: str,
+    raw_names: List[str],
+    suggestion_ids: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """Create one canonical and retain a reviewed set of raw aliases."""
+    _entity_config(entity_type)
+    display = str(display_name or "").strip()
+    if not display:
+        raise ValueError("display_name is required")
+    names = list(dict.fromkeys(str(item or "").strip() for item in raw_names))
+    names = [item for item in names if item]
+    if not names:
+        raise ValueError("raw_names must be non-empty")
+    if len(names) > 200:
+        raise ValueError("raw_names may contain at most 200 aliases")
+    snapshots = [_runtime_snapshot_for_alias(entity_type, raw) for raw in names]
+    return db.create_normalization_group(
+        entity_type,
+        display,
+        _normalize_text(display),
+        snapshots,
+        suggestion_ids=[int(item) for item in (suggestion_ids or [])],
+    )
+
+
+def list_canonical_aliases(
+    db: Database, entity_type: str, *, canonical_id: int
+) -> Dict[str, Any]:
+    """Return the source spellings retained for one canonical."""
+    _entity_config(entity_type)
+    canonical = db.get_normalization_canonical(int(canonical_id))
+    if not canonical or str(canonical.get("entity_type") or "") != entity_type:
+        raise ValueError("Canonical not found for entity type")
+    return {
+        "available": True,
+        "canonical": canonical,
+        "items": db.list_normalization_aliases_for_canonical(
+            entity_type, int(canonical_id)
+        ),
+    }
+
+
+def rename_canonical(
+    db: Database,
+    entity_type: str,
+    *,
+    canonical_id: int,
+    display_name: str,
+) -> Dict[str, Any]:
+    """Change the chosen display name without changing retained aliases."""
+    _entity_config(entity_type)
+    display = str(display_name or "").strip()
+    if not display:
+        raise ValueError("display_name is required")
+    return db.rename_normalization_canonical(
+        entity_type, int(canonical_id), display, _normalize_text(display)
+    )
+
+
+def dismiss_suggestion(
+    db: Database,
+    entity_type: str,
+    *,
+    suggestion_id: int,
+) -> Dict[str, Any]:
+    """Dismiss one proposal while leaving the alias unresolved."""
+    _entity_config(entity_type)
+    return db.dismiss_normalization_suggestion(entity_type, int(suggestion_id))
+
+
 def _upsert_alias_decision(
     db: Database,
     entity_type: str,
@@ -842,6 +916,41 @@ def undo_event(
         for alias_snapshot in payload.get("moved_aliases") or []:
             db.restore_normalization_alias_snapshot(alias_snapshot)
 
+    elif action in {"bulk_link_aliases", "bulk_reject_aliases"}:
+        before_aliases = payload.get("before_aliases") or []
+        after_aliases = payload.get("after_aliases") or []
+        for index, after_alias in enumerate(after_aliases):
+            before_alias = before_aliases[index] if index < len(before_aliases) else None
+            _apply_alias_restore(
+                db,
+                entity_type=entity_type,
+                before_alias=before_alias,
+                after_alias=after_alias,
+            )
+
+    elif action == "create_canonical_group":
+        before_by_name = {
+            str(item.get("raw_name") or ""): item
+            for item in (payload.get("before_aliases") or [])
+        }
+        for after_alias in payload.get("after_aliases") or []:
+            raw_name = str(after_alias.get("raw_name") or "")
+            _apply_alias_restore(
+                db,
+                entity_type=entity_type,
+                before_alias=before_by_name.get(raw_name),
+                after_alias=after_alias,
+            )
+        created_id = int(payload.get("created_canonical_id") or 0)
+        if created_id > 0 and db.count_linked_aliases_for_canonical(created_id) == 0:
+            db.delete_normalization_canonical(created_id)
+
+    elif action == "rename_canonical":
+        db.restore_normalization_canonical_snapshot(payload.get("before"))
+
+    else:
+        raise ValueError("Event cannot be undone")
+
     db.mark_normalization_event_reverted(int(event_id))
     return {
         "event": db.get_normalization_event(int(event_id)),
@@ -1046,6 +1155,7 @@ def bulk_link_aliases(
     *,
     raw_names: List[str],
     canonical_id: int,
+    suggestion_ids: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     """Bulk-link a list of aliases to one canonical."""
     _entity_config(entity_type)
@@ -1053,37 +1163,13 @@ def bulk_link_aliases(
     if not rows:
         raise ValueError("raw_names must be non-empty")
 
-    before: List[Optional[Dict[str, Any]]] = []
-    after: List[Dict[str, Any]] = []
-    for raw in rows:
-        before.append(db.get_normalization_alias(entity_type, raw))
-        after.append(
-            _upsert_alias_decision(
-                db,
-                entity_type,
-                raw_name=raw,
-                decision_status="linked",
-                canonical_id=int(canonical_id),
-                source="manual_bulk",
-                confidence=1.0,
-                reason="bulk_link",
-            )
-        )
-
-    event = db.create_normalization_event(
+    snapshots = [_runtime_snapshot_for_alias(entity_type, raw) for raw in rows]
+    return db.link_normalization_alias_group(
         entity_type,
-        "bulk_link_aliases",
-        {
-            "canonical_id": int(canonical_id),
-            "raw_names": rows,
-            "before_aliases": before,
-            "after_aliases": after,
-        },
+        int(canonical_id),
+        snapshots,
+        suggestion_ids=[int(item) for item in (suggestion_ids or [])],
     )
-    return {
-        "updated": len(after),
-        "event": event,
-    }
 
 
 def bulk_reject_aliases(
@@ -1133,7 +1219,9 @@ def bulk_reject_aliases(
 
 __all__ = [
     "ENTITY_TYPES", "get_normalization_dashboard", "get_review_queue",
-    "list_canonicals", "create_canonical", "link_alias", "create_and_link_alias",
+    "list_canonicals", "create_canonical", "create_canonical_group",
+    "list_canonical_aliases", "rename_canonical", "dismiss_suggestion",
+    "link_alias", "create_and_link_alias",
     "reject_alias", "bulk_link_aliases", "bulk_reject_aliases",
     "merge_canonicals", "undo_event", "list_history", "get_quality",
     "get_merge_candidates", "get_evidence",

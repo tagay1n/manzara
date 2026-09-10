@@ -26,7 +26,7 @@ export const LIBRARY_PERSONALITIES_SOURCE = readFileSync(
   "utf-8",
 );
 export const LIBRARY_PUBLISHERS_SOURCE = readFileSync(
-  new URL("../../../static/library-entities.js", import.meta.url),
+  new URL("../../../static/library-publishers.js", import.meta.url),
   "utf-8",
 );
 export const LIBRARY_COLLECTIONS_SOURCE = readFileSync(
@@ -193,28 +193,44 @@ export const PERSONALITIES_PAGE_IDS = [
 ];
 
 export const PUBLISHERS_PAGE_IDS = [
-  "clusters-root",
+  "canonical-root",
+  "canonical-search",
+  "canonical-search-apply",
+  "canonical-status",
   "filter-apply",
   "filter-min-docs",
   "filter-script",
   "filter-search",
-  "filter-sort",
+  "filter-status",
   "global-status",
+  "history-root",
+  "history-status",
   "last-event",
   "page-label",
   "page-next",
   "page-prev",
+  "publisher-add-existing",
+  "publisher-clear-selection",
+  "publisher-create-group",
+  "publisher-evidence-close",
+  "publisher-evidence-content",
+  "publisher-evidence-dialog",
+  "publisher-evidence-title",
+  "publisher-existing-canonical",
+  "publisher-existing-search",
+  "publisher-match-btn",
+  "publisher-match-status",
+  "publisher-select-page",
+  "publisher-selection-bar",
+  "publisher-selection-count",
+  "publisher-selection-preview",
   "publisher-stat-grid",
   "publisher-status",
   "publisher-table-body",
   "publisher-table-status",
-  "publisher-top-list",
-  "queue-root",
-  "scripts-root",
   "stop-all-btn",
-  "tab-badge-clusters",
-  "tab-badge-queue",
-  "tab-badge-scripts",
+  "tab-badge-publishers",
+  "tab-badge-review",
 ];
 
 export const COLLECTIONS_PAGE_IDS = [
