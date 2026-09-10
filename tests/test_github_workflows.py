@@ -15,7 +15,7 @@ def test_nightly_google_export_workflow_contract() -> None:
 
     assert workflow["name"] == "Nightly Google Sheets & Drive Export"
     triggers = workflow["on"]
-    assert triggers["schedule"] == [{"cron": "0 0 * * *"}]
+    assert triggers["schedule"] == [{"cron": "7 0 * * *"}]
     assert "workflow_dispatch" in triggers
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["concurrency"] == {
@@ -55,3 +55,13 @@ def test_nightly_google_export_workflow_contract() -> None:
         "MANZARA_ARTIFACTS_ROOT": "${{ runner.temp }}/manzara"
     }
     assert "python -m app.modules.maintenance.runtime.dump_state" in export_step["run"]
+
+
+def test_nightly_postgres_backup_uses_an_off_hour_schedule() -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "nightly-postgres-backup.yml"
+    workflow = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+
+    assert workflow["name"] == "Nightly PostgreSQL Logical Backup"
+    triggers = workflow["on"]
+    assert triggers["schedule"] == [{"cron": "27 1 * * *"}]
+    assert "workflow_dispatch" in triggers

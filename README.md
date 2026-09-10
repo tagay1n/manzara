@@ -71,7 +71,7 @@ Gemini configuration contains one ordered `gemini.model_pool` and account-groupe
 
 The `Nightly Google Sheets & Drive Export` GitHub Actions workflow exports the
 PostgreSQL document catalog to the established Google Drive folder and Google Sheets
-worksheet every day at 03:00 Europe/Moscow (00:00 UTC). It can also be started
+worksheet every day at 03:07 Europe/Moscow (00:07 UTC). It can also be started
 manually with the workflow's **Run workflow** action.
 
 Configure these repository Actions secrets before the first run:

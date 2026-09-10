@@ -2,8 +2,8 @@ name: 'Nightly PostgreSQL Logical Backup'
 
 on:
   schedule:
-    # GitHub cron is UTC. This is 04:17 Europe/Moscow and avoids the busy hour boundary.
-    - cron: '17 1 * * *'
+    # GitHub cron is UTC. This is 04:27 Europe/Moscow and avoids the busy hour boundary.
+    - cron: '27 1 * * *'
   workflow_dispatch:
 
 permissions:

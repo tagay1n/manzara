@@ -2,8 +2,8 @@ name: 'Nightly Google Sheets & Drive Export'
 
 on:
   schedule:
-    # GitHub cron is UTC. This is 03:00 Europe/Moscow.
-    - cron: '0 0 * * *'
+    # GitHub cron is UTC. This is 03:07 Europe/Moscow and avoids the busy hour boundary.
+    - cron: '7 0 * * *'
   workflow_dispatch:
 
 permissions:
