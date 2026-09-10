@@ -112,6 +112,8 @@ def register_library_cleanup_routes(
             repo.dispose()
         state_provider().db.insert_event(
             "library.document_cleanup_changed",
+            task_id=None,
+            run_id=None,
             panel_id="library",
             payload={"review_id": review_id, "queued": result["queued"]},
         )
@@ -128,6 +130,8 @@ def register_library_cleanup_routes(
             repo.dispose()
         state_provider().db.insert_event(
             "library.document_cleanup_changed",
+            task_id=None,
+            run_id=None,
             panel_id="library",
             payload={
                 "review_id": review_id,

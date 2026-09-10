@@ -17,8 +17,25 @@ class _FakeDb:
     def get_latest_event_id(self) -> int:
         return 42
 
-    def insert_event(self, event_type: str, **kwargs) -> None:  # noqa: ANN003
-        self.events.append((event_type, kwargs))
+    def insert_event(
+        self,
+        event_type: str,
+        task_id: str | None,
+        run_id: int | None,
+        panel_id: str | None,
+        payload: dict,
+    ) -> None:
+        self.events.append(
+            (
+                event_type,
+                {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "panel_id": panel_id,
+                    "payload": payload,
+                },
+            )
+        )
 
 
 class _FakeRepository:
@@ -90,6 +107,57 @@ def test_cleanup_api_rejects_invalid_review_selection(monkeypatch) -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "keep_md5s must be an array of strings"
+
+
+def test_cleanup_api_decision_emits_refresh_event_without_failing_response(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        library_cleanup_routes, "DocumentCleanupRepository", _FakeRepository
+    )
+    monkeypatch.setattr(library_cleanup_routes, "load_runtime_config", dict)
+    monkeypatch.setattr(
+        library_cleanup_routes,
+        "load_document_storage_settings",
+        lambda _config: SimpleNamespace(
+            filtered_out_path="/filtered",
+            source_path="/documents",
+        ),
+    )
+    monkeypatch.setattr(
+        library_cleanup_routes,
+        "apply_isbn_review_decision",
+        lambda **_kwargs: {
+            "review_id": 3,
+            "isbn": "9780306406157",
+            "keep_md5s": ["a" * 32],
+            "remove_candidates": [],
+            "queued": 0,
+        },
+    )
+    state = SimpleNamespace(
+        settings=SimpleNamespace(database_url="postgresql://unused", database_schema="test"),
+        db=_FakeDb(),
+    )
+    app = FastAPI()
+    library_cleanup_routes.register_library_cleanup_routes(app, state_provider=lambda: state)
+
+    response = TestClient(app).post(
+        "/api/library/document-cleanup/isbn-reviews/3/decision",
+        json={"keep_md5s": ["a" * 32]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["queued"] == 0
+    assert state.db.events[-1] == (
+        "library.document_cleanup_changed",
+        {
+            "task_id": None,
+            "run_id": None,
+            "panel_id": "library",
+            "payload": {"review_id": 3, "queued": 0},
+        },
+    )
 
 
 def test_cleanup_api_undoes_review_and_emits_change_event(monkeypatch) -> None:

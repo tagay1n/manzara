@@ -6,10 +6,21 @@ const cleanupState = {
   eventStreamController: null,
   savingReviewIds: new Set(),
   undoingReviewIds: new Set(),
+  documentDownloads: new Map(),
+  documentDownloadQueue: [],
+  documentDownloadWorkerActive: false,
 };
 
 const cleanupApi = (path, options = {}) => window.ManzaraCore.api(path, options);
 const cleanupEscape = (value) => window.ManzaraCore.escapeHtml(value);
+
+function cleanupDocumentAction(candidate) {
+  const md5 = String(candidate.md5 || "").trim().toLowerCase();
+  const download = cleanupState.documentDownloads.get(md5);
+  const status = download?.status || "downloading";
+  const label = status === "ready" ? "Open" : status === "failed" ? "Retry" : "Downloading";
+  return `<button class="small-btn" type="button" data-document-md5="${cleanupEscape(md5)}" data-document-status="${status}"${status === "ready" || status === "failed" ? "" : " disabled"}>${label}</button>`;
+}
 
 function cleanupReviewCard(item) {
   const candidates = (item.candidates_json || []).map((candidate) => `
@@ -26,7 +37,7 @@ function cleanupReviewCard(item) {
         ].filter(Boolean).join(" · "))}</small>
         <span>${cleanupEscape(candidate.source_path || "")}</span>
       </span>
-      <span class="collection-proposal-item-tail"><a class="small-btn" href="/api/library/documents/${encodeURIComponent(candidate.md5)}/open" target="_blank" rel="noopener">Open</a></span>
+      <span class="collection-proposal-item-tail">${cleanupDocumentAction(candidate)}</span>
     </label>`).join("");
   return `<article class="collection-queue-card is-expanded cleanup-review-card">
     <div class="collection-static-row cleanup-review-head">
@@ -46,6 +57,77 @@ function renderCleanupList(payload) {
   document.getElementById("cleanup-list").innerHTML = items.map(cleanupReviewCard).join("")
     || '<div class="collections-review-empty">No pending ISBN conflicts.</div>';
   window.lucide?.createIcons?.();
+  queueCleanupDocuments(items);
+}
+
+function updateCleanupDocumentButtons(md5) {
+  const download = cleanupState.documentDownloads.get(md5);
+  if (!download) return;
+  document.querySelectorAll(`[data-document-md5="${md5}"]`).forEach((button) => {
+    button.dataset.documentStatus = download.status;
+    button.dataset.documentUrl = download.url || "";
+    button.disabled = download.status !== "ready" && download.status !== "failed";
+    button.textContent = download.status === "ready"
+      ? "Open"
+      : download.status === "failed" ? "Retry" : "Downloading";
+    if (download.error) button.title = download.error;
+    else button.removeAttribute?.("title");
+  });
+}
+
+function enqueueCleanupDocument(md5) {
+  const digest = String(md5 || "").trim().toLowerCase();
+  const current = cleanupState.documentDownloads.get(digest);
+  if (!digest || current?.status === "ready" || current?.status === "downloading") return;
+  cleanupState.documentDownloads.set(digest, { status: "downloading", url: "", error: "" });
+  cleanupState.documentDownloadQueue.push(digest);
+  updateCleanupDocumentButtons(digest);
+  runCleanupDocumentQueue();
+}
+
+function queueCleanupDocuments(items) {
+  for (const item of items || []) {
+    for (const candidate of item.candidates_json || []) {
+      const md5 = String(candidate.md5 || "").trim().toLowerCase();
+      if (!md5 || cleanupState.documentDownloads.has(md5)) continue;
+      cleanupState.documentDownloads.set(md5, { status: "queued", url: "", error: "" });
+      cleanupState.documentDownloadQueue.push(md5);
+    }
+  }
+  runCleanupDocumentQueue();
+}
+
+async function runCleanupDocumentQueue() {
+  if (cleanupState.documentDownloadWorkerActive) return;
+  cleanupState.documentDownloadWorkerActive = true;
+  try {
+    while (cleanupState.documentDownloadQueue.length) {
+      const md5 = cleanupState.documentDownloadQueue.shift();
+      cleanupState.documentDownloads.set(md5, { status: "downloading", url: "", error: "" });
+      updateCleanupDocumentButtons(md5);
+      try {
+        const result = await cleanupApi(`/api/library/documents/${encodeURIComponent(md5)}/cache`, {
+          method: "POST",
+        });
+        const openUrl = String(result?.open_url || "").trim();
+        if (!openUrl) throw new Error("Local document URL was not returned");
+        cleanupState.documentDownloads.set(md5, {
+          status: "ready",
+          url: openUrl,
+          error: "",
+        });
+      } catch (error) {
+        cleanupState.documentDownloads.set(md5, {
+          status: "failed",
+          url: "",
+          error: String(error?.message || error),
+        });
+      }
+      updateCleanupDocumentButtons(md5);
+    }
+  } finally {
+    cleanupState.documentDownloadWorkerActive = false;
+  }
 }
 
 function cleanupRecentCard(item) {
@@ -171,6 +253,19 @@ function setupCleanupEvents() {
 }
 
 document.getElementById("cleanup-list").addEventListener("click", (event) => {
+  const documentButton = event.target.closest("[data-document-md5]");
+  if (documentButton) {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    const md5 = String(documentButton.dataset.documentMd5 || "");
+    const download = cleanupState.documentDownloads.get(md5);
+    if (download?.status === "ready" && download.url) {
+      window.open(download.url, "_blank", "noopener");
+    } else if (download?.status === "failed") {
+      enqueueCleanupDocument(md5);
+    }
+    return;
+  }
   const action = event.target.closest("[data-review-decide]");
   if (action) decideCleanupReview(Number(action.dataset.reviewDecide), action).catch((error) => {
     window.ManzaraUI.toast(error.message || String(error), { tone: "error" });

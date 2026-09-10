@@ -660,6 +660,13 @@ test("document cleanup page bootstraps from its snapshot cursor and pending ISBN
       if (path === "/api/library/document-cleanup/isbn-reviews?status=decided&limit=20") {
         return { items: [] };
       }
+      if (path === `/api/library/documents/${"a".repeat(32)}/cache`) {
+        return {
+          md5: "a".repeat(32),
+          status: "ready",
+          open_url: `/api/library/documents/${"a".repeat(32)}/local`,
+        };
+      }
       throw new Error(`unexpected path: ${path}`);
     },
   });
@@ -677,6 +684,96 @@ test("document cleanup page bootstraps from its snapshot cursor and pending ISBN
     harness.sse.config.eventTypes.includes("library.document_cleanup_changed"),
     true,
   );
+  assert.match(harness.elements.get("cleanup-list").innerHTML, /Downloading/);
+  assert.ok(harness.apiCalls.some((call) =>
+    call.path === `/api/library/documents/${"a".repeat(32)}/cache`
+    && call.options.method === "POST"
+  ));
+});
+
+test("document cleanup caches candidates sequentially and continues after failure", async () => {
+  const first = "a".repeat(32);
+  const second = "b".repeat(32);
+  const third = "c".repeat(32);
+  let releaseFirst;
+  let secondAttempts = 0;
+  const firstPending = new Promise((resolve) => { releaseFirst = resolve; });
+  const cacheCalls = [];
+  const harness = createHarness({
+    source: LIBRARY_DOCUMENT_CLEANUP_SOURCE,
+    ids: DOCUMENT_CLEANUP_PAGE_IDS,
+    locationPathname: "/library/document-cleanup",
+    apiResolver(path) {
+      if (path === "/api/library/document-cleanup") return { event_cursor: 73, stats: {} };
+      if (path === "/api/library/document-cleanup/isbn-reviews?status=pending&limit=500") {
+        return { items: [
+          {
+            review_id: 9,
+            isbn: "9781234567890",
+            candidates_json: [
+              { md5: first, title: "First" },
+              { md5: second, title: "Second" },
+              { md5: third, title: "Third" },
+            ],
+          },
+          {
+            review_id: 8,
+            isbn: "9780987654321",
+            candidates_json: [{ md5: first, title: "First duplicate" }],
+          },
+        ] };
+      }
+      if (path === "/api/library/document-cleanup/isbn-reviews?status=decided&limit=20") {
+        return { items: [] };
+      }
+      if (path.endsWith("/cache")) {
+        cacheCalls.push(path);
+        if (path.includes(first)) return firstPending;
+        if (path.includes(second) && secondAttempts++ === 0) {
+          throw new Error("Backblaze unavailable");
+        }
+        if (path.includes(second)) {
+          return { md5: second, status: "ready", open_url: `/local/${second}` };
+        }
+        return { md5: third, status: "ready", open_url: `/local/${third}` };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+
+  assert.deepEqual(cacheCalls, [`/api/library/documents/${first}/cache`]);
+  releaseFirst({ md5: first, status: "ready", open_url: `/local/${first}` });
+  await harness.flush();
+
+  assert.deepEqual(cacheCalls, [
+    `/api/library/documents/${first}/cache`,
+    `/api/library/documents/${second}/cache`,
+    `/api/library/documents/${third}/cache`,
+  ]);
+  const firstButton = harness.document.querySelectorAll(`[data-document-md5="${first}"]`)[0];
+  const secondButton = harness.document.querySelectorAll(`[data-document-md5="${second}"]`)[0];
+  const thirdButton = harness.document.querySelectorAll(`[data-document-md5="${third}"]`)[0];
+  assert.equal(firstButton.textContent, "Open");
+  assert.equal(firstButton.dataset.documentUrl, `/local/${first}`);
+  assert.equal(secondButton.textContent, "Retry");
+  assert.equal(secondButton.disabled, false);
+  assert.equal(thirdButton.textContent, "Open");
+
+  harness.elements.get("cleanup-list").dispatch("click", {
+    target: {
+      closest(selector) {
+        return selector === "[data-document-md5]"
+          ? { dataset: { documentMd5: second } }
+          : null;
+      },
+    },
+  });
+  await harness.flush();
+
+  assert.equal(cacheCalls.at(-1), `/api/library/documents/${second}/cache`);
+  assert.equal(secondButton.textContent, "Open");
+  assert.equal(secondButton.dataset.documentUrl, `/local/${second}`);
 });
 
 test("document cleanup resolves immediately and offers undo in recent reviews", async () => {
@@ -719,6 +816,9 @@ test("document cleanup resolves immediately and offers undo in recent reviews", 
         resolved = false;
         return { review_id: 9, status: "pending", canceled_cleanup_ids: [] };
       }
+      if (path.endsWith("/cache") && options.method === "POST") {
+        return { md5: "a".repeat(32), status: "ready", open_url: "/local/a" };
+      }
       throw new Error(`unexpected path: ${path}`);
     },
   });
@@ -756,6 +856,10 @@ test("document cleanup resolves immediately and offers undo in recent reviews", 
 
   assert.ok(harness.apiCalls.some((call) => call.path.endsWith("/9/undo")));
   assert.match(harness.elements.get("cleanup-list").innerHTML, /ISBN 9781234567890/);
+  assert.equal(
+    harness.apiCalls.filter((call) => call.path.endsWith("/cache")).length,
+    1,
+  );
 });
 
 test("document cleanup refreshes a review resolved by another request", async () => {
@@ -792,6 +896,9 @@ test("document cleanup refreshes a review resolved by another request", async ()
       if (path.endsWith("/isbn-reviews/9/decision") && options.method === "POST") {
         stale = false;
         throw new Error("ISBN review is no longer pending");
+      }
+      if (path.endsWith("/cache") && options.method === "POST") {
+        return { md5: "a".repeat(32), status: "ready", open_url: "/local/a" };
       }
       throw new Error(`unexpected path: ${path}`);
     },
