@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from app.document_sync_filter import classify_document
-from app.modules.library.runtime.metadata.isbn_utils import canonicalize_isbn_values
+from app.modules.library.runtime.metadata.isbn_utils import (
+    canonicalize_isbn_values,
+    isbn_comparison_values,
+)
 
 
 TATAR_LANGUAGE_CODES = frozenset({"tat", "tt", "tatar"})
@@ -41,18 +44,32 @@ def build_isbn_cleanup_decisions(
 ) -> list[IsbnCleanupDecision]:
     """Group duplicate ISBNs and auto-select only one clearly complete PDF."""
     grouped: dict[str, dict[str, Mapping[str, Any]]] = {}
+    observed_by_key: dict[str, set[str]] = {}
     for document in documents:
         md5 = str(document.get("md5") or "").strip().lower()
         if len(md5) != 32:
             continue
-        for isbn in canonicalize_isbn_values(document.get("isbn")) or []:
-            grouped.setdefault(isbn, {})[md5] = document
+        observed = canonicalize_isbn_values(document.get("isbn")) or []
+        for value in observed:
+            for comparison_key in isbn_comparison_values([value]):
+                grouped.setdefault(comparison_key, {})[md5] = document
+                observed_by_key.setdefault(comparison_key, set()).add(value)
 
-    decisions: list[IsbnCleanupDecision] = []
+    isbn_groups_by_candidates: dict[tuple[str, ...], list[str]] = {}
     for isbn, candidates_by_md5 in sorted(grouped.items()):
         if len(candidates_by_md5) < 2:
             continue
         candidates = tuple(sorted(candidates_by_md5))
+        isbn_groups_by_candidates.setdefault(candidates, []).append(isbn)
+
+    decisions: list[IsbnCleanupDecision] = []
+    consolidated_groups = sorted(
+        isbn_groups_by_candidates.items(),
+        key=lambda item: (item[1][0], item[0]),
+    )
+    for candidates, matched_isbns in consolidated_groups:
+        isbn = matched_isbns[0]
+        candidates_by_md5 = grouped[isbn]
         complete_pdfs = tuple(
             md5
             for md5 in candidates
@@ -74,6 +91,14 @@ def build_isbn_cleanup_decisions(
                     "candidate_count": len(candidates),
                     "complete_pdf_count": len(complete_pdfs),
                     "rule": "single_complete_pdf" if deterministic else "human_review",
+                    "matched_isbns": matched_isbns,
+                    "observed_isbns": sorted(
+                        {
+                            observed
+                            for matched in matched_isbns
+                            for observed in observed_by_key[matched]
+                        }
+                    ),
                 },
             )
         )

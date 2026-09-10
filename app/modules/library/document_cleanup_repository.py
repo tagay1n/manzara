@@ -10,7 +10,19 @@ from typing import Any
 from sqlalchemy import text
 
 from app.modules.library.runtime.metadata.fields import extract_page_count, parse_meta
+from app.modules.library.runtime.metadata.isbn_utils import equivalent_isbn_values
 from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
+
+
+_ISBN_REVIEW_LOCK = text(
+    "SELECT pg_advisory_xact_lock(hashtext(current_schema()), "
+    "hashtext('library_isbn_duplicate_review_mutation'))"
+)
+
+
+def _lock_isbn_reviews(conn: Any) -> None:
+    """Serialize review identity and decision mutations within one schema."""
+    conn.execute(_ISBN_REVIEW_LOCK)
 
 
 def _enrich_review_page_counts(
@@ -172,7 +184,70 @@ class DocumentCleanupRepository:
             "candidates_json": canonical,
             "evidence_json": json.dumps(evidence, ensure_ascii=False, sort_keys=True),
         }
+        matched_isbns = evidence.get("matched_isbns")
+        identity_isbns: set[str] = set()
+        for identifier in [
+            isbn,
+            *(matched_isbns if isinstance(matched_isbns, list) else []),
+        ]:
+            aliases = equivalent_isbn_values(identifier)
+            identity_isbns.update(aliases or [str(identifier)])
         with self.engine.begin() as conn:
+            _lock_isbn_reviews(conn)
+            existing_reviews = conn.execute(
+                text(
+                    """
+                    SELECT review_id, isbn, status
+                    FROM library_isbn_duplicate_reviews
+                    WHERE candidate_hash = :candidate_hash
+                      AND isbn = ANY(:identity_isbns)
+                    ORDER BY
+                        CASE status
+                            WHEN 'decided' THEN 0
+                            WHEN 'pending' THEN 1
+                            ELSE 2
+                        END,
+                        (isbn = :isbn) DESC,
+                        review_id
+                    """
+                ),
+                {
+                    **values,
+                    "identity_isbns": sorted(identity_isbns),
+                },
+            ).mappings().all()
+            if existing_reviews:
+                selected = existing_reviews[0]
+                selected_id = int(selected["review_id"])
+                redundant_pending_ids = [
+                    int(item["review_id"])
+                    for item in existing_reviews[1:]
+                    if item["status"] == "pending"
+                ]
+                if redundant_pending_ids:
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE library_isbn_duplicate_reviews
+                            SET status = 'superseded', updated_at = CURRENT_TIMESTAMP
+                            WHERE review_id = ANY(:review_ids) AND status = 'pending'
+                            """
+                        ),
+                        {"review_ids": redundant_pending_ids},
+                    )
+                if selected["status"] == "pending":
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE library_isbn_duplicate_reviews
+                            SET evidence_json = CAST(:evidence_json AS JSONB),
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE review_id = :review_id
+                            """
+                        ),
+                        {**values, "review_id": selected_id},
+                    )
+                return selected_id, False
             row = conn.execute(
                 text(
                     """
@@ -279,6 +354,7 @@ class DocumentCleanupRepository:
         if not keep:
             raise ValueError("At least one document must be kept")
         with self.engine.begin() as conn:
+            _lock_isbn_reviews(conn)
             review = conn.execute(
                 text(
                     """
@@ -308,6 +384,47 @@ class DocumentCleanupRepository:
             if status not in {"pending", "decided"}:
                 raise ValueError("ISBN review is no longer pending")
             if status == "pending":
+                candidate_md5s = set(by_md5)
+                remove = candidate_md5s - set(keep)
+                decided_reviews = conn.execute(
+                    text(
+                        """
+                        SELECT review_id, candidates_json, keep_md5s_json
+                        FROM library_isbn_duplicate_reviews
+                        WHERE review_id <> :review_id
+                          AND status = 'decided'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM jsonb_array_elements(candidates_json) candidate
+                              WHERE candidate->>'md5' = ANY(:candidate_md5s)
+                          )
+                        ORDER BY review_id
+                        """
+                    ),
+                    {
+                        "review_id": int(review_id),
+                        "candidate_md5s": sorted(candidate_md5s),
+                    },
+                ).mappings()
+                for decided in decided_reviews:
+                    other_candidates = {
+                        str(item.get("md5") or "").strip().lower()
+                        for item in decided["candidates_json"] or []
+                        if item.get("md5")
+                    }
+                    other_keep = {
+                        str(value).strip().lower()
+                        for value in decided["keep_md5s_json"] or []
+                        if value
+                    }
+                    other_remove = other_candidates - other_keep
+                    conflicting = (set(keep) & other_remove) | (remove & other_keep)
+                    if conflicting:
+                        identifiers = ", ".join(sorted(conflicting))
+                        raise ValueError(
+                            "Decision conflicts with decided ISBN review "
+                            f"{int(decided['review_id'])} for document(s): {identifiers}"
+                        )
                 conn.execute(
                     text(
                         """
@@ -331,6 +448,7 @@ class DocumentCleanupRepository:
         """Reopen one decision when its exclusive cleanup plans remain reversible."""
         normalized_review_id = int(review_id)
         with self.engine.begin() as conn:
+            _lock_isbn_reviews(conn)
             review = conn.execute(
                 text(
                     """

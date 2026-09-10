@@ -14,6 +14,18 @@ const cleanupState = {
 const cleanupApi = (path, options = {}) => window.ManzaraCore.api(path, options);
 const cleanupEscape = (value) => window.ManzaraCore.escapeHtml(value);
 
+function cleanupReviewIsbnLabel(item) {
+  const matched = Array.isArray(item.evidence_json?.matched_isbns)
+    ? item.evidence_json.matched_isbns
+    : [];
+  const values = [...new Set(
+    [item.isbn, ...matched]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  )];
+  return `${values.length === 1 ? "ISBN" : "ISBNs"} ${values.join(" · ")}`;
+}
+
 function cleanupDocumentAction(candidate) {
   const md5 = String(candidate.md5 || "").trim().toLowerCase();
   const download = cleanupState.documentDownloads.get(md5);
@@ -41,7 +53,7 @@ function cleanupReviewCard(item) {
     </label>`).join("");
   return `<article class="collection-queue-card is-expanded cleanup-review-card">
     <div class="collection-static-row cleanup-review-head">
-      <span class="collection-queue-copy"><span class="collection-queue-title">ISBN ${cleanupEscape(item.isbn)}</span><span class="collection-queue-meta">Select every document that must remain</span></span>
+      <span class="collection-queue-copy"><span class="collection-queue-title">${cleanupEscape(cleanupReviewIsbnLabel(item))}</span><span class="collection-queue-meta">Select every document that must remain</span></span>
       <button class="small-btn primary" data-review-decide="${Number(item.review_id)}">Keep selected</button>
     </div>
     <div class="collection-queue-details"><div class="collection-proposal-items">${candidates}</div></div>
@@ -136,7 +148,7 @@ function cleanupRecentCard(item) {
   return `<article class="collection-queue-card cleanup-recent-card">
     <div class="collection-static-row cleanup-review-head">
       <span class="collection-queue-copy">
-        <span class="collection-queue-title">ISBN ${cleanupEscape(item.isbn)}</span>
+        <span class="collection-queue-title">${cleanupEscape(cleanupReviewIsbnLabel(item))}</span>
         <span class="collection-queue-meta">Resolved · ${kept.size} of ${candidates.length} kept · ${cleanupEscape(window.ManzaraCore.formatDateTime(item.decided_at))}</span>
       </span>
       <button class="small-btn" data-review-undo="${Number(item.review_id)}">Undo</button>

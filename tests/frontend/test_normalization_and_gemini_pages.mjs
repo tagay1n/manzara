@@ -645,6 +645,9 @@ test("document cleanup page bootstraps from its snapshot cursor and pending ISBN
             {
               review_id: 9,
               isbn: "9781234567890",
+              evidence_json: {
+                matched_isbns: ["9781234567890", "9780987654321"],
+              },
               candidates_json: [{
                 md5: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 title: "Book one",
@@ -672,7 +675,10 @@ test("document cleanup page bootstraps from its snapshot cursor and pending ISBN
   });
   await harness.flush();
 
-  assert.match(harness.elements.get("cleanup-list").innerHTML, /ISBN 9781234567890/);
+  assert.match(
+    harness.elements.get("cleanup-list").innerHTML,
+    /ISBNs 9781234567890 · 9780987654321/,
+  );
   assert.match(harness.elements.get("cleanup-list").innerHTML, /321 pages/);
   assert.match(harness.elements.get("cleanup-list").innerHTML, /Full document/);
   assert.equal(

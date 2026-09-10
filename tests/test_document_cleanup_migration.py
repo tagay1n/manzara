@@ -307,3 +307,175 @@ def test_isbn_review_decision_retry_with_same_selection_is_idempotent(
             repository.decide_review(review_id, keep_md5s=[removed_md5])
     finally:
         repository.dispose()
+
+
+def test_overlapping_isbn_reviews_reject_contradictory_decisions(
+    prepared_test_schema,
+) -> None:
+    database_url, schema = prepared_test_schema
+    repository = DocumentCleanupRepository(database_url, schema=schema)
+    shared_md5 = "1" * 32
+    first_only_md5 = "2" * 32
+    second_only_md5 = "3" * 32
+    try:
+        with repository.engine.begin() as conn:
+            first_review_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO library_isbn_duplicate_reviews (
+                        isbn, candidate_hash, candidates_json
+                    ) VALUES (
+                        '9780306406157', 'overlap-first',
+                        CAST(:candidates AS JSONB)
+                    ) RETURNING review_id
+                    """
+                ),
+                {
+                    "candidates": (
+                        '[{"md5":"' + shared_md5 + '"},'
+                        '{"md5":"' + first_only_md5 + '"}]'
+                    ),
+                },
+            ).scalar_one()
+            second_review_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO library_isbn_duplicate_reviews (
+                        isbn, candidate_hash, candidates_json
+                    ) VALUES (
+                        '9781861972712', 'overlap-second',
+                        CAST(:candidates AS JSONB)
+                    ) RETURNING review_id
+                    """
+                ),
+                {
+                    "candidates": (
+                        '[{"md5":"' + shared_md5 + '"},'
+                        '{"md5":"' + second_only_md5 + '"}]'
+                    ),
+                },
+            ).scalar_one()
+
+        repository.decide_review(first_review_id, keep_md5s=[shared_md5])
+
+        with pytest.raises(ValueError, match="conflicts with decided ISBN review"):
+            repository.decide_review(
+                second_review_id,
+                keep_md5s=[second_only_md5],
+            )
+
+        with repository.engine.connect() as conn:
+            status = conn.execute(
+                text(
+                    "SELECT status FROM library_isbn_duplicate_reviews "
+                    "WHERE review_id=:review_id"
+                ),
+                {"review_id": second_review_id},
+            ).scalar_one()
+        assert status == "pending"
+    finally:
+        repository.dispose()
+
+
+def test_isbn_13_planning_reuses_equivalent_decided_isbn_10_review(
+    prepared_test_schema,
+) -> None:
+    database_url, schema = prepared_test_schema
+    repository = DocumentCleanupRepository(database_url, schema=schema)
+    kept_md5 = "4" * 32
+    removed_md5 = "5" * 32
+    candidates = [
+        {"md5": kept_md5, "source_path": "/books/kept.pdf"},
+        {"md5": removed_md5, "source_path": "/books/removed.pdf"},
+    ]
+    try:
+        legacy_review_id, created = repository.upsert_isbn_review(
+            isbn="0306406152",
+            candidates=candidates,
+            evidence={"source": "legacy"},
+        )
+        assert created is True
+        repository.decide_review(legacy_review_id, keep_md5s=[kept_md5])
+
+        review_id, created = repository.upsert_isbn_review(
+            isbn="9780306406157",
+            candidates=candidates,
+            evidence={"source": "current"},
+        )
+
+        assert (review_id, created) == (legacy_review_id, False)
+        with repository.engine.connect() as conn:
+            review = conn.execute(
+                text(
+                    "SELECT isbn, status, evidence_json "
+                    "FROM library_isbn_duplicate_reviews "
+                    "WHERE review_id=:review_id"
+                ),
+                {"review_id": review_id},
+            ).mappings().one()
+        assert review == {
+            "isbn": "0306406152",
+            "status": "decided",
+            "evidence_json": {"source": "legacy"},
+        }
+    finally:
+        repository.dispose()
+
+
+def test_consolidated_isbn_planning_supersedes_redundant_pending_review(
+    prepared_test_schema,
+) -> None:
+    database_url, schema = prepared_test_schema
+    repository = DocumentCleanupRepository(database_url, schema=schema)
+    candidates = [
+        {"md5": "6" * 32, "source_path": "/books/first.pdf"},
+        {"md5": "7" * 32, "source_path": "/books/second.pdf"},
+    ]
+    try:
+        first_id, _ = repository.upsert_isbn_review(
+            isbn="9780306406157",
+            candidates=candidates,
+            evidence={"matched_isbns": ["9780306406157"]},
+        )
+        second_id, _ = repository.upsert_isbn_review(
+            isbn="9781861972712",
+            candidates=candidates,
+            evidence={"matched_isbns": ["9781861972712"]},
+        )
+
+        review_id, created = repository.upsert_isbn_review(
+            isbn="9780306406157",
+            candidates=candidates,
+            evidence={
+                "matched_isbns": ["9780306406157", "9781861972712"],
+                "observed_isbns": ["9780306406157", "9781861972712"],
+            },
+        )
+
+        assert (review_id, created) == (first_id, False)
+        with repository.engine.connect() as conn:
+            reviews = conn.execute(
+                text(
+                    "SELECT review_id, status, evidence_json "
+                    "FROM library_isbn_duplicate_reviews "
+                    "WHERE review_id = ANY(:review_ids) ORDER BY review_id"
+                ),
+                {"review_ids": [first_id, second_id]},
+            ).mappings().all()
+        assert [dict(item) for item in reviews] == [
+            {
+                "review_id": first_id,
+                "status": "pending",
+                "evidence_json": {
+                    "matched_isbns": ["9780306406157", "9781861972712"],
+                    "observed_isbns": ["9780306406157", "9781861972712"],
+                },
+            },
+            {
+                "review_id": second_id,
+                "status": "superseded",
+                "evidence_json": {"matched_isbns": ["9781861972712"]},
+            },
+        ]
+    finally:
+        repository.dispose()

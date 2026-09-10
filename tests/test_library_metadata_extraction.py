@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pymupdf
@@ -240,6 +241,25 @@ def test_adopted_normalization_cleans_base_metadata() -> None:
             },
         }
     ]
+
+
+def test_metadata_response_preserves_multiple_distinct_valid_isbns() -> None:
+    normalized = parse_metadata_response(
+        json.dumps(
+            {
+                "@context": "https://schema.org",
+                "@type": "Book",
+                "name": "Example",
+                "isbn": [
+                    "978-0-306-40615-7",
+                    "978-1-86197-271-2",
+                    "9780306406157",
+                ],
+            }
+        )
+    )
+
+    assert normalized["isbn"] == ["9780306406157", "9781861972712"]
 
 
 def test_normalization_preserves_zamanalif_variant_tag() -> None:

@@ -34,6 +34,39 @@ def canonicalize_isbn_values(value: Any) -> list[str] | None:
     return result or None
 
 
+def isbn_comparison_values(value: Any) -> list[str]:
+    """Return unique ISBN-13 keys while preserving identifiers elsewhere."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for canonical in canonicalize_isbn_values(value) or []:
+        comparison = (
+            isbnlib.to_isbn13(canonical)
+            if isbnlib.is_isbn10(canonical)
+            else canonical
+        )
+        if comparison and comparison not in seen:
+            seen.add(comparison)
+            result.append(comparison)
+    return result
+
+
+def equivalent_isbn_values(value: Any) -> list[str]:
+    """Return canonical identifiers plus their ISBN-10/ISBN-13 aliases."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for canonical in canonicalize_isbn_values(value) or []:
+        aliases = [canonical]
+        if isbnlib.is_isbn10(canonical):
+            aliases.append(isbnlib.to_isbn13(canonical))
+        else:
+            aliases.append(isbnlib.to_isbn10(canonical))
+        for alias in aliases:
+            if alias and alias not in seen:
+                seen.add(alias)
+                result.append(alias)
+    return result
+
+
 def _iter_isbn_candidates(value: Any) -> list[str]:
     items = value if isinstance(value, list) else [value]
     out: list[str] = []

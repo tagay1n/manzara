@@ -134,6 +134,122 @@ def test_isbn_cleanup_keeps_ambiguous_complete_documents_for_review() -> None:
     assert decisions[0].remove_md5s == ()
 
 
+def test_isbn_cleanup_matches_equivalent_isbn_10_and_isbn_13() -> None:
+    decisions = build_isbn_cleanup_decisions(
+        [
+            {
+                "md5": "a" * 32,
+                "isbn": ["0-306-40615-2"],
+                "full": True,
+                "mime_type": "application/pdf",
+            },
+            {
+                "md5": "b" * 32,
+                "isbn": ["978-0-306-40615-7"],
+                "full": True,
+                "mime_type": "application/pdf",
+            },
+        ]
+    )
+
+    assert len(decisions) == 1
+    assert decisions[0].isbn == "9780306406157"
+    assert decisions[0].candidate_md5s == ("a" * 32, "b" * 32)
+    assert decisions[0].evidence["observed_isbns"] == [
+        "0306406152",
+        "9780306406157",
+    ]
+
+
+def test_isbn_cleanup_deduplicates_equivalent_forms_within_one_document() -> None:
+    decisions = build_isbn_cleanup_decisions(
+        [
+            {
+                "md5": "a" * 32,
+                "isbn": ["0-306-40615-2", "978-0-306-40615-7"],
+                "full": True,
+                "mime_type": "application/pdf",
+            },
+            {
+                "md5": "b" * 32,
+                "isbn": ["9780306406157"],
+                "full": True,
+                "mime_type": "application/pdf",
+            },
+        ]
+    )
+
+    assert len(decisions) == 1
+    assert decisions[0].candidate_md5s == ("a" * 32, "b" * 32)
+
+
+def test_isbn_cleanup_places_multi_isbn_document_in_each_matching_group() -> None:
+    decisions = build_isbn_cleanup_decisions(
+        [
+            {
+                "md5": "a" * 32,
+                "isbn": ["9780306406157", "9781861972712"],
+                "full": True,
+                "mime_type": "application/pdf",
+            },
+            {
+                "md5": "b" * 32,
+                "isbn": ["9780306406157"],
+                "full": True,
+                "mime_type": "application/pdf",
+            },
+            {
+                "md5": "c" * 32,
+                "isbn": ["9781861972712"],
+                "full": True,
+                "mime_type": "application/pdf",
+            },
+            {
+                "md5": "d" * 32,
+                "isbn": ["9780743273565"],
+                "full": True,
+                "mime_type": "application/pdf",
+            },
+        ]
+    )
+
+    assert [(item.isbn, item.candidate_md5s) for item in decisions] == [
+        ("9780306406157", ("a" * 32, "b" * 32)),
+        ("9781861972712", ("a" * 32, "c" * 32)),
+    ]
+
+
+def test_isbn_cleanup_consolidates_shared_isbns_with_same_candidates() -> None:
+    decisions = build_isbn_cleanup_decisions(
+        [
+            {
+                "md5": "a" * 32,
+                "isbn": ["9780306406157", "9781861972712"],
+                "full": True,
+                "mime_type": "application/pdf",
+            },
+            {
+                "md5": "b" * 32,
+                "isbn": ["9780306406157", "9781861972712"],
+                "full": True,
+                "mime_type": "application/pdf",
+            },
+        ]
+    )
+
+    assert len(decisions) == 1
+    assert decisions[0].isbn == "9780306406157"
+    assert decisions[0].candidate_md5s == ("a" * 32, "b" * 32)
+    assert decisions[0].evidence["matched_isbns"] == [
+        "9780306406157",
+        "9781861972712",
+    ]
+    assert decisions[0].evidence["observed_isbns"] == [
+        "9780306406157",
+        "9781861972712",
+    ]
+
+
 def test_isbn_review_candidates_are_enriched_with_page_counts() -> None:
     reviews = [{
         "review_id": 7,
