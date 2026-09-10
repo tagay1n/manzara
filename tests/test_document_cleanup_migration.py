@@ -269,3 +269,41 @@ def test_isbn_review_undo_preserves_cleanup_shared_by_another_decision(
         assert cleanup_status == "planned"
     finally:
         repository.dispose()
+
+
+def test_isbn_review_decision_retry_with_same_selection_is_idempotent(
+    prepared_test_schema,
+) -> None:
+    database_url, schema = prepared_test_schema
+    repository = DocumentCleanupRepository(database_url, schema=schema)
+    kept_md5 = "e" * 32
+    removed_md5 = "f" * 32
+    try:
+        with repository.engine.begin() as conn:
+            review_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO library_isbn_duplicate_reviews (
+                        isbn, candidate_hash, candidates_json
+                    ) VALUES (
+                        '9780679760801', 'decision-retry-test',
+                        CAST(:candidates AS JSONB)
+                    ) RETURNING review_id
+                    """
+                ),
+                {
+                    "candidates": (
+                        '[{"md5":"' + kept_md5 + '"},'
+                        '{"md5":"' + removed_md5 + '"}]'
+                    ),
+                },
+            ).scalar_one()
+
+        first = repository.decide_review(review_id, keep_md5s=[kept_md5])
+        retried = repository.decide_review(review_id, keep_md5s=[kept_md5])
+
+        assert retried == first
+        with pytest.raises(ValueError, match="no longer pending"):
+            repository.decide_review(review_id, keep_md5s=[removed_md5])
+    finally:
+        repository.dispose()

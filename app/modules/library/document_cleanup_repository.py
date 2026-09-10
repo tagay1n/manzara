@@ -282,7 +282,7 @@ class DocumentCleanupRepository:
             review = conn.execute(
                 text(
                     """
-                    SELECT review_id, isbn, candidates_json, status
+                    SELECT review_id, isbn, candidates_json, keep_md5s_json, status
                     FROM library_isbn_duplicate_reviews
                     WHERE review_id = :review_id FOR UPDATE
                     """
@@ -291,24 +291,35 @@ class DocumentCleanupRepository:
             ).mappings().one_or_none()
             if review is None:
                 raise ValueError("ISBN review not found")
-            if str(review["status"]) != "pending":
-                raise ValueError("ISBN review is no longer pending")
             candidates = list(review["candidates_json"] or [])
             by_md5 = {str(item.get("md5") or "").lower(): dict(item) for item in candidates}
             if not set(keep).issubset(by_md5):
                 raise ValueError("keep_md5s contains a document outside this review")
-            conn.execute(
-                text(
-                    """
-                    UPDATE library_isbn_duplicate_reviews SET
-                        keep_md5s_json = CAST(:keep_json AS JSONB),
-                        status = 'decided', decided_at = CURRENT_TIMESTAMP,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE review_id = :review_id
-                    """
-                ),
-                {"review_id": int(review_id), "keep_json": json.dumps(keep)},
+            status = str(review["status"])
+            existing_keep = tuple(
+                sorted(
+                    str(value).strip().lower()
+                    for value in review["keep_md5s_json"] or []
+                    if value
+                )
             )
+            if status == "decided" and keep != existing_keep:
+                raise ValueError("ISBN review is no longer pending")
+            if status not in {"pending", "decided"}:
+                raise ValueError("ISBN review is no longer pending")
+            if status == "pending":
+                conn.execute(
+                    text(
+                        """
+                        UPDATE library_isbn_duplicate_reviews SET
+                            keep_md5s_json = CAST(:keep_json AS JSONB),
+                            status = 'decided', decided_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE review_id = :review_id
+                        """
+                    ),
+                    {"review_id": int(review_id), "keep_json": json.dumps(keep)},
+                )
         return {
             "review_id": int(review_id),
             "isbn": str(review["isbn"]),

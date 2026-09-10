@@ -111,6 +111,15 @@ async function decideCleanupReview(reviewId, button) {
     window.ManzaraUI.toast(
       `ISBN resolved: ${selected.length} kept, ${Math.max(0, removed)} queued for cleanup.`
     );
+  } catch (error) {
+    if (String(error?.message || error).includes("ISBN review is no longer pending")) {
+      await refreshCleanup();
+      window.ManzaraUI.toast(
+        "This ISBN conflict was already resolved. The review list has been refreshed."
+      );
+      return;
+    }
+    throw error;
   } finally {
     cleanupState.savingReviewIds.delete(reviewId);
     if (button) {
