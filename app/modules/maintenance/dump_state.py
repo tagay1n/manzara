@@ -6,6 +6,7 @@ import csv
 from datetime import datetime
 import json
 from pathlib import Path
+import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 import zipfile
 
@@ -21,6 +22,7 @@ SCOPES = (
 SHARED_FOLDER_ID = "1WFYCcbrtKGv3KTwyKdcKHKxXwmr9iFHE"
 SPREADSHEET_ID = "1qDm6iHJu44wN78YvYRbn44oFd28UfRs9HT-7UAzeZZ8"
 WORKSHEET_NAME = "tt"
+SHEETS_WRITE_INTERVAL_SECONDS = 1.1
 
 EXCLUDED_CSV_COLUMNS = {
     "ya_public_key",
@@ -205,10 +207,19 @@ def upload_csv_to_sheets(
     required_rows = max(40000, len(data))
     required_columns = max(25, len(data[0]) if data else 1)
 
+    write_started = False
+
+    def pace_write() -> None:
+        nonlocal write_started
+        if write_started:
+            time.sleep(SHEETS_WRITE_INTERVAL_SECONDS)
+        write_started = True
+
     spreadsheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID)
     try:
         worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
     except WorksheetNotFound:
+        pace_write()
         worksheet = spreadsheet.add_worksheet(
             title=WORKSHEET_NAME,
             rows=required_rows,
@@ -218,19 +229,23 @@ def upload_csv_to_sheets(
     if should_stop():
         raise StopRequested("graceful stop requested before Sheets replacement")
     if worksheet.row_count < required_rows or worksheet.col_count < required_columns:
+        pace_write()
         worksheet.resize(
             rows=max(worksheet.row_count, required_rows),
             cols=max(worksheet.col_count, required_columns),
         )
+    pace_write()
     worksheet.clear()
     for start in range(0, len(data), chunk_size):
         chunk = data[start : start + chunk_size]
+        pace_write()
         worksheet.update(values=chunk, range_name=f"A{start + 1}")
         print(
             f"dump state: sheets rows {start + 1}-{start + len(chunk)} uploaded",
             flush=True,
         )
 
+    pace_write()
     spreadsheet.batch_update(
         {
             "requests": [

@@ -84,6 +84,7 @@ def test_sheets_upload_resizes_small_existing_worksheet(monkeypatch, tmp_path) -
             self.updates.append((range_name, values))
 
     worksheet = Worksheet()
+    sleeps = []
 
     class Spreadsheet:
         def worksheet(self, title):  # noqa: ANN001
@@ -99,6 +100,9 @@ def test_sheets_upload_resizes_small_existing_worksheet(monkeypatch, tmp_path) -
             return Spreadsheet()
 
     monkeypatch.setattr(gspread, "authorize", lambda _credentials: Client())
+    monkeypatch.setattr(
+        "app.modules.maintenance.dump_state.time.sleep", sleeps.append
+    )
 
     uploaded = upload_csv_to_sheets(path, object())
 
@@ -106,3 +110,4 @@ def test_sheets_upload_resizes_small_existing_worksheet(monkeypatch, tmp_path) -
     assert worksheet.resized == (40000, 25)
     assert worksheet.cleared is True
     assert worksheet.updates == [("A1", [["md5", "title"], ["abc", "Китап"]])]
+    assert sleeps == [1.1, 1.1, 1.1]
