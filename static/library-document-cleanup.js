@@ -142,6 +142,12 @@ async function runCleanupDocumentQueue() {
   }
 }
 
+function openCleanupDocumentInBackground(url) {
+  window.open(url, "_blank", "noopener");
+  window.focus();
+  setTimeout(() => window.focus(), 0);
+}
+
 function cleanupRecentCard(item) {
   const candidates = item.candidates_json || [];
   const kept = new Set(item.keep_md5s_json || []);
@@ -272,7 +278,7 @@ document.getElementById("cleanup-list").addEventListener("click", (event) => {
     const md5 = String(documentButton.dataset.documentMd5 || "");
     const download = cleanupState.documentDownloads.get(md5);
     if (download?.status === "ready" && download.url) {
-      window.open(download.url, "_blank", "noopener");
+      openCleanupDocumentInBackground(download.url);
     } else if (download?.status === "failed") {
       enqueueCleanupDocument(md5);
     }

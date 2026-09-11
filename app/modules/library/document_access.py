@@ -21,6 +21,7 @@ from app.document_storage import (
     normalized_extension,
     parse_object_url,
 )
+from app.document_sync_filter import normalize_document_mime
 from app.modules.runtime_shared_utils import decrypt
 from app.postgres_engine import get_postgres_engine
 from app.runtime_config import load_runtime_config
@@ -111,7 +112,10 @@ def _cached_document(row: Mapping[str, Any], path: Path) -> CachedDocument:
     source_name = PurePosixPath(str(row.get("ya_path") or "")).name or path.name
     return CachedDocument(
         path=path,
-        mime_type=str(row.get("mime_type") or "application/octet-stream"),
+        mime_type=normalize_document_mime(
+            source_name,
+            str(row.get("mime_type") or "application/octet-stream"),
+        ),
         source_name=source_name,
     )
 

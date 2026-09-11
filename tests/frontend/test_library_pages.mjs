@@ -720,6 +720,56 @@ test("library collections approval posts selected proposal decision", async () =
   );
 });
 
+test("ISBN review opens a ready document and restores focus to the review tab", async () => {
+  const md5 = "a".repeat(32);
+  const openUrl = `/api/library/documents/${md5}/local`;
+  const harness = createHarness({
+    source: LIBRARY_DOCUMENT_CLEANUP_SOURCE,
+    ids: DOCUMENT_CLEANUP_PAGE_IDS,
+    apiResolver(path, options = {}) {
+      if (path === "/api/library/document-cleanup") {
+        return { event_cursor: 0 };
+      }
+      if (path === "/api/library/document-cleanup/isbn-reviews?status=pending&limit=500") {
+        return {
+          items: [{
+            review_id: 7,
+            isbn: "9780306406157",
+            candidates_json: [{ md5, title: "Book", mime_type: "application/pdf" }],
+          }],
+        };
+      }
+      if (path === "/api/library/document-cleanup/isbn-reviews?status=decided&limit=20") {
+        return { items: [] };
+      }
+      if (
+        path === `/api/library/documents/${md5}/cache`
+        && String(options.method || "GET").toUpperCase() === "POST"
+      ) {
+        return { open_url: openUrl };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+  await harness.flush();
+
+  harness.elements.get("cleanup-list").dispatch("click", {
+    preventDefault() {},
+    stopPropagation() {},
+    target: {
+      closest(selector) {
+        if (selector !== "[data-document-md5]") return null;
+        return { dataset: { documentMd5: md5 } };
+      },
+    },
+  });
+  await harness.flush();
+  await harness.timer.runAllTimeouts();
+
+  assert.deepEqual(harness.openedWindows, [[openUrl, "_blank", "noopener"]]);
+  assert.equal(harness.windowFocuses.length, 2);
+});
+
 test("library classification detail page renders API error state", async () => {
   const harness = createHarness({
     source: LIBRARY_CLASSIFICATION_SOURCE,

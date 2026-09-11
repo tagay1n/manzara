@@ -384,6 +384,8 @@ export function createHarness({
   const apiCalls = [];
   const alerts = [];
   const prompts = [];
+  const openedWindows = [];
+  const windowFocuses = [];
   const sse = {
     config: null,
     started: 0,
@@ -418,6 +420,13 @@ export function createHarness({
       },
     },
     addEventListener() {},
+    open(...args) {
+      openedWindows.push(args);
+      return null;
+    },
+    focus() {
+      windowFocuses.push(true);
+    },
     confirm() {
       return confirmResult;
     },
@@ -805,6 +814,8 @@ export function createHarness({
     apiCalls,
     alerts,
     prompts,
+    openedWindows,
+    windowFocuses,
     sse,
     logViewer,
     localStorage,

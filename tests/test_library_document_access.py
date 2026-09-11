@@ -4,6 +4,7 @@ import base64
 import hashlib
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -219,14 +220,47 @@ def test_resolve_local_cached_document_requires_catalog_record_and_valid_bytes(
     assert cached.source_name == "original.pdf"
 
 
-def test_library_document_cache_and_local_open_routes(monkeypatch, tmp_path: Path) -> None:
+def test_cached_epub_uses_browser_recognizable_mime_type(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    content = b"cached epub"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    cached_path = tmp_path / f"{digest}.epub"
+    cached_path.write_bytes(content)
+    settings = _settings()
+    settings = DocumentStorageSettings(**{**settings.__dict__, "cache_path": tmp_path})
+    monkeypatch.setattr(
+        document_access,
+        "_load_document_row",
+        lambda _state, _md5: {
+            "md5": digest,
+            "mime_type": "application/octet-stream",
+            "ya_path": "/books/Татар китабы.epub",
+        },
+    )
+    monkeypatch.setattr(document_access, "load_runtime_config", dict)
+    monkeypatch.setattr(
+        document_access, "load_document_storage_settings", lambda _payload: settings
+    )
+
+    cached = resolve_local_cached_document(object(), digest)
+
+    assert cached is not None
+    assert cached.mime_type == "application/epub+zip"
+    assert cached.source_name == "Татар китабы.epub"
+
+
+def test_library_epub_cache_returns_extension_visible_inline_open_route(
+    monkeypatch, tmp_path: Path
+) -> None:
     digest = "b" * 32
-    local_path = tmp_path / f"{digest}.pdf"
-    local_path.write_bytes(b"cached pdf")
+    local_path = tmp_path / f"{digest}.epub"
+    local_path.write_bytes(b"cached epub")
     cached = document_access.CachedDocument(
         path=local_path,
-        mime_type="application/pdf",
-        source_name="book.pdf",
+        mime_type="application/epub+zip",
+        source_name="book.epub",
     )
     monkeypatch.setattr(
         library_document_routes,
@@ -246,15 +280,16 @@ def test_library_document_cache_and_local_open_routes(monkeypatch, tmp_path: Pat
     client = TestClient(app)
 
     cache_response = client.post(f"/api/library/documents/{digest}/cache")
-    local_response = client.get(f"/api/library/documents/{digest}/local")
+    open_url = f"/api/library/documents/{digest}/local/{quote('book.epub')}"
+    local_response = client.get(open_url)
 
     assert cache_response.status_code == 200
     assert cache_response.json() == {
         "md5": digest,
         "status": "ready",
-        "open_url": f"/api/library/documents/{digest}/local",
+        "open_url": open_url,
     }
     assert local_response.status_code == 200
-    assert local_response.content == b"cached pdf"
-    assert local_response.headers["content-type"] == "application/pdf"
+    assert local_response.content == b"cached epub"
+    assert local_response.headers["content-type"] == "application/epub+zip"
     assert local_response.headers["content-disposition"].startswith("inline;")

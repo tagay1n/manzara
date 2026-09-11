@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Callable
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -63,12 +64,14 @@ def register_library_document_routes(
             {
                 "md5": digest,
                 "status": "ready",
-                "open_url": f"/api/library/documents/{digest}/local",
+                "open_url": (
+                    f"/api/library/documents/{digest}/local/"
+                    f"{quote(cached.source_name, safe='')}"
+                ),
             }
         )
 
-    @app.get("/api/library/documents/{md5}/local")
-    def open_local_library_document(md5: str) -> FileResponse:
+    def local_library_document_response(md5: str) -> FileResponse:
         digest = str(md5 or "").strip().lower()
         if not _MD5_RE.fullmatch(digest):
             raise HTTPException(
@@ -88,6 +91,15 @@ def register_library_document_routes(
             content_disposition_type="inline",
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.get("/api/library/documents/{md5}/local/{filename}")
+    def open_named_local_library_document(md5: str, filename: str) -> FileResponse:
+        del filename
+        return local_library_document_response(md5)
+
+    @app.get("/api/library/documents/{md5}/local")
+    def open_local_library_document(md5: str) -> FileResponse:
+        return local_library_document_response(md5)
 
 
 __all__ = ["register_library_document_routes"]
