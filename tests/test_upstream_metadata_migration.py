@@ -63,8 +63,11 @@ def test_simplification_preserves_existing_payload(prepared_test_schema) -> None
     engine = create_engine(database_url)
     md5 = "a" * 32
     try:
-        command.upgrade(config, "20260908_0046")
+        command.upgrade(config, "20260830_0041")
         with engine.begin() as conn:
+            conn.execute(
+                text(f'CREATE TABLE "{schema}".document (md5 TEXT)'),
+            )
             conn.execute(
                 text(f'INSERT INTO "{schema}".document (md5) VALUES (:md5)'),
                 {"md5": md5},
@@ -95,6 +98,22 @@ def test_simplification_preserves_existing_payload(prepared_test_schema) -> None
             ).mappings().one()
         assert row["md5"] == md5
         assert row["payload_json"] == {"title": "Kitap"}
+
+        assert not inspect(engine).get_foreign_keys(
+            "library_upstream_metadata", schema=schema
+        )
+        with engine.begin() as conn:
+            conn.execute(
+                text(f'DELETE FROM "{schema}".document WHERE md5=:md5'),
+                {"md5": md5},
+            )
+            assert conn.execute(
+                text(
+                    f'SELECT count(*) FROM "{schema}".library_upstream_metadata '
+                    "WHERE md5=:md5"
+                ),
+                {"md5": md5},
+            ).scalar_one() == 1
     finally:
         with engine.begin() as conn:
             conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))

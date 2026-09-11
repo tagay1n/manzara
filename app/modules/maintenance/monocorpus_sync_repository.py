@@ -185,8 +185,12 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
             return True
 
     def delete_document_state(self, md5: str) -> None:
-        """Delete one document; PostgreSQL cascades document-owned state."""
+        """Delete one document and all of its owned state atomically."""
         with self.engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM library_upstream_metadata WHERE md5=:md5"),
+                {"md5": md5},
+            )
             deleted = conn.execute(
                 text("DELETE FROM document WHERE md5=:md5"), {"md5": md5}
             )

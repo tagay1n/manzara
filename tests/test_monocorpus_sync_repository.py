@@ -40,14 +40,16 @@ class _Engine:
         return _Connection(self.statements)
 
 
-def test_document_cleanup_delegates_dependents_to_database_cascade() -> None:
+def test_document_cleanup_explicitly_deletes_upstream_metadata_before_document() -> None:
     repository = MonocorpusSyncRepository.__new__(MonocorpusSyncRepository)
     repository.engine = _Engine()
 
     repository.delete_document_state("a" * 32)
 
-    sql = "\n".join(repository.engine.statements)
-    assert sql.strip() == "DELETE FROM document WHERE md5=:md5"
+    assert [statement.strip() for statement in repository.engine.statements] == [
+        "DELETE FROM library_upstream_metadata WHERE md5=:md5",
+        "DELETE FROM document WHERE md5=:md5",
+    ]
 
 
 def test_cleanup_claim_excludes_plans_canceled_by_review_undo() -> None:
