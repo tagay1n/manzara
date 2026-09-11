@@ -65,6 +65,151 @@ def _shared_removed_md5s(reviews: Iterable[Mapping[str, Any]]) -> set[str]:
     return shared
 
 
+def _candidate_md5s(candidates: Iterable[Mapping[str, Any]]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                str(candidate.get("md5") or "").strip().lower()
+                for candidate in candidates
+                if candidate.get("md5")
+            }
+        )
+    )
+
+
+def _review_identity_isbns(review: Mapping[str, Any]) -> set[str]:
+    evidence = review.get("evidence_json") or {}
+    matched = evidence.get("matched_isbns") if isinstance(evidence, Mapping) else []
+    identities: set[str] = set()
+    for identifier in [
+        review.get("isbn"),
+        *(matched if isinstance(matched, list) else []),
+    ]:
+        aliases = equivalent_isbn_values(identifier)
+        identities.update(aliases or [str(identifier or "")])
+    identities.discard("")
+    return identities
+
+
+def _reconcile_pending_reviews(conn: Any) -> dict[str, int]:
+    """Remove missing candidates and supersede reviews that are no longer conflicts."""
+    reviews = [
+        dict(row)
+        for row in conn.execute(
+            text(
+                """
+                SELECT review_id, isbn, candidates_json, evidence_json
+                FROM library_isbn_duplicate_reviews
+                WHERE status='pending'
+                ORDER BY review_id
+                FOR UPDATE
+                """
+            )
+        ).mappings()
+    ]
+    candidate_md5s = sorted(
+        {
+            md5
+            for review in reviews
+            for md5 in _candidate_md5s(review.get("candidates_json") or [])
+        }
+    )
+    present_md5s: set[str] = set()
+    if candidate_md5s:
+        present_md5s = {
+            str(value).strip().lower()
+            for value in conn.execute(
+                text("SELECT md5 FROM document WHERE md5=ANY(:md5s)"),
+                {"md5s": candidate_md5s},
+            ).scalars()
+        }
+
+    superseded: dict[int, tuple[str, list[str]]] = {}
+    survivors: list[tuple[dict[str, Any], list[dict[str, Any]], list[str]]] = []
+    winners: dict[tuple[str, ...], list[tuple[int, set[str]]]] = {}
+    for review in reviews:
+        candidates = [dict(item) for item in review.get("candidates_json") or []]
+        remaining = [
+            item
+            for item in candidates
+            if str(item.get("md5") or "").strip().lower() in present_md5s
+        ]
+        removed = sorted(
+            set(_candidate_md5s(candidates)) - set(_candidate_md5s(remaining))
+        )
+        review_id = int(review["review_id"])
+        if len(_candidate_md5s(remaining)) < 2:
+            superseded[review_id] = ("fewer_than_two_available_candidates", removed)
+            continue
+        candidate_key = _candidate_md5s(remaining)
+        identities = _review_identity_isbns(review)
+        duplicate_of = next(
+            (
+                winner_id
+                for winner_id, winner_identities in winners.get(candidate_key, [])
+                if identities & winner_identities
+            ),
+            None,
+        )
+        if duplicate_of is not None:
+            superseded[review_id] = (f"duplicate_of_review_{duplicate_of}", removed)
+            continue
+        winners.setdefault(candidate_key, []).append((review_id, identities))
+        survivors.append((review, remaining, removed))
+
+    for review_id, (reason, removed) in superseded.items():
+        conn.execute(
+            text(
+                """
+                UPDATE library_isbn_duplicate_reviews SET
+                    status='superseded', updated_at=CURRENT_TIMESTAMP,
+                    evidence_json=evidence_json || jsonb_build_object(
+                        'reconciliation', jsonb_build_object(
+                            'reason', :reason,
+                            'removed_missing_md5s', CAST(:removed_json AS JSONB)
+                        )
+                    )
+                WHERE review_id=:review_id AND status='pending'
+                """
+            ),
+            {
+                "review_id": review_id,
+                "reason": reason,
+                "removed_json": json.dumps(removed),
+            },
+        )
+
+    pruned = 0
+    for review, remaining, removed in survivors:
+        if not removed:
+            continue
+        conn.execute(
+            text(
+                """
+                UPDATE library_isbn_duplicate_reviews SET
+                    candidates_json=CAST(:candidates_json AS JSONB),
+                    updated_at=CURRENT_TIMESTAMP,
+                    evidence_json=evidence_json || jsonb_build_object(
+                        'reconciliation', jsonb_build_object(
+                            'reason', 'document_cleanup',
+                            'removed_missing_md5s', CAST(:removed_json AS JSONB)
+                        )
+                    )
+                WHERE review_id=:review_id AND status='pending'
+                """
+            ),
+            {
+                "review_id": int(review["review_id"]),
+                "candidates_json": json.dumps(
+                    remaining, ensure_ascii=False, sort_keys=True
+                ),
+                "removed_json": json.dumps(removed),
+            },
+        )
+        pruned += 1
+    return {"pruned": pruned, "superseded": len(superseded)}
+
+
 class DocumentCleanupRepository:
     """Own cleanup planning, review, claiming, and status transitions."""
 
@@ -177,7 +322,10 @@ class DocumentCleanupRepository:
             key=lambda item: str(item.get("md5") or ""),
         )
         canonical = json.dumps(candidate_list, ensure_ascii=False, sort_keys=True)
-        candidate_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        candidate_md5s = _candidate_md5s(candidate_list)
+        candidate_hash = hashlib.sha256(
+            json.dumps(candidate_md5s).encode("utf-8")
+        ).hexdigest()
         values = {
             "isbn": isbn,
             "candidate_hash": candidate_hash,
@@ -194,21 +342,12 @@ class DocumentCleanupRepository:
             identity_isbns.update(aliases or [str(identifier)])
         with self.engine.begin() as conn:
             _lock_isbn_reviews(conn)
-            existing_reviews = conn.execute(
+            possible_reviews = conn.execute(
                 text(
                     """
-                    SELECT review_id, isbn, status
+                    SELECT review_id, isbn, status, candidates_json
                     FROM library_isbn_duplicate_reviews
-                    WHERE candidate_hash = :candidate_hash
-                      AND isbn = ANY(:identity_isbns)
-                    ORDER BY
-                        CASE status
-                            WHEN 'decided' THEN 0
-                            WHEN 'pending' THEN 1
-                            ELSE 2
-                        END,
-                        (isbn = :isbn) DESC,
-                        review_id
+                    WHERE isbn = ANY(:identity_isbns)
                     """
                 ),
                 {
@@ -216,6 +355,18 @@ class DocumentCleanupRepository:
                     "identity_isbns": sorted(identity_isbns),
                 },
             ).mappings().all()
+            existing_reviews = sorted(
+                (
+                    item
+                    for item in possible_reviews
+                    if _candidate_md5s(item["candidates_json"] or []) == candidate_md5s
+                ),
+                key=lambda item: (
+                    {"decided": 0, "pending": 1}.get(str(item["status"]), 2),
+                    str(item["isbn"]) != isbn,
+                    int(item["review_id"]),
+                ),
+            )
             if existing_reviews:
                 selected = existing_reviews[0]
                 selected_id = int(selected["review_id"])
@@ -240,7 +391,8 @@ class DocumentCleanupRepository:
                         text(
                             """
                             UPDATE library_isbn_duplicate_reviews
-                            SET evidence_json = CAST(:evidence_json AS JSONB),
+                            SET candidates_json = CAST(:candidates_json AS JSONB),
+                                evidence_json = CAST(:evidence_json AS JSONB),
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE review_id = :review_id
                             """
@@ -265,6 +417,22 @@ class DocumentCleanupRepository:
                 values,
             ).mappings().one()
         return int(row["review_id"]), bool(row["inserted"])
+
+    def reconcile_pending_reviews(self) -> dict[str, int]:
+        """Persistently reconcile pending reviews with the current document catalog."""
+        with self.engine.begin() as conn:
+            self.lock_isbn_reviews_in_transaction(conn)
+            return self.reconcile_pending_reviews_in_locked_transaction(conn)
+
+    def lock_isbn_reviews_in_transaction(self, conn: Any) -> None:
+        """Acquire the review mutation lock inside a caller-owned transaction."""
+        _lock_isbn_reviews(conn)
+
+    def reconcile_pending_reviews_in_locked_transaction(
+        self, conn: Any
+    ) -> dict[str, int]:
+        """Reconcile reviews after the caller acquires the review mutation lock."""
+        return _reconcile_pending_reviews(conn)
 
     def list_queue(self, *, status: str = "", limit: int = 100) -> list[dict[str, Any]]:
         where = "WHERE status = :status" if status else ""

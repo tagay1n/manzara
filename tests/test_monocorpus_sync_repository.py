@@ -10,6 +10,9 @@ from app.modules.maintenance.monocorpus_sync_repository import (
 class _Result:
     rowcount = 1
 
+    def mappings(self):
+        return []
+
     def scalar_one(self) -> bool:
         return True
 
@@ -47,8 +50,15 @@ def test_document_cleanup_explicitly_deletes_upstream_metadata_before_document()
     repository.delete_document_state("a" * 32)
 
     assert [statement.strip() for statement in repository.engine.statements] == [
+        "SELECT pg_advisory_xact_lock(hashtext(current_schema()), "
+        "hashtext('library_isbn_duplicate_review_mutation'))",
         "DELETE FROM library_upstream_metadata WHERE md5=:md5",
         "DELETE FROM document WHERE md5=:md5",
+        "SELECT review_id, isbn, candidates_json, evidence_json\n"
+        "                FROM library_isbn_duplicate_reviews\n"
+        "                WHERE status='pending'\n"
+        "                ORDER BY review_id\n"
+        "                FOR UPDATE",
     ]
 
 

@@ -233,13 +233,15 @@ def test_missing_cleanup_source_and_target_is_canceled_without_deleting_state() 
     ]
 
 
-def test_cleanup_overwrites_existing_filtered_out_target() -> None:
+def test_cleanup_overwrites_target_and_removes_local_cache(tmp_path: Path) -> None:
     content = b"same document"
     md5 = hashlib.md5(content).hexdigest()  # noqa: S324
     source = "/documents/book.pdf"
     target = "/filtered/non_tatar/book.pdf"
     yadisk = _YaDisk({source: content, target: content})
     repository = _Repository(yadisk, documents={md5: {"md5": md5}})
+    cached = tmp_path / f"{md5}.pdf"
+    cached.write_bytes(content)
 
     removed, outcome = _apply_cleanup(
         {
@@ -256,7 +258,7 @@ def test_cleanup_overwrites_existing_filtered_out_target() -> None:
         yadisk=yadisk,
         primary_s3=_S3(),
         legacy_s3=_S3(),
-        settings=_settings(),
+        settings=_settings(cache_path=tmp_path),
         config={"yandex": {"cloud": {"bucket": {}}}},
         run_id=909,
         missing_legacy_buckets=set(),
@@ -268,6 +270,45 @@ def test_cleanup_overwrites_existing_filtered_out_target() -> None:
     assert yadisk.files[target] == content
     assert yadisk.timeline == [("move", f"{source} -> {target}")]
     assert repository.timeline == [("delete_document", md5)]
+    assert not cached.exists()
+
+
+def test_document_delete_removes_managed_state_and_local_cache(tmp_path: Path) -> None:
+    content = b"unusable document"
+    md5 = hashlib.md5(content).hexdigest()  # noqa: S324
+    source = "/documents/unusable.pdf"
+    yadisk = _YaDisk({source: content})
+    repository = _Repository(yadisk, documents={md5: {"md5": md5}})
+    cached = tmp_path / f"{md5}.pdf"
+    cached.write_bytes(content)
+
+    removed, outcome = _apply_cleanup(
+        {
+            "cleanup_id": 656,
+            "scope": "document",
+            "action": "delete",
+            "reason": "no_usable_content",
+            "md5": md5,
+            "source_path": source,
+            "target_path": None,
+            "status": "planned",
+        },
+        repository=repository,
+        yadisk=yadisk,
+        primary_s3=_S3(),
+        legacy_s3=_S3(),
+        settings=_settings(cache_path=tmp_path),
+        config={"yandex": {"cloud": {"bucket": {}}}},
+        run_id=910,
+        missing_legacy_buckets=set(),
+    )
+
+    assert removed == 0
+    assert outcome == "completed"
+    assert source not in yadisk.files
+    assert yadisk.timeline == [("remove", source)]
+    assert repository.timeline == [("delete_document", md5)]
+    assert not cached.exists()
 
 
 class _S3:
@@ -295,10 +336,10 @@ class _MissingBucketS3(_S3):
         return {"Contents": [], "IsTruncated": False}
 
 
-def _settings() -> DocumentStorageSettings:
+def _settings(*, cache_path: Path = Path("/tmp/cache")) -> DocumentStorageSettings:
     connection = S3ConnectionSettings("https://s3.test", "region", "key", "secret")
     return DocumentStorageSettings(
-        cache_path=Path("/tmp/cache"),
+        cache_path=cache_path,
         source_path="/documents",
         restricted_path="/documents/private",
         filtered_out_path="/filtered",

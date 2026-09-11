@@ -187,6 +187,7 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
     def delete_document_state(self, md5: str) -> None:
         """Delete one document and all of its owned state atomically."""
         with self.engine.begin() as conn:
+            self.lock_isbn_reviews_in_transaction(conn)
             conn.execute(
                 text("DELETE FROM library_upstream_metadata WHERE md5=:md5"),
                 {"md5": md5},
@@ -196,6 +197,7 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
             )
             if deleted.rowcount > 1:
                 raise RuntimeError(f"Document MD5 {md5} deleted multiple rows")
+            self.reconcile_pending_reviews_in_locked_transaction(conn)
 
 
 __all__ = ["MonocorpusSyncRepository"]

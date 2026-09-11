@@ -335,6 +335,9 @@ class _PlanningRepository:
         self.plans: list[dict] = []
         self.reviews: list[dict] = []
 
+    def reconcile_pending_reviews(self):
+        return {"pruned": 2, "superseded": 3}
+
     def list_documents_for_planning(self):
         return [
             {
@@ -437,6 +440,7 @@ def test_preparation_only_writes_plans_and_ambiguous_reviews() -> None:
     assert summary["isbn_auto_resolved_groups"] == 0
     assert summary["isbn_review_groups"] == 2
     assert summary["isbn_review_candidates"] == 4
+    assert summary["review_reconciliation"] == {"pruned": 2, "superseded": 3}
     assert repository.plans[0]["reason"] == "non_tatar"
     assert repository.plans[0]["target_path"].startswith(
         "/filtered/non_tatar/"

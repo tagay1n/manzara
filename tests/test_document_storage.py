@@ -19,6 +19,7 @@ from app.document_storage import (
     load_document_storage_settings,
     materialize_cached_document,
     prune_document_cache,
+    remove_cached_document,
     resolve_document_download_url,
 )
 from app.modules.runtime_shared_utils import encrypt
@@ -189,6 +190,24 @@ def test_prune_document_cache_removes_oldest_completed_entries(tmp_path: Path) -
     assert newest.exists()
     assert partial.exists()
     assert result.remaining_bytes == 5
+
+
+def test_remove_cached_document_deletes_every_completed_extension(tmp_path: Path) -> None:
+    digest = "a" * 32
+    pdf = tmp_path / f"{digest}.pdf"
+    epub = tmp_path / f"{digest}.epub"
+    other = tmp_path / f"{'b' * 32}.pdf"
+    partial = tmp_path / f".{digest}.download"
+    for path in (pdf, epub, other, partial):
+        path.write_bytes(path.name.encode())
+
+    removed = remove_cached_document(tmp_path, digest)
+
+    assert removed == (epub, pdf)
+    assert not pdf.exists()
+    assert not epub.exists()
+    assert other.exists()
+    assert partial.exists()
 
 
 def test_prune_removes_abandoned_but_not_recent_partial_downloads(

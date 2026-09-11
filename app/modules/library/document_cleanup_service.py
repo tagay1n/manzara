@@ -22,6 +22,7 @@ def prepare_document_cleanup(
     on_progress: Callable[[int, int, Mapping[str, int]], None] | None = None,
 ) -> dict[str, Any]:
     """Create safe cleanup plans and reviews without touching storage or documents."""
+    reconciliation = repository.reconcile_pending_reviews()
     documents = repository.list_documents_for_planning()
     counters = {
         "scanned": 0,
@@ -154,6 +155,7 @@ def prepare_document_cleanup(
             "review_groups": counters["isbn_review_groups"],
             "books_awaiting_review": counters["isbn_review_candidates"],
         },
+        "review_reconciliation": dict(reconciliation),
         "stopped": bool(should_stop()),
     }
     print(

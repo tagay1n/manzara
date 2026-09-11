@@ -359,6 +359,22 @@ def find_valid_cache_file(cache_path: Path, md5: str) -> Path | None:
     return entry[0] if entry else None
 
 
+def remove_cached_document(cache_path: Path, md5: str) -> tuple[Path, ...]:
+    """Remove every completed shared-cache entry for one document identity."""
+    digest = str(md5 or "").strip().lower()
+    if len(digest) != 32 or any(char not in "0123456789abcdef" for char in digest):
+        raise ValueError("md5 must be a 32-character hexadecimal digest")
+    candidates = tuple(build_cache_index(Path(cache_path)).get(digest, ()))
+    removed: list[Path] = []
+    for path in candidates:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        removed.append(path)
+    return tuple(removed)
+
+
 def materialize_cached_document(
     *,
     cache_path: Path,
@@ -615,6 +631,7 @@ __all__ = [
     "normalized_extension",
     "object_url",
     "prune_document_cache",
+    "remove_cached_document",
     "parse_object_url",
     "resolve_document_download_url",
     "resolve_document_object_location",

@@ -18,6 +18,7 @@ from app.db import Database
 from app.document_storage import (
     DocumentStorageSettings,
     load_document_storage_settings,
+    remove_cached_document,
 )
 from app.document_cleanup_paths import cleanup_target_path
 from app.modules.maintenance.document_cleanup_executor import execute_yandex_cleanup
@@ -300,7 +301,9 @@ def _apply_cleanup(
             )
             return 0, "canceled"
         executable = {**dict(item), "status": "running"}
-        if str(item["action"]) == "move":
+        action = str(item["action"])
+        scope = str(item.get("scope") or "")
+        if action == "move":
             target = str(item.get("target_path") or "")
             target_verified = _verify_moved_target(yadisk, item)
             source_exists = _meta_or_none(yadisk, str(item["source_path"])) is not None
@@ -320,6 +323,15 @@ def _apply_cleanup(
                 raise RuntimeError("Moved Yandex target failed MD5 verification")
             if _meta_or_none(yadisk, str(item["source_path"])) is not None:
                 raise RuntimeError("Original Yandex source remains after verified move")
+        elif action == "delete":
+            if _meta_or_none(yadisk, str(item["source_path"])) is not None:
+                execute_yandex_cleanup(executable, yadisk=yadisk)
+            if _meta_or_none(yadisk, str(item["source_path"])) is not None:
+                raise RuntimeError("Yandex resource remains after permanent removal")
+        else:
+            raise ValueError(f"Unsupported cleanup action: {action!r}")
+
+        if action == "move" or scope == "document":
             repository.mark_cleanup_phase(cleanup_id, "storage_cleanup")
             print(
                 f"monocorpus sync: storage cleanup start cleanup_id={cleanup_id} "
@@ -339,13 +351,17 @@ def _apply_cleanup(
                 f"md5={item['md5']} objects_removed={removed_objects}",
                 flush=True,
             )
+            removed_cache_files = remove_cached_document(
+                settings.cache_path, str(item["md5"])
+            )
+            print(
+                f"monocorpus sync: local cache cleanup complete cleanup_id={cleanup_id} "
+                f"md5={item['md5']} files_removed={len(removed_cache_files)}",
+                flush=True,
+            )
             repository.mark_cleanup_phase(cleanup_id, "database_cleanup")
             repository.delete_document_state(str(item["md5"]))
         else:
-            if _meta_or_none(yadisk, str(item["source_path"])) is not None:
-                execute_yandex_cleanup(executable, yadisk=yadisk)
-            if _meta_or_none(yadisk, str(item["source_path"])) is not None:
-                raise RuntimeError("Duplicate Yandex resource remains after removal")
             removed_objects = 0
         repository.mark_cleanup_completed(cleanup_id)
         print(

@@ -6,6 +6,17 @@ import pytest
 from sqlalchemy import inspect, text
 
 from app.modules.library.document_cleanup_repository import DocumentCleanupRepository
+from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
+
+
+def _insert_document(conn, md5: str) -> None:  # noqa: ANN001
+    conn.execute(
+        text(
+            "INSERT INTO document (md5, mime_type, sharing_restricted) "
+            "VALUES (:md5, 'application/pdf', FALSE)"
+        ),
+        {"md5": md5},
+    )
 
 
 def test_document_cleanup_tables_are_migrated(prepared_test_schema) -> None:
@@ -477,5 +488,139 @@ def test_consolidated_isbn_planning_supersedes_redundant_pending_review(
                 "evidence_json": {"matched_isbns": ["9781861972712"]},
             },
         ]
+    finally:
+        repository.dispose()
+
+
+def test_pending_review_identity_ignores_mutable_candidate_display_metadata(
+    prepared_test_schema,
+) -> None:
+    database_url, schema = prepared_test_schema
+    repository = DocumentCleanupRepository(database_url, schema=schema)
+    candidates = [
+        {"md5": "a" * 32, "title": "Old title", "source_path": "/old/a.pdf"},
+        {"md5": "b" * 32, "title": "Second", "source_path": "/old/b.pdf"},
+    ]
+    try:
+        review_id, created = repository.upsert_isbn_review(
+            isbn="9780306406157", candidates=candidates, evidence={"generation": 1}
+        )
+        replacement = [
+            {"md5": "a" * 32, "title": "New title", "source_path": "/new/a.pdf"},
+            {"md5": "b" * 32, "title": "Second", "source_path": "/new/b.pdf"},
+        ]
+
+        reused_id, reused_created = repository.upsert_isbn_review(
+            isbn="9780306406157", candidates=replacement, evidence={"generation": 2}
+        )
+
+        assert (reused_id, reused_created) == (review_id, False)
+        with repository.engine.connect() as conn:
+            stored = conn.execute(
+                text(
+                    "SELECT candidates_json FROM library_isbn_duplicate_reviews "
+                    "WHERE review_id=:review_id"
+                ),
+                {"review_id": review_id},
+            ).scalar_one()
+        assert stored == replacement
+    finally:
+        repository.dispose()
+
+
+def test_document_deletion_reconciles_overlapping_pending_isbn_reviews(
+    prepared_test_schema,
+) -> None:
+    database_url, schema = prepared_test_schema
+    repository = MonocorpusSyncRepository(database_url, schema=schema)
+    removed_md5 = "c" * 32
+    surviving_md5s = ["d" * 32, "e" * 32]
+    try:
+        with repository.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS document (md5 TEXT PRIMARY KEY, "
+                    "mime_type TEXT, sharing_restricted BOOLEAN)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS library_upstream_metadata "
+                    "(md5 TEXT PRIMARY KEY)"
+                )
+            )
+            for md5 in [removed_md5, *surviving_md5s]:
+                _insert_document(conn, md5)
+        pruned_review_id, _ = repository.upsert_isbn_review(
+            isbn="9780306406157",
+            candidates=[{"md5": md5} for md5 in [removed_md5, *surviving_md5s]],
+            evidence={},
+        )
+        obsolete_review_id, _ = repository.upsert_isbn_review(
+            isbn="9781861972712",
+            candidates=[{"md5": removed_md5}, {"md5": surviving_md5s[0]}],
+            evidence={},
+        )
+        with repository.engine.begin() as conn:
+            duplicate_review_id = conn.execute(
+                text(
+                    """
+                    INSERT INTO library_isbn_duplicate_reviews (
+                        isbn, candidate_hash, candidates_json
+                    ) VALUES (
+                        '9780306406157', 'legacy-mutable-snapshot-hash',
+                        CAST(:candidates AS JSONB)
+                    ) RETURNING review_id
+                    """
+                ),
+                {
+                    "candidates": '[{"md5":"'
+                    + removed_md5
+                    + '"},{"md5":"'
+                    + surviving_md5s[0]
+                    + '"},{"md5":"'
+                    + surviving_md5s[1]
+                    + '"}]'
+                },
+            ).scalar_one()
+
+        repository.delete_document_state(removed_md5)
+
+        with repository.engine.connect() as conn:
+            pending = conn.execute(
+                text(
+                    "SELECT review_id, candidates_json "
+                    "FROM library_isbn_duplicate_reviews "
+                    "WHERE review_id=ANY(:review_ids) AND status='pending'"
+                ),
+                {
+                    "review_ids": [
+                        pruned_review_id,
+                        obsolete_review_id,
+                        duplicate_review_id,
+                    ]
+                },
+            ).mappings().all()
+            superseded_ids = set(
+                conn.execute(
+                    text(
+                        "SELECT review_id FROM library_isbn_duplicate_reviews "
+                        "WHERE review_id=ANY(:review_ids) AND status='superseded'"
+                    ),
+                    {
+                        "review_ids": [
+                            pruned_review_id,
+                            obsolete_review_id,
+                            duplicate_review_id,
+                        ]
+                    },
+                ).scalars()
+            )
+        assert [item["review_id"] for item in pending] == [pruned_review_id]
+        assert [
+            candidate["md5"] for candidate in pending[0]["candidates_json"]
+        ] == surviving_md5s
+        assert obsolete_review_id in superseded_ids
+        assert duplicate_review_id in superseded_ids
     finally:
         repository.dispose()
