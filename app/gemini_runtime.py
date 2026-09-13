@@ -24,6 +24,8 @@ _PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 _UTC = timezone.utc
 _KEY_COOLDOWN_SECONDS = 60
 _MODEL_SERVER_PAUSE_SECONDS = 60
+_QUOTA_COOLDOWN_BASE_SECONDS = 60
+_QUOTA_COOLDOWN_MAX_SECONDS = 600
 _ACCOUNT_LEASE_TTL_SECONDS = 90
 _ACCOUNT_LEASE_HEARTBEAT_SECONDS = 30
 _MAX_WAIT_SLICE_SECONDS = 10
@@ -34,11 +36,19 @@ class GeminiRuntimeError(RuntimeError):
 
 
 class GeminiQuotaExceededError(GeminiRuntimeError):
-    """Raised when Gemini returns 429 for a key+model."""
+    """Raised when Gemini returns 429 for a quota domain and model."""
 
 
 class GeminiAllKeysExhaustedError(GeminiRuntimeError):
     """Raised when no non-exhausted keys remain for model."""
+
+
+class GeminiQuotaCooldownError(GeminiAllKeysExhaustedError):
+    """Raised when every otherwise-usable quota domain is cooling down."""
+
+    def __init__(self, message: str, *, retry_at: datetime | None = None):
+        self.retry_at = retry_at
+        super().__init__(message)
 
 
 class GeminiServerPauseError(GeminiRuntimeError):
@@ -80,6 +90,85 @@ class GeminiLease:
     masked_key: str
     model_name: str
     account_lease_token: str = ""
+    quota_domain_id: str = ""
+
+
+@dataclass(frozen=True)
+class _QuotaDisposition:
+    daily: bool
+    retry_after_seconds: int | None = None
+
+
+def _walk_error_details(value: Any):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from _walk_error_details(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _walk_error_details(item)
+    elif value is not None:
+        yield str(value)
+
+
+def _parse_retry_delay(value: Any) -> int | None:
+    if isinstance(value, dict):
+        try:
+            seconds = float(value.get("seconds") or 0)
+            nanos = float(value.get("nanos") or 0)
+        except (TypeError, ValueError):
+            return None
+        return max(1, int(seconds + nanos / 1_000_000_000 + 0.999))
+    raw = str(value or "").strip().casefold()
+    if raw.endswith("s"):
+        raw = raw[:-1]
+    try:
+        return max(1, int(float(raw) + 0.999))
+    except ValueError:
+        return None
+
+
+def _find_retry_delay(value: Any) -> int | None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).casefold() in {"retrydelay", "retry_delay"}:
+                parsed = _parse_retry_delay(item)
+                if parsed is not None:
+                    return parsed
+            nested = _find_retry_delay(item)
+            if nested is not None:
+                return nested
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            nested = _find_retry_delay(item)
+            if nested is not None:
+                return nested
+    return None
+
+
+def _classify_quota_error(error: Exception) -> _QuotaDisposition:
+    """Only explicit per-day quota evidence warrants day-long exhaustion."""
+    details = getattr(error, "details", None)
+    searchable = " ".join(
+        [str(error), *_walk_error_details(details)]
+    ).casefold()
+    daily_markers = (
+        "per_day",
+        "per-day",
+        "per day",
+        "requestsperday",
+        "tokensperday",
+        "daily quota",
+    )
+    retry_after = _find_retry_delay(details)
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    if retry_after is None and headers is not None:
+        retry_after = _parse_retry_delay(headers.get("retry-after"))
+    return _QuotaDisposition(
+        daily=any(marker in searchable for marker in daily_markers),
+        retry_after_seconds=retry_after,
+    )
 
 
 def _utc_now() -> datetime:
@@ -215,6 +304,7 @@ class GeminiRuntimeManager:
                         "key_id": item.key_id,
                         "account_id": item.account_id,
                         "masked_key": item.masked_key,
+                        "quota_domain_id": item.quota_domain_id or item.key_id,
                     }
                     for item in keys
                 ]
@@ -341,13 +431,35 @@ class GeminiRuntimeManager:
                 continue
             by_key_id[key_id] = row
 
+        quota_rows_method = getattr(
+            self.db, "list_gemini_quota_domain_model_states", None
+        )
+        quota_rows = (
+            quota_rows_method(model_name=model_name)
+            if quota_rows_method is not None
+            else []
+        )
+        quota_by_domain = {
+            str(row.get("quota_domain_id") or ""): row for row in quota_rows
+        }
         available_by_account: Dict[str, List[GeminiKey]] = {}
         ready_by_account: Dict[str, List[GeminiKey]] = {}
         earliest_cooldown: Optional[datetime] = None
+        earliest_quota_cooldown: Optional[datetime] = None
+        has_unexhausted_key = False
 
         for key in keys:
             row = by_key_id.get(key.key_id) or {}
             if bool(row.get("exhausted", False)):
+                continue
+            has_unexhausted_key = True
+            quota_domain_id = key.quota_domain_id or key.key_id
+            quota_until = _parse_ts(
+                (quota_by_domain.get(quota_domain_id) or {}).get("cooldown_until")
+            )
+            if quota_until is not None and quota_until > now_utc:
+                if earliest_quota_cooldown is None or quota_until < earliest_quota_cooldown:
+                    earliest_quota_cooldown = quota_until
                 continue
             available_by_account.setdefault(key.account_id, []).append(key)
             cooldown_until = _parse_ts(row.get("cooldown_until"))
@@ -358,6 +470,11 @@ class GeminiRuntimeManager:
                     earliest_cooldown = cooldown_until
 
         if not available_by_account:
+            if has_unexhausted_key and earliest_quota_cooldown is not None:
+                return {
+                    "type": "quota_cooldown",
+                    "wait_until": earliest_quota_cooldown,
+                }
             raise GeminiAllKeysExhaustedError(
                 f"All Gemini keys exhausted for model '{model_name}'"
             )
@@ -454,6 +571,13 @@ class GeminiRuntimeManager:
             decision = self._pick_candidate(
                 keys=keys, model_name=model_name, now_utc=now_utc
             )
+            if decision.get("type") == "quota_cooldown":
+                retry_at = decision.get("wait_until")
+                raise GeminiQuotaCooldownError(
+                    f"All Gemini quota domains are cooling down for model "
+                    f"'{model_name}' until {_iso_utc(retry_at)}",
+                    retry_at=retry_at,
+                )
             if decision.get("type") == "wait":
                 self._sleep_until(decision.get("wait_until"))
                 continue
@@ -501,6 +625,7 @@ class GeminiRuntimeManager:
                 masked_key=key.masked_key,
                 model_name=model_name,
                 account_lease_token=lease_token,
+                quota_domain_id=key.quota_domain_id or key.key_id,
             )
 
     def _lease_heartbeat(self, lease: GeminiLease, stop: threading.Event) -> None:
@@ -535,27 +660,98 @@ class GeminiRuntimeManager:
         error_text = str(error)
 
         if status_code == 429:
-            self.db.mark_gemini_error(
-                lease.key_id,
-                lease.model_name,
-                now_ts=_iso_utc(now_utc),
-                error_text=error_text,
-                exhausted=True,
-            )
-            self._emit(
-                "gemini.key.exhausted",
-                {
-                    "account_id": lease.account_id,
-                    "key_id": lease.key_id,
-                    "masked_key": lease.masked_key,
-                    "model_name": lease.model_name,
-                    "status_code": status_code,
-                    "error": error_text,
-                },
-                run_id=run_id,
-            )
+            disposition = _classify_quota_error(error)
+            now_ts = _iso_utc(now_utc)
+            quota_domain_id = lease.quota_domain_id or lease.key_id
+            if disposition.daily:
+                mark_domain = getattr(
+                    self.db, "mark_gemini_quota_domain_model_exhausted", None
+                )
+                if mark_domain is not None:
+                    rows_changed = mark_domain(
+                        quota_domain_id,
+                        lease.model_name,
+                        now_ts=now_ts,
+                        error_text=error_text,
+                    )
+                else:
+                    self.db.mark_gemini_error(
+                        lease.key_id,
+                        lease.model_name,
+                        now_ts=now_ts,
+                        error_text=error_text,
+                        exhausted=True,
+                    )
+                    rows_changed = 1
+                self._emit(
+                    "gemini.key.exhausted",
+                    {
+                        "account_id": lease.account_id,
+                        "key_id": lease.key_id,
+                        "masked_key": lease.masked_key,
+                        "model_name": lease.model_name,
+                        "status_code": status_code,
+                        "quota_scope": "quota_domain_model_daily",
+                        "quota_domain_id": quota_domain_id,
+                        "rows_changed": rows_changed,
+                        "error": error_text,
+                    },
+                    run_id=run_id,
+                )
+            else:
+                self.db.mark_gemini_error(
+                    lease.key_id,
+                    lease.model_name,
+                    now_ts=now_ts,
+                    error_text=error_text,
+                    exhausted=False,
+                )
+                get_quota = getattr(
+                    self.db, "get_gemini_quota_domain_model_state", None
+                )
+                current = (
+                    get_quota(quota_domain_id, lease.model_name)
+                    if get_quota is not None
+                    else None
+                ) or {}
+                failure_count = int(current.get("failure_count") or 0) + 1
+                exponential_delay = min(
+                    _QUOTA_COOLDOWN_MAX_SECONDS,
+                    _QUOTA_COOLDOWN_BASE_SECONDS * (2 ** min(failure_count - 1, 8)),
+                )
+                delay_seconds = max(
+                    exponential_delay,
+                    int(disposition.retry_after_seconds or 0),
+                )
+                cooldown_until = now_utc + timedelta(seconds=delay_seconds)
+                set_cooldown = getattr(
+                    self.db, "set_gemini_quota_domain_model_cooldown", None
+                )
+                if set_cooldown is not None:
+                    set_cooldown(
+                        quota_domain_id,
+                        lease.model_name,
+                        cooldown_until=_iso_utc(cooldown_until),
+                        failure_count=failure_count,
+                        now_ts=now_ts,
+                        error_text=error_text,
+                    )
+                self._emit(
+                    "gemini.quota.cooldown.started",
+                    {
+                        "account_id": lease.account_id,
+                        "quota_domain_id": quota_domain_id,
+                        "model_name": lease.model_name,
+                        "status_code": status_code,
+                        "cooldown_until": _iso_utc(cooldown_until),
+                        "failure_count": failure_count,
+                        "error": error_text,
+                    },
+                    run_id=run_id,
+                )
             raise GeminiQuotaExceededError(
-                f"Gemini quota exhausted for key {lease.masked_key} model={lease.model_name}"
+                f"Gemini quota unavailable for domain={quota_domain_id} "
+                f"model={lease.model_name}"
             ) from error
 
         if status_code == 400:
@@ -722,6 +918,14 @@ class GeminiRuntimeManager:
                     raise
             else:
                 now_utc = _utc_now()
+                clear_quota = getattr(
+                    self.db, "clear_gemini_quota_domain_model_state", None
+                )
+                if clear_quota is not None:
+                    clear_quota(
+                        lease.quota_domain_id or lease.key_id,
+                        lease.model_name,
+                    )
                 self.db.mark_gemini_success(
                     lease.key_id,
                     lease.model_name,
@@ -810,6 +1014,9 @@ class GeminiRuntimeManager:
         snapshot_metadata = self.db.get_gemini_snapshot_metadata()
         account_leases = list(snapshot_metadata.get("account_leases") or [])
         model_runtime = list(snapshot_metadata.get("model_runtime") or [])
+        quota_domain_model_states = list(
+            snapshot_metadata.get("quota_domain_model_states") or []
+        )
 
         models_by_key: Dict[str, List[Dict[str, Any]]] = {}
         for row in state_rows:
@@ -866,6 +1073,7 @@ class GeminiRuntimeManager:
                 {
                     "key_id": key.key_id,
                     "masked_key": key.masked_key,
+                    "quota_domain_id": key.quota_domain_id or key.key_id,
                     "models": model_rows,
                     "exhausted_models": exhausted_models,
                 }
@@ -883,6 +1091,20 @@ class GeminiRuntimeManager:
             str(row.get("account_id") or ""): row
             for row in account_leases
         }
+        quota_by_domain: Dict[str, List[Dict[str, Any]]] = {}
+        for row in quota_domain_model_states:
+            quota_until = _parse_ts(row.get("cooldown_until"))
+            if quota_until is None or quota_until <= now_utc:
+                continue
+            quota_by_domain.setdefault(
+                str(row.get("quota_domain_id") or ""), []
+            ).append(
+                {
+                    "model_name": str(row.get("model_name") or ""),
+                    "cooldown_until": _iso_utc(quota_until),
+                    "failure_count": int(row.get("failure_count") or 0),
+                }
+            )
         for account in accounts:
             lease = leases_by_account.get(str(account["account_id"])) or {}
             expires_at = _parse_ts(lease.get("lease_expires_at"))
@@ -894,6 +1116,11 @@ class GeminiRuntimeManager:
                 "expires_at": lease.get("lease_expires_at"),
                 "last_acquired_at": lease.get("last_acquired_at"),
             }
+            account["quota_cooldowns"] = [
+                {**quota, "quota_domain_id": str(key["quota_domain_id"])}
+                for key in account["keys"]
+                for quota in quota_by_domain.get(str(key["quota_domain_id"]), [])
+            ]
 
         exhausted_rows = 0
         usage_by_model = {

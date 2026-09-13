@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
-LOCAL_STATE_SCHEMA_VERSION = 1
+LOCAL_STATE_SCHEMA_VERSION = 2
 _FOR_UPDATE_RE = re.compile(r"\s+FOR\s+UPDATE\b", re.IGNORECASE)
 
 
@@ -63,12 +63,22 @@ class LocalStateStore:
         self.path.parent.chmod(0o700)
         with self.connect() as conn:
             version = int(conn.execute("PRAGMA user_version").scalar() or 0)
-            if version not in (0, LOCAL_STATE_SCHEMA_VERSION):
+            if version not in (0, 1, LOCAL_STATE_SCHEMA_VERSION):
                 raise RuntimeError(
                     f"Unsupported local runtime schema version {version}; "
                     f"expected {LOCAL_STATE_SCHEMA_VERSION}"
                 )
             conn._connection.executescript(_SCHEMA)
+            if version == 1:
+                key_columns = {
+                    str(row[1])
+                    for row in conn._connection.execute("PRAGMA table_info(gemini_keys)")
+                }
+                if "quota_domain_id" not in key_columns:
+                    conn._connection.execute(
+                        "ALTER TABLE gemini_keys ADD COLUMN quota_domain_id TEXT"
+                    )
+                conn._connection.executescript(_MIGRATE_V1_TO_V2)
             conn.execute(f"PRAGMA user_version = {LOCAL_STATE_SCHEMA_VERSION}")
             # IDs remain unique against retained run artifacts if the disposable
             # database is recreated on the same laptop.
@@ -348,6 +358,7 @@ CREATE INDEX IF NOT EXISTS idx_conveyor_run_items_stage
 ON conveyor_run_items(conveyor_run_id, stage_order, task_order);
 CREATE TABLE IF NOT EXISTS gemini_keys (
     key_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, masked_key TEXT NOT NULL,
+    quota_domain_id TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gemini_keys_account ON gemini_keys(account_id);
@@ -371,6 +382,14 @@ CREATE TABLE IF NOT EXISTS gemini_account_leases (
     worker_id TEXT, lease_expires_at TEXT, last_acquired_at TEXT,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS gemini_quota_domain_model_state (
+    quota_domain_id TEXT NOT NULL, model_name TEXT NOT NULL, cooldown_until TEXT,
+    failure_count INTEGER NOT NULL DEFAULT 0, last_error_at TEXT,
+    last_error_text TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    PRIMARY KEY(quota_domain_id, model_name)
+);
+CREATE INDEX IF NOT EXISTS idx_gemini_quota_domain_model_cooldown
+ON gemini_quota_domain_model_state(model_name, cooldown_until);
 CREATE TABLE IF NOT EXISTS gemini_model_runtime (
     model_name TEXT PRIMARY KEY, pause_until TEXT, last_pause_reason TEXT,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -383,6 +402,18 @@ CREATE TABLE IF NOT EXISTS ai_item_checkpoints (
     last_error TEXT, terminal_reason TEXT, run_id INTEGER, updated_at TEXT NOT NULL,
     PRIMARY KEY(flow_id, item_id)
 );
+"""
+
+
+_MIGRATE_V1_TO_V2 = """
+-- Version 1 treated every 429 as daily exhaustion. Those rows cannot be
+-- classified retroactively, so clear them once when installing quota-aware
+-- cooldown state.
+UPDATE gemini_key_model_state
+SET exhausted = 0, exhausted_at = NULL, cooldown_until = NULL;
+UPDATE gemini_keys
+SET quota_domain_id = key_id
+WHERE quota_domain_id IS NULL OR quota_domain_id = '';
 """
 
 

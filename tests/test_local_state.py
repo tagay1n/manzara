@@ -28,7 +28,52 @@ def test_local_state_is_private_wal_database_with_runtime_tables(tmp_path: Path)
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
-    assert {"runs", "events", "gemini_keys", "ai_item_checkpoints"} <= tables
+    assert {
+        "runs",
+        "events",
+        "gemini_keys",
+        "gemini_quota_domain_model_state",
+        "ai_item_checkpoints",
+    } <= tables
+
+
+def test_v1_local_state_migrates_legacy_exhaustion_to_quota_aware_schema(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state" / "runtime.sqlite3"
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            PRAGMA user_version = 1;
+            CREATE TABLE gemini_key_model_state (
+                key_id TEXT NOT NULL, model_name TEXT NOT NULL,
+                exhausted INTEGER NOT NULL DEFAULT 0, exhausted_at TEXT,
+                cooldown_until TEXT, attempts_cycle INTEGER NOT NULL DEFAULT 0,
+                success_cycle INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+                PRIMARY KEY(key_id, model_name)
+            );
+            INSERT INTO gemini_key_model_state (
+                key_id, model_name, exhausted, exhausted_at, updated_at
+            ) VALUES ('account:key', 'model', 1, '2026-09-13T10:00:00+00:00',
+                      '2026-09-13T10:00:00+00:00');
+            """
+        )
+
+    LocalStateStore(path).initialize()
+
+    with sqlite3.connect(path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        exhausted = connection.execute(
+            "SELECT exhausted FROM gemini_key_model_state"
+        ).fetchone()[0]
+        quota_table = connection.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='gemini_quota_domain_model_state'"
+        ).fetchone()
+    assert version == LOCAL_STATE_SCHEMA_VERSION
+    assert exhausted == 0
+    assert quota_table is not None
 
 
 def test_ai_attempts_are_local_versioned_and_disposable(tmp_path: Path) -> None:
@@ -129,9 +174,22 @@ def test_operational_repositories_do_not_open_postgres(tmp_path: Path) -> None:
             [{"key_id": "account:key", "account_id": "account", "masked_key": "***"}]
         )
         db.ensure_gemini_model_states(["account:key"], "model")
+        db.set_gemini_quota_domain_model_cooldown(
+            "account:key",
+            "model",
+            cooldown_until="2026-09-13T10:01:00+00:00",
+            failure_count=1,
+            now_ts="2026-09-13T10:00:00+00:00",
+            error_text="temporary quota",
+        )
 
         assert db.get_run(run_id)["task_id"] == "library.local"
         assert db.get_latest_event_id() > 0
         assert db.list_gemini_model_states(model_name="model")[0]["key_id"] == "account:key"
+        assert db.get_gemini_quota_domain_model_state("account:key", "model")[
+            "failure_count"
+        ] == 1
+        assert db.reset_all_gemini_exhaustion() == 1
+        assert db.get_gemini_quota_domain_model_state("account:key", "model") is None
     finally:
         db.close()

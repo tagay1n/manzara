@@ -8,10 +8,13 @@ gemini:
   accounts:
     tt:
       - "<REDACTED>"
-      - "<REDACTED>"
+      # Group keys only when they belong to the same Google quota project.
+      - api_key: "<REDACTED>"
+        quota_domain: "tt-shared-project"
     secondary:
       - "<REDACTED>"
-      - "<REDACTED>"
+      - api_key: "<REDACTED>"
+        quota_domain: "secondary-shared-project"
 
 documents:
   cache_path: ~/.manzara/cache/source-documents

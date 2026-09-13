@@ -22,6 +22,7 @@ class GeminiKey:
     key_id: str
     key_value: str
     masked_key: str
+    quota_domain_id: str = ""
 
 
 def _candidate_config_paths() -> Sequence[Path]:
@@ -69,6 +70,31 @@ def _key_id(account_id: str, key: str) -> str:
     return f"{clean_account}:{digest}"
 
 
+def _configured_key(account_id: str, raw_value: Any) -> GeminiKey | None:
+    quota_domain = ""
+    key_value = raw_value
+    if isinstance(raw_value, dict):
+        key_value = (
+            raw_value.get("api_key")
+            or raw_value.get("key")
+            or raw_value.get("value")
+        )
+        quota_domain = str(
+            raw_value.get("quota_domain") or raw_value.get("project_id") or ""
+        ).strip()
+    key = _clean_key(key_value)
+    if not key:
+        return None
+    key_id = _key_id(account_id, key)
+    return GeminiKey(
+        account_id=account_id,
+        key_id=key_id,
+        key_value=key,
+        masked_key=_mask_key(key),
+        quota_domain_id=quota_domain or key_id,
+    )
+
+
 def _iter_new_shape(payload: Dict[str, Any]) -> Iterable[GeminiKey]:
     gemini = payload.get("gemini")
     if not isinstance(gemini, dict):
@@ -90,17 +116,9 @@ def _iter_new_shape(payload: Dict[str, Any]) -> Iterable[GeminiKey]:
             if not isinstance(keys, list):
                 continue
             for raw_key in keys:
-                key = _clean_key(raw_key)
-                if not key:
-                    continue
-                rows.append(
-                    GeminiKey(
-                        account_id=account_id,
-                        key_id=_key_id(account_id, key),
-                        key_value=key,
-                        masked_key=_mask_key(key),
-                    )
-                )
+                configured = _configured_key(account_id, raw_key)
+                if configured is not None:
+                    rows.append(configured)
         return rows
 
     if isinstance(accounts, dict):
@@ -109,17 +127,9 @@ def _iter_new_shape(payload: Dict[str, Any]) -> Iterable[GeminiKey]:
             if not isinstance(keys, list):
                 continue
             for raw_key in keys:
-                key = _clean_key(raw_key)
-                if not key:
-                    continue
-                rows.append(
-                    GeminiKey(
-                        account_id=account_id,
-                        key_id=_key_id(account_id, key),
-                        key_value=key,
-                        masked_key=_mask_key(key),
-                    )
-                )
+                configured = _configured_key(account_id, raw_key)
+                if configured is not None:
+                    rows.append(configured)
         return rows
 
     return []

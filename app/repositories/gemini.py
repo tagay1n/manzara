@@ -16,6 +16,9 @@ class GeminiRepository:
                 "key_id": str(item.get("key_id") or ""),
                 "account_id": str(item.get("account_id") or "default"),
                 "masked_key": str(item.get("masked_key") or ""),
+                "quota_domain_id": str(
+                    item.get("quota_domain_id") or item.get("key_id") or ""
+                ),
             }
             for item in keys
         ]
@@ -34,13 +37,22 @@ class GeminiRepository:
                 for item in normalized:
                     conn.execute(
                         """INSERT INTO gemini_keys (
-                               key_id, account_id, masked_key, active, created_at, updated_at
-                           ) VALUES (?, ?, ?, 1, ?, ?)
+                               key_id, account_id, masked_key, quota_domain_id,
+                               active, created_at, updated_at
+                           ) VALUES (?, ?, ?, ?, 1, ?, ?)
                            ON CONFLICT(key_id) DO UPDATE SET
                                account_id=excluded.account_id,
                                masked_key=excluded.masked_key,
+                               quota_domain_id=excluded.quota_domain_id,
                                active=1, updated_at=excluded.updated_at""",
-                        (item["key_id"], item["account_id"], item["masked_key"], now, now),
+                        (
+                            item["key_id"],
+                            item["account_id"],
+                            item["masked_key"],
+                            item["quota_domain_id"],
+                            now,
+                            now,
+                        ),
                     )
                     conn.execute(
                         """INSERT INTO gemini_account_leases (
@@ -105,6 +117,7 @@ class GeminiRepository:
                     """,
                     (now,),
                 )
+                conn.execute("DELETE FROM gemini_quota_domain_model_state")
         return {**dict(row), "rolled": True} if row else {
             "control_id": 1,
             "cycle_label": cycle_label,
@@ -126,6 +139,111 @@ class GeminiRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_gemini_quota_domain_model_state(
+        self, quota_domain_id: str, model_name: str
+    ) -> Optional[Dict[str, Any]]:
+        with self._runtime_connect() as conn:
+            row = conn.execute(
+                """SELECT quota_domain_id, model_name, cooldown_until, failure_count,
+                          last_error_at, last_error_text, created_at, updated_at
+                   FROM gemini_quota_domain_model_state
+                   WHERE quota_domain_id = ? AND model_name = ?""",
+                (quota_domain_id, model_name),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_gemini_quota_domain_model_states(
+        self, *, model_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        params: tuple[Any, ...] = ()
+        where = ""
+        if model_name:
+            where = "WHERE model_name = ?"
+            params = (model_name,)
+        with self._runtime_connect() as conn:
+            rows = conn.execute(
+                f"""SELECT quota_domain_id, model_name, cooldown_until, failure_count,
+                           last_error_at, last_error_text, created_at, updated_at
+                    FROM gemini_quota_domain_model_state
+                    {where}
+                    ORDER BY quota_domain_id, model_name""",
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_gemini_quota_domain_model_cooldown(
+        self,
+        quota_domain_id: str,
+        model_name: str,
+        *,
+        cooldown_until: str,
+        failure_count: int,
+        now_ts: str,
+        error_text: str,
+    ) -> None:
+        """Persist a temporary project/account quota circuit breaker."""
+        with self._runtime_connect(immediate=True) as conn:
+            conn.execute(
+                """INSERT INTO gemini_quota_domain_model_state (
+                       quota_domain_id, model_name, cooldown_until, failure_count,
+                       last_error_at, last_error_text, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(quota_domain_id, model_name) DO UPDATE SET
+                       cooldown_until=excluded.cooldown_until,
+                       failure_count=excluded.failure_count,
+                       last_error_at=excluded.last_error_at,
+                       last_error_text=excluded.last_error_text,
+                       updated_at=excluded.updated_at""",
+                (
+                    quota_domain_id,
+                    model_name,
+                    cooldown_until,
+                    failure_count,
+                    now_ts,
+                    error_text,
+                    now_ts,
+                    now_ts,
+                ),
+            )
+
+    def clear_gemini_quota_domain_model_state(
+        self, quota_domain_id: str, model_name: str
+    ) -> int:
+        with self._runtime_connect(immediate=True) as conn:
+            cur = conn.execute(
+                "DELETE FROM gemini_quota_domain_model_state "
+                "WHERE quota_domain_id = ? AND model_name = ?",
+                (quota_domain_id, model_name),
+            )
+        return int(cur.rowcount or 0)
+
+    def mark_gemini_quota_domain_model_exhausted(
+        self,
+        quota_domain_id: str,
+        model_name: str,
+        *,
+        now_ts: str,
+        error_text: str,
+    ) -> int:
+        """Mark all keys in one quota domain exhausted after explicit daily evidence."""
+        with self._runtime_connect(immediate=True) as conn:
+            cur = conn.execute(
+                """UPDATE gemini_key_model_state
+                   SET exhausted = 1, exhausted_at = ?, last_error_at = ?,
+                       last_error_text = ?, updated_at = ?
+                   WHERE model_name = ? AND key_id IN (
+                       SELECT key_id FROM gemini_keys
+                       WHERE quota_domain_id = ? AND active = 1
+                   )""",
+                (now_ts, now_ts, error_text, now_ts, model_name, quota_domain_id),
+            )
+            conn.execute(
+                "DELETE FROM gemini_quota_domain_model_state "
+                "WHERE quota_domain_id = ? AND model_name = ?",
+                (quota_domain_id, model_name),
+            )
+        return int(cur.rowcount or 0)
+
     def get_gemini_snapshot_metadata(self) -> Dict[str, List[Dict[str, Any]]]:
         """Read account leases and model runtime through one pool checkout."""
         with self._runtime_connect() as conn:
@@ -139,9 +257,18 @@ class GeminiRepository:
                 """SELECT model_name, pause_until, last_pause_reason, created_at, updated_at
                    FROM gemini_model_runtime ORDER BY model_name"""
             ).fetchall()
+            quota_domain_model_states = conn.execute(
+                """SELECT quota_domain_id, model_name, cooldown_until, failure_count,
+                          last_error_at, created_at, updated_at
+                   FROM gemini_quota_domain_model_state
+                   ORDER BY quota_domain_id, model_name"""
+            ).fetchall()
         return {
             "account_leases": [dict(row) for row in account_leases],
             "model_runtime": [dict(row) for row in model_runtime],
+            "quota_domain_model_states": [
+                dict(row) for row in quota_domain_model_states
+            ],
         }
 
     def try_claim_gemini_account(
@@ -423,6 +550,7 @@ class GeminiRepository:
                     """,
                     (now,),
                 )
+                conn.execute("DELETE FROM gemini_quota_domain_model_state")
                 return True
 
 
@@ -587,7 +715,7 @@ class GeminiRepository:
 
 
     def reset_gemini_key_exhaustion(self, key_id: str) -> int:
-        """Clear exhaustion marker for all models of one key."""
+        """Clear one key and its quota-domain cooldowns."""
         now = utc_now()
         with self._lock:
             with self._runtime_connect() as conn:
@@ -599,11 +727,18 @@ class GeminiRepository:
                     """,
                     (now, key_id),
                 )
-                return int(cur.rowcount or 0)
+                quota_cur = conn.execute(
+                    """DELETE FROM gemini_quota_domain_model_state
+                       WHERE quota_domain_id = (
+                           SELECT quota_domain_id FROM gemini_keys WHERE key_id = ?
+                       )""",
+                    (key_id,),
+                )
+                return int(cur.rowcount or 0) + int(quota_cur.rowcount or 0)
 
 
     def reset_all_gemini_exhaustion(self) -> int:
-        """Clear exhaustion marker for all key+model rows."""
+        """Clear daily exhaustion and temporary quota cooldowns."""
         now = utc_now()
         with self._lock:
             with self._runtime_connect() as conn:
@@ -615,4 +750,7 @@ class GeminiRepository:
                     """,
                     (now,),
                 )
-                return int(cur.rowcount or 0)
+                quota_cur = conn.execute(
+                    "DELETE FROM gemini_quota_domain_model_state"
+                )
+                return int(cur.rowcount or 0) + int(quota_cur.rowcount or 0)

@@ -7,9 +7,11 @@ import pytest
 
 from app.gemini_runtime import (
     GeminiLease,
+    GeminiQuotaExceededError,
     GeminiRuntimeManager,
     GeminiStopRequestedError,
     GeminiTransportError,
+    _classify_quota_error,
 )
 from app.gemini_config import GeminiKey
 
@@ -51,6 +53,176 @@ def test_connection_reset_is_classified_as_transient_transport_failure() -> None
 
     assert db.errors
     assert db.events[-1][0] == "gemini.request.transport_error"
+
+
+class _QuotaError(Exception):
+    status_code = 429
+
+    def __init__(self, details):  # noqa: ANN001
+        self.details = details
+        super().__init__("429 RESOURCE_EXHAUSTED")
+
+
+def test_quota_classifier_only_treats_explicit_daily_limits_as_exhaustion() -> None:
+    daily = _QuotaError(
+        {
+            "error": {
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                        "violations": [
+                            {
+                                "quotaMetric": (
+                                    "generativelanguage.googleapis.com/"
+                                    "generate_requests_per_model_per_day"
+                                )
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    temporary = _QuotaError(
+        {
+            "error": {
+                "message": "Resource has been exhausted (e.g. check quota).",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "37s",
+                    }
+                ],
+            }
+        }
+    )
+
+    assert _classify_quota_error(daily).daily is True
+    disposition = _classify_quota_error(temporary)
+    assert disposition.daily is False
+    assert disposition.retry_after_seconds == 37
+
+
+def test_generic_429_cools_quota_domain_without_exhausting_key(monkeypatch) -> None:
+    now = datetime(2026, 9, 13, 10, 0, tzinfo=timezone.utc)
+
+    class Db:
+        def __init__(self) -> None:
+            self.errors = []
+            self.cooldowns = []
+            self.events = []
+
+        def mark_gemini_error(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            self.errors.append((args, kwargs))
+
+        def get_gemini_quota_domain_model_state(self, *_args):  # noqa: ANN002
+            return None
+
+        def set_gemini_quota_domain_model_cooldown(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            self.cooldowns.append((args, kwargs))
+
+        def insert_event(self, event_type, **kwargs):  # noqa: ANN001
+            self.events.append((event_type, kwargs))
+
+    db = Db()
+    manager = GeminiRuntimeManager(db, task_id="task", panel_id="library")
+    lease = GeminiLease(
+        "account", "key-id", "secret", "masked", "model", quota_domain_id="project"
+    )
+    monkeypatch.setattr("app.gemini_runtime._utc_now", lambda: now)
+
+    with pytest.raises(GeminiQuotaExceededError):
+        manager._handle_error(
+            lease=lease,
+            error=_QuotaError({"error": {"message": "Resource exhausted"}}),
+            run_id=3,
+        )
+
+    assert db.errors[0][1]["exhausted"] is False
+    assert db.cooldowns[0][0] == ("project", "model")
+    assert db.cooldowns[0][1]["failure_count"] == 1
+    assert db.cooldowns[0][1]["cooldown_until"] == "2026-09-13T10:01:00+00:00"
+    assert db.events[-1][0] == "gemini.quota.cooldown.started"
+
+
+def test_explicit_daily_429_exhausts_the_whole_quota_domain_model() -> None:
+    class Db:
+        def __init__(self) -> None:
+            self.exhaustions = []
+            self.events = []
+
+        def mark_gemini_quota_domain_model_exhausted(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            self.exhaustions.append((args, kwargs))
+            return 4
+
+        def insert_event(self, event_type, **kwargs):  # noqa: ANN001
+            self.events.append((event_type, kwargs))
+
+    db = Db()
+    manager = GeminiRuntimeManager(db, task_id="task", panel_id="library")
+    lease = GeminiLease(
+        "account", "key-id", "secret", "masked", "model", quota_domain_id="project"
+    )
+    error = _QuotaError(
+        {
+            "error": {
+                "details": [
+                    {
+                        "quotaMetric": "generate_requests_per_model_per_day",
+                    }
+                ]
+            }
+        }
+    )
+
+    with pytest.raises(GeminiQuotaExceededError):
+        manager._handle_error(lease=lease, error=error, run_id=4)
+
+    assert db.exhaustions[0][0] == ("project", "model")
+    assert db.events[-1][0] == "gemini.key.exhausted"
+    assert (
+        db.events[-1][1]["payload"]["quota_scope"]
+        == "quota_domain_model_daily"
+    )
+    assert db.events[-1][1]["payload"]["rows_changed"] == 4
+
+
+def test_candidate_reports_all_accounts_cooling_down() -> None:
+    now = datetime(2026, 9, 13, 10, 0, tzinfo=timezone.utc)
+
+    class Db:
+        def list_gemini_model_states(self, *, model_name=None):  # noqa: ANN001
+            return [
+                {"key_id": "a:key", "model_name": model_name, "exhausted": False},
+                {"key_id": "b:key", "model_name": model_name, "exhausted": False},
+            ]
+
+        def list_gemini_quota_domain_model_states(self, *, model_name=None):  # noqa: ANN001
+            return [
+                {
+                    "quota_domain_id": "a:key",
+                    "model_name": model_name,
+                    "cooldown_until": "2026-09-13T10:04:00+00:00",
+                },
+                {
+                    "quota_domain_id": "b:key",
+                    "model_name": model_name,
+                    "cooldown_until": "2026-09-13T10:02:00+00:00",
+                },
+            ]
+
+    manager = GeminiRuntimeManager(Db(), task_id="task", panel_id="library")
+    keys = [
+        GeminiKey("a", "a:key", "secret-a", "a***"),
+        GeminiKey("b", "b:key", "secret-b", "b***"),
+    ]
+
+    decision = manager._pick_candidate(keys=keys, model_name="model", now_utc=now)
+
+    assert decision["type"] == "quota_cooldown"
+    assert decision["wait_until"] == datetime(
+        2026, 9, 13, 10, 2, tzinfo=timezone.utc
+    )
 
 
 def test_manual_blackout_override_disables_current_window(monkeypatch) -> None:

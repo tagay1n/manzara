@@ -77,6 +77,42 @@ def test_configured_model_names_come_only_from_shared_pool(
     ]
 
 
+def test_keys_default_to_independent_quota_domains_and_allow_project_grouping(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.local.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gemini": {
+                    "accounts": {
+                        "owner": [
+                            "key-one",
+                            {
+                                "api_key": "key-two",
+                                "quota_domain": "project-shared",
+                            },
+                            {
+                                "api_key": "key-three",
+                                "quota_domain": "project-shared",
+                            },
+                        ]
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
+
+    keys = gemini_config.load_gemini_keys()
+
+    assert keys[0].quota_domain_id == keys[0].key_id
+    assert keys[1].quota_domain_id == "project-shared"
+    assert keys[2].quota_domain_id == "project-shared"
+
+
 def test_normalization_uses_full_shared_ordered_model_pool(monkeypatch) -> None:
     from app.modules.library import normalization_suggestions as normalization
 
