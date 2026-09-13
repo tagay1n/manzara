@@ -226,6 +226,43 @@ def test_document_upload_summary_uses_database_queue_artifact() -> None:
     }
 
 
+def test_pdf_content_migration_summary_reports_removed_missing_images() -> None:
+    summary = build_structured_run_summary(
+        task_id="maintenance.migrate_pdf_content",
+        panel_id="library",
+        status="completed",
+        exit_code=0,
+        error_text=None,
+        stop_mode=None,
+        started_at=None,
+        finished_at=None,
+        log_lines=[],
+        artifacts={
+            "kind": "maintenance.pdf_content_migration_summary",
+            "migrated": 59,
+            "failed": 1,
+            "images_uploaded": 10,
+            "images_reused": 20,
+            "missing_images_removed": 58,
+            "documents_with_missing_images": 58,
+            "pending_after": 100,
+        },
+    )
+
+    assert summary["message"] == (
+        "PDF content migration completed: 59 migrated, 1 failed, 100 pending; "
+        "58 missing images removed from 58 documents."
+    )
+    assert {item["label"]: item["value"] for item in summary["highlights"]} == {
+        "Migrated": "59",
+        "Images": "30",
+        "Missing images removed": "58",
+        "Documents repaired": "58",
+        "Failed": "1",
+        "Pending": "100",
+    }
+
+
 def test_document_sync_summary_marks_incomplete_discovery_as_not_evaluated() -> None:
     summary = build_structured_run_summary(
         task_id="maintenance.sync_documents_s3",

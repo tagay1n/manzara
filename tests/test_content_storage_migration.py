@@ -5,6 +5,8 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
+from botocore.exceptions import ClientError
+
 from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.maintenance.content_storage_migration import (
@@ -102,6 +104,43 @@ def test_archive_rewrite_rejects_cross_document_image_key() -> None:
         raise AssertionError("cross-document image must be rejected")
 
 
+def test_archive_rewrite_removes_missing_image_references_and_whole_figure() -> None:
+    md5 = "a" * 32
+    figure_key = f"{md5}-1-0.png"
+    html_key = f"{md5}-2-0.png"
+    markdown_key = f"{md5}-3-0.png"
+    source = _archive(
+        md5,
+        '<figure class="illustration">'
+        f'<img src="https://storage.yandexcloud.net/ttimg/{figure_key}">'
+        "<figcaption>Remove this caption</figcaption></figure>\n"
+        f'<p>Before <img src="https://storage.yandexcloud.net/ttimg/{html_key}"> after</p>\n'
+        f'![missing](https://storage.yandexcloud.net/ttimg/{markdown_key})\n'
+        "Keep this text.\n",
+    )
+
+    rewritten, keys, member = rewrite_content_archive(
+        source,
+        md5=md5,
+        legacy_endpoint="https://storage.yandexcloud.net",
+        legacy_bucket="ttimg",
+        primary_endpoint="https://s3.example.test",
+        primary_bucket="ttimgs",
+        missing_image_keys={figure_key, html_key, markdown_key},
+    )
+
+    assert keys == ()
+    with zipfile.ZipFile(BytesIO(rewritten)) as archive:
+        markdown = archive.read(member).decode()
+    assert "Remove this caption" not in markdown
+    assert "<figure" not in markdown
+    assert "<img" not in markdown
+    assert "![missing]" not in markdown
+    assert "<p>Before  after</p>" in markdown
+    assert "Keep this text." in markdown
+    assert "storage.yandexcloud.net/ttimg" not in markdown
+
+
 class FakeS3:
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], dict] = {}
@@ -143,6 +182,16 @@ class FakeS3:
     def delete_object(self, *, Bucket, Key):  # noqa: N803, ANN001
         self.objects.pop((Bucket, Key), None)
         self.deletes.append((Bucket, Key))
+
+
+class DeniedImageS3(FakeS3):
+    def head_object(self, *, Bucket, Key):  # noqa: N803, ANN001
+        if Bucket == "ttimg":
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "denied"}},
+                "HeadObject",
+            )
+        return super().head_object(Bucket=Bucket, Key=Key)
 
 
 class FakeRepository:
@@ -271,6 +320,95 @@ def test_single_worker_migrates_cutovers_and_deletes_in_order(tmp_path: Path) ->
     assert repository.completed == [md5]
     assert primary.transfer_thread_settings == [False, False]
     assert legacy.transfer_thread_settings == [False, False]
+
+
+def test_missing_image_is_removed_without_failing_document(tmp_path: Path) -> None:
+    md5 = "a" * 32
+    present_key = f"{md5}-1-0.png"
+    missing_key = f"{md5}-2-0.png"
+    source_url = f"https://storage.yandexcloud.net/ttcontent/{md5}.zip"
+    candidate = ContentMigrationCandidate(md5, "application/pdf", source_url, "failed")
+    repository = FakeRepository(candidate)
+    legacy = FakeS3()
+    primary = FakeS3()
+    legacy.add("ttimg", present_key, b"present-png")
+    legacy.add(
+        "ttcontent",
+        f"{md5}.zip",
+        _archive(
+            md5,
+            '<figure><img src="https://storage.yandexcloud.net/ttimg/'
+            f'{missing_key}"><figcaption>Missing caption</figcaption></figure>\n'
+            '<figure><img src="https://storage.yandexcloud.net/ttimg/'
+            f'{present_key}"><figcaption>Present caption</figcaption></figure>',
+        ),
+    )
+
+    result = run_content_storage_migration(
+        repository=repository,
+        state_db=FakeStateDb(),
+        legacy_s3=legacy,
+        primary_s3=primary,
+        settings=_settings(tmp_path),
+        workspace=tmp_path / "run",
+        run_id=9,
+        should_stop=lambda: False,
+        public_check=lambda _url: True,
+    )
+
+    assert result["migrated"] == 1
+    assert result["failed"] == 0
+    assert result["missing_images_removed"] == 1
+    assert result["documents_with_missing_images"] == 1
+    assert repository.completed == [md5]
+    assert repository.failed == []
+    assert set(repository.images) == {present_key}
+    assert ("ttimgs", missing_key) not in primary.uploads
+    assert ("ttimg", missing_key) not in legacy.deletes
+    archive_body = primary.objects[("ttcontent", f"{md5}.zip")]["Body"]
+    with zipfile.ZipFile(BytesIO(archive_body)) as archive:
+        markdown = archive.read(f"{md5}.md").decode()
+    assert "Missing caption" not in markdown
+    assert missing_key not in markdown
+    assert "Present caption" in markdown
+    assert f"https://b2.test/ttimgs/{present_key}" in markdown
+
+
+def test_non_missing_image_storage_error_still_fails_document(tmp_path: Path) -> None:
+    md5 = "a" * 32
+    image_key = f"{md5}-1-0.png"
+    source_url = f"https://storage.yandexcloud.net/ttcontent/{md5}.zip"
+    candidate = ContentMigrationCandidate(md5, "application/pdf", source_url, "pending")
+    repository = FakeRepository(candidate)
+    legacy = DeniedImageS3()
+    primary = FakeS3()
+    legacy.add(
+        "ttcontent",
+        f"{md5}.zip",
+        _archive(
+            md5,
+            f'<figure><img src="https://storage.yandexcloud.net/ttimg/{image_key}">'
+            "</figure>",
+        ),
+    )
+
+    result = run_content_storage_migration(
+        repository=repository,
+        state_db=FakeStateDb(),
+        legacy_s3=legacy,
+        primary_s3=primary,
+        settings=_settings(tmp_path),
+        workspace=tmp_path / "run",
+        run_id=9,
+        should_stop=lambda: False,
+        public_check=lambda _url: True,
+    )
+
+    assert result["migrated"] == 0
+    assert result["failed"] == 1
+    assert result["missing_images_removed"] == 0
+    assert repository.failed == [md5]
+    assert repository.completed == []
 
 
 def test_stop_before_first_document_makes_no_remote_changes(tmp_path: Path) -> None:

@@ -29,6 +29,11 @@ SINGLE_THREAD_TRANSFER_CONFIG = TransferConfig(
     max_concurrency=1,
 )
 _URL_PATTERN = re.compile(r"https?://[^\s\"'<>()\[\]]*")
+_FIGURE_PATTERN = re.compile(r"(?is)<figure\b[^>]*>.*?</figure\s*>")
+_HTML_IMAGE_PATTERN = re.compile(r"(?is)<img\b[^>]*>")
+_MARKDOWN_IMAGE_PATTERN = re.compile(
+    r"(?m)(?<!\\)!\[[^\]\n]*\]\((?P<url>https?://[^)\n]+)\)"
+)
 _MD5_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -41,6 +46,10 @@ class ContentMigrationCandidate:
 
 
 class _StopAfterCheckpoint(RuntimeError):
+    pass
+
+
+class _MissingSourceImage(RuntimeError):
     pass
 
 
@@ -76,6 +85,7 @@ def rewrite_content_archive(
     legacy_bucket: str,
     primary_endpoint: str,
     primary_bucket: str,
+    missing_image_keys: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[bytes, tuple[str, ...], str]:
     """Rewrite only legacy image URLs in a one-Markdown-file ZIP."""
     digest = str(md5 or "").strip().lower()
@@ -98,18 +108,50 @@ def rewrite_content_archive(
     except (zipfile.BadZipFile, UnicodeDecodeError, KeyError) as exc:
         raise ValueError(f"Invalid content archive: {exc}") from exc
 
-    referenced: list[str] = []
+    missing = {str(key) for key in missing_image_keys}
 
-    def replace(match: re.Match[str]) -> str:
-        url = match.group(0)
+    def legacy_image_key(url: str) -> str | None:
         parsed = parse_object_url(url, legacy_endpoint)
         if parsed is None or parsed[0] != legacy_bucket:
-            return url
+            return None
         key = parsed[1]
         if not key.startswith(f"{digest}-") or "/" in key or key in {"", ".", ".."}:
             raise ValueError(
                 f"Legacy image key does not belong to document {digest}: {key}"
             )
+        return key
+
+    def contains_missing_image(value: str) -> bool:
+        return any(
+            (key := legacy_image_key(match.group(0))) is not None and key in missing
+            for match in _URL_PATTERN.finditer(value)
+        )
+
+    markdown = _FIGURE_PATTERN.sub(
+        lambda match: "" if contains_missing_image(match.group(0)) else match.group(0),
+        markdown,
+    )
+    markdown = _MARKDOWN_IMAGE_PATTERN.sub(
+        lambda match: ""
+        if (key := legacy_image_key(str(match.group("url")))) is not None
+        and key in missing
+        else match.group(0),
+        markdown,
+    )
+    markdown = _HTML_IMAGE_PATTERN.sub(
+        lambda match: "" if contains_missing_image(match.group(0)) else match.group(0),
+        markdown,
+    )
+
+    referenced: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        url = match.group(0)
+        key = legacy_image_key(url)
+        if key is None:
+            return url
+        if key in missing:
+            raise ValueError(f"Missing image reference was not removed: {key}")
         if key not in referenced:
             referenced.append(key)
         return object_url(primary_endpoint, primary_bucket, key)
@@ -165,16 +207,24 @@ def _copy_verified_file(
 ) -> tuple[dict[str, Any], str, int, str, bool]:
     source_head = _head_or_none(source_s3, source_bucket, key)
     if source_head is None:
-        raise FileNotFoundError(f"Missing source object s3://{source_bucket}/{key}")
+        raise _MissingSourceImage(f"Missing source object s3://{source_bucket}/{key}")
     source_size = int(source_head.get("ContentLength") or 0)
     source_etag = _etag(source_head.get("ETag"))
     path.parent.mkdir(parents=True, exist_ok=True)
-    source_s3.download_file(
-        source_bucket,
-        key,
-        str(path),
-        Config=SINGLE_THREAD_TRANSFER_CONFIG,
-    )
+    try:
+        source_s3.download_file(
+            source_bucket,
+            key,
+            str(path),
+            Config=SINGLE_THREAD_TRANSFER_CONFIG,
+        )
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code") or "")
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            raise _MissingSourceImage(
+                f"Missing source object s3://{source_bucket}/{key}"
+            ) from exc
+        raise
     if path.stat().st_size != source_size:
         raise RuntimeError(f"Source size changed while downloading {key}")
     digest = _sha256(path)
@@ -377,6 +427,8 @@ def run_content_storage_migration(
         source_images_deleted=0,
         source_archives_deleted=0,
         cutover_raced=0,
+        missing_images_removed=0,
+        documents_with_missing_images=0,
     )
     processed = 0
     stopped = bool(should_stop())
@@ -391,6 +443,7 @@ def run_content_storage_migration(
         doc_dir = workspace / candidate.md5
         doc_dir.mkdir(parents=True, exist_ok=True)
         archive_key = f"{candidate.md5}.zip"
+        removed_image_count = 0
         try:
             repository.start(candidate, run_id=run_id)
             if candidate.status not in {"cutover", "deleting"}:
@@ -410,15 +463,16 @@ def run_content_storage_migration(
                 )
                 if source_path.stat().st_size != source_size:
                     raise RuntimeError("Source archive size changed while downloading")
+                source_payload = source_path.read_bytes()
                 rewritten, image_keys, member = rewrite_content_archive(
-                    source_path.read_bytes(),
+                    source_payload,
                     md5=candidate.md5,
                     legacy_endpoint=settings.legacy.endpoint_url,
                     legacy_bucket=settings.legacy_content_images_bucket,
                     primary_endpoint=settings.primary.endpoint_url,
                     primary_bucket=settings.content_images_bucket,
                 )
-                repository.retain_images(candidate.md5, image_keys)
+                missing_image_keys: set[str] = set()
                 for image_key in image_keys:
                     if should_stop():
                         raise _StopAfterCheckpoint()
@@ -428,8 +482,14 @@ def run_content_storage_migration(
                         image_key,
                     )
                     image_path = doc_dir / "images" / image_key
-                    head, image_source_etag, image_source_size, image_sha, reused = (
-                        _copy_verified_file(
+                    try:
+                        (
+                            head,
+                            image_source_etag,
+                            image_source_size,
+                            image_sha,
+                            reused,
+                        ) = _copy_verified_file(
                             source_s3=legacy_s3,
                             destination_s3=primary_s3,
                             source_bucket=settings.legacy_content_images_bucket,
@@ -443,7 +503,14 @@ def run_content_storage_migration(
                             public_check=public_check,
                             public_url=image_url,
                         )
-                    )
+                    except _MissingSourceImage as exc:
+                        missing_image_keys.add(image_key)
+                        print(
+                            f"content migration: warning md5={candidate.md5} "
+                            f"image_removed={image_key} reason={exc}",
+                            flush=True,
+                        )
+                        continue
                     repository.checkpoint_image(
                         candidate.md5,
                         image_key,
@@ -456,6 +523,18 @@ def run_content_storage_migration(
                         run_id=run_id,
                     )
                     counters["images_reused" if reused else "images_uploaded"] += 1
+                if missing_image_keys:
+                    removed_image_count = len(missing_image_keys)
+                    rewritten, image_keys, member = rewrite_content_archive(
+                        source_payload,
+                        md5=candidate.md5,
+                        legacy_endpoint=settings.legacy.endpoint_url,
+                        legacy_bucket=settings.legacy_content_images_bucket,
+                        primary_endpoint=settings.primary.endpoint_url,
+                        primary_bucket=settings.content_images_bucket,
+                        missing_image_keys=missing_image_keys,
+                    )
+                repository.retain_images(candidate.md5, image_keys)
                 rewritten_path = doc_dir / "rewritten.zip"
                 rewritten_path.write_bytes(rewritten)
                 if should_stop():
@@ -527,6 +606,9 @@ def run_content_storage_migration(
                 counters["source_images_deleted"] += 1
             repository.complete(candidate.md5, run_id=run_id)
             counters["migrated"] += 1
+            if removed_image_count:
+                counters["missing_images_removed"] += removed_image_count
+                counters["documents_with_missing_images"] += 1
             print(f"content migration: completed md5={candidate.md5}", flush=True)
         except _StopAfterCheckpoint:
             stopped = True
