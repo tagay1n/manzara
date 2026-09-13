@@ -176,9 +176,9 @@ def test_route_operation_services_expose_expected_attributes() -> None:
 
     assert callable(classification.list_classifications)
     assert callable(classification.get_classification_insights)
-    assert callable(classification.get_normalization_preview)
-    assert callable(classification.get_merge_candidates)
-    assert callable(classification.merge_classifications)
+    assert callable(classification.list_classification_documents)
+    assert callable(classification.preview_change_set)
+    assert callable(classification.apply_change_set)
 
     assert callable(entities.list_personalities)
     assert callable(entities.get_personality_insights)

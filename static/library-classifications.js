@@ -1,835 +1,457 @@
 const state = {
-  tablePayload: null,
-  insightsPayload: null,
-  normalizationPayload: null,
-  mergePayload: null,
-  globalPayload: null,
-  viewState: "loading",
-  refreshTimer: null,
-  eventCursor: 0,
-  eventStreamController: null,
-  soundNotifier: null,
-  page: 1,
-  pageSize: 25,
-  activeTab: "table",
-  mergeActionKey: "",
-  confirmPendingResolve: null,
+  tablePayload: null, insightsPayload: null, globalPayload: null,
+  page: 1, pageSize: 25, activeTab: "tree", refreshTimer: null,
+  eventCursor: 0, eventStreamController: null,
+  base: new Map(), draft: new Map(), merges: new Map(),
+  history: [], future: [], expanded: new Set(), documentPages: new Map(),
+  documentDownloads: new Map(), dragged: null,
+  editingPath: null, mergeSource: null, documentObserver: null, applying: false,
 };
 
 const viewState = window.ManzaraCore.attachViewState(state, "loading");
 
-const TAB_IDS = [
-  "table",
-  "tree",
-  "distribution",
-  "normalization",
-  "merge",
-  "duplicates",
-  "unclassified",
-];
-
 const tabController = window.ManzaraCore.createTabController({
-  tabs: TAB_IDS,
+  tabs: ["table", "tree", "distribution"],
   getActiveTab: () => state.activeTab,
-  setActiveTab: (tab) => {
-    state.activeTab = tab;
-  },
+  setActiveTab: (tab) => { state.activeTab = tab; },
 });
-
-async function api(path, options = {}) {
-  return window.ManzaraCore.api(path, options);
-}
-
-function escapeHtml(value) {
-  return window.ManzaraCore.escapeHtml(value);
-}
-
-function encodePathSegment(value) {
-  return encodeURIComponent(String(value ?? ""));
-}
-
-function toInt(value, fallback = 0) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return fallback;
-  return Math.trunc(num);
-}
-
-function toId(value) {
-  const num = toInt(value, 0);
-  return num > 0 ? num : null;
-}
-
-function formatDateTime(value) {
-  return window.ManzaraCore.formatDateTime(value);
-}
-
-function initSoundNotifier() {
-  const createNotifier = window.ManzaraSound?.createNotifier;
-  if (typeof createNotifier !== "function") return;
-  state.soundNotifier = createNotifier({ repeatGapMs: 2000 });
-}
-
-function maybePlayTaskNotification(eventPayload, lastEventId = "") {
-  state.soundNotifier?.handleEvent(eventPayload, lastEventId);
-}
-
-function teardownSoundNotifier() {
-  if (state.soundNotifier && typeof state.soundNotifier.teardown === "function") {
-    state.soundNotifier.teardown();
-  }
-  state.soundNotifier = null;
-}
-
-function renderGlobalState(payload) {
-  const active = payload.global.active_tasks || 0;
-  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(
-    active
-  );
-  const stopBtn = document.getElementById("stop-all-btn");
-  window.ManzaraCore.applyStopAllButton(stopBtn, payload.global.stop_all_state);
-}
-
-function currentFilters() {
-  return {
-    search: document.getElementById("filter-search").value.trim(),
-    ddcPrefix: document.getElementById("filter-ddc-prefix").value.trim(),
-    minUsage: Number(document.getElementById("filter-min-usage").value || "0"),
-    status: document.getElementById("filter-status").value,
-    sort: document.getElementById("filter-sort").value,
-  };
-}
+const api = (path, options = {}) => window.ManzaraCore.api(path, options);
+const escapeHtml = (value) => window.ManzaraCore.escapeHtml(value);
+const toInt = (value, fallback = 0) => Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : fallback;
+const pathKey = (path) => JSON.stringify(path);
+const encodedPath = (path) => encodeURIComponent(pathKey(path));
+const samePath = (left, right) => pathKey(left) === pathKey(right);
+const isPrefix = (prefix, path) => prefix.length <= path.length && prefix.every((part, i) => part === path[i]);
 
 function tableUrl() {
-  const filters = currentFilters();
   const params = new URLSearchParams({
-    page: String(state.page),
-    page_size: String(state.pageSize),
-    search: filters.search,
-    ddc_prefix: filters.ddcPrefix,
-    min_usage: String(Math.max(0, filters.minUsage || 0)),
-    status: filters.status,
-    sort: filters.sort,
+    page: String(state.page), page_size: String(state.pageSize),
+    search: document.getElementById("filter-search").value.trim(),
+    ddc_prefix: document.getElementById("filter-ddc-prefix").value.trim(),
+    min_usage: String(Math.max(0, Number(document.getElementById("filter-min-usage").value || 0))),
+    status: document.getElementById("filter-status").value,
+    sort: document.getElementById("filter-sort").value,
   });
-  return `/api/library/classifications?${params.toString()}`;
-}
-
-function normalizationUrl() {
-  const dropSegments = document
-    .getElementById("normalization-drop-segments")
-    .value.trim();
-  const limitRaw = Number(
-    document.getElementById("normalization-limit").value || "120"
-  );
-  const limit = Math.max(10, Math.min(500, Number.isFinite(limitRaw) ? limitRaw : 120));
-  const params = new URLSearchParams({
-    drop_segments: dropSegments || "Turkic literature",
-    limit: String(limit),
-  });
-  return `/api/library/classifications/normalization-preview?${params.toString()}`;
-}
-
-function mergeCandidatesUrl() {
-  const minScoreRaw = Number(document.getElementById("merge-min-score").value || "0.78");
-  const limitRaw = Number(document.getElementById("merge-limit").value || "80");
-  const minScore = Math.max(0, Math.min(1, Number.isFinite(minScoreRaw) ? minScoreRaw : 0.78));
-  const limit = Math.max(10, Math.min(300, Number.isFinite(limitRaw) ? limitRaw : 80));
-  const params = new URLSearchParams({
-    min_score: String(minScore),
-    limit: String(limit),
-  });
-  return `/api/library/classifications/merge-candidates?${params.toString()}`;
-}
-
-function classificationMergeActionKey(sourceId, targetId) {
-  return `${String(sourceId || "")}->${String(targetId || "")}`;
-}
-
-function requestConfirmation(options = {}) {
-  return window.ManzaraUI.confirm({
-    title: String(options.title || "Confirm"),
-    message: String(options.message || "Are you sure?"),
-    acceptLabel: String(options.acceptLabel || "Confirm"),
-    destructive: Boolean(options.destructive),
-  });
+  return `/api/library/classifications?${params}`;
 }
 
 function renderTable(payload) {
   state.tablePayload = payload;
-  const statusNode = document.getElementById("classification-table-status");
-  if (!payload.available) {
-    statusNode.textContent = `Table unavailable: ${payload.error || "unknown error"}`;
-    statusNode.classList.add("library-status-error");
-    document.getElementById("classification-table-body").innerHTML = "";
-    return;
+  const status = document.getElementById("classification-table-status");
+  status.classList.toggle("library-status-error", !payload.available);
+  status.textContent = payload.available
+    ? `Loaded ${(payload.items || []).length} rows from ${payload.total || 0} total`
+    : `Table unavailable: ${payload.error || "unknown error"}`;
+  document.getElementById("classification-table-body").innerHTML = payload.available ? (payload.items || []).map((item) => `
+    <tr><td>${escapeHtml(item.classification_id ?? "-")}</td>
+    <td><a class="run-task-link" href="/library/classifications/${encodeURIComponent(item.classification_id)}">${escapeHtml(item.ddc || "-")}</a></td>
+    <td>${escapeHtml(item.path || "-")}</td><td>${escapeHtml(item.usage_count || 0)}</td>
+    <td>${escapeHtml(item.status || "-")}</td><td>${escapeHtml(item.created_by || "-")}</td>
+    <td>${escapeHtml(window.ManzaraCore.formatDateTime(item.created_at))}</td></tr>`).join("") : "";
+  window.ManzaraCore.applyPaginationControls({
+    page: payload.page, totalPages: payload.total_pages,
+    labelNode: document.getElementById("page-label"),
+    prevNode: document.getElementById("page-prev"), nextNode: document.getElementById("page-next"),
+  });
+}
+
+function flattenTree(nodes, prefix = [], rows = []) {
+  for (const node of nodes || []) {
+    const path = Array.isArray(node.path) ? node.path : [...prefix, String(node.name || "")];
+    for (const item of node.classifications || []) {
+      const id = toInt(item.classification_id);
+      if (id > 0) rows.push({ id, ddc: String(item.ddc || ""), usage: toInt(item.usage_count), path: [...path] });
+    }
+    flattenTree(node.children, path, rows);
   }
-  statusNode.classList.remove("library-status-error");
-  statusNode.textContent = `Loaded ${payload.items.length} rows from ${payload.total} total`;
-
-  document.getElementById("classification-table-body").innerHTML = (payload.items || [])
-    .map((item) => {
-      const classificationId = toId(item.classification_id);
-      const href = classificationId ? `/library/classifications/${encodePathSegment(classificationId)}` : "#";
-      return `
-      <tr>
-        <td>${escapeHtml(String(classificationId ?? "-"))}</td>
-        <td><a href="${href}" class="run-task-link">${escapeHtml(item.ddc || "-")}</a></td>
-        <td title="${escapeHtml(item.path || "-")}">${escapeHtml(item.path || "-")}</td>
-        <td>${escapeHtml(String(toInt(item.usage_count, 0)))}</td>
-        <td>${escapeHtml(item.status || "-")}</td>
-        <td>${escapeHtml(item.created_by || "-")}</td>
-        <td>${escapeHtml(formatDateTime(item.created_at))}</td>
-      </tr>
-    `;
-    })
-    .join("");
-
-  document.getElementById("page-label").textContent = `Page ${payload.page} / ${payload.total_pages}`;
-  document.getElementById("page-prev").disabled = payload.page <= 1;
-  document.getElementById("page-next").disabled = payload.page >= payload.total_pages;
+  return rows;
+}
+function expandedPaths(rows) {
+  const keys = new Set();
+  for (const row of rows) for (let depth = 1; depth <= row.path.length; depth += 1) keys.add(pathKey(row.path.slice(0, depth)));
+  return keys;
 }
 
-function applyActiveTab() {
-  tabController.apply();
+function initializeDraft(payload) {
+  state.base = new Map(flattenTree(payload.tree).map((row) => [row.id, row]));
+  state.draft = new Map([...state.base].map(([id, row]) => [id, { ...row, path: [...row.path] }]));
+  state.merges = new Map(); state.history = []; state.future = []; state.documentPages = new Map();
+  state.expanded = expandedPaths(state.draft.values());
 }
 
-function switchTab(tab) {
-  tabController.select(tab);
+function snapshot() {
+  return {
+    draft: [...state.draft].map(([id, row]) => [id, { ...row, path: [...row.path] }]),
+    merges: [...state.merges], expanded: [...state.expanded],
+  };
+}
+
+function restore(value) {
+  state.draft = new Map(value.draft.map(([id, row]) => [id, { ...row, path: [...row.path] }]));
+  state.merges = new Map(value.merges); state.expanded = new Set(value.expanded || []);
+  state.documentPages = new Map(); renderEditor();
+}
+
+function stage(mutator) {
+  const before = snapshot(); mutator(); state.history.push(before); state.future = [];
+  state.documentPages = new Map(); renderEditor();
+}
+
+function draftRows() { return [...state.draft.values()].filter((row) => !state.merges.has(row.id)); }
+
+function stagedPayload() {
+  const changes = [];
+  for (const row of draftRows()) {
+    const base = state.base.get(row.id);
+    if (base && !samePath(row.path, base.path)) changes.push({ classification_id: row.id, path: row.path });
+  }
+  return {
+    base_revision: state.insightsPayload.revision, changes,
+    merges: [...state.merges].map(([source, target]) => ({ source_classification_id: source, target_classification_id: target })),
+  };
+}
+
+function changeCount() { const draft = stagedPayload(); return draft.changes.length + draft.merges.length; }
+
+function buildDraftTree() {
+  const root = [];
+  for (const baseRow of draftRows().sort((a, b) => a.path.join("\0").localeCompare(b.path.join("\0")) || a.ddc.localeCompare(b.ddc))) {
+    const mergedUsage = [...state.merges].reduce((sum, [source, target]) => target === baseRow.id ? sum + (state.draft.get(source)?.usage || 0) : sum, 0);
+    const row = { ...baseRow, path: [...baseRow.path], usage: baseRow.usage + mergedUsage };
+    let nodes = root; let current;
+    row.path.forEach((name, index) => {
+      current = nodes.find((item) => item.name === name);
+      if (!current) { current = { name, path: row.path.slice(0, index + 1), children: [], classifications: [] }; nodes.push(current); }
+      nodes = current.children;
+    });
+    current.classifications.push(row);
+  }
+  const populate = (node) => {
+    node.children.forEach(populate);
+    node.count = node.classifications.reduce((sum, row) => sum + row.usage, 0) + node.children.reduce((sum, child) => sum + child.count, 0);
+  };
+  root.forEach(populate); return root;
+}
+
+function terminalIds(path) { return draftRows().filter((row) => samePath(row.path, path)).map((row) => row.id); }
+function subtreeIds(path) { return draftRows().filter((row) => isPrefix(path, row.path)).map((row) => row.id); }
+function documentGroup(path) {
+  const ids = terminalIds(path); const sources = [...ids];
+  for (const [source, target] of state.merges) if (ids.includes(target)) sources.push(source);
+  return [...new Set(sources)].sort((a, b) => a - b);
+}
+function documentState(path) {
+  const key = pathKey(path);
+  if (!state.documentPages.has(key)) state.documentPages.set(key, { items: [], total: 0, hasMore: false, loading: false, error: "" });
+  return state.documentPages.get(key);
+}
+
+function renderDocuments(path) {
+  if (!terminalIds(path).length) return "";
+  const page = documentState(path);
+  if (!page.items.length && !page.loading && !page.error) return `<button class="document-load-btn small-btn" data-auto-document-path="${encodedPath(path)}" data-path="${encodedPath(path)}">Load first 10 documents</button>`;
+  const items = page.items.map((doc) => {
+    const download = state.documentDownloads.get(doc.md5) || {};
+    const details = [
+      doc.source_name, doc.language, doc.mime_type,
+      doc.page_count ? `${doc.page_count} pages` : "",
+      doc.full === true ? "full document" : doc.full === false ? "partial" : "",
+      doc.sharing_restricted === true ? "restricted" : "",
+    ].filter(Boolean).join(" · ");
+    return `<li class="document-leaf"><div><strong>${escapeHtml(doc.title || doc.source_name || doc.md5)}</strong>
+      <div class="workflow-footnote">${escapeHtml(details)}</div></div>
+      <button class="small-btn document-open-btn" data-md5="${escapeHtml(doc.md5)}" ${download.loading ? "disabled" : ""}>${download.loading ? '<span class="inline-spinner"></span> Downloading…' : "Open locally"}</button>
+      ${download.error ? `<div class="workflow-footnote library-status-error">${escapeHtml(download.error)}</div>` : ""}</li>`;
+  }).join("");
+  return `<ul class="document-list">${items}</ul>
+    ${page.loading ? '<div class="workflow-footnote"><span class="inline-spinner"></span> Loading documents…</div>' : ""}
+    ${page.error ? `<div class="workflow-footnote library-status-error">${escapeHtml(page.error)}</div>` : ""}
+    ${page.hasMore ? `<button class="document-more-btn small-btn" data-path="${encodedPath(path)}">Load 10 more</button>` : ""}`;
 }
 
 function renderTreeNodes(nodes, depth = 0) {
-  if (!nodes || !nodes.length) {
-    return depth === 0 ? '<div class="workflow-footnote">No hierarchy data.</div>' : "";
-  }
-  return `
-    <ul class="tree-list ${depth === 0 ? "root" : ""}">
-      ${nodes
-        .map(
-          (node) => `
-        <li>
-          <div class="tree-row">
-            <span class="tree-name">${escapeHtml(node.name || "-")}</span>
-            <span class="tree-count">${escapeHtml(String(node.usage_count || 0))}</span>
-          </div>
-          ${renderTreeNodes(node.children || [], depth + 1)}
-        </li>
-      `
-        )
-        .join("")}
-    </ul>
-  `;
+  if (!nodes.length) return depth ? "" : '<div class="workflow-footnote">No hierarchy data.</div>';
+  return `<ul class="tree-list ${depth === 0 ? "root" : "tree-children"}">${nodes.map((node) => {
+    const key = pathKey(node.path); const expanded = state.expanded.has(key);
+    const editing = state.editingPath === key;
+    const encoded = encodedPath(node.path);
+    return `<li class="tree-node"><div class="tree-row taxonomy-drop-target" draggable="${!editing}" data-drag-path="${encoded}" data-drop-path="${encoded}">
+      ${editing ? `<span class="taxonomy-inline-editor"><input class="filter-input taxonomy-name-input" value="${escapeHtml(node.name)}" aria-label="Category name"><button class="small-btn" data-action="save-name" data-path="${encoded}">Save</button><button class="small-btn" data-action="cancel-name" data-path="${encoded}">Cancel</button></span>` : `<button class="tree-toggle" data-tree-path="${encoded}" aria-expanded="${expanded}"><span class="tree-caret">&#9656;</span><span class="tree-name">${escapeHtml(node.name)}</span><span class="tree-count">${node.count}</span></button>`}
+      <span class="taxonomy-node-actions"><button class="icon-btn" data-action="edit-name" data-path="${encoded}">Edit</button>
+      <button class="icon-btn" data-action="add-above" data-path="${encoded}" title="Insert level above">+↑</button>
+      <button class="icon-btn" data-action="add-below" data-path="${encoded}" title="Insert level below">+↓</button>
+      <button class="icon-btn danger" data-action="remove" data-path="${encoded}">Remove</button></span></div>
+      ${expanded ? `<div class="tree-branch">${node.classifications.length ? `<div class="classification-pills">${node.classifications.map((row) => `<button class="classification-pill ${state.mergeSource === row.id ? "is-selected" : ""}" draggable="true" data-drag-classification="${row.id}" data-drop-classification="${row.id}" title="Drag onto another DDC, or select source then target, to merge"><span>${escapeHtml(row.ddc || "No DDC")}</span><span class="tree-count">${row.usage}</span></button>`).join("")}</div>` : ""}${renderDocuments(node.path)}${renderTreeNodes(node.children, depth + 1)}</div>` : ""}</li>`;
+  }).join("")}</ul>`;
 }
 
-function renderDistribution(items) {
-  if (!items || !items.length) {
-    return '<div class="workflow-footnote">No distribution data.</div>';
-  }
-  return items
-    .map(
-      (item) => `
-      <div class="distribution-row">
-        <div class="distribution-head">
-          <span>${escapeHtml(item.bucket || "-")}</span>
-          <span>${escapeHtml(String(item.usage_count || 0))} • ${escapeHtml(String(item.share_pct || 0))}%</span>
-        </div>
-        <div class="distribution-bar">
-          <span style="width: ${Math.max(0, Math.min(100, Number(item.share_pct || 0)))}%"></span>
-        </div>
-      </div>
-    `
-    )
-    .join("");
+function renderChangeTray() {
+  const tray = document.getElementById("taxonomy-change-tray"); const payload = stagedPayload();
+  const total = payload.changes.length + payload.merges.length; tray.hidden = total === 0;
+  tray.innerHTML = total ? `<strong>${total} staged change${total === 1 ? "" : "s"}</strong><span>${payload.changes.length} path edits; ${payload.merges.length} merges. Nothing is saved until confirmation.</span>` : "";
+  document.getElementById("taxonomy-undo").disabled = !state.history.length;
+  document.getElementById("taxonomy-redo").disabled = !state.future.length;
+  document.getElementById("taxonomy-clear").disabled = total === 0;
+  const reviewButton = document.getElementById("taxonomy-review");
+  reviewButton.disabled = total === 0 || state.applying;
+  reviewButton.textContent = state.applying ? "Applying…" : "Review and apply";
+  document.getElementById("tree-status").textContent = total ? `${total} staged change${total === 1 ? "" : "s"}` : "All changes are staged locally until review.";
 }
-
-function renderDuplicates(items) {
-  if (!items || !items.length) {
-    return '<div class="workflow-footnote">No duplicates detected.</div>';
-  }
-  return items
-    .map(
-      (group) => `
-      <div class="duplicate-card">
-        <div class="duplicate-head">
-          <span class="duplicate-path">${escapeHtml(group.path || "-")}</span>
-          <span class="panel-pill">${escapeHtml(group.issue || "-")}</span>
-        </div>
-        <div class="workflow-footnote">Usage ${group.total_usage} • DDC variants ${group.distinct_ddc_count}</div>
-        ${(() => {
-          const entries = Array.isArray(group.items) ? group.items : [];
-          if (!entries.length) {
-            return '<div class="workflow-footnote">No classification rows.</div>';
-          }
-          const primary = entries[0] || {};
-          const primaryId = toId(primary.classification_id);
-          const primaryHref = primaryId
-            ? `/library/classifications/${encodePathSegment(primaryId)}`
-            : "#";
-          const mergeRows = entries
-            .slice(1)
-            .map((item) => {
-              const classificationId = toId(item.classification_id);
-              const href = classificationId
-                ? `/library/classifications/${encodePathSegment(classificationId)}`
-                : "#";
-              const actionEnabled = primaryId && classificationId;
-              const actionKey = classificationMergeActionKey(classificationId, primaryId);
-              const actionBusy = actionEnabled && state.mergeActionKey === actionKey;
-              return `
-              <div class="duplicate-merge-row">
-                <a class="duplicate-item" href="${href}">
-                  <span>#${escapeHtml(String(classificationId ?? "-"))} ${escapeHtml(item.ddc || "-")}</span>
-                  <span>Usage ${escapeHtml(String(item.usage_count || 0))}</span>
-                </a>
-                <button
-                  class="small-btn duplicate-merge-btn"
-                  data-source-id="${escapeHtml(String(classificationId ?? ""))}"
-                  data-target-id="${escapeHtml(String(primaryId ?? ""))}"
-                  ${actionEnabled && !actionBusy ? "" : "disabled"}
-                >${actionBusy ? "Merging..." : `Merge into #${escapeHtml(String(primaryId ?? "-"))}`}</button>
-              </div>
-            `;
-            })
-            .join("");
-          return `
-            <div class="duplicate-items">
-              <a class="duplicate-item duplicate-primary" href="${primaryHref}">
-                <span>Keep #${escapeHtml(String(primaryId ?? "-"))} ${escapeHtml(primary.ddc || "-")}</span>
-                <span>Usage ${escapeHtml(String(primary.usage_count || 0))}</span>
-              </a>
-              ${mergeRows || '<div class="workflow-footnote">No merge actions for this group.</div>'}
-            </div>
-          `;
-        })()}
-      </div>
-    `
-    )
-    .join("");
-}
-
-function renderUnclassified(queue) {
-  if (!queue || !queue.items || !queue.items.length) {
-    return `<div class="workflow-footnote">Queue is empty.</div>`;
-  }
-  const rows = queue.items
-    .map(
-      (item) => `
-      <div class="run-row">
-        <div>${escapeHtml(item.md5 || "-")} • ${escapeHtml(item.language || "-")}</div>
-        <div title="${escapeHtml(item.ya_path || "-")}">${escapeHtml(item.mime_type || "-")}</div>
-      </div>
-    `
-    )
-    .join("");
-  return `
-    <div class="workflow-footnote">Total in queue: ${queue.total || 0}</div>
-    ${rows}
-  `;
-}
-
-function renderNormalization(payload) {
-  state.normalizationPayload = payload;
-  const statusNode = document.getElementById("normalization-status");
-  const summaryNode = document.getElementById("normalization-summary");
-  const groupsNode = document.getElementById("normalization-groups");
-  const affectedNode = document.getElementById("normalization-affected");
-
-  if (!payload.available) {
-    statusNode.textContent = `Normalization unavailable: ${payload.error || "unknown error"}`;
-    statusNode.classList.add("library-status-error");
-    summaryNode.innerHTML = "";
-    groupsNode.innerHTML = "";
-    affectedNode.innerHTML = "";
-    const normalizationBadge = document.getElementById("tab-badge-normalization");
-    if (normalizationBadge) normalizationBadge.textContent = "0";
-    return;
-  }
-
-  statusNode.classList.remove("library-status-error");
-  statusNode.textContent = `Rules: ${payload.rules.drop_segments.join(", ")}`;
-  summaryNode.innerHTML = `
-    <div class="library-stat-card"><span class="library-stat-label">Rows Scanned</span><span class="library-stat-value">${payload.summary.total_rows_scanned || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Affected</span><span class="library-stat-value">${payload.summary.affected_classifications || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Estimated Reassignments</span><span class="library-stat-value">${payload.summary.estimated_reassigned_documents || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Merge Groups</span><span class="library-stat-value">${payload.summary.merge_group_candidates || 0}</span></div>
-  `;
-
-  groupsNode.innerHTML = `
-    <h3 class="mini-head">Merge Groups After Normalization</h3>
-    ${
-      (payload.merge_groups || []).length
-        ? (payload.merge_groups || [])
-            .slice(0, 25)
-            .map(
-              (group) => `
-            <div class="duplicate-card">
-              <div class="duplicate-head">
-                <span class="duplicate-path">${escapeHtml(group.normalized_path || "-")}</span>
-                <span class="panel-pill">group ${group.group_size}</span>
-              </div>
-              <div class="workflow-footnote">Usage ${group.total_usage} • primary ${group.recommended_primary_classification_id}</div>
-            </div>
-          `
-            )
-            .join("")
-        : '<div class="workflow-footnote">No merge groups detected.</div>'
+function observeDocumentLeaves() {
+  state.documentObserver?.disconnect();
+  if (typeof IntersectionObserver === "undefined") return;
+  state.documentObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const path = parseDatasetPath(entry.target.dataset.autoDocumentPath);
+      state.documentObserver.unobserve(entry.target);
+      if (path) loadDocuments(path);
     }
-  `;
-
-  affectedNode.innerHTML = `
-    <h3 class="mini-head">Affected Classifications Preview</h3>
-    ${
-      (payload.affected_preview || []).length
-        ? (payload.affected_preview || [])
-            .slice(0, 30)
-            .map(
-              (item) => `
-            <div class="duplicate-card">
-              <div class="duplicate-head">
-                <span class="duplicate-path">${escapeHtml(item.original_path || "-")}</span>
-                <span class="panel-pill">#${escapeHtml(String(toId(item.classification_id) ?? "-"))}</span>
-              </div>
-              <div class="workflow-footnote">→ ${escapeHtml(item.normalized_path || "-")} • usage ${escapeHtml(String(item.usage_count ?? 0))}</div>
-            </div>
-          `
-            )
-            .join("")
-        : '<div class="workflow-footnote">No affected classifications.</div>'
-    }
-  `;
-
-  const normalizationBadge = document.getElementById("tab-badge-normalization");
-  if (normalizationBadge) {
-    normalizationBadge.textContent = String(payload.summary.affected_classifications || 0);
-  }
+  }, { rootMargin: "160px" });
+  document.querySelectorAll("[data-auto-document-path]").forEach((node) => state.documentObserver.observe(node));
+}
+function renderEditor() {
+  document.getElementById("tree-root").innerHTML = renderTreeNodes(buildDraftTree());
+  renderChangeTray(); observeDocumentLeaves();
 }
 
-function renderMergeCandidates(payload) {
-  state.mergePayload = payload;
-  const statusNode = document.getElementById("merge-status");
-  const summaryNode = document.getElementById("merge-summary");
-  const rootNode = document.getElementById("merge-root");
-
-  if (!payload.available) {
-    statusNode.textContent = `Merge candidates unavailable: ${payload.error || "unknown error"}`;
-    statusNode.classList.add("library-status-error");
-    summaryNode.innerHTML = "";
-    rootNode.innerHTML = "";
-    const mergeBadge = document.getElementById("tab-badge-merge");
-    if (mergeBadge) mergeBadge.textContent = "0";
-    return;
-  }
-
-  statusNode.classList.remove("library-status-error");
-  statusNode.textContent = "Pick the classification to keep, then merge the duplicate into it.";
-  summaryNode.innerHTML = `
-    <div class="library-stat-card"><span class="library-stat-label">Candidates</span><span class="library-stat-value">${payload.summary.candidate_count || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Rows Scanned</span><span class="library-stat-value">${payload.summary.rows_scanned || 0}</span></div>
-    <div class="library-stat-card"><span class="library-stat-label">Min Score</span><span class="library-stat-value">${Number(payload.summary.min_score || 0).toFixed(2)}</span></div>
-  `;
-  rootNode.innerHTML = (payload.candidates || []).length
-    ? (payload.candidates || [])
-        .map((candidate) => {
-          const primaryId = toId(candidate.primary.classification_id);
-          const secondaryId = toId(candidate.secondary.classification_id);
-          const recommendedPrimaryId = toId(candidate.recommended_primary_classification_id);
-          const keepId = recommendedPrimaryId || primaryId || secondaryId;
-          const mergeSourceId = keepId === primaryId ? secondaryId : primaryId;
-          const actionEnabled = Number(mergeSourceId || 0) > 0 && Number(keepId || 0) > 0;
-          const actionKey = classificationMergeActionKey(mergeSourceId, keepId);
-          const actionBusy = actionEnabled && state.mergeActionKey === actionKey;
-          const primaryHref = primaryId ? `/library/classifications/${encodePathSegment(primaryId)}` : "#";
-          const secondaryHref = secondaryId
-            ? `/library/classifications/${encodePathSegment(secondaryId)}`
-            : "#";
-          return `
-        <div class="duplicate-card">
-          <div class="duplicate-head">
-            <span class="duplicate-path">Candidate ${escapeHtml(String(primaryId ?? "-"))} ↔ ${escapeHtml(String(secondaryId ?? "-"))}</span>
-            <span class="panel-pill">${escapeHtml(candidate.issue || "-")}</span>
-          </div>
-          <div class="workflow-footnote">Score ${escapeHtml(String(candidate.score ?? 0))} • Impact ${escapeHtml(String(candidate.impact ?? 0))}</div>
-          <div class="merge-candidate-grid">
-            <a class="duplicate-item merge-candidate-col" href="${primaryHref}">
-              <span class="merge-candidate-label">${primaryId === keepId ? "Keep" : "Merge into keep"}</span>
-              <span>#${escapeHtml(String(primaryId ?? "-"))} ${escapeHtml(candidate.primary.ddc || "-")}</span>
-              <span>${escapeHtml(candidate.primary.path || "-")}</span>
-              <span>Usage ${escapeHtml(String(candidate.primary.usage_count ?? 0))}</span>
-            </a>
-            <a class="duplicate-item merge-candidate-col" href="${secondaryHref}">
-              <span class="merge-candidate-label">${secondaryId === keepId ? "Keep" : "Merge into keep"}</span>
-              <span>#${escapeHtml(String(secondaryId ?? "-"))} ${escapeHtml(candidate.secondary.ddc || "-")}</span>
-              <span>${escapeHtml(candidate.secondary.path || "-")}</span>
-              <span>Usage ${escapeHtml(String(candidate.secondary.usage_count ?? 0))}</span>
-            </a>
-          </div>
-          <div class="normalization-action-row">
-            <button
-              class="small-btn merge-execute-btn"
-              data-source-id="${escapeHtml(String(mergeSourceId ?? ""))}"
-              data-target-id="${escapeHtml(String(keepId ?? ""))}"
-              ${actionEnabled && !actionBusy ? "" : "disabled"}
-            >${actionBusy ? "Merging..." : "Merge"}</button>
-            <span class="workflow-footnote">Action: merge #${escapeHtml(String(mergeSourceId ?? "-"))} into #${escapeHtml(String(keepId ?? "-"))}</span>
-          </div>
-        </div>
-      `;
-        })
-        .join("")
-    : '<div class="workflow-footnote">No merge candidates at this threshold.</div>';
-
-  const mergeBadge = document.getElementById("tab-badge-merge");
-  if (mergeBadge) {
-    mergeBadge.textContent = String(payload.summary.candidate_count || 0);
-  }
+function renderDistribution(payload) {
+  document.getElementById("distribution-root").innerHTML = (payload.distribution || []).map((item) => `<div class="distribution-row"><div class="distribution-head"><span>${escapeHtml(item.bucket || "-")}</span><span>${escapeHtml(item.usage_count || 0)} documents</span></div><div class="distribution-bar"><span style="width:${Math.max(0, Math.min(100, Number(item.share_pct) || 0))}%"></span></div></div>`).join("") || '<div class="workflow-footnote">No distribution data.</div>';
 }
 
-async function applyClassificationMerge(
-  sourceClassificationId,
-  targetClassificationId,
-  options = {}
-) {
-  const statusNodeId = String(options.statusNodeId || "merge-status");
-  const sourceId = toId(sourceClassificationId);
-  const targetId = toId(targetClassificationId);
-  if (!sourceId || !targetId || sourceId === targetId) return;
-  const confirmed = await requestConfirmation({
-    title: "Confirm merge",
-    message: `Merge classification #${sourceId} into #${targetId}? This action is one-way.`,
-    acceptLabel: "Merge",
-    destructive: true,
+function validateLabel(label) {
+  const value = String(label || "").trim().replace(/\s+/g, " ");
+  if (!value || value.length > 180 || !/^[A-Za-z0-9][A-Za-z0-9 &'()/:,+.\-]*$/.test(value)) throw new Error("Use a non-empty English label (maximum 180 characters).");
+  return value;
+}
+function rewriteExpanded(source, rewrite) {
+  state.expanded = new Set([...state.expanded].map((key) => {
+    const path = parseDatasetPath(key);
+    return path && isPrefix(source, path) ? pathKey(rewrite([...path])) : key;
+  }));
+}
+async function askLabel(message, value = "") {
+  const answer = await window.ManzaraUI.prompt({ title: "Edit category", message, value, acceptLabel: "Stage change" });
+  if (answer === null || answer === undefined || answer === false) return null;
+  return validateLabel(typeof answer === "object" ? answer.value : answer);
+}
+function renameNode(path, rawLabel) {
+  const label = validateLabel(rawLabel);
+  state.editingPath = null;
+  if (label === path.at(-1)) { renderEditor(); return; }
+  stage(() => {
+    for (const row of state.draft.values()) if (isPrefix(path, row.path)) row.path[path.length - 1] = label;
+    rewriteExpanded(path, (expanded) => { expanded[path.length - 1] = label; return expanded; });
   });
+}
+async function addLevel(path, placement) {
+  if (Math.max(...subtreeIds(path).map((id) => state.draft.get(id).path.length), 0) >= 8) return window.ManzaraUI.toast("A classification path can contain at most eight levels.");
+  const label = await askLabel(`Name for the new level ${placement} “${path.at(-1)}”`);
+  if (!label) return; const index = placement === "above" ? path.length - 1 : path.length;
+  stage(() => {
+    for (const row of state.draft.values()) if (isPrefix(path, row.path)) row.path.splice(index, 0, label);
+    rewriteExpanded(path, (expanded) => { expanded.splice(index, 0, label); return expanded; });
+  });
+}
+async function removeLevel(path) {
+  if (path.length <= 2) return window.ManzaraUI.toast("A classification must keep at least two category levels.");
+  if (terminalIds(path).length) return window.ManzaraUI.toast("This category has directly assigned classifications. Merge them first.");
+  const confirmed = await window.ManzaraUI.confirm({ title: "Remove hierarchy level", message: `Promote every child of “${path.at(-1)}” one level?`, acceptLabel: "Stage removal", destructive: true });
+  if (confirmed) stage(() => {
+    for (const row of state.draft.values()) if (isPrefix(path, row.path)) row.path.splice(path.length - 1, 1);
+    rewriteExpanded(path, (expanded) => { expanded.splice(path.length - 1, 1); return expanded; });
+  });
+}
+function moveSubtree(source, target) {
+  if (samePath(source, target) || isPrefix(source, target)) return window.ManzaraUI.toast("A category cannot be moved into itself or its descendants.");
+  const ids = subtreeIds(source); if (!ids.length) return;
+  if (ids.some((id) => target.length + 1 + state.draft.get(id).path.length - source.length > 8)) return window.ManzaraUI.toast("That move would exceed the eight-level limit.");
+  stage(() => {
+    for (const id of ids) { const row = state.draft.get(id); row.path = [...target, source.at(-1), ...row.path.slice(source.length)]; }
+    rewriteExpanded(source, (expanded) => [...target, source.at(-1), ...expanded.slice(source.length)]);
+  });
+}
+function mergeClassification(source, target) {
+  if (source === target || state.merges.has(source) || state.merges.has(target) || [...state.merges.values()].includes(source)) return window.ManzaraUI.toast("That classification already participates in a staged merge.");
+  if (!state.draft.has(source) || !state.draft.has(target)) return;
+  state.mergeSource = null;
+  stage(() => state.merges.set(source, target));
+}
+
+async function loadDocuments(path) {
+  const page = documentState(path); if (page.loading) return;
+  page.loading = true; page.error = ""; renderEditor();
+  try {
+    const payload = await api(`/api/library/classifications/documents?${new URLSearchParams({ classification_ids: documentGroup(path).join(","), offset: String(page.items.length), limit: "10" })}`);
+    page.items.push(...(payload.items || [])); page.total = payload.total || page.items.length; page.hasMore = Boolean(payload.has_more);
+  } catch (error) { page.error = String(error?.message || error); }
+  finally { page.loading = false; renderEditor(); }
+}
+async function openDocument(md5) {
+  const existing = state.documentDownloads.get(md5);
+  if (existing?.openUrl) { window.open(existing.openUrl, "_blank", "noopener"); return; }
+  const pendingWindow = window.open("about:blank", "_blank");
+  if (pendingWindow) pendingWindow.opener = null;
+  state.documentDownloads.set(md5, { loading: true, error: "" }); renderEditor();
+  try {
+    const payload = await api(`/api/library/documents/${encodeURIComponent(md5)}/cache`, { method: "POST" });
+    const openUrl = String(payload?.open_url || "").trim();
+    if (!openUrl) throw new Error("Local document URL was not returned");
+    state.documentDownloads.set(md5, { loading: false, error: "", openUrl });
+    if (pendingWindow) pendingWindow.location.href = openUrl;
+    else window.open(openUrl, "_blank", "noopener");
+  } catch (error) {
+    pendingWindow?.close();
+    state.documentDownloads.set(md5, { loading: false, error: String(error?.message || error) });
+  }
+  renderEditor();
+}
+
+async function reviewAndApply() {
+  if (state.applying || !changeCount()) return;
+  state.applying = true; renderChangeTray();
+  try {
+  const draft = stagedPayload();
+  const preview = await api("/api/library/classifications/change-set/preview", { method: "POST", body: JSON.stringify(draft) });
+  const summary = preview.summary || {};
+  const details = [
+    ...draft.changes.map((item) => {
+      const before = state.base.get(item.classification_id)?.path.join(" / ") || `#${item.classification_id}`;
+      return `${before} → ${item.path.join(" / ")}`;
+    }),
+    ...draft.merges.map((item) => `${state.base.get(item.source_classification_id)?.ddc || `#${item.source_classification_id}`} → ${state.base.get(item.target_classification_id)?.ddc || `#${item.target_classification_id}`}`),
+  ];
+  const detailText = details.slice(0, 8).join("\n");
+  const remainder = details.length > 8 ? `\n…and ${details.length - 8} more` : "";
+  const confirmed = await window.ManzaraUI.confirm({ title: "Apply category changes", message: `${summary.path_changes || 0} path changes, ${summary.classification_merges || 0} merges, ${summary.affected_documents || 0} affected documents.\n\n${detailText}${remainder}\n\nApply atomically?`, acceptLabel: "Apply changes", destructive: Boolean(summary.classification_merges) });
   if (!confirmed) return;
-
-  state.mergeActionKey = classificationMergeActionKey(sourceId, targetId);
-  if (state.mergePayload) renderMergeCandidates(state.mergePayload);
-  try {
-    const result = await api("/api/library/classifications/merge", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source_classification_id: sourceId,
-        target_classification_id: targetId,
-        reason: "manual_merge_from_candidates",
-      }),
-    });
-    await Promise.all([refreshTable(), refreshInsights(), refreshMergeCandidates()]);
-    const moved = toInt(result?.moved_docs_count, 0);
-    const updated = toInt(result?.schema_org_updated_count, 0);
-    const statusNode = document.getElementById(statusNodeId);
-    if (statusNode) {
-      statusNode.classList.remove("library-status-error");
-      statusNode.textContent = `Merged #${sourceId} into #${targetId}. Moved docs ${moved}, schema updates ${updated}.`;
-    }
-  } catch (error) {
-    const message = String(error?.message || error || "unknown error");
-    const statusNode = document.getElementById(statusNodeId);
-    if (statusNode) {
-      statusNode.classList.add("library-status-error");
-      statusNode.textContent = `Merge failed: ${message}`;
-    }
-    throw error;
+  await api("/api/library/classifications/change-set/apply", { method: "POST", body: JSON.stringify({ ...draft, confirmed: true, change_set_hash: preview.change_set_hash }) });
+  await refreshAll(true); window.ManzaraUI.toast("Category changes applied.");
   } finally {
-    state.mergeActionKey = "";
-    if (state.mergePayload) renderMergeCandidates(state.mergePayload);
+    state.applying = false; renderChangeTray();
   }
 }
 
-function renderInsights(payload) {
-  state.insightsPayload = payload;
-  const duplicatesStatusNode = document.getElementById("duplicates-status");
-  if (!payload.available) {
-    document.getElementById("tree-root").innerHTML = `<div class="workflow-footnote library-status-error">${escapeHtml(payload.error || "unknown error")}</div>`;
-    document.getElementById("distribution-root").innerHTML = "";
-    document.getElementById("duplicates-root").innerHTML = "";
-    document.getElementById("unclassified-root").innerHTML = "";
-    if (duplicatesStatusNode) {
-      duplicatesStatusNode.textContent = `Duplicates unavailable: ${payload.error || "unknown error"}`;
-      duplicatesStatusNode.classList.add("library-status-error");
-    }
-    const duplicatesBadge = document.getElementById("tab-badge-duplicates");
-    if (duplicatesBadge) duplicatesBadge.textContent = "0";
-    const unclassifiedBadge = document.getElementById("tab-badge-unclassified");
-    if (unclassifiedBadge) unclassifiedBadge.textContent = "0";
-    return;
-  }
-  if (duplicatesStatusNode) {
-    const count = Array.isArray(payload.duplicates) ? payload.duplicates.length : 0;
-    duplicatesStatusNode.textContent = `Detected ${count} duplicate/drift groups`;
-    duplicatesStatusNode.classList.remove("library-status-error");
-  }
-  document.getElementById("tree-root").innerHTML = renderTreeNodes(payload.tree || []);
-  document.getElementById("distribution-root").innerHTML = renderDistribution(payload.distribution || []);
-  document.getElementById("duplicates-root").innerHTML = renderDuplicates(payload.duplicates || []);
-  document.getElementById("unclassified-root").innerHTML = renderUnclassified(payload.unclassified_queue || {});
-  const duplicatesBadge = document.getElementById("tab-badge-duplicates");
-  if (duplicatesBadge) {
-    duplicatesBadge.textContent = String((payload.duplicates || []).length);
-  }
-  const unclassifiedBadge = document.getElementById("tab-badge-unclassified");
-  if (unclassifiedBadge) {
-    unclassifiedBadge.textContent = String(
-      Number(payload.unclassified_queue?.total || 0)
-    );
-  }
+async function refreshTable() { renderTable(await api(tableUrl())); }
+async function refreshInsights(resetDraft = false) {
+  const payload = await api("/api/library/classifications/insights"); state.insightsPayload = payload;
+  if (!payload.available) throw new Error(payload.error || "Hierarchy unavailable");
+  if (resetDraft || !state.base.size) initializeDraft(payload);
+  renderEditor(); renderDistribution(payload);
 }
-
-async function refreshTable() {
-  const payload = await api(tableUrl());
-  renderTable(payload);
-}
-
-async function refreshInsights() {
-  const payload = await api("/api/library/classifications/insights");
-  renderInsights(payload);
-}
-
-async function refreshNormalization() {
-  const payload = await api(normalizationUrl());
-  renderNormalization(payload);
-}
-
-async function refreshMergeCandidates() {
-  const payload = await api(mergeCandidatesUrl());
-  renderMergeCandidates(payload);
-}
-
 async function refreshGlobal() {
-  const payload = await api("/api/library");
-  state.globalPayload = payload;
-  renderGlobalState(payload);
+  const payload = await api("/api/library"); state.globalPayload = payload;
+  document.getElementById("global-status").textContent = window.ManzaraCore.formatGlobalStatus(payload.global?.active_tasks || 0);
+  window.ManzaraCore.applyStopAllButton(document.getElementById("stop-all-btn"), payload.global?.stop_all_state);
 }
-
-async function refreshAll() {
-  await refreshAllWithState({});
+async function refreshAll(resetDraft = false) {
+  await Promise.all([refreshTable(), refreshInsights(resetDraft), refreshGlobal()]);
+  viewState.set(state.base.size ? "ready" : "empty"); tabController.apply(); lucide.createIcons();
 }
-
-function renderPageLoading() {
-  viewState.set("loading");
-  document.getElementById("classification-table-status").textContent = "Loading classifications...";
-  document.getElementById("classification-table-status").classList.remove("library-status-error");
-  document.getElementById("classification-table-body").innerHTML =
-    '<tr><td colspan="7">Loading classifications...</td></tr>';
-  document.getElementById("tree-root").innerHTML = '<div class="workflow-footnote">Loading hierarchy tree...</div>';
-  document.getElementById("distribution-root").innerHTML =
-    '<div class="workflow-footnote">Loading DDC distribution...</div>';
-  document.getElementById("duplicates-root").innerHTML =
-    '<div class="workflow-footnote">Loading duplicates and drift...</div>';
-  const duplicatesStatusNode = document.getElementById("duplicates-status");
-  if (duplicatesStatusNode) {
-    duplicatesStatusNode.textContent = "Loading duplicates and drift...";
-    duplicatesStatusNode.classList.remove("library-status-error");
-  }
-  document.getElementById("unclassified-root").innerHTML =
-    '<div class="workflow-footnote">Loading unclassified queue...</div>';
-  document.getElementById("normalization-status").textContent = "Loading normalization preview...";
-  document.getElementById("normalization-status").classList.remove("library-status-error");
-  document.getElementById("normalization-summary").innerHTML = "";
-  document.getElementById("normalization-groups").innerHTML = "";
-  document.getElementById("normalization-affected").innerHTML = "";
-  document.getElementById("merge-status").textContent = "Loading merge candidates...";
-  document.getElementById("merge-status").classList.remove("library-status-error");
-  document.getElementById("merge-summary").innerHTML = "";
-  document.getElementById("merge-root").innerHTML = "";
+function queueRefresh(delayMs = 250) { if (!changeCount()) window.ManzaraCore.scheduleRefresh(state, () => refreshAll(false), delayMs); }
+function undo() { if (state.history.length) { state.future.push(snapshot()); restore(state.history.pop()); } }
+function redo() { if (state.future.length) { state.history.push(snapshot()); restore(state.future.pop()); } }
+function clearChanges() {
+  if (!changeCount()) return; state.history.push(snapshot());
+  state.draft = new Map([...state.base].map(([id, row]) => [id, { ...row, path: [...row.path] }]));
+  state.merges = new Map(); state.future = []; state.documentPages = new Map();
+  state.expanded = expandedPaths(state.draft.values()); renderEditor();
 }
-
-function renderPageError(error) {
-  viewState.set("error");
-  const message = String(error?.message || error || "Failed to load classifications.");
-  const safe = escapeHtml(message);
-  document.getElementById("classification-table-status").textContent =
-    `Classifications unavailable: ${message}`;
-  document.getElementById("classification-table-status").classList.add("library-status-error");
-  document.getElementById("classification-table-body").innerHTML = "";
-  document.getElementById("tree-root").innerHTML =
-    `<div class="workflow-footnote library-status-error">${safe}</div>`;
-  document.getElementById("distribution-root").innerHTML =
-    `<div class="workflow-footnote library-status-error">${safe}</div>`;
-  document.getElementById("duplicates-root").innerHTML =
-    `<div class="workflow-footnote library-status-error">${safe}</div>`;
-  const duplicatesStatusNode = document.getElementById("duplicates-status");
-  if (duplicatesStatusNode) {
-    duplicatesStatusNode.textContent = `Duplicates unavailable: ${message}`;
-    duplicatesStatusNode.classList.add("library-status-error");
-  }
-  document.getElementById("unclassified-root").innerHTML =
-    `<div class="workflow-footnote library-status-error">${safe}</div>`;
-  document.getElementById("normalization-status").textContent =
-    `Normalization unavailable: ${message}`;
-  document.getElementById("normalization-status").classList.add("library-status-error");
-  document.getElementById("normalization-summary").innerHTML = "";
-  document.getElementById("normalization-groups").innerHTML = "";
-  document.getElementById("normalization-affected").innerHTML = "";
-  document.getElementById("merge-status").textContent = `Merge candidates unavailable: ${message}`;
-  document.getElementById("merge-status").classList.add("library-status-error");
-  document.getElementById("merge-summary").innerHTML = "";
-  document.getElementById("merge-root").innerHTML = "";
-  const duplicatesBadge = document.getElementById("tab-badge-duplicates");
-  if (duplicatesBadge) duplicatesBadge.textContent = "0";
-  const mergeBadge = document.getElementById("tab-badge-merge");
-  if (mergeBadge) mergeBadge.textContent = "0";
-  const normalizationBadge = document.getElementById("tab-badge-normalization");
-  if (normalizationBadge) normalizationBadge.textContent = "0";
-  const unclassifiedBadge = document.getElementById("tab-badge-unclassified");
-  if (unclassifiedBadge) unclassifiedBadge.textContent = "0";
-}
-
-async function refreshAllWithState({ showLoading = false } = {}) {
-  if (showLoading) {
-    renderPageLoading();
-  }
-  try {
-    await Promise.all([
-      refreshTable(),
-      refreshInsights(),
-      refreshNormalization(),
-      refreshMergeCandidates(),
-      refreshGlobal(),
-    ]);
-    viewState.set("ready");
-    applyActiveTab();
-    lucide.createIcons();
-  } catch (error) {
-    renderPageError(error);
-    throw error;
+function parseDatasetPath(value) {
+  try { const parsed = JSON.parse(decodeURIComponent(value)); return Array.isArray(parsed) ? parsed : null; }
+  catch {
+    try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : null; }
+    catch { return null; }
   }
 }
 
-function queueRefresh(delayMs = 250) {
-  window.ManzaraCore.scheduleRefresh(state, refreshAll, delayMs);
-}
-
-async function stopAll() {
-  const stopState = state.globalPayload?.global?.stop_all_state;
-  if (stopState === "armed") {
-    const confirmed = await requestConfirmation({
-      title: "Force stop all tasks",
-      message: "Force stop all running tasks immediately?",
-      acceptLabel: "Force stop",
-      destructive: true,
-    });
-    if (!confirmed) return;
-  }
-  await api("/api/system/stop-all", { method: "POST" });
-  queueRefresh(0);
-}
-
-function setupEventStream() {
-  state.eventStreamController?.stop();
-  state.eventStreamController = window.ManzaraCore.createSseController({
-    eventTypes: window.ManzaraCore.DEFAULT_EVENT_TYPES,
-    initialCursor: window.ManzaraCore.eventCursorFromSnapshot(state.globalPayload),
-    getCursor: () => Number(state.eventCursor || 0),
-    setCursor: (nextCursor) => {
-      state.eventCursor = Number(nextCursor || 0);
-    },
-    onEvent: (payload, event) => {
-      document.getElementById("last-event").textContent = window.ManzaraCore.formatEventBanner(payload);
-      maybePlayTaskNotification(payload, event.lastEventId || "");
-      const eventType = String(payload?.type || "");
-      const taskFinished = ["task.artifact", "task.completed", "task.failed", "task.stopped"]
-        .includes(eventType);
-      if (
-        eventType.startsWith("library.")
-        || (String(payload?.panel_id || "") === "library" && taskFinished)
-      ) {
-        queueRefresh(150);
-      }
-    },
+function attachTreeHandlers() {
+  const root = document.getElementById("tree-root");
+  root.addEventListener("click", (event) => {
+    const toggle = event.target.closest(".tree-toggle");
+    if (toggle) { const path = parseDatasetPath(toggle.dataset.treePath); if (!path) return; const key = pathKey(path); state.expanded.has(key) ? state.expanded.delete(key) : state.expanded.add(key); renderEditor(); return; }
+    const action = event.target.closest("[data-action]");
+    if (action) {
+      const path = parseDatasetPath(action.dataset.path); if (!path) return;
+      const jobs = {
+        "edit-name": () => { state.editingPath = pathKey(path); renderEditor(); },
+        "save-name": () => renameNode(path, action.closest(".taxonomy-inline-editor")?.querySelector(".taxonomy-name-input")?.value),
+        "cancel-name": () => { state.editingPath = null; renderEditor(); },
+        "add-above": () => addLevel(path, "above"), "add-below": () => addLevel(path, "below"), remove: () => removeLevel(path),
+      };
+      Promise.resolve(jobs[action.dataset.action]?.()).catch((error) => window.ManzaraUI.toast(error.message)); return;
+    }
+    const load = event.target.closest(".document-load-btn, .document-more-btn");
+    if (load) { const path = parseDatasetPath(load.dataset.path); if (path) loadDocuments(path); return; }
+    const open = event.target.closest(".document-open-btn"); if (open) openDocument(open.dataset.md5);
+    const pill = event.target.closest("[data-drop-classification]");
+    if (pill) {
+      const id = toInt(pill.dataset.dropClassification);
+      if (state.mergeSource && state.mergeSource !== id) mergeClassification(state.mergeSource, id);
+      else { state.mergeSource = state.mergeSource === id ? null : id; renderEditor(); }
+    }
   });
-  state.eventStreamController.start();
+  root.addEventListener("keydown", (event) => {
+    if (!event.target.closest(".taxonomy-name-input")) return;
+    if (event.key === "Enter") event.target.closest(".taxonomy-inline-editor")?.querySelector('[data-action="save-name"]')?.click();
+    if (event.key === "Escape") event.target.closest(".taxonomy-inline-editor")?.querySelector('[data-action="cancel-name"]')?.click();
+  });
+  root.addEventListener("dragstart", (event) => {
+    const pill = event.target.closest("[data-drag-classification]"); const row = event.target.closest("[data-drag-path]");
+    if (pill) state.dragged = { type: "classification", id: toInt(pill.dataset.dragClassification) };
+    else if (row) state.dragged = { type: "path", path: parseDatasetPath(row.dataset.dragPath) };
+  });
+  root.addEventListener("dragover", (event) => { if (event.target.closest("[data-drop-path], [data-drop-classification]")) event.preventDefault(); });
+  root.addEventListener("drop", (event) => {
+    event.preventDefault(); const targetClass = event.target.closest("[data-drop-classification]"); const targetPath = event.target.closest("[data-drop-path]");
+    if (state.dragged?.type === "classification" && targetClass) mergeClassification(state.dragged.id, toInt(targetClass.dataset.dropClassification));
+    else if (state.dragged?.type === "path" && targetPath) { const path = parseDatasetPath(targetPath.dataset.dropPath); if (path) moveSubtree(state.dragged.path, path); }
+    state.dragged = null;
+  });
+  root.addEventListener("dragend", () => { state.dragged = null; });
 }
 
 function attachUiHandlers() {
-  document.getElementById("stop-all-btn").addEventListener("click", () => {
-    stopAll().catch((error) => console.error(error));
-  });
-
-  document.getElementById("filter-apply").addEventListener("click", () => {
-    state.page = 1;
-    switchTab("table");
-    queueRefresh(0);
-  });
-
-  document.getElementById("filter-search").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      state.page = 1;
-      switchTab("table");
-      queueRefresh(0);
-    }
-  });
-
-  document.getElementById("page-prev").addEventListener("click", () => {
-    const current = state.tablePayload?.page || 1;
-    if (current <= 1) return;
-    state.page = current - 1;
-    queueRefresh(0);
-  });
-
-  document.getElementById("page-next").addEventListener("click", () => {
-    const current = state.tablePayload?.page || 1;
-    const total = state.tablePayload?.total_pages || 1;
-    if (current >= total) return;
-    state.page = current + 1;
-    queueRefresh(0);
-  });
-
-  document.querySelector(".classification-tabs").addEventListener("click", (event) => {
-    const button = event.target.closest(".classification-tab");
-    if (!button) return;
-    switchTab(String(button.dataset.tab || "table"));
-  });
-
-  document.getElementById("normalization-refresh").addEventListener("click", () => {
-    switchTab("normalization");
-    refreshNormalization().catch((error) => console.error(error));
-  });
-
-  document.getElementById("merge-refresh").addEventListener("click", () => {
-    switchTab("merge");
-    refreshMergeCandidates().catch((error) => console.error(error));
-  });
-
-  document.getElementById("merge-root").addEventListener("click", (event) => {
-    const button = event.target.closest(".merge-execute-btn");
-    if (!button) return;
-    const sourceId = toId(button.dataset.sourceId);
-    const targetId = toId(button.dataset.targetId);
-    if (!sourceId || !targetId) return;
-    applyClassificationMerge(sourceId, targetId).catch((error) => console.error(error));
-  });
-
-  document.getElementById("duplicates-root").addEventListener("click", (event) => {
-    const button = event.target.closest(".duplicate-merge-btn");
-    if (!button) return;
-    const sourceId = toId(button.dataset.sourceId);
-    const targetId = toId(button.dataset.targetId);
-    if (!sourceId || !targetId) return;
-    applyClassificationMerge(sourceId, targetId, { statusNodeId: "duplicates-status" }).catch(
-      (error) => console.error(error)
-    );
-  });
+  document.getElementById("filter-apply").addEventListener("click", () => { state.page = 1; state.activeTab = "table"; queueRefresh(0); });
+  document.getElementById("page-prev").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; queueRefresh(0); } });
+  document.getElementById("page-next").addEventListener("click", () => { if (state.page < (state.tablePayload?.total_pages || 1)) { state.page += 1; queueRefresh(0); } });
+  document.querySelector(".classification-tabs").addEventListener("click", (event) => { const button = event.target.closest(".classification-tab"); if (button) { state.activeTab = button.dataset.tab; tabController.apply(); } });
+  document.getElementById("taxonomy-undo").addEventListener("click", undo);
+  document.getElementById("taxonomy-redo").addEventListener("click", redo);
+  document.getElementById("taxonomy-clear").addEventListener("click", clearChanges);
+  document.getElementById("taxonomy-review").addEventListener("click", () => reviewAndApply().catch((error) => window.ManzaraUI.toast(error.message)));
+  document.getElementById("stop-all-btn").addEventListener("click", async () => { await api("/api/system/stop-all", { method: "POST" }); queueRefresh(0); });
+  attachTreeHandlers();
 }
 
-async function bootstrap() {
-  initSoundNotifier();
-  window.addEventListener("beforeunload", () => {
-    teardownSoundNotifier();
-    if (state.eventStreamController) {
-      state.eventStreamController.stop();
-      state.eventStreamController = null;
-    }
-
-  });
-  attachUiHandlers();
-  await refreshAllWithState({ showLoading: true });
-  setupEventStream();
+function renderLoading() {
+  viewState.set("loading");
+  document.getElementById("classification-table-status").textContent = "Loading classifications…";
+  document.getElementById("tree-root").innerHTML = '<div class="workflow-footnote">Loading hierarchy…</div>';
+  document.getElementById("distribution-root").innerHTML = '<div class="workflow-footnote">Loading distribution…</div>';
 }
-
-bootstrap().catch((error) => {
-  console.error(error);
+function renderError(error) {
+  viewState.set("error");
   const message = String(error?.message || error || "Failed to load classifications.");
-  const statusNode = document.getElementById("classification-table-status");
-  if (statusNode) {
-    statusNode.textContent = `Classifications unavailable: ${message}`;
-    statusNode.classList.add("library-status-error");
-  }
-});
+  document.getElementById("classification-table-status").textContent = `Classifications unavailable: ${message}`;
+  document.getElementById("classification-table-status").classList.add("library-status-error");
+  document.getElementById("tree-root").innerHTML = `<div class="workflow-footnote library-status-error">${escapeHtml(message)}</div>`;
+  document.getElementById("distribution-root").innerHTML = `<div class="workflow-footnote library-status-error">${escapeHtml(message)}</div>`;
+}
+function setupEventStream() {
+  state.eventStreamController = window.ManzaraCore.createSseController({
+    eventTypes: window.ManzaraCore.DEFAULT_EVENT_TYPES,
+    initialCursor: window.ManzaraCore.eventCursorFromSnapshot(state.globalPayload),
+    getCursor: () => state.eventCursor, setCursor: (value) => { state.eventCursor = Number(value || 0); },
+    onEvent: (payload) => { document.getElementById("last-event").textContent = window.ManzaraCore.formatEventBanner(payload); if (String(payload?.type || "").startsWith("library.")) queueRefresh(150); },
+  });
+  state.eventStreamController.start();
+}
+async function bootstrap() {
+  window.addEventListener("beforeunload", (event) => {
+    if (!changeCount()) return;
+    event.preventDefault(); event.returnValue = "";
+  });
+  attachUiHandlers(); renderLoading(); await refreshAll(true); setupEventStream();
+}
+bootstrap().catch((error) => { console.error(error); renderError(error); });

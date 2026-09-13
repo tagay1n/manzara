@@ -62,10 +62,9 @@ def test_library_classification_insights_endpoint(test_client, monkeypatch) -> N
             "available": True,
             "error": None,
             "config_source": "config.yaml",
-            "tree": [{"name": "Language", "usage_count": 10, "children": []}],
+            "revision": "abc",
+            "tree": [{"name": "Language", "path": ["Language"], "usage_count": 10, "children": []}],
             "distribution": [{"bucket": "800", "usage_count": 10, "share_pct": 100.0}],
-            "duplicates": [],
-            "unclassified_queue": {"total": 1, "items": [{"md5": "abc"}]},
         },
     )
 
@@ -74,142 +73,60 @@ def test_library_classification_insights_endpoint(test_client, monkeypatch) -> N
     payload = response.json()
     assert payload["available"] is True
     assert payload["distribution"][0]["bucket"] == "800"
-    assert payload["unclassified_queue"]["total"] == 1
+    assert payload["revision"] == "abc"
 
 
-def test_library_classification_normalization_preview_endpoint(
+def test_library_classification_documents_endpoint(
     test_client,
     monkeypatch,
 ) -> None:
     client, main_app = test_client
-
     monkeypatch.setattr(
         main_app,
-        "get_normalization_preview",
-        lambda **_kwargs: {
+        "list_classification_documents",
+        lambda ids, **_kwargs: {
             "available": True,
-            "error": None,
-            "config_source": "config.yaml",
-            "rules": {"drop_segments": ["turkic literature"]},
-            "summary": {
-                "total_rows_scanned": 100,
-                "affected_classifications": 7,
-                "estimated_reassigned_documents": 42,
-                "merge_group_candidates": 3,
-            },
-            "affected_preview": [{"classification_id": 1}],
-            "merge_groups": [{"normalized_path": "language / tatar"}],
+            "classification_ids": ids,
+            "total": 1,
+            "has_more": False,
+            "items": [{"md5": "a" * 32, "title": "Book"}],
         },
     )
-
-    response = client.get(
-        "/api/library/classifications/normalization-preview"
-        "?drop_segments=Turkic%20literature,Tatar&limit=120&row_limit=5000"
-    )
+    response = client.get("/api/library/classifications/documents?classification_ids=2,3&limit=10")
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["available"] is True
-    assert payload["summary"]["affected_classifications"] == 7
-    assert payload["rules"]["drop_segments"][0] == "turkic literature"
+    assert response.json()["classification_ids"] == [2, 3]
 
 
-def test_library_classification_merge_candidates_endpoint(
+def test_library_classification_change_set_preview_and_apply_endpoints(
     test_client,
     monkeypatch,
 ) -> None:
     client, main_app = test_client
-
+    captured: list[tuple[str, dict]] = []
     monkeypatch.setattr(
         main_app,
-        "get_merge_candidates",
-        lambda **_kwargs: {
-            "available": True,
-            "error": None,
-            "config_source": "config.yaml",
-            "summary": {
-                "rows_scanned": 120,
-                "candidate_count": 2,
-                "min_score": 0.78,
-            },
-            "candidates": [
-                {
-                    "issue": "near_duplicate",
-                    "score": 0.91,
-                    "impact": 11,
-                    "recommended_primary_classification_id": 3,
-                    "primary": {"classification_id": 3, "ddc": "891.7", "path": "A", "usage_count": 7},
-                    "secondary": {"classification_id": 4, "ddc": "891.7", "path": "B", "usage_count": 4},
-                }
-            ],
-        },
+        "preview_classification_change_set",
+        lambda payload: captured.append(("preview", payload)) or {"available": True, "change_set_hash": "hash"},
     )
-
-    response = client.get(
-        "/api/library/classifications/merge-candidates"
-        "?limit=80&min_score=0.8&row_limit=1000"
+    monkeypatch.setattr(
+        main_app,
+        "apply_classification_change_set",
+        lambda payload: captured.append(("apply", payload)) or {"available": True, "applied": True},
     )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["available"] is True
-    assert payload["summary"]["candidate_count"] == 2
-    assert payload["candidates"][0]["recommended_primary_classification_id"] == 3
+    body = {"base_revision": "rev", "changes": [], "merges": []}
+    assert client.post("/api/library/classifications/change-set/preview", json=body).status_code == 200
+    assert client.post(
+        "/api/library/classifications/change-set/apply",
+        json={**body, "confirmed": True, "change_set_hash": "hash"},
+    ).status_code == 200
+    assert [item[0] for item in captured] == ["preview", "apply"]
 
 
-def test_library_classification_merge_endpoint(
-    test_client,
-    monkeypatch,
-) -> None:
-    client, main_app = test_client
-    captured: dict[str, int | str] = {}
-
-    def _fake_merge_classifications(*, source_classification_id, target_classification_id, reason):  # noqa: ANN001
-        captured["source"] = int(source_classification_id)
-        captured["target"] = int(target_classification_id)
-        captured["reason"] = str(reason)
-        return {
-            "available": True,
-            "error": None,
-            "config_source": "config.yaml",
-            "source_classification_id": int(source_classification_id),
-            "target_classification_id": int(target_classification_id),
-            "moved_docs_count": 17,
-            "schema_org_updated_count": 17,
-            "source_deleted": True,
-        }
-
-    monkeypatch.setattr(main_app, "merge_classifications", _fake_merge_classifications)
-
-    response = client.post(
-        "/api/library/classifications/merge",
-        json={
-            "source_classification_id": 7,
-            "target_classification_id": 3,
-            "reason": "manual_merge",
-        },
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["available"] is True
-    assert payload["source_classification_id"] == 7
-    assert payload["target_classification_id"] == 3
-    assert payload["moved_docs_count"] == 17
-    assert payload["source_deleted"] is True
-    assert captured == {"source": 7, "target": 3, "reason": "manual_merge"}
-
-
-def test_library_classification_merge_endpoint_rejects_invalid_ids(
-    test_client,
-) -> None:
+def test_removed_classification_workflow_endpoints_are_absent(test_client) -> None:
     client, _main_app = test_client
-    response = client.post(
-        "/api/library/classifications/merge",
-        json={
-            "source_classification_id": "x",
-            "target_classification_id": 3,
-        },
-    )
-    assert response.status_code == 400
-    assert "must be integers" in response.json().get("detail", "")
+    assert client.get("/api/library/classifications/normalization-preview").status_code in {404, 422}
+    assert client.get("/api/library/classifications/merge-candidates").status_code in {404, 422}
+    assert client.post("/api/library/classifications/merge", json={}).status_code in {404, 405}
 
 
 def test_library_personalities_overview_endpoint(test_client, monkeypatch) -> None:

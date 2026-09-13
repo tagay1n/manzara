@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import defaultdict
 from datetime import datetime
@@ -15,12 +16,6 @@ from app.modules.library.stats import create_runtime_engine, dispose_runtime_eng
 
 _DEFAULT_PAGE_SIZE = 25
 _MAX_PAGE_SIZE = 100
-_DEFAULT_ALL_ROWS_LIMIT = 5000
-_DEFAULT_DROP_SEGMENTS = [
-    "turkic literature",
-    "torkic literature",
-    "turkic",
-]
 _DDC_TERMSET = "DDC"
 _CATEGORY_PATH_TERMSET = "CategoryPath"
 _MANAGED_CLASSIFICATION_TERMSETS = {
@@ -251,7 +246,7 @@ def list_classifications(
         )
 
 
-def _all_classification_usage_rows(limit: int = _DEFAULT_ALL_ROWS_LIMIT) -> tuple[list[dict[str, Any]], str]:
+def _all_classification_usage_rows(limit: int | None = None) -> tuple[list[dict[str, Any]], str]:
     engine, config_source = create_runtime_engine()
     with engine.connect() as conn:
         rows = conn.execute(
@@ -274,21 +269,18 @@ def _all_classification_usage_rows(limit: int = _DEFAULT_ALL_ROWS_LIMIT) -> tupl
                 FROM classification c
                 LEFT JOIN usage u ON u.classification_id = c.id
                 ORDER BY COALESCE(u.usage_count, 0) DESC, c.ddc ASC
-                LIMIT :limit
-                """
+                """ + ("LIMIT :limit" if limit is not None else "")
             ),
-            {"limit": max(1, int(limit))},
+            {"limit": max(1, int(limit))} if limit is not None else {},
         ).mappings().all()
     dispose_runtime_engine(engine)
     return [dict(row) for row in rows], config_source
 
 
 def _build_tree(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    root: Dict[str, Any] = {"children": {}, "usage_count": 0}
+    root: Dict[str, Any] = {"children": {}, "usage_count": 0, "classifications": []}
     for row in rows:
         usage = int(row.get("usage_count") or 0)
-        if usage <= 0:
-            continue
         parts = _parse_json_path(row.get("path_en"))
         if not parts:
             parts = ["Uncategorized"]
@@ -297,25 +289,47 @@ def _build_tree(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for part in parts:
             children = node["children"]
             if part not in children:
-                children[part] = {"name": part, "usage_count": 0, "children": {}}
+                children[part] = {
+                    "name": part,
+                    "usage_count": 0,
+                    "children": {},
+                    "classifications": [],
+                }
             node = children[part]
             node["usage_count"] += usage
+        node["classifications"].append(
+            {
+                "classification_id": int(row.get("id") or 0),
+                "ddc": str(row.get("ddc") or ""),
+                "usage_count": usage,
+            }
+        )
 
-    def _to_array(node: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _to_array(node: Dict[str, Any], prefix: list[str]) -> List[Dict[str, Any]]:
         children = list(node.get("children", {}).values())
         children.sort(key=lambda item: (-int(item.get("usage_count") or 0), str(item.get("name") or "")))
         result: List[Dict[str, Any]] = []
         for child in children:
+            path = [*prefix, str(child.get("name") or "")]
             result.append(
                 {
                     "name": str(child.get("name") or ""),
+                    "path": path,
                     "usage_count": int(child.get("usage_count") or 0),
-                    "children": _to_array(child),
+                    "direct_usage_count": sum(
+                        int(item.get("usage_count") or 0)
+                        for item in child.get("classifications", [])
+                    ),
+                    "classifications": sorted(
+                        child.get("classifications", []),
+                        key=lambda item: (str(item.get("ddc") or ""), int(item.get("classification_id") or 0)),
+                    ),
+                    "children": _to_array(child, path),
                 }
             )
         return result
 
-    return _to_array(root)
+    return _to_array(root, [])
 
 
 def _build_distribution(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -340,124 +354,39 @@ def _build_distribution(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return items
 
 
-def _build_duplicates(rows: Iterable[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
-    groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for row in rows:
-        path_parts = _parse_json_path(row.get("path_en"))
-        if not path_parts:
-            continue
-        key = " / ".join(part.strip().lower() for part in path_parts)
-        groups[key].append(row)
-
-    results: List[Dict[str, Any]] = []
-    for key, group_rows in groups.items():
-        if len(group_rows) <= 1:
-            continue
-        distinct_ddc = {str(item.get("ddc") or "").strip() for item in group_rows}
-        total_usage = sum(int(item.get("usage_count") or 0) for item in group_rows)
-        sample_path = _format_path(group_rows[0].get("path_en"))
-        items = sorted(
-            [
-                {
-                    "classification_id": int(item.get("id") or 0),
-                    "ddc": str(item.get("ddc") or ""),
-                    "status": str(item.get("status") or ""),
-                    "usage_count": int(item.get("usage_count") or 0),
-                }
-                for item in group_rows
-            ],
-            key=lambda item: (-item["usage_count"], item["ddc"]),
-        )
-        results.append(
+def get_classification_insights() -> Dict[str, Any]:
+    """Return the complete editable hierarchy and DDC distribution."""
+    try:
+        rows, config_source = _all_classification_usage_rows()
+        revision_payload = [
             {
-                "path_key": key,
-                "path": sample_path,
-                "issue": "ddc_conflict" if len(distinct_ddc) > 1 else "duplicate_path",
-                "total_usage": total_usage,
-                "distinct_ddc_count": len(distinct_ddc),
-                "items": items,
-            }
-        )
-
-    results.sort(key=lambda item: (-int(item["total_usage"]), str(item["path"])))
-    return results[: max(1, int(limit))]
-
-
-def _fetch_unclassified_applicable(limit: int) -> Dict[str, Any]:
-    engine, _config_source = create_runtime_engine()
-    with engine.connect() as conn:
-        total = int(
-            conn.execute(
-                text(
-                    """
-                    SELECT COUNT(*) AS count
-                    FROM metadata m
-                    JOIN document d ON d.md5 = m.md5
-                    WHERE m.lib IS TRUE
-                      AND m.classification_id IS NULL
-                    """
-                )
-            ).scalar()
-            or 0
-        )
-        rows = conn.execute(
-            text(
-                """
-                SELECT
-                    d.md5,
-                    d.language,
-                    d.ya_path,
-                    d.mime_type,
-                    d.document_url
-                FROM metadata m
-                JOIN document d ON d.md5 = m.md5
-                WHERE m.lib IS TRUE
-                  AND m.classification_id IS NULL
-                ORDER BY d.md5 ASC
-                LIMIT :limit
-                """
-            ),
-            {"limit": max(1, int(limit))},
-        ).mappings().all()
-    dispose_runtime_engine(engine)
-    return {
-        "total": total,
-        "items": [
-            {
-                "md5": str(row.get("md5") or ""),
-                "language": str(row.get("language") or ""),
-                "ya_path": str(row.get("ya_path") or ""),
-                "mime_type": str(row.get("mime_type") or ""),
-                "document_url": str(row.get("document_url") or ""),
+                "id": int(row.get("id") or 0),
+                "ddc": str(row.get("ddc") or ""),
+                "path": _parse_json_path(row.get("path_en")),
             }
             for row in rows
-        ],
-    }
-
-
-def get_classification_insights(
-    *,
-    row_limit: int = _DEFAULT_ALL_ROWS_LIMIT,
-    duplicate_limit: int = 25,
-    unclassified_limit: int = 30,
-) -> Dict[str, Any]:
-    """Return hierarchy, DDC distribution, duplicate path clusters and queue."""
-    try:
-        rows, config_source = _all_classification_usage_rows(limit=row_limit)
+        ]
+        revision_payload.sort(key=lambda item: item["id"])
+        revision = hashlib.sha256(
+            json.dumps(
+                revision_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         return available_payload(
             config_source=config_source,
+            revision=revision,
             tree=_build_tree(rows),
             distribution=_build_distribution(rows),
-            duplicates=_build_duplicates(rows, limit=duplicate_limit),
-            unclassified_queue=_fetch_unclassified_applicable(unclassified_limit),
         )
     except Exception as exc:  # noqa: BLE001
         return unavailable_payload(
             exc,
+            revision="",
             tree=[],
             distribution=[],
-            duplicates=[],
-            unclassified_queue={"total": 0, "items": []},
         )
 
 

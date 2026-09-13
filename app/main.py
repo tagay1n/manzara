@@ -40,9 +40,11 @@ from app.modules.library.classification_insights import (
 )
 from app.modules.library.classification_operations import (
     get_classification_detail,
-    get_merge_candidates,
-    get_normalization_preview,
-    merge_classifications,
+)
+from app.modules.library.classification_editor import (
+    apply_classification_change_set,
+    list_classification_documents,
+    preview_classification_change_set,
 )
 from app.modules.library.collection_tasks import collection_task_definitions
 from app.modules.library.collections import (
@@ -183,9 +185,9 @@ def _classification_operations() -> ClassificationOperations:
         {
             "list_classifications": list_classifications,
             "get_classification_insights": get_classification_insights,
-            "get_normalization_preview": get_normalization_preview,
-            "get_merge_candidates": get_merge_candidates,
-            "merge_classifications": merge_classifications,
+            "list_classification_documents": list_classification_documents,
+            "preview_change_set": preview_classification_change_set,
+            "apply_change_set": apply_classification_change_set,
         }
     )
 

@@ -27,27 +27,10 @@ test("library classifications page renders API error state", async () => {
     /Classifications unavailable/,
   );
   assert.match(harness.elements.get("tree-root").innerHTML, /classifications unavailable/);
-  assert.match(
-    harness.elements.get("normalization-status").textContent,
-    /classifications unavailable/,
-  );
 });
 
-function createClassificationsResolver({ malicious = false } = {}) {
+function createClassificationsResolver({ malicious = false, tree = [], documents = [] } = {}) {
   return (path, options = {}) => {
-    if (
-      path === "/api/library/classifications/merge"
-      && String(options?.method || "GET").toUpperCase() === "POST"
-    ) {
-      return {
-        available: true,
-        source_classification_id: 11,
-        target_classification_id: 10,
-        moved_docs_count: 4,
-        schema_org_updated_count: 4,
-        source_deleted: true,
-      };
-    }
     if (path.startsWith("/api/library/classifications?")) {
       return {
         available: true,
@@ -70,73 +53,15 @@ function createClassificationsResolver({ malicious = false } = {}) {
     if (path === "/api/library/classifications/insights") {
       return {
         available: true,
-        tree: [],
+        revision: "revision-1",
+        tree,
         distribution: [],
-        duplicates: [
-          {
-            path: malicious ? '<svg onload=alert(1)>' : "Language / Tatar",
-            issue: "duplicate_path",
-            total_usage: 2,
-            distinct_ddc_count: 2,
-            items: [
-              {
-                classification_id: malicious ? '2" onclick="alert(2)' : 2,
-                ddc: malicious ? "<iframe>" : "891.7",
-                usage_count: 2,
-              },
-            ],
-          },
-        ],
-        unclassified_queue: { total: 0, items: [] },
       };
     }
-    if (path.startsWith("/api/library/classifications/normalization-preview?")) {
-      return {
-        available: true,
-        rules: { drop_segments: ["Turkic literature"] },
-        summary: {
-          total_rows_scanned: 1,
-          affected_classifications: 1,
-          estimated_reassigned_documents: 1,
-          merge_group_candidates: 0,
-        },
-        merge_groups: [],
-        affected_preview: [
-          {
-            classification_id: malicious ? "3<script>" : 3,
-            original_path: malicious ? "<script>orig</script>" : "orig",
-            normalized_path: malicious ? "<img src=x>" : "norm",
-            usage_count: 1,
-          },
-        ],
-      };
-    }
-    if (path.startsWith("/api/library/classifications/merge-candidates?")) {
-      return {
-        available: true,
-        summary: { candidate_count: 1, rows_scanned: 1, min_score: 0.8 },
-        candidates: [
-          {
-            issue: "duplicate_path",
-            score: 0.9,
-            impact: 1,
-            recommended_primary_classification_id: 10,
-            primary: {
-              classification_id: malicious ? '10" onclick="alert(3)' : 10,
-              ddc: malicious ? "<script>p</script>" : "891.7",
-              path: malicious ? "<img src=x>" : "path-primary",
-              usage_count: 1,
-            },
-            secondary: {
-              classification_id: malicious ? '11" onclick="alert(4)' : 11,
-              ddc: malicious ? "<script>s</script>" : "891.8",
-              path: "path-secondary",
-              usage_count: 1,
-            },
-          },
-        ],
-      };
-    }
+    if (path.startsWith("/api/library/classifications/documents?")) return { available: true, items: documents, total: documents.length, has_more: false };
+    if (path.startsWith("/api/library/documents/") && path.endsWith("/cache")) return { available: true, open_url: "/api/library/documents/abc/local/book.pdf" };
+    if (path === "/api/library/classifications/change-set/preview") return { available: true, change_set_hash: "hash-1", summary: { path_changes: 1, classification_merges: 0, affected_documents: 5 } };
+    if (path === "/api/library/classifications/change-set/apply") return { available: true, applied: true };
     if (path === "/api/library") {
       return {
         global: { active_tasks: 0, stop_all_state: "disabled" },
@@ -351,165 +276,124 @@ test("library classifications page escapes dangerous strings in rendered html", 
     source: LIBRARY_CLASSIFICATIONS_SOURCE,
     ids: CLASSIFICATIONS_PAGE_IDS,
     selectors: [".classification-tabs"],
-    apiResolver: createClassificationsResolver({ malicious: true }),
+    apiResolver: createClassificationsResolver({ malicious: true, tree: [{
+      name: '<img src=x onerror=alert(1)>', path: ['<img src=x onerror=alert(1)>'], usage_count: 2,
+      classifications: [{ classification_id: 2, ddc: '<script>alert(2)</script>', usage_count: 2 }], children: [],
+    }] }),
   });
   await harness.flush();
 
   const tableHtml = harness.elements.get("classification-table-body").innerHTML;
-  const duplicatesHtml = harness.elements.get("duplicates-root").innerHTML;
-  const normalizationHtml = harness.elements.get("normalization-affected").innerHTML;
-  const mergeHtml = harness.elements.get("merge-root").innerHTML;
-  const combined = `${tableHtml}\n${duplicatesHtml}\n${normalizationHtml}\n${mergeHtml}`;
+  const combined = `${tableHtml}\n${harness.elements.get("tree-root").innerHTML}`;
 
   assert.equal(combined.includes("<img"), false);
   assert.equal(combined.includes("<script"), false);
-  assert.equal(combined.includes("onclick="), false);
+  assert.doesNotMatch(combined, /href="[^"]*"\s+onclick=/);
   assert.match(combined, /&lt;img/);
   assert.match(combined, /&lt;script/);
 });
 
-test("library classifications merge action posts merge request", async () => {
+test("library classifications hierarchy renders collapsible branches and toggles them", async () => {
   const harness = createHarness({
     source: LIBRARY_CLASSIFICATIONS_SOURCE,
     ids: CLASSIFICATIONS_PAGE_IDS,
     selectors: [".classification-tabs"],
-    apiResolver: createClassificationsResolver(),
+    apiResolver: createClassificationsResolver({
+      tree: [
+        {
+          name: "Literature",
+          path: ["Literature"],
+          usage_count: 12,
+          classifications: [],
+          children: [{ name: "Tatar literature", path: ["Literature", "Tatar literature"], usage_count: 8, classifications: [{ classification_id: 1, ddc: "891.7", usage_count: 8 }], children: [] }],
+        },
+      ],
+    }),
   });
   await harness.flush();
 
-  harness.elements.get("merge-root").dispatch("click", {
+  const treeRoot = harness.elements.get("tree-root");
+  assert.match(treeRoot.innerHTML, /class="tree-toggle"/);
+  assert.match(treeRoot.innerHTML, /aria-expanded="true"/);
+  assert.match(treeRoot.innerHTML, /Tatar literature/);
+
+  const toggle = {
+    dataset: { treePath: '["Literature"]' },
+  };
+  treeRoot.dispatch("click", {
     target: {
       closest(selector) {
-        if (selector !== ".merge-execute-btn") return null;
-        return {
-          dataset: {
-            sourceId: "11",
-            targetId: "10",
-          },
-        };
+        return selector === ".tree-toggle" ? toggle : null;
       },
     },
   });
-  await harness.flush();
 
-  const mergeCall = harness.apiCalls.find((entry) => entry.path === "/api/library/classifications/merge");
-  assert.ok(mergeCall);
-  assert.equal(String(mergeCall.options?.method || "").toUpperCase(), "POST");
-  const body = JSON.parse(String(mergeCall.options?.body || "{}"));
-  assert.equal(body.source_classification_id, 11);
-  assert.equal(body.target_classification_id, 10);
+  assert.doesNotMatch(treeRoot.innerHTML, /Tatar literature/);
 });
 
-test("library classifications duplicates action posts merge request", async () => {
+test("library classifications stages a subtree rename and supports undo", async () => {
   const harness = createHarness({
     source: LIBRARY_CLASSIFICATIONS_SOURCE,
     ids: CLASSIFICATIONS_PAGE_IDS,
     selectors: [".classification-tabs"],
-    apiResolver(path, options = {}) {
-      if (
-        path === "/api/library/classifications/merge"
-        && String(options?.method || "GET").toUpperCase() === "POST"
-      ) {
-        return {
-          available: true,
-          source_classification_id: 2,
-          target_classification_id: 1,
-          moved_docs_count: 5,
-          schema_org_updated_count: 5,
-          source_deleted: true,
-        };
-      }
-      if (path.startsWith("/api/library/classifications?")) {
-        return {
-          available: true,
-          page: 1,
-          total_pages: 1,
-          total: 1,
-          items: [
-            {
-              classification_id: 1,
-              ddc: "891.7",
-              path: "Language / Tatar",
-              usage_count: 8,
-              status: "active",
-              created_by: "seed",
-              created_at: "2026-03-24T12:00:00Z",
-            },
-          ],
-        };
-      }
-      if (path === "/api/library/classifications/insights") {
-        return {
-          available: true,
-          tree: [],
-          distribution: [],
-          duplicates: [
-            {
-              path: "Language / Tatar",
-              issue: "duplicate_path",
-              total_usage: 12,
-              distinct_ddc_count: 1,
-              items: [
-                { classification_id: 1, ddc: "891.7", usage_count: 8 },
-                { classification_id: 2, ddc: "891.7", usage_count: 4 },
-              ],
-            },
-          ],
-          unclassified_queue: { total: 0, items: [] },
-        };
-      }
-      if (path.startsWith("/api/library/classifications/normalization-preview?")) {
-        return {
-          available: true,
-          rules: { drop_segments: ["Turkic literature"] },
-          summary: {
-            total_rows_scanned: 1,
-            affected_classifications: 0,
-            estimated_reassigned_documents: 0,
-            merge_group_candidates: 0,
-          },
-          merge_groups: [],
-          affected_preview: [],
-        };
-      }
-      if (path.startsWith("/api/library/classifications/merge-candidates?")) {
-        return {
-          available: true,
-          summary: { candidate_count: 0, rows_scanned: 2, min_score: 0.8 },
-          candidates: [],
-        };
-      }
-      if (path === "/api/library") {
-        return {
-          global: { active_tasks: 0, stop_all_state: "disabled" },
-        };
-      }
-      throw new Error(`unexpected path: ${path}`);
-    },
+    promptResult: "Books",
+    apiResolver: createClassificationsResolver({ tree: [{ name: "Literature", path: ["Literature"], usage_count: 4, classifications: [], children: [{ name: "Tatar", path: ["Literature", "Tatar"], usage_count: 4, classifications: [{ classification_id: 11, ddc: "891.7", usage_count: 4 }], children: [] }] }] }),
   });
   await harness.flush();
-
-  harness.elements.get("duplicates-root").dispatch("click", {
+  const treeRoot = harness.elements.get("tree-root");
+  treeRoot.dispatch("click", {
     target: {
       closest(selector) {
-        if (selector !== ".duplicate-merge-btn") return null;
-        return {
-          dataset: {
-            sourceId: "2",
-            targetId: "1",
-          },
-        };
+        if (selector === "[data-action]") return { dataset: { action: "add-above", path: '["Literature","Tatar"]' } };
+        return null;
       },
     },
   });
   await harness.flush();
+  assert.match(treeRoot.innerHTML, /Books/);
+  assert.equal(harness.elements.get("taxonomy-review").disabled, false);
+  harness.elements.get("taxonomy-undo").dispatch("click");
+  assert.doesNotMatch(treeRoot.innerHTML, /Books/);
+});
 
-  const mergeCall = harness.apiCalls.find((entry) => entry.path === "/api/library/classifications/merge");
-  assert.ok(mergeCall);
-  assert.equal(String(mergeCall.options?.method || "").toUpperCase(), "POST");
-  const body = JSON.parse(String(mergeCall.options?.body || "{}"));
-  assert.equal(body.source_classification_id, 2);
-  assert.equal(body.target_classification_id, 1);
+test("library classifications reviews then atomically applies staged changes", async () => {
+  const harness = createHarness({
+    source: LIBRARY_CLASSIFICATIONS_SOURCE,
+    ids: CLASSIFICATIONS_PAGE_IDS,
+    selectors: [".classification-tabs"],
+    promptResult: "Books",
+    apiResolver: createClassificationsResolver({ tree: [{ name: "Literature", path: ["Literature"], usage_count: 4, classifications: [], children: [{ name: "Tatar", path: ["Literature", "Tatar"], usage_count: 4, classifications: [{ classification_id: 11, ddc: "891.7", usage_count: 4 }], children: [] }] }] }),
+  });
+  await harness.flush();
+  harness.elements.get("tree-root").dispatch("click", { target: { closest(selector) { return selector === "[data-action]" ? { dataset: { action: "add-above", path: '["Literature","Tatar"]' } } : null; } } });
+  await harness.flush();
+  harness.elements.get("taxonomy-review").dispatch("click");
+  await harness.flush();
+  const preview = harness.apiCalls.find((entry) => entry.path.endsWith("/change-set/preview"));
+  const apply = harness.apiCalls.find((entry) => entry.path.endsWith("/change-set/apply"));
+  assert.ok(preview); assert.ok(apply);
+  const body = JSON.parse(apply.options.body);
+  assert.equal(body.confirmed, true); assert.equal(body.change_set_hash, "hash-1");
+});
+
+test("library classification leaves load documents and open through the local cache flow", async () => {
+  const tree = [{ name: "Literature", path: ["Literature"], usage_count: 1, classifications: [], children: [{ name: "Tatar", path: ["Literature", "Tatar"], usage_count: 1, classifications: [{ classification_id: 7, ddc: "891.7", usage_count: 1 }], children: [] }] }];
+  const harness = createHarness({
+    source: LIBRARY_CLASSIFICATIONS_SOURCE,
+    ids: CLASSIFICATIONS_PAGE_IDS,
+    selectors: [".classification-tabs"],
+    apiResolver: createClassificationsResolver({ tree, documents: [{ md5: "abc", title: "A real book", source_name: "book.pdf", language: "tt", mime_type: "application/pdf", page_count: 42 }] }),
+  });
+  await harness.flush();
+  const root = harness.elements.get("tree-root");
+  root.dispatch("click", { target: { closest(selector) { return selector === ".document-load-btn, .document-more-btn" ? { dataset: { path: '["Literature","Tatar"]' } } : null; } } });
+  await harness.flush();
+  assert.match(root.innerHTML, /A real book/);
+  assert.match(root.innerHTML, /42 pages/);
+  root.dispatch("click", { target: { closest(selector) { return selector === ".document-open-btn" ? { dataset: { md5: "abc" } } : null; } } });
+  await harness.flush();
+  assert.ok(harness.apiCalls.some((entry) => entry.path === "/api/library/documents/abc/cache" && entry.options.method === "POST"));
+  assert.deepEqual(harness.openedWindows.at(-1), ["/api/library/documents/abc/local/book.pdf", "_blank", "noopener"]);
 });
 
 test("library personalities page renders API error state", async () => {

@@ -74,9 +74,9 @@ class NormalizationOperations(Protocol):
 class ClassificationOperations(Protocol):
     list_classifications: Callable[..., Any]
     get_classification_insights: Callable[..., Any]
-    get_normalization_preview: Callable[..., Any]
-    get_merge_candidates: Callable[..., Any]
-    merge_classifications: Callable[..., Any]
+    list_classification_documents: Callable[..., Any]
+    preview_change_set: Callable[..., Any]
+    apply_change_set: Callable[..., Any]
 
 
 class EntitiesOperations(Protocol):

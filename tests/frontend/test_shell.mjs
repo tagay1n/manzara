@@ -43,6 +43,13 @@ test("task catalog uses compact fixed-width task columns", () => {
   );
 });
 
+test("collapsed classification tree branches stay hidden despite tree layout styles", () => {
+  assert.match(
+    STYLES_SOURCE,
+    /\.tree-list\[hidden\]\s*\{[^}]*display:\s*none;/s,
+  );
+});
+
 test("all application pages use the shared shell and omit permanent alert strips", () => {
   for (const file of PAGE_FILES) {
     const source = readFileSync(new URL(`../../static/${file}`, import.meta.url), "utf-8");

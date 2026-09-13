@@ -8,15 +8,8 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from app.contracts import ClassificationOperations
-from app.library_route_params import (
-    parse_csv_tokens,
-    q_limit,
-    q_non_negative,
-    q_page,
-    q_page_size,
-    q_ratio,
-    q_text,
-)
+from app.library_route_params import q_non_negative, q_page, q_page_size, q_text
+from app.modules.library.classification_editor import StaleTaxonomyError
 
 
 def register_library_classification_routes(
@@ -51,72 +44,53 @@ def register_library_classification_routes(
         return JSONResponse(payload)
 
     @app.get("/api/library/classifications/insights")
-    def get_library_classification_insights(
-        row_limit: int = q_limit(default=5000, minimum=1, maximum=20000),
-        duplicate_limit: int = q_limit(default=25, minimum=1, maximum=200),
-        unclassified_limit: int = q_limit(default=30, minimum=1, maximum=200),
-    ) -> JSONResponse:
-        """Return hierarchy, distribution, duplicates, and unclassified queue."""
+    def get_library_classification_insights() -> JSONResponse:
+        """Return the complete editable hierarchy and DDC distribution."""
         operations = operations_provider()
-        payload = operations.get_classification_insights(
-            row_limit=row_limit,
-            duplicate_limit=duplicate_limit,
-            unclassified_limit=unclassified_limit,
-        )
+        payload = operations.get_classification_insights()
         return JSONResponse(payload)
 
-    @app.get("/api/library/classifications/normalization-preview")
-    def get_library_classification_normalization_preview(
-        drop_segments: str = q_text(default="Turkic literature", max_length=300),
-        limit: int = q_limit(default=120, minimum=1, maximum=500),
-        row_limit: int = q_limit(default=5000, minimum=1, maximum=20000),
+    @app.get("/api/library/classifications/documents")
+    def get_library_classification_documents(
+        classification_ids: str,
+        offset: int = q_non_negative(),
+        limit: int = q_page_size(default=10, max_value=50),
     ) -> JSONResponse:
-        """Preview simplification rules before applying any merge."""
+        """Return a bounded page of real documents for classification leaves."""
+        try:
+            ids = [int(item.strip()) for item in classification_ids.split(",") if item.strip()]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="classification_ids must be integers") from exc
         operations = operations_provider()
-        segments = parse_csv_tokens(drop_segments)
-        payload = operations.get_normalization_preview(
-            drop_segments=segments,
-            limit=limit,
-            row_limit=row_limit,
-        )
-        return JSONResponse(payload)
+        try:
+            return JSONResponse(
+                operations.list_classification_documents(ids, offset=offset, limit=limit)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.get("/api/library/classifications/merge-candidates")
-    def get_library_classification_merge_candidates(
-        limit: int = q_limit(default=80, minimum=1, maximum=300),
-        min_score: float = q_ratio(default=0.78),
-        row_limit: int = q_limit(default=1200, minimum=10, maximum=10000),
-    ) -> JSONResponse:
-        """Return ranked near-duplicate classification merge suggestions."""
-        operations = operations_provider()
-        payload = operations.get_merge_candidates(
-            limit=limit,
-            min_score=min_score,
-            row_limit=row_limit,
-        )
-        return JSONResponse(payload)
-
-    @app.post("/api/library/classifications/merge")
-    def post_library_classification_merge(
+    @app.post("/api/library/classifications/change-set/preview")
+    def preview_library_classification_change_set(
         payload: Dict[str, Any] = Body(...),
     ) -> JSONResponse:
-        """Merge one source classification into a target classification."""
         operations = operations_provider()
         try:
-            source_classification_id = int(payload.get("source_classification_id"))
-            target_classification_id = int(payload.get("target_classification_id"))
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400,
-                detail="source_classification_id and target_classification_id must be integers",
-            )
-        reason = str(payload.get("reason") or "").strip()
+            result = operations.preview_change_set(payload)
+        except StaleTaxonomyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.post("/api/library/classifications/change-set/apply")
+    def apply_library_classification_change_set(
+        payload: Dict[str, Any] = Body(...),
+    ) -> JSONResponse:
+        operations = operations_provider()
         try:
-            result = operations.merge_classifications(
-                source_classification_id=source_classification_id,
-                target_classification_id=target_classification_id,
-                reason=reason,
-            )
+            result = operations.apply_change_set(payload)
+        except StaleTaxonomyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result)

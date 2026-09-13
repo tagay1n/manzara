@@ -17,34 +17,18 @@
               <h2>Classifications</h2>
             </div>
             <div class="classification-tabs" role="tablist" aria-label="Classification views">
-              <button id="tab-btn-table" class="classification-tab active" data-tab="table" role="tab" aria-selected="true">
+              <button id="tab-btn-table" class="classification-tab" data-tab="table" role="tab" aria-selected="false">
                 Classification Table
               </button>
-              <button id="tab-btn-tree" class="classification-tab" data-tab="tree" role="tab" aria-selected="false">
+              <button id="tab-btn-tree" class="classification-tab active" data-tab="tree" role="tab" aria-selected="true">
                 Hierarchy Tree
               </button>
               <button id="tab-btn-distribution" class="classification-tab" data-tab="distribution" role="tab" aria-selected="false">
                 DDC Distribution
               </button>
-              <button id="tab-btn-normalization" class="classification-tab" data-tab="normalization" role="tab" aria-selected="false">
-                Normalization Rules
-                <span id="tab-badge-normalization" class="classification-tab-badge">0</span>
-              </button>
-              <button id="tab-btn-merge" class="classification-tab" data-tab="merge" role="tab" aria-selected="false">
-                Merge Candidates
-                <span id="tab-badge-merge" class="classification-tab-badge">0</span>
-              </button>
-              <button id="tab-btn-duplicates" class="classification-tab" data-tab="duplicates" role="tab" aria-selected="false">
-                Duplicates / Drift
-                <span id="tab-badge-duplicates" class="classification-tab-badge">0</span>
-              </button>
-              <button id="tab-btn-unclassified" class="classification-tab" data-tab="unclassified" role="tab" aria-selected="false">
-                Unclassified Queue
-                <span id="tab-badge-unclassified" class="classification-tab-badge">0</span>
-              </button>
             </div>
 
-            <div id="tab-panel-table" class="classification-tab-panel active" role="tabpanel" aria-labelledby="tab-btn-table">
+            <div id="tab-panel-table" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-table">
               <div class="classification-filters">
                 <input id="filter-search" class="filter-input" type="text" placeholder="Search ddc/path" />
                 <input id="filter-ddc-prefix" class="filter-input" type="text" placeholder="DDC prefix" />
@@ -89,8 +73,21 @@
               </div>
             </div>
 
-            <div id="tab-panel-tree" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-tree">
-              <h2>Hierarchy Tree</h2>
+            <div id="tab-panel-tree" class="classification-tab-panel active" role="tabpanel" aria-labelledby="tab-btn-tree">
+              <div class="library-overview-head">
+                <div>
+                  <h2>Hierarchy Tree</h2>
+                  <p class="workflow-footnote">Edit category levels or drag categories to move them. Drag a DDC classification onto another to merge.</p>
+                </div>
+                <div class="taxonomy-toolbar">
+                  <button id="taxonomy-undo" class="small-btn" disabled>Undo</button>
+                  <button id="taxonomy-redo" class="small-btn" disabled>Redo</button>
+                  <button id="taxonomy-clear" class="small-btn" disabled>Clear</button>
+                  <button id="taxonomy-review" class="small-btn primary" disabled>Review and apply</button>
+                </div>
+              </div>
+              <div id="tree-status" class="workflow-footnote">Loading hierarchy...</div>
+              <aside id="taxonomy-change-tray" class="taxonomy-change-tray" hidden></aside>
               <div id="tree-root" class="tree-root"></div>
             </div>
 
@@ -99,79 +96,6 @@
               <div id="distribution-root" class="distribution-root"></div>
             </div>
 
-            <div id="tab-panel-normalization" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-normalization">
-              <div class="library-overview-head">
-                <h2>Normalization Rules Preview</h2>
-                <button id="normalization-refresh" class="small-btn">Refresh Preview</button>
-              </div>
-              <div class="classification-filters compact">
-                <input
-                  id="normalization-drop-segments"
-                  class="filter-input"
-                  type="text"
-                  value="Turkic literature"
-                  placeholder="Segments to drop (comma-separated)"
-                />
-                <input
-                  id="normalization-limit"
-                  class="filter-input"
-                  type="number"
-                  min="10"
-                  max="500"
-                  value="120"
-                  placeholder="Preview limit"
-                />
-              </div>
-              <div id="normalization-status" class="workflow-footnote">Loading normalization preview...</div>
-              <div id="normalization-summary" class="normalization-summary"></div>
-              <div id="normalization-groups" class="duplicates-root"></div>
-              <div id="normalization-affected" class="duplicates-root"></div>
-            </div>
-
-            <div id="tab-panel-merge" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-merge">
-              <div class="library-overview-head">
-                <h2>Merge Candidates</h2>
-                <button id="merge-refresh" class="small-btn">Refresh Candidates</button>
-              </div>
-              <div class="workflow-footnote">
-                Choose classification to keep, then merge duplicate into it. Merge is one-way and removes source classification.
-              </div>
-              <div class="classification-filters compact">
-                <input
-                  id="merge-min-score"
-                  class="filter-input"
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value="0.78"
-                  placeholder="Min score"
-                />
-                <input
-                  id="merge-limit"
-                  class="filter-input"
-                  type="number"
-                  min="10"
-                  max="300"
-                  value="80"
-                  placeholder="Limit"
-                />
-              </div>
-              <div id="merge-status" class="workflow-footnote">Loading merge candidates...</div>
-              <div id="merge-summary" class="normalization-summary"></div>
-              <div id="merge-root" class="duplicates-root"></div>
-            </div>
-
-            <div id="tab-panel-duplicates" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-duplicates">
-              <h2>Duplicates / Drift</h2>
-              <div id="duplicates-status" class="workflow-footnote">Loading duplicates and drift...</div>
-              <div id="duplicates-root" class="duplicates-root"></div>
-            </div>
-
-            <div id="tab-panel-unclassified" class="classification-tab-panel" role="tabpanel" aria-labelledby="tab-btn-unclassified">
-              <h2>Unclassified Applicable Queue</h2>
-              <div id="unclassified-root" class="unclassified-root"></div>
-            </div>
           </section>
         </main>
 

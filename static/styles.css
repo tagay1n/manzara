@@ -995,6 +995,10 @@ button {
   gap: 4px;
 }
 
+.tree-list[hidden] {
+  display: none;
+}
+
 .tree-list.root {
   padding-left: 0;
   border-left: 0;
@@ -1010,6 +1014,51 @@ button {
   gap: 8px;
 }
 
+.tree-toggle,
+.tree-leaf-label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.tree-toggle {
+  flex: 1;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree-toggle:hover .tree-name {
+  color: #ffffff;
+}
+
+.tree-toggle:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid #6aa8ff;
+  outline-offset: 3px;
+}
+
+.tree-caret {
+  width: 10px;
+  flex: 0 0 10px;
+  color: #82b5f5;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.tree-toggle[aria-expanded="true"] .tree-caret {
+  transform: rotate(90deg);
+}
+
+.tree-caret-placeholder::before {
+  content: "";
+}
+
 .tree-name {
   color: #d5e7ff;
 }
@@ -1017,6 +1066,141 @@ button {
 .tree-count {
   color: #9bccff;
   font-family: "IBM Plex Mono", monospace;
+}
+
+.taxonomy-toolbar,
+.taxonomy-node-actions,
+.taxonomy-inline-editor,
+.classification-pills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.taxonomy-change-tray {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid #37669d;
+  border-radius: 9px;
+  background: rgba(31, 78, 121, 0.2);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.taxonomy-change-tray[hidden] {
+  display: none;
+}
+
+.taxonomy-node-actions {
+  flex: 0 0 auto;
+  opacity: 0.72;
+}
+
+.tree-row:hover .taxonomy-node-actions,
+.taxonomy-node-actions:focus-within {
+  opacity: 1;
+}
+
+.taxonomy-inline-editor {
+  flex: 1;
+}
+
+.taxonomy-name-input {
+  min-width: 220px;
+  flex: 1;
+}
+
+.tree-branch {
+  margin-top: 4px;
+}
+
+.classification-pills {
+  margin: 5px 0 6px 14px;
+}
+
+.classification-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border: 1px solid #396596;
+  border-radius: 999px;
+  background: #102746;
+  cursor: grab;
+  font: 12px "IBM Plex Mono", monospace;
+  color: #d5e7ff;
+}
+
+.classification-pill.is-selected {
+  border-color: #75b7ff;
+  box-shadow: 0 0 0 2px rgba(61, 141, 255, 0.28);
+}
+
+.taxonomy-drop-target {
+  transition: border-color 100ms ease, background 100ms ease;
+}
+
+.taxonomy-drop-target:hover {
+  border-color: #3d8dff;
+}
+
+.document-list {
+  list-style: none;
+  margin: 6px 0 8px 28px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.document-leaf {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  align-items: center;
+  padding: 7px 9px;
+  border-left: 2px solid #315987;
+  background: rgba(9, 21, 40, 0.72);
+}
+
+.document-leaf .library-status-error {
+  grid-column: 1 / -1;
+}
+
+.document-load-btn,
+.document-more-btn {
+  margin: 5px 0 8px 28px;
+}
+
+.inline-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: taxonomy-spin 700ms linear infinite;
+}
+
+@keyframes taxonomy-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 760px) {
+  .tree-row,
+  .taxonomy-change-tray {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .taxonomy-node-actions {
+    opacity: 1;
+  }
+
+  .document-leaf {
+    grid-template-columns: 1fr;
+  }
 }
 
 .distribution-row {
