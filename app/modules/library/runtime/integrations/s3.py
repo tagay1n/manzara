@@ -1,12 +1,13 @@
 """S3 client helpers for Library runtime storage boundaries."""
 
+import os
+
 from boto3 import Session
 from botocore.config import Config
-import os
 from rich import print
 
 from app.document_storage import load_document_storage_settings
-from core.config import read_config
+from app.modules.runtime_shared_utils import read_config
 
 
 def create_session(config=None):

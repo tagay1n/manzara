@@ -18,13 +18,11 @@ class MetaEvalArgs:
     excerpt_chars: int
 
 
-def _bootstrap_import_paths() -> None:
+def _bootstrap_repo_imports() -> None:
     repo_root = Path(__file__).resolve().parents[4]
-    runtime_root = Path(__file__).resolve().parent
-    for path in (repo_root, runtime_root):
-        value = str(path)
-        if value not in sys.path:
-            sys.path.insert(0, value)
+    value = str(repo_root)
+    if value not in sys.path:
+        sys.path.insert(0, value)
 
 
 def _parse_args() -> MetaEvalArgs:
@@ -45,8 +43,8 @@ def _parse_args() -> MetaEvalArgs:
 
 
 def main() -> None:
-    _bootstrap_import_paths()
-    from metadata.evaluation import evaluate
+    _bootstrap_repo_imports()
+    from app.modules.library.runtime.metadata.evaluation import evaluate
 
     evaluate(_parse_args())
 

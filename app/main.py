@@ -18,106 +18,20 @@ from app.constants import (
     STATIC_DIR,
     TITLE_MAX_LENGTH,
 )
-from app.contracts import (
-    ClassificationOperations,
-    EntitiesOperations,
-    NormalizationOperations,
-    PayloadBuilderOperations,
-)
 from app.conveyor import ConveyorService
 from app.db import Database
 from app.dependencies import (
-    build_classification_operations_with_overrides,
-    build_entities_operations_with_overrides,
-    build_normalization_operations_with_overrides,
-    build_payload_builder_operations_with_overrides,
+    ApplicationOperations,
+    build_application_operations,
     build_route_payload_builders,
 )
 from app.factory import create_manzara_app
-from app.modules.library.classification_insights import (
-    get_classification_insights,
-    list_classifications,
-)
-from app.modules.library.classification_operations import (
-    get_classification_detail,
-)
-from app.modules.library.classification_editor import (
-    apply_classification_change_set,
-    list_classification_documents,
-    preview_classification_change_set,
-)
 from app.modules.library.collection_tasks import collection_task_definitions
-from app.modules.library.collections import (
-    decide_collection_proposal,
-    get_collection_insights,
-    get_collection_overview,
-    get_collection_proposal_review,
-    get_collection_review,
-    list_collection_items,
-    list_collection_proposals,
-    merge_collections,
-    update_collection,
-)
-from app.modules.library.collections import (
-    list_collections as list_library_collections,
-)
-from app.modules.library.normalization import (
-    ENTITY_TYPES as NORMALIZATION_ENTITY_TYPES,
-)
-from app.modules.library.normalization import (
-    bulk_link_aliases,
-    bulk_reject_aliases,
-    create_and_link_alias,
-    create_canonical,
-    create_canonical_group,
-    dismiss_suggestion,
-    get_normalization_dashboard,
-    get_review_queue,
-    link_alias,
-    list_canonical_aliases,
-    list_canonicals,
-    merge_canonicals,
-    reject_alias,
-    rename_canonical,
-    undo_event,
-)
-from app.modules.library.normalization import (
-    get_evidence as get_normalization_evidence,
-)
-from app.modules.library.normalization import (
-    get_merge_candidates as get_normalization_merge_candidates,
-)
-from app.modules.library.normalization import (
-    get_quality as get_normalization_quality,
-)
-from app.modules.library.normalization import (
-    list_history as list_normalization_history,
-)
-from app.modules.library.normalization_suggestions import (
-    list_suggestions,
-    refresh_suggestions,
-)
-from app.modules.library.personalities import (
-    get_personality_insights,
-    get_personality_overview,
-    list_personalities,
-)
-from app.modules.library.publishers import (
-    get_publisher_insights,
-    get_publisher_overview,
-    list_publishers,
-)
-from app.modules.library.stats import get_library_dataset_stats
+from app.modules.library.normalization import ENTITY_TYPES as NORMALIZATION_ENTITY_TYPES
 from app.modules.library.tasks import library_task_definitions
-from app.modules.maintenance.panel import (
-    build_database_state_snapshot,
-    build_library_panel,
-    build_maintenance_panel,
-)
 from app.modules.maintenance.tasks import maintenance_task_definitions
 from app.payload_builder import PayloadBuilder
 from app.registry import build_startup_seed_registry
-from app.run_summary import build_default_run_summary
 from app.settings import Settings, load_settings
 from app.tasks import TaskRunner
 
@@ -130,94 +44,16 @@ _SLUG_SEPARATOR_PATTERN = SLUG_SEPARATOR_PATTERN
 _SLUG_CLEAN_PATTERN = SLUG_CLEAN_PATTERN
 
 
-def _payload_builder_operations() -> PayloadBuilderOperations:
-    """Build payload operations from module-level symbols (patch-friendly for tests)."""
-    return build_payload_builder_operations_with_overrides(
-        {
-            "build_default_run_summary": build_default_run_summary,
-            "build_maintenance_panel": build_maintenance_panel,
-            "build_library_panel": build_library_panel,
-            "get_library_dataset_stats": get_library_dataset_stats,
-            "build_database_state_snapshot": build_database_state_snapshot,
-            "get_classification_detail": get_classification_detail,
-            "get_personality_overview": get_personality_overview,
-            "get_publisher_overview": get_publisher_overview,
-            "get_collection_overview": get_collection_overview,
-            "get_normalization_dashboard": get_normalization_dashboard,
-            "get_normalization_quality": get_normalization_quality,
-            "list_suggestions": list_suggestions,
-            "list_normalization_history": list_normalization_history,
-        }
-    )
-
-
-def _normalization_operations() -> NormalizationOperations:
-    """Build normalization operations from module-level symbols."""
-    return build_normalization_operations_with_overrides(
-        {
-            "get_review_queue": get_review_queue,
-            "list_canonicals": list_canonicals,
-            "create_canonical": create_canonical,
-            "create_canonical_group": create_canonical_group,
-            "list_canonical_aliases": list_canonical_aliases,
-            "rename_canonical": rename_canonical,
-            "dismiss_suggestion": dismiss_suggestion,
-            "link_alias": link_alias,
-            "create_and_link_alias": create_and_link_alias,
-            "reject_alias": reject_alias,
-            "bulk_link_aliases": bulk_link_aliases,
-            "bulk_reject_aliases": bulk_reject_aliases,
-            "list_suggestions": list_suggestions,
-            "refresh_suggestions": refresh_suggestions,
-            "get_normalization_merge_candidates": get_normalization_merge_candidates,
-            "merge_canonicals": merge_canonicals,
-            "list_normalization_history": list_normalization_history,
-            "undo_event": undo_event,
-            "get_normalization_quality": get_normalization_quality,
-            "get_normalization_evidence": get_normalization_evidence,
-        }
-    )
-
-
-def _classification_operations() -> ClassificationOperations:
-    """Build classification operations from module-level symbols."""
-    return build_classification_operations_with_overrides(
-        {
-            "list_classifications": list_classifications,
-            "get_classification_insights": get_classification_insights,
-            "list_classification_documents": list_classification_documents,
-            "preview_change_set": preview_classification_change_set,
-            "apply_change_set": apply_classification_change_set,
-        }
-    )
-
-
-def _entities_operations() -> EntitiesOperations:
-    """Build entities operations from module-level symbols."""
-    return build_entities_operations_with_overrides(
-        {
-            "list_personalities": list_personalities,
-            "get_personality_insights": get_personality_insights,
-            "list_publishers": list_publishers,
-            "get_publisher_insights": get_publisher_insights,
-            "list_library_collections": list_library_collections,
-            "get_collection_insights": get_collection_insights,
-            "get_collection_review": get_collection_review,
-            "list_collection_items": list_collection_items,
-            "list_collection_proposals": list_collection_proposals,
-            "get_collection_proposal_review": get_collection_proposal_review,
-            "decide_collection_proposal": decide_collection_proposal,
-            "update_collection": update_collection,
-            "merge_collections": merge_collections,
-        }
-    )
-
-
 class AppState:
     """Typed state holder for shared app services."""
 
-    def __init__(self, settings: Settings):
+    def __init__(
+        self, settings: Settings, *, operations: ApplicationOperations | None = None
+    ):
         self.settings = settings
+        self.operations = (
+            operations if operations is not None else build_application_operations()
+        )
         self.db = Database(
             settings.database_url,
             schema=settings.database_schema,
@@ -236,7 +72,7 @@ payload_builder = PayloadBuilder(
     normalization_entity_types=NORMALIZATION_ENTITY_TYPES,
     slug_separator_pattern=_SLUG_SEPARATOR_PATTERN,
     slug_clean_pattern=_SLUG_CLEAN_PATTERN,
-    ops_provider=_payload_builder_operations,
+    ops_provider=lambda: state.operations.payload,
 )
 
 
@@ -288,9 +124,9 @@ _factory_result = create_manzara_app(
     sse_poll_interval_seconds=_SSE_POLL_INTERVAL_SECONDS,
     sse_heartbeat_every_empty_polls=_SSE_HEARTBEAT_EVERY_EMPTY_POLLS,
     payload_provider=lambda: build_route_payload_builders(payload_builder),
-    normalization_operations_provider=_normalization_operations,
-    classification_operations_provider=_classification_operations,
-    entities_operations_provider=_entities_operations,
+    normalization_operations_provider=lambda: state.operations.normalization,
+    classification_operations_provider=lambda: state.operations.classification,
+    entities_operations_provider=lambda: state.operations.entities,
 )
 app = _factory_result.app
 run_logs = _factory_result.stream_handlers["run_logs"]

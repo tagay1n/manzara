@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.library import normalization
+from app.modules.library import normalization, normalization_canonicals
 
 
 def test_create_canonical_group_deduplicates_and_retains_raw_aliases(monkeypatch) -> None:
     monkeypatch.setattr(
-        normalization,
+        normalization_canonicals,
         "_runtime_snapshot_for_alias",
         lambda _entity_type, raw_name: {
             "raw_name": raw_name,
@@ -71,7 +71,7 @@ def test_publisher_group_round_trip_preserves_aliases_and_rename(
 ) -> None:
     _client, main_app = test_client
     monkeypatch.setattr(
-        normalization,
+        normalization_canonicals,
         "_runtime_snapshot_for_alias",
         lambda _entity_type, raw_name: {
             "raw_name": raw_name,

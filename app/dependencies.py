@@ -14,17 +14,17 @@ from app.contracts import (
     PayloadBuilderOperations,
     RoutePayloadBuilders,
 )
+from app.modules.library.classification_editor import (
+    apply_classification_change_set,
+    list_classification_documents,
+    preview_classification_change_set,
+)
 from app.modules.library.classification_insights import (
     get_classification_insights,
     list_classifications,
 )
 from app.modules.library.classification_operations import (
     get_classification_detail,
-)
-from app.modules.library.classification_editor import (
-    apply_classification_change_set,
-    list_classification_documents,
-    preview_classification_change_set,
 )
 from app.modules.library.collections import (
     decide_collection_proposal,
@@ -187,10 +187,23 @@ class EntitiesOperationsService:
     merge_collections: Callable[..., Any]
 
 
-def _apply_overrides(service: Any, overrides: dict[str, Any] | None) -> Any:
-    if not overrides:
-        return service
-    return type(service)(**{**service.__dict__, **overrides})
+@dataclass
+class ApplicationOperations:
+    """Per-application operation services, replaceable at the assembly boundary."""
+
+    payload: PayloadBuilderOperations
+    normalization: NormalizationOperations
+    classification: ClassificationOperations
+    entities: EntitiesOperations
+
+
+def build_application_operations() -> ApplicationOperations:
+    return ApplicationOperations(
+        payload=build_payload_builder_operations(),
+        normalization=build_normalization_operations(),
+        classification=build_classification_operations(),
+        entities=build_entities_operations(),
+    )
 
 
 def build_payload_builder_operations() -> PayloadBuilderOperations:
@@ -211,13 +224,6 @@ def build_payload_builder_operations() -> PayloadBuilderOperations:
         list_normalization_history=list_normalization_history,
         monocorpus_meta_evaluate_task_id=MONOCORPUS_META_EVALUATE_TASK_ID,
     )
-
-
-def build_payload_builder_operations_with_overrides(
-    overrides: dict[str, Any] | None = None,
-) -> PayloadBuilderOperations:
-    """Build PayloadBuilder operations and apply optional key overrides."""
-    return _apply_overrides(build_payload_builder_operations(), overrides)
 
 
 def build_normalization_operations() -> NormalizationOperations:
@@ -246,13 +252,6 @@ def build_normalization_operations() -> NormalizationOperations:
     )
 
 
-def build_normalization_operations_with_overrides(
-    overrides: dict[str, Any] | None = None,
-) -> NormalizationOperations:
-    """Build normalization operations and apply optional field overrides."""
-    return _apply_overrides(build_normalization_operations(), overrides)
-
-
 def build_classification_operations() -> ClassificationOperations:
     """Build classification route operations service."""
     return ClassificationOperationsService(
@@ -262,13 +261,6 @@ def build_classification_operations() -> ClassificationOperations:
         preview_change_set=preview_classification_change_set,
         apply_change_set=apply_classification_change_set,
     )
-
-
-def build_classification_operations_with_overrides(
-    overrides: dict[str, Any] | None = None,
-) -> ClassificationOperations:
-    """Build classification operations and apply optional field overrides."""
-    return _apply_overrides(build_classification_operations(), overrides)
 
 
 def build_entities_operations() -> EntitiesOperations:
@@ -290,14 +282,9 @@ def build_entities_operations() -> EntitiesOperations:
     )
 
 
-def build_entities_operations_with_overrides(
-    overrides: dict[str, Any] | None = None,
-) -> EntitiesOperations:
-    """Build entities operations and apply optional field overrides."""
-    return _apply_overrides(build_entities_operations(), overrides)
-
-
-def build_route_payload_builders(payload_builder: PayloadBuilder) -> RoutePayloadBuilders:
+def build_route_payload_builders(
+    payload_builder: PayloadBuilder,
+) -> RoutePayloadBuilders:
     """Build payload callbacks exposed to API route modules."""
     return RoutePayloadBuildersService(
         build_system_state_payload=payload_builder.build_system_state_payload,
@@ -314,7 +301,9 @@ def build_route_payload_builders(payload_builder: PayloadBuilder) -> RoutePayloa
     )
 
 
-def build_core_read_payload_builders(payload_builders: RoutePayloadBuilders) -> CoreReadPayloadBuilders:
+def build_core_read_payload_builders(
+    payload_builders: RoutePayloadBuilders,
+) -> CoreReadPayloadBuilders:
     """Select read payload callbacks required by core read routes."""
     return CoreReadPayloadBuildersService(
         build_system_state_payload=payload_builders.build_system_state_payload,

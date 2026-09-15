@@ -304,13 +304,14 @@ def test_task_detail_endpoint_accepts_human_slug(test_client) -> None:
 
 
 
-def test_library_endpoint_returns_dataset_stats(test_client, monkeypatch) -> None:
-    client, main_app = test_client
+def test_library_endpoint_returns_dataset_stats(
+    test_client, override_operations
+) -> None:
+    client, _main_app = test_client
 
-    monkeypatch.setattr(
-        main_app,
-        "get_library_dataset_stats",
-        lambda: {
+    override_operations(
+        "payload",
+        get_library_dataset_stats=lambda: {
             "available": True,
             "error": None,
             "config_source": "config.yaml",

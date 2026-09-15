@@ -7,7 +7,6 @@ import re
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional
 
-
 from app.db import Database
 from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_model_pool import (
@@ -19,13 +18,14 @@ from app.gemini_model_pool import (
 )
 from app.gemini_runtime import GeminiRuntimeManager
 from app.gemini_workers import current_gemini_worker_id, emit_gemini_worker_log
-from app.modules.library.normalization import (
+from app.modules.library.normalization_rules import (
     _canonical_name_map,
     _confidence_band,
     _entity_config,
     _similarity,
-    get_review_queue,
 )
+from app.modules.library.normalization_views import get_review_queue
+
 
 def _parse_first_json_blob(value: str) -> Optional[Dict[str, Any]]:
     text_value = str(value or "").strip()

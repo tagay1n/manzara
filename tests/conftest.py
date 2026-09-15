@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -220,7 +221,7 @@ def test_client(
     )
 
     monkeypatch.setattr(main_app, "maintenance_task_definitions", _test_task_defs)
-    main_app.state = main_app.AppState(settings)
+    monkeypatch.setattr(main_app, "state", main_app.AppState(settings))
     main_app.state.runner._artifacts_root = tmp_path / "_artifacts" / "task_runs"
     main_app.state.runner._artifacts_root.mkdir(parents=True, exist_ok=True)
     main_app.state.db._local_state.initialize()
@@ -238,6 +239,19 @@ def test_client(
                 main_app.state.runner.stop_all_toggle()
                 time.sleep(0.15)
     _truncate_schema(database_url, schema_name)
+
+
+@pytest.fixture()
+def override_operations(test_client, monkeypatch):
+    """Inject an operation service into this test's isolated application state."""
+    _client, main_app = test_client
+
+    def override(group, **operations):
+        services = main_app.state.operations
+        service = replace(getattr(services, group), **operations)
+        monkeypatch.setattr(services, group, service)
+
+    return override
 
 
 @pytest.fixture()
@@ -263,3 +277,31 @@ def wait_for_terminal_run() -> callable:
         )
 
     return _wait
+
+
+@pytest.fixture()
+def evaluation_document():
+    """Return a factory for fresh evaluation tasks shared across focused tests."""
+    from app.modules.library.runtime.metadata.evaluation_types import EvaluationTask
+
+    def make_document():
+        return EvaluationTask(
+            md5="a" * 32,
+            ya_path="/books/a.pdf",
+            language="tt-Cyrl",
+            page_count=10,
+            full=True,
+            sharing_restricted=False,
+            ya_public_url=None,
+            mime_type="application/pdf",
+            document_url="https://example.test/a.pdf",
+            upstream_metadata={"title": "Source title"},
+            content_url=None,
+            schema_org={
+                "@context": "https://schema.org",
+                "@type": "Book",
+                "name": "A",
+            },
+        )
+
+    return make_document

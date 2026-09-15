@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 from app.constants import PANEL_DEFS
@@ -29,10 +30,7 @@ def test_maintenance_task_definitions_include_guarded_sync_task(tmp_path) -> Non
     task_ids = set(by_id)
     assert "maintenance.monocorpus_sync" in task_ids
     assert by_id["maintenance.monocorpus_sync"]["title"] == "Sync"
-    assert (
-        by_id["maintenance.sync_documents_s3"]["title"]
-        == "Upload to Backblaze S3"
-    )
+    assert by_id["maintenance.sync_documents_s3"]["title"] == "Upload to Backblaze S3"
     assert "maintenance.dump_state" not in task_ids
     assert not any(task_id.startswith("library.collection_") for task_id in task_ids)
 
@@ -57,7 +55,9 @@ def test_metadata_tasks_belong_to_dedicated_catalog(tmp_path) -> None:
     tasks = [*maintenance_tasks, *library_task_definitions(app_root=tmp_path)]
     by_id = {str(task["task_id"]): task for task in tasks}
 
-    assert {panel["panel_id"]: panel["title"] for panel in PANEL_DEFS}["metadata"] == "Metadata"
+    assert {panel["panel_id"]: panel["title"] for panel in PANEL_DEFS}[
+        "metadata"
+    ] == "Metadata"
     assert {
         task_id: (by_id[task_id]["panel_id"], by_id[task_id]["title"])
         for task_id in (
@@ -139,13 +139,20 @@ def test_route_payload_builders_bind_payload_builder_methods() -> None:
     builders = build_route_payload_builders(_FakeBuilder())
     assert builders.build_system_state_payload() == {"ok": "system"}
     assert builders.build_dashboard_payload() == {"ok": "dashboard"}
-    assert builders.build_task_detail_payload("abc", limit=7) == {"task_key": "abc", "limit": 7}
-    assert builders.build_classification_detail_payload(11, docs_page=2, docs_page_size=50) == {
+    assert builders.build_task_detail_payload("abc", limit=7) == {
+        "task_key": "abc",
+        "limit": 7,
+    }
+    assert builders.build_classification_detail_payload(
+        11, docs_page=2, docs_page_size=50
+    ) == {
         "classification_id": 11,
         "docs_page": 2,
         "docs_page_size": 50,
     }
-    assert builders.build_normalization_payload("personality") == {"entity_type": "personality"}
+    assert builders.build_normalization_payload("personality") == {
+        "entity_type": "personality"
+    }
 
 
 def test_route_operation_services_expose_expected_attributes() -> None:
@@ -189,3 +196,18 @@ def test_route_operation_services_expose_expected_attributes() -> None:
     assert callable(entities.get_collection_review)
     assert callable(entities.list_collection_items)
     assert callable(entities.update_collection)
+
+
+def test_application_services_can_be_injected_without_changing_other_instances():
+    from app.dependencies import build_application_operations
+
+    first = build_application_operations()
+    second = build_application_operations()
+
+    def fake(*_args, **_kwargs):
+        return {"injected": True}
+
+    first.normalization = replace(first.normalization, get_review_queue=fake)
+    assert first.normalization.get_review_queue(None, "publisher") == {"injected": True}
+    assert second.normalization.get_review_queue is not fake
+    assert callable(first.payload.get_normalization_dashboard)

@@ -5,15 +5,15 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Sequence
 
-from core.db import get_session
-from models import (
+from sqlalchemy import and_, select
+
+from app.local_state import AIItemCheckpointStore
+from app.modules.library.runtime.models import (
     Document,
     LibraryUpstreamMetadata,
     Metadata,
 )
-from sqlalchemy import and_, select
-
-from app.local_state import AIItemCheckpointStore
+from app.modules.runtime_shared_utils import get_session
 from app.settings import _load_local_state_path
 
 EVALUATION_PROMPT_VERSION = "prompt.v3"
