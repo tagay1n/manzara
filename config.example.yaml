@@ -1,3 +1,12 @@
+# Runtime persistence
+database_url: "<REDACTED>"
+
+database_pool_size: 4
+
+# Optional; defaults to ~/.manzara/state/runtime.sqlite3.
+local_state_path: ~/.manzara/state/runtime.sqlite3
+
+# AI models and quota accounts
 gemini:
   metadata_extraction_operational_retry_cooldown_seconds: 21600
   model_pool:
@@ -16,6 +25,7 @@ gemini:
       - api_key: "<REDACTED>"
         quota_domain: "secondary-shared-project"
 
+# Document cache, primary storage, and encryption
 documents:
   cache_path: ~/.manzara/cache/source-documents
   cache_max_gib: 50
@@ -31,6 +41,9 @@ documents:
       content: ttcontent
       content_images: ttimgs
 
+encryption_key: "<REDACTED>"
+
+# Upstream document services (Yandex Cloud is still used for legacy data)
 yandex:
   disk:
     oauth_token: "<REDACTED>"
@@ -49,13 +62,7 @@ yandex:
       content: ttcontent
       image: ttimg
 
-encryption_key: "<REDACTED>"
-
-database_url: "<REDACTED>"
-database_pool_size: 4
-# Optional; defaults to ~/.manzara/state/runtime.sqlite3.
-local_state_path: ~/.manzara/state/runtime.sqlite3
-
+# Supported language codes for metadata evaluation
 sup_langs:
   tt:
     codes: ['tt-Latn-x-zamanalif', 'tt-Cyrl', 'tt-Latn-x-yanalif', 'tt-Arab', 'tt-Latn']
