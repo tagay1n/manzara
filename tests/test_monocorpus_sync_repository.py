@@ -73,7 +73,7 @@ def test_cleanup_claim_excludes_plans_canceled_by_review_undo() -> None:
     assert "RETURNING cleanup_id" in sql
 
 
-def test_catalog_update_clears_storage_checkpoint_when_source_identity_changes() -> None:
+def test_catalog_update_clears_storage_checkpoint_only_when_target_changes() -> None:
     repository = MonocorpusSyncRepository.__new__(MonocorpusSyncRepository)
     repository.engine = _Engine()
 
@@ -87,12 +87,12 @@ def test_catalog_update_clears_storage_checkpoint_when_source_identity_changes()
             "ya_resource_id": None,
             "full": True,
             "sharing_restricted": False,
-        }
+        },
+        reset_primary_storage=False,
     )
 
     sql = repository.engine.statements[0]
-    assert "ya_path IS DISTINCT FROM :ya_path" in sql
-    assert "mime_type IS DISTINCT FROM :mime_type" in sql
-    assert "sharing_restricted IS DISTINCT FROM :sharing_restricted" in sql
+    assert "WHEN :reset_primary_storage" in sql
+    assert "ya_path IS DISTINCT FROM :ya_path" not in sql
     assert "THEN NULL ELSE document_url END" in sql
     assert "THEN NULL ELSE primary_storage_verified_at END" in sql

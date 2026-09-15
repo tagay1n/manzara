@@ -124,33 +124,33 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                 {"cleanup_id": cleanup_id, "reason": str(reason)[:1000]},
             )
 
-    def save_discovered_document(self, payload: Mapping[str, Any]) -> bool:
+    def save_discovered_document(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        reset_primary_storage: bool,
+    ) -> bool:
         """Update Yandex catalog fields without erasing unrelated metadata."""
-        values = dict(payload)
+        values = {
+            **payload,
+            "reset_primary_storage": bool(reset_primary_storage),
+        }
         with self.engine.begin() as conn:
             updated = conn.execute(
                 text(
                     """
                     UPDATE document SET
                         document_url=CASE
-                            WHEN ya_path IS DISTINCT FROM :ya_path
-                              OR mime_type IS DISTINCT FROM :mime_type
-                              OR sharing_restricted IS DISTINCT FROM :sharing_restricted
+                            WHEN :reset_primary_storage
                             THEN NULL ELSE document_url END,
                         primary_storage_size=CASE
-                            WHEN ya_path IS DISTINCT FROM :ya_path
-                              OR mime_type IS DISTINCT FROM :mime_type
-                              OR sharing_restricted IS DISTINCT FROM :sharing_restricted
+                            WHEN :reset_primary_storage
                             THEN NULL ELSE primary_storage_size END,
                         primary_storage_etag=CASE
-                            WHEN ya_path IS DISTINCT FROM :ya_path
-                              OR mime_type IS DISTINCT FROM :mime_type
-                              OR sharing_restricted IS DISTINCT FROM :sharing_restricted
+                            WHEN :reset_primary_storage
                             THEN NULL ELSE primary_storage_etag END,
                         primary_storage_verified_at=CASE
-                            WHEN ya_path IS DISTINCT FROM :ya_path
-                              OR mime_type IS DISTINCT FROM :mime_type
-                              OR sharing_restricted IS DISTINCT FROM :sharing_restricted
+                            WHEN :reset_primary_storage
                             THEN NULL ELSE primary_storage_verified_at END,
                         mime_type=:mime_type, ya_path=:ya_path,
                         ya_public_url=COALESCE(:ya_public_url, ya_public_url),

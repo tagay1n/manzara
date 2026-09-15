@@ -314,8 +314,8 @@ test("library classifications hierarchy renders collapsible branches and toggles
 
   const treeRoot = harness.elements.get("tree-root");
   assert.match(treeRoot.innerHTML, /class="tree-toggle"/);
-  assert.match(treeRoot.innerHTML, /aria-expanded="true"/);
-  assert.match(treeRoot.innerHTML, /Tatar literature/);
+  assert.match(treeRoot.innerHTML, /aria-expanded="false"/);
+  assert.doesNotMatch(treeRoot.innerHTML, /Tatar literature/);
 
   const toggle = {
     dataset: { treePath: '["Literature"]' },
@@ -328,7 +328,7 @@ test("library classifications hierarchy renders collapsible branches and toggles
     },
   });
 
-  assert.doesNotMatch(treeRoot.innerHTML, /Tatar literature/);
+  assert.match(treeRoot.innerHTML, /Tatar literature/);
 });
 
 test("library classifications stages a subtree rename and supports undo", async () => {
@@ -341,6 +341,7 @@ test("library classifications stages a subtree rename and supports undo", async 
   });
   await harness.flush();
   const treeRoot = harness.elements.get("tree-root");
+  treeRoot.dispatch("click", { target: { closest(selector) { return selector === ".tree-toggle" ? { dataset: { treePath: '["Literature"]' } } : null; } } });
   treeRoot.dispatch("click", {
     target: {
       closest(selector) {
@@ -386,6 +387,8 @@ test("library classification leaves load documents and open through the local ca
   });
   await harness.flush();
   const root = harness.elements.get("tree-root");
+  root.dispatch("click", { target: { closest(selector) { return selector === ".tree-toggle" ? { dataset: { treePath: '["Literature"]' } } : null; } } });
+  root.dispatch("click", { target: { closest(selector) { return selector === ".tree-toggle" ? { dataset: { treePath: '["Literature","Tatar"]' } } : null; } } });
   root.dispatch("click", { target: { closest(selector) { return selector === ".document-load-btn, .document-more-btn" ? { dataset: { path: '["Literature","Tatar"]' } } : null; } } });
   await harness.flush();
   assert.match(root.innerHTML, /A real book/);

@@ -1,7 +1,11 @@
 # AGENTS.md
 
-Last updated: 2026-08-28
+Last updated: 2026-09-11
 Owner: tans1q
+
+## Owner communication preference
+
+- Communicate with the owner only in English. Never answer in Russian or use Russian for captions, status updates, generated UI copy, image text, or other owner-facing content unless the owner explicitly rescinds this instruction.
 
 ## Scope and routing
 

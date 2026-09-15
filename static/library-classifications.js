@@ -66,17 +66,11 @@ function flattenTree(nodes, prefix = [], rows = []) {
   }
   return rows;
 }
-function expandedPaths(rows) {
-  const keys = new Set();
-  for (const row of rows) for (let depth = 1; depth <= row.path.length; depth += 1) keys.add(pathKey(row.path.slice(0, depth)));
-  return keys;
-}
-
 function initializeDraft(payload) {
   state.base = new Map(flattenTree(payload.tree).map((row) => [row.id, row]));
   state.draft = new Map([...state.base].map(([id, row]) => [id, { ...row, path: [...row.path] }]));
   state.merges = new Map(); state.history = []; state.future = []; state.documentPages = new Map();
-  state.expanded = expandedPaths(state.draft.values());
+  state.expanded = new Set();
 }
 
 function snapshot() {
@@ -355,7 +349,7 @@ function clearChanges() {
   if (!changeCount()) return; state.history.push(snapshot());
   state.draft = new Map([...state.base].map(([id, row]) => [id, { ...row, path: [...row.path] }]));
   state.merges = new Map(); state.future = []; state.documentPages = new Map();
-  state.expanded = expandedPaths(state.draft.values()); renderEditor();
+  state.expanded = new Set(); renderEditor();
 }
 function parseDatasetPath(value) {
   try { const parsed = JSON.parse(decodeURIComponent(value)); return Array.isArray(parsed) ? parsed : null; }

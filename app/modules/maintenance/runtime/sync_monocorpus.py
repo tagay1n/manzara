@@ -18,6 +18,7 @@ from app.db import Database
 from app.document_storage import (
     DocumentStorageSettings,
     load_document_storage_settings,
+    normalized_extension,
     remove_cached_document,
 )
 from app.document_cleanup_paths import cleanup_target_path
@@ -184,6 +185,24 @@ def _catalog_changed(existing: Mapping[str, Any], payload: Mapping[str, Any]) ->
         "sharing_restricted",
     )
     return any(existing.get(key) != payload.get(key) for key in keys)
+
+
+def _storage_target_changed(
+    existing: Mapping[str, Any], payload: Mapping[str, Any]
+) -> bool:
+    """Return whether a catalog update changes the Backblaze key or bucket."""
+    old_extension = normalized_extension(
+        str(existing.get("ya_path") or ""), existing.get("mime_type")
+    )
+    new_extension = normalized_extension(
+        str(payload.get("ya_path") or ""), payload.get("mime_type")
+    )
+    return (
+        old_extension != new_extension
+        or existing.get("mime_type") != payload.get("mime_type")
+        or bool(existing.get("sharing_restricted"))
+        != bool(payload.get("sharing_restricted"))
+    )
 
 
 def _delete_prefix(
@@ -617,10 +636,15 @@ def run_monocorpus_sync(
             "sharing_restricted": restricted,
         }
         if current is None:
-            repository.save_discovered_document(payload)
+            repository.save_discovered_document(
+                payload, reset_primary_storage=False
+            )
             counters["created"] += 1
         elif _catalog_changed(current, payload):
-            repository.save_discovered_document(payload)
+            repository.save_discovered_document(
+                payload,
+                reset_primary_storage=_storage_target_changed(current, payload),
+            )
             counters["updated"] += 1
         else:
             counters["unchanged"] += 1

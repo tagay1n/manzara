@@ -14,8 +14,48 @@ from app.modules.maintenance.runtime.sync_monocorpus import (
     _cleanup_managed_storage,
     _delete_prefix,
     _publish_progress,
+    _storage_target_changed,
     run_monocorpus_sync,
 )
+
+
+def test_storage_target_is_preserved_for_path_only_move() -> None:
+    existing = {
+        "ya_path": "/documents/inbox/book.pdf",
+        "mime_type": "application/pdf",
+        "sharing_restricted": False,
+    }
+
+    assert not _storage_target_changed(
+        existing,
+        {
+            **existing,
+            "ya_path": "/documents/organized/book.pdf",
+        },
+    )
+    assert _storage_target_changed(
+        existing,
+        {
+            **existing,
+            "ya_path": "/documents/organized/book.epub",
+            "mime_type": "application/epub+zip",
+        },
+    )
+    assert _storage_target_changed(
+        existing,
+        {
+            **existing,
+            "mime_type": "application/octet-stream",
+        },
+    )
+    assert _storage_target_changed(
+        existing,
+        {
+            **existing,
+            "ya_path": "/documents/private/book.pdf",
+            "sharing_restricted": True,
+        },
+    )
 
 
 class _YaDisk:
@@ -126,8 +166,11 @@ class _Repository:
     def mark_cleanup_canceled(self, cleanup_id, reason):  # noqa: ANN001
         self.timeline.append(("canceled", f"{cleanup_id}:{reason}"))
 
-    def save_discovered_document(self, payload):  # noqa: ANN001
+    def save_discovered_document(  # noqa: ANN001
+        self, payload, *, reset_primary_storage
+    ):
         item = dict(payload)
+        item["reset_primary_storage"] = reset_primary_storage
         created = item["md5"] not in self.documents
         self.documents[item["md5"]] = item
         self.saved.append(item)
