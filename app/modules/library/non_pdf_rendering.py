@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Mapping
 
 from app.modules.library.non_pdf_converters import _run
@@ -24,6 +26,119 @@ from app.modules.library.non_pdf_types import (
     EXTRACTOR_VERSION,
     PreparedExtraction,
 )
+
+
+MARKDOWN_READER = (
+    "markdown-smart-markdown_in_html_blocks-native_divs-native_spans"
+    "-yaml_metadata_block-pandoc_title_block"
+)
+MARKDOWN_WRITER = "markdown-smart-raw_attribute"
+
+
+def _protect_code_fences(content: str) -> tuple[str, dict[str, str]]:
+    """Keep fenced code verbatim: Pandoc drops trailing code blank lines."""
+    lines = content.splitlines(keepends=True)
+    protected: dict[str, str] = {}
+    output: list[str] = []
+    index = 0
+    while index < len(lines):
+        opening = re.match(
+            r"^([ \t]*(?:>[ \t]*)*)(`{3,}|~{3,})([^\n]*)\n$", lines[index]
+        )
+        if opening is None:
+            output.append(lines[index])
+            index += 1
+            continue
+        indent, fence, info = opening.groups()
+        closing = re.compile(
+            r"^"
+            + re.escape(indent)
+            + re.escape(fence[0])
+            + "{"
+            + str(len(fence))
+            + r",}[ \t]*(?:\n)?$"
+        )
+        end = next(
+            (i for i in range(index + 1, len(lines)) if closing.match(lines[i])), None
+        )
+        if end is None:
+            output.append(lines[index])
+            index += 1
+            continue
+        marker = f"<!-- manzara-code-{uuid.uuid4().hex} -->"
+        block = [
+            line[len(indent) :] if line.startswith(indent) else line
+            for line in lines[index : end + 1]
+        ]
+        code = "".join(block[1:-1])
+        char = "~" if "`" in info else "`"
+        size = max(
+            [3, *(len(run) + 1 for run in re.findall(re.escape(char) + r"+", code))]
+        )
+        canonical_fence = char * size
+        block[0] = canonical_fence + (" " + info.strip() if info.strip() else "") + "\n"
+        block[-1] = canonical_fence
+        protected[marker] = "".join(block)
+        output.append(indent + marker + "\n")
+        index = end + 1
+    return "".join(output), protected
+
+
+def format_markdown(
+    content: str,
+    *,
+    workspace: Path,
+    literal_text: bool = False,
+) -> str:
+    """Use one Pandoc formatting contract, retaining raw HTML and punctuation."""
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
+    parsing_input, code_fences = (
+        _protect_code_fences(content) if not literal_text else ("", {})
+    )
+    parsed = _run(
+        ["pandoc", "-f", MARKDOWN_READER, "-t", "json"],
+        workspace=workspace,
+        label="markdown-format-read",
+        stdin=parsing_input,
+    )
+    ast = json.loads(parsed.stdout)
+    if literal_text:
+        ast["blocks"] = []
+        for paragraph in re.split(r"\n\s*\n", content.strip()):
+            inlines = []
+            for index, line in enumerate(paragraph.splitlines()):
+                if index:
+                    inlines.append({"t": "LineBreak"})
+                inlines.append({"t": "Str", "c": line})
+            ast["blocks"].append({"t": "Para", "c": inlines})
+    ast = _strip_presentational_spans(ast)
+    _strip_heading_attributes(ast)
+    ast = _strip_local_links(ast)
+    ast["blocks"] = _normalize_blocks(
+        ast.get("blocks", []),
+        ast=ast,
+        workspace=workspace,
+    )
+    rendered = _run(
+        ["pandoc", "-f", "json", "-t", MARKDOWN_WRITER, "--wrap=none"],
+        workspace=workspace,
+        label="markdown-format-write",
+        stdin=json.dumps(ast, ensure_ascii=False),
+    )
+    output = rendered.stdout
+    for marker, code in code_fences.items():
+        if marker not in output:
+            raise ValueError("Markdown formatting lost a fenced code block")
+        output, restored = re.subn(
+            r"(?m)^([ \t]*(?:>[ \t]*)*)" + re.escape(marker),
+            lambda match: match[1] + code.replace("\n", "\n" + match[1]),
+            output,
+        )
+        if restored != 1:
+            raise ValueError(
+                "Markdown formatting could not restore a fenced code block"
+            )
+    return output.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
 
 
 def render_markdown(
@@ -46,14 +161,18 @@ def render_markdown(
                 "Extracted document contains only images; OCR required for text content"
             )
         _rewrite_image_urls(ast, asset_urls)
-        ast["blocks"] = _normalize_blocks(
-            blocks, ast=ast, workspace=prepared.workspace
-        )
-        output = prepared.workspace / "final.md"
+        ast["blocks"] = _normalize_blocks(blocks, ast=ast, workspace=prepared.workspace)
+        output = prepared.workspace / "unformatted.md"
         _run(
             [
-                "pandoc", "-f", "json", "-t", "markdown",
-                "--wrap=preserve", "-o", str(output),
+                "pandoc",
+                "-f",
+                "json",
+                "-t",
+                MARKDOWN_WRITER,
+                "--wrap=preserve",
+                "-o",
+                str(output),
             ],
             workspace=prepared.workspace,
             label="pandoc-write",
@@ -66,7 +185,12 @@ def render_markdown(
             content,
             flags=re.DOTALL,
         )
-    content = content.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
+    (prepared.workspace / "unformatted.md").write_text(content, encoding="utf-8")
+    content = format_markdown(
+        content,
+        workspace=prepared.workspace,
+        literal_text=prepared.detected_format == "text",
+    )
     if not re.search(r"[\w\d]", content, flags=re.UNICODE):
         raise ValueError("Extracted Markdown has no textual content")
     final_path = prepared.workspace / "final.md"
@@ -92,9 +216,7 @@ def validate_rendered_markdown(
         quoted = re.escape(url)
         if not re.search(rf'<img\b[^>]*\bsrc=["\']{quoted}["\']', markdown):
             errors.append(f"asset {asset.ordinal} is not rendered as an HTML image")
-    markdown_images = re.findall(
-        r"(?m)(?<!\\)!\[[^\]\n]*\]\([^)\n]+\)", markdown
-    )
+    markdown_images = re.findall(r"(?m)(?<!\\)!\[[^\]\n]*\]\([^)\n]+\)", markdown)
     if markdown_images:
         errors.append(f"found {len(markdown_images)} Markdown image expressions")
     local_refs = [

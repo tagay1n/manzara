@@ -88,3 +88,83 @@ def test_new_extractor_version_resets_automatic_attempt_budget() -> None:
 
     assert "IS DISTINCT FROM EXCLUDED.extractor_version" in repository.engine.sql
     assert "THEN 1" in repository.engine.sql
+
+
+def test_deferred_pptx_is_checkpointed_without_replacing_content(test_database_url):
+    """Exercise actual queue SQL, rather than only inspecting its predicates."""
+    import uuid
+    from sqlalchemy import create_engine, text
+    from app.modules.library.non_pdf_types import EXTRACTOR_VERSION
+
+    schema = "pptx_checkpoint_" + uuid.uuid4().hex
+    admin = create_engine(test_database_url)
+    repository = None
+    try:
+        with admin.begin() as conn:
+            conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+            conn.execute(text(f'SET search_path TO "{schema}"'))
+            conn.execute(
+                text("""CREATE TABLE document (
+                md5 TEXT PRIMARY KEY,mime_type TEXT,ya_path TEXT,document_url TEXT,
+                primary_storage_size BIGINT,primary_storage_verified_at TIMESTAMPTZ,
+                content_url TEXT)""")
+            )
+            conn.execute(
+                text("""CREATE TABLE document_cleanup_queue (
+                scope TEXT,md5 TEXT,reason TEXT,status TEXT)""")
+            )
+            conn.execute(
+                text("""CREATE TABLE library_non_pdf_extraction_state (
+                md5 TEXT PRIMARY KEY,extractor_version TEXT,status TEXT,
+                attempt_count INTEGER,last_run_id BIGINT,detected_format TEXT,
+                error_text TEXT,generated_at TIMESTAMPTZ,created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ)""")
+            )
+            conn.execute(
+                text("""INSERT INTO document VALUES (
+                :md5,'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                '/deck.pptx','https://example/deck.pptx',100,CURRENT_TIMESTAMP,
+                'https://example/old.zip')"""),
+                {"md5": "a" * 32},
+            )
+        repository = NonPdfExtractionRepository(test_database_url, schema=schema)
+        candidate = repository.list_candidates(extractor_version=EXTRACTOR_VERSION)[0]
+        repository.start_attempt(
+            candidate.md5, extractor_version=EXTRACTOR_VERSION, run_id=71
+        )
+        repository.mark_outcome(
+            candidate.md5,
+            extractor_version=EXTRACTOR_VERSION,
+            detected_format="pptx",
+            status="deferred",
+            run_id=71,
+            error_text="pptx_slide_images: visible slides contain images",
+        )
+        assert repository.list_candidates(extractor_version=EXTRACTOR_VERSION) == []
+        assert (
+            len(
+                repository.list_candidates(
+                    extractor_version=EXTRACTOR_VERSION,
+                    retry_known_failures=True,
+                )
+            )
+            == 1
+        )
+        assert len(repository.list_candidates(extractor_version="next-recipe")) == 1
+        with repository.engine.connect() as conn:
+            assert (
+                conn.execute(text("SELECT content_url FROM document")).scalar()
+                == "https://example/old.zip"
+            )
+            assert (
+                conn.execute(
+                    text("SELECT error_text FROM library_non_pdf_extraction_state")
+                )
+                .scalar()
+                .startswith("pptx_slide_images")
+            )
+    finally:
+        if repository is not None:
+            repository.dispose()
+        with admin.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()

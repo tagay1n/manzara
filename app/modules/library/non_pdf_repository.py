@@ -137,9 +137,7 @@ class NonPdfExtractionRepository:
             candidates.append(candidate)
         return candidates
 
-    def start_attempt(
-        self, md5: str, *, extractor_version: str, run_id: int
-    ) -> None:
+    def start_attempt(self, md5: str, *, extractor_version: str, run_id: int) -> None:
         with self.engine.begin() as conn:
             conn.execute(
                 text(
@@ -271,7 +269,9 @@ class NonPdfExtractionRepository:
                 },
             )
             if int(state.rowcount or 0) != 1:
-                raise LookupError(f"Extraction state was not started for {candidate.md5}")
+                raise LookupError(
+                    f"Extraction state was not started for {candidate.md5}"
+                )
         return True
 
     @staticmethod

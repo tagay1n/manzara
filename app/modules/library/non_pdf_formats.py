@@ -14,7 +14,7 @@ _TEXT_SUFFIXES = {
 _HTML_SUFFIXES = {".html", ".htm"}
 
 _SUPPORTED_FORMATS = {
-    "doc", "docx", "rtf", "odt", "epub", "fb2", "html", "markdown", "text"
+    "doc", "docx", "rtf", "odt", "epub", "fb2", "html", "markdown", "text", "pptx"
 }
 
 
@@ -44,6 +44,8 @@ def detect_document_format(path: Path, *, mime_type: str = "", source_path: str 
             if "META-INF/container.xml" in names:
                 return "epub"
             if any(name.startswith("ppt/") for name in names):
+                if "ppt/presentation.xml" in names:
+                    return "pptx"
                 return "powerpoint"
             if any(name.startswith("xl/") for name in names):
                 return "spreadsheet"
@@ -74,6 +76,8 @@ def detect_document_format(path: Path, *, mime_type: str = "", source_path: str 
         return "html"
     if suffix == ".epub" or mime == "application/epub+zip":
         return "epub"
+    if suffix == ".pptx" or mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+        return "pptx"
     if suffix == ".docx" or "wordprocessingml" in mime:
         return "docx"
     if suffix == ".odt" or mime == "application/vnd.oasis.opendocument.text":

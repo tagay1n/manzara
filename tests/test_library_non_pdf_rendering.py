@@ -306,3 +306,107 @@ def test_publication_validation_rejects_an_unreferenced_asset(tmp_path: Path) ->
 
     report = json.loads((tmp_path / "validation.json").read_text())
     assert report["passed"] is False
+
+
+def test_all_formats_share_final_formatter_and_keep_local_outputs(tmp_path):
+    """Equivalent Markdown from different source formats gets identical style."""
+    import re
+
+    body = 'A — “quote” and $x^2$.\n\n- first\n- second\n\n```python\nx = "literal"\n```\n\n<table><tr><td>Cell</td></tr></table>\n\n<figure><img src="https://public.example/image.png"><figcaption>Caption</figcaption></figure>\n'
+    raw = "##   Heading\r\n\r\n\r\n" + body
+    ast = json.loads(
+        subprocess.run(
+            ["pandoc", "-f", "markdown-smart-markdown_in_html_blocks", "-t", "json"],
+            input="# Heading\n\n" + body,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+    )
+    results = []
+    for format_name in (
+        "markdown",
+        "docx",
+        "rtf",
+        "odt",
+        "epub",
+        "fb2",
+        "html",
+        "pptx",
+    ):
+        work = tmp_path / format_name
+        work.mkdir()
+        prepared = PreparedExtraction(
+            format_name,
+            work,
+            None if format_name == "markdown" else ast,
+            raw if format_name == "markdown" else None,
+            (),
+        )
+        md = render_markdown(prepared, asset_urls={})
+        results.append(md)
+        assert (work / "unformatted.md").is_file()
+        assert (work / "final.md").read_text() == md
+        assert "A — “quote” and $x" in md
+        assert 'x = "literal"' in md
+        assert '<figure><img src="https://public.example/image.png">' in md
+        assert "<table>" in md
+        assert not re.search(r"\n{3,}", md)
+    # Heading levels are content, so align them for the style comparison.
+    assert len({s.replace("## Heading", "# Heading") for s in results}) == 1
+
+
+def test_formatter_is_idempotent_and_preserves_rich_content(tmp_path):
+    from app.modules.library.non_pdf_rendering import format_markdown
+
+    raw = "# Heading\n\n|A|B|\n|-|-|\n|one|two|\n\nText — “quote”; $x^2$.\n\n```python\n# keep code spacing\nx  =  1\n\n\n```\n"
+    first = format_markdown(raw, workspace=tmp_path)
+    assert format_markdown(first, workspace=tmp_path) == first
+    assert "<table>" in first
+    assert "x  =  1\n\n\n" in first
+    assert "Text — “quote”; $x" in first
+
+
+def test_plain_text_uses_formatter_without_interpreting_markdown_syntax(tmp_path):
+    raw = "# Literal heading\n*literal stars* and $literal dollars$\n\nText — “quote”\n"
+    prepared = PreparedExtraction("text", tmp_path, None, raw, ())
+    md = render_markdown(prepared, asset_urls={})
+    parsed = json.loads(
+        subprocess.run(
+            ["pandoc", "-f", "markdown-smart", "-t", "json"],
+            input=md,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+    )
+    assert all(block["t"] == "Para" for block in parsed["blocks"])
+    assert "\\# Literal heading" in md
+    assert "\\*literal stars\\*" in md
+    assert "Text — “quote”" in md
+    assert (tmp_path / "unformatted.md").read_text() == raw
+
+
+@pytest.mark.parametrize("prefix", ["", "    ", "> "])
+def test_formatter_preserves_fences_in_lists_and_quotes(tmp_path, prefix):
+    from app.modules.library.non_pdf_rendering import format_markdown
+
+    opening = "- Item\n\n" if prefix == "    " else ""
+    raw = (
+        opening
+        + prefix
+        + "```python\n"
+        + prefix
+        + "x  =  1\n"
+        + prefix
+        + "\n"
+        + prefix
+        + "\n"
+        + prefix
+        + "```\n"
+    )
+    formatted = format_markdown(raw, workspace=tmp_path)
+    assert "x  =  1" in formatted
+    assert format_markdown(formatted, workspace=tmp_path) == formatted
+    assert formatted.count("```") == 2
+    assert "manzara-code-" not in formatted

@@ -152,6 +152,7 @@ class TaskLoggingMixin:
             payload["recipe_version"] = str(artifacts.get("recipe_version") or "")
             return payload
         if kind == "library.non_pdf_extraction_summary":
+            payload["workspace_path"] = str(artifacts.get("workspace_path") or "")
             for key in (
                 "processed",
                 "total",
@@ -167,6 +168,11 @@ class TaskLoggingMixin:
                 "reused_archives",
                 "checkpoint_raced",
                 "deleted_stale_images",
+                "pptx_inspected",
+                "pptx_extracted",
+                "pptx_image_decks",
+                "pptx_unsupported_visual_decks",
+                "pptx_empty_decks",
             ):
                 payload[key] = int(artifacts.get(key) or 0)
             payload["stopped"] = bool(artifacts.get("stopped"))

@@ -23,6 +23,7 @@ from app.modules.library.non_pdf_formats import (
     _decode_text,
     detect_document_format,
 )
+from app.modules.library.non_pdf_pptx import pptx_to_html
 from app.modules.library.non_pdf_media import _collect_assets, _collect_markdown_assets
 from app.modules.library.non_pdf_rendering import (
     render_markdown,
@@ -61,7 +62,7 @@ def prepare_extraction(
             "temporary_source",
             "Word owner/lock file is not a document",
         )
-    if detected in {"docx", "odt", "epub"}:
+    if detected in {"docx", "odt", "epub", "pptx"}:
         if not zipfile.is_zipfile(source):
             raise CorruptDocumentError(
                 "document_container",
@@ -132,6 +133,9 @@ def prepare_extraction(
             _validate_converted_docx(pandoc_source)
             legacy_conversion = "google_drive"
         pandoc_format = "docx"
+    elif detected == "pptx":
+        pandoc_source = pptx_to_html(source, workspace=workspace)
+        pandoc_format = "html"
     elif detected == "fb2":
         try:
             pandoc_source = _fb2_to_html(source, workspace=workspace)

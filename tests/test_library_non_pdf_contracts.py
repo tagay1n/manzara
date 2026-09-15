@@ -17,7 +17,7 @@ def test_task_catalog_includes_extract_non_pdf(tmp_path: Path) -> None:
     assert task["title"] == "Extract non-pdf"
     assert "run_extract_non_pdf" in task["command"]["value"]
     assert "--per-mime-limit" not in task["command"]["value"]
-    assert EXTRACTOR_VERSION == "nonpdf.v7"
+    assert EXTRACTOR_VERSION == "nonpdf.v9"
 
 
 def test_migration_allows_schema_without_external_document_catalog() -> None:

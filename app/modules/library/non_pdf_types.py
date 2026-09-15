@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-EXTRACTOR_VERSION = "nonpdf.v7"
+EXTRACTOR_VERSION = "nonpdf.v9"
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,15 @@ class UnsupportedDocumentFormat(ValueError):
     def __init__(self, detected_format: str) -> None:
         self.detected_format = str(detected_format or "unknown")
         super().__init__(f"Unsupported document format: {self.detected_format}")
+
+
+class DeferredDocumentExtraction(ValueError):
+    """An intact source needs an extraction capability intentionally deferred."""
+
+    def __init__(self, detected_format: str, reason: str) -> None:
+        self.detected_format = detected_format
+        self.reason = reason
+        super().__init__(f"{reason}: extraction deferred for {detected_format}")
 
 
 class ConverterCommandError(RuntimeError):

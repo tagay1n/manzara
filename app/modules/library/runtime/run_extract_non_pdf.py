@@ -60,6 +60,7 @@ from app.modules.library.non_pdf_repository import (  # noqa: E402
     NonPdfExtractionRepository,
 )
 from app.run_artifact_channel import emit_run_artifact  # noqa: E402
+from app.modules.library.non_pdf_types import DeferredDocumentExtraction  # noqa: E402
 from app.runtime_config import load_runtime_config  # noqa: E402
 from app.settings import load_settings  # noqa: E402
 
@@ -89,10 +90,44 @@ _DEFERRED_FAILURE_MARKERS = (
 
 
 def _failure_status(exc: Exception) -> str:
+    if isinstance(exc, DeferredDocumentExtraction):
+        return "deferred"
     message = str(exc)
     if any(marker in message for marker in _DEFERRED_FAILURE_MARKERS):
         return "deferred"
     return "failed"
+
+
+def _record_pptx_inspection(
+    db: Database,
+    *,
+    workspace: Path,
+    md5: str,
+    run_id: int,
+    counters: Counter[str],
+) -> None:
+    """Persist compact findings and link the retained, detailed inspection report."""
+    path = workspace / "pptx-inspection.json"
+    if not path.exists():
+        return
+    report = json.loads(path.read_text(encoding="utf-8"))
+    counters["pptx_inspected"] += int(report["inspection_complete"])
+    counters["pptx_image_decks"] += int(bool(report["image_slide_count"]))
+    counters["pptx_unsupported_visual_decks"] += int(
+        bool(report["unsupported_visual_slide_count"])
+    )
+    counters["pptx_empty_decks"] += int("pptx_no_text" in report["reasons"])
+    db.insert_event(
+        event_type="task.artifact",
+        task_id=TASK_ID,
+        run_id=run_id,
+        panel_id="library",
+        payload={
+            **{key: value for key, value in report.items() if key != "slides"},
+            "md5": md5,
+            "report_path": str(path),
+        },
+    )
 
 
 def _run_id() -> int:
@@ -131,7 +166,11 @@ def _matching_object(
         head = s3.head_object(Bucket=bucket, Key=key)
     except Exception as exc:  # noqa: BLE001
         response = getattr(exc, "response", {})
-        code = str(response.get("Error", {}).get("Code") or "") if isinstance(response, dict) else ""
+        code = (
+            str(response.get("Error", {}).get("Code") or "")
+            if isinstance(response, dict)
+            else ""
+        )
         if code in {"404", "NoSuchKey", "NotFound"}:
             return None
         raise
@@ -235,7 +274,9 @@ def _upload_assets(
             uploaded += 1
         else:
             reused += 1
-        url = object_url(storage.primary.endpoint_url, storage.content_images_bucket, key)
+        url = object_url(
+            storage.primary.endpoint_url, storage.content_images_bucket, key
+        )
         if not _public_object_available(url):
             raise RuntimeError(f"Embedded image is not publicly readable: {key}")
         urls[asset.source_ref] = url
@@ -291,8 +332,11 @@ def _delete_stale_assets(
 
 def _image_content_type(suffix: str) -> str:
     return {
-        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-        ".gif": "image/gif", ".webp": "image/webp",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
     }.get(str(suffix).lower(), "application/octet-stream")
 
 
@@ -318,12 +362,27 @@ def run_extraction(
     )
     total = len(candidates)
     counters: Counter[str] = Counter(
-        ready=0, failed=0, deferred=0, unsupported=0, corrupted=0,
-        corrupted_plan_reused=0, downloaded_sources=0,
-        reused_sources=0, uploaded_images=0, reused_images=0,
-        uploaded_archives=0, reused_archives=0, checkpoint_raced=0,
+        ready=0,
+        failed=0,
+        deferred=0,
+        unsupported=0,
+        corrupted=0,
+        corrupted_plan_reused=0,
+        downloaded_sources=0,
+        reused_sources=0,
+        uploaded_images=0,
+        reused_images=0,
+        uploaded_archives=0,
+        reused_archives=0,
+        checkpoint_raced=0,
         deleted_stale_images=0,
-        google_drive_converted=0, libreoffice_converted=0,
+        google_drive_converted=0,
+        libreoffice_converted=0,
+        pptx_inspected=0,
+        pptx_extracted=0,
+        pptx_image_decks=0,
+        pptx_unsupported_visual_decks=0,
+        pptx_empty_decks=0,
     )
     formats: Counter[str] = Counter()
     mime_outcomes: defaultdict[str, Counter[str]] = defaultdict(Counter)
@@ -346,12 +405,13 @@ def run_extraction(
         )
         doc_workspace = workspace / candidate.md5
         doc_workspace.mkdir(parents=True, exist_ok=True)
+        (doc_workspace / "pptx-inspection.json").unlink(missing_ok=True)
         detected: str | None = None
         try:
             extension = normalized_extension(candidate.source_path, candidate.mime_type)
-            cached_before = find_valid_cache_file(
-                storage.cache_path, candidate.md5
-            ) is not None
+            cached_before = (
+                find_valid_cache_file(storage.cache_path, candidate.md5) is not None
+            )
             source = download_cached_primary_document(
                 settings=storage,
                 s3=s3,
@@ -371,23 +431,46 @@ def run_extraction(
             if prepared.legacy_conversion:
                 counters[f"{prepared.legacy_conversion}_converted"] += 1
             detected = prepared.detected_format
+            if detected == "pptx":
+                _record_pptx_inspection(
+                    db,
+                    workspace=doc_workspace,
+                    md5=candidate.md5,
+                    run_id=run_id,
+                    counters=counters,
+                )
             formats[detected] += 1
             image_urls = _expected_asset_urls(
                 prepared, md5=candidate.md5, storage=storage
             )
             markdown = render_markdown(prepared, asset_urls=image_urls)
-            validate_rendered_markdown(
-                prepared, markdown, asset_urls=image_urls
-            )
+            validate_rendered_markdown(prepared, markdown, asset_urls=image_urls)
             uploaded_urls, uploaded_images, reused_images = _upload_assets(
                 prepared, md5=candidate.md5, s3=s3, storage=storage
             )
             if uploaded_urls != image_urls:
-                raise RuntimeError("Uploaded image URL manifest changed after validation")
+                raise RuntimeError(
+                    "Uploaded image URL manifest changed after validation"
+                )
             counters["uploaded_images"] += uploaded_images
             counters["reused_images"] += reused_images
             archive_path = _write_content_archive(
                 candidate.md5, markdown, doc_workspace / f"{candidate.md5}.zip"
+            )
+            db.insert_event(
+                event_type="task.artifact",
+                task_id=TASK_ID,
+                run_id=run_id,
+                panel_id="library",
+                payload={
+                    "kind": "library.non_pdf_local_content",
+                    "md5": candidate.md5,
+                    "detected_format": detected,
+                    "markdown_path": str(doc_workspace / "final.md"),
+                    "unformatted_path": str(doc_workspace / "unformatted.md"),
+                    "archive_path": str(archive_path),
+                    "validation_path": str(doc_workspace / "validation.json"),
+                },
             )
             key = f"{candidate.md5}.zip"
             head = _matching_object(
@@ -445,6 +528,7 @@ def run_extraction(
                     expected_keys=expected_image_keys,
                 )
                 counters["ready"] += 1
+                counters["pptx_extracted"] += int(detected == "pptx")
                 mime_outcomes[_mime_key(candidate.mime_type)]["ready"] += 1
                 print(
                     f"non-pdf extraction: ready md5={candidate.md5} "
@@ -493,6 +577,30 @@ def run_extraction(
                 f"cleanup_id={cleanup_id} detector={exc.detector} created={created}",
                 flush=True,
             )
+        except DeferredDocumentExtraction as exc:
+            detected = exc.detected_format
+            formats[detected] += 1
+            counters["deferred"] += 1
+            mime_outcomes[_mime_key(candidate.mime_type)]["deferred"] += 1
+            repository.mark_outcome(
+                candidate.md5,
+                extractor_version=EXTRACTOR_VERSION,
+                detected_format=detected,
+                status="deferred",
+                run_id=run_id,
+                error_text=str(exc),
+            )
+            _record_pptx_inspection(
+                db,
+                workspace=doc_workspace,
+                md5=candidate.md5,
+                run_id=run_id,
+                counters=counters,
+            )
+            print(
+                f"non-pdf extraction: deferred md5={candidate.md5} reason={exc.reason}",
+                flush=True,
+            )
         except UnsupportedDocumentFormat as exc:
             detected = exc.detected_format
             formats[detected] += 1
@@ -537,6 +645,7 @@ def run_extraction(
             break
     summary = {
         "kind": "library.non_pdf_extraction_summary",
+        "workspace_path": str(workspace),
         "extractor_version": EXTRACTOR_VERSION,
         "per_mime_limit": per_mime_limit,
         "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
@@ -583,7 +692,8 @@ def main() -> int:
         settings.database_url, schema=settings.database_schema
     )
     db = Database(
-        settings.database_url, schema=settings.database_schema,
+        settings.database_url,
+        schema=settings.database_schema,
         local_state_path=settings.local_state_path,
     )
     stop = {"requested": False}
