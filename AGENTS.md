@@ -1,11 +1,12 @@
 # AGENTS.md
 
-Last updated: 2026-09-11
+Last updated: 2026-09-16
 Owner: tans1q
 
 ## Owner communication preference
 
-- Communicate with the owner only in English. Never answer in Russian or use Russian for captions, status updates, generated UI copy, image text, or other owner-facing content unless the owner explicitly rescinds this instruction.
+- Communicate with the owner only in English unless the owner explicitly requests another language.
+- Never use Russian in any owner-facing content unless the owner explicitly asks for Russian in that request. This prohibition includes answers, recaps, summaries, captions, status updates, generated UI copy, image text, and automatic or compacted-conversation summaries.
 
 ## Scope and routing
 
