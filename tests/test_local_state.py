@@ -34,6 +34,9 @@ def test_local_state_is_private_wal_database_with_runtime_tables(tmp_path: Path)
         "gemini_keys",
         "gemini_quota_domain_model_state",
         "ai_item_checkpoints",
+        "attention_signals",
+        "attention_providers",
+        "attention_state",
     } <= tables
 
 
@@ -191,5 +194,46 @@ def test_operational_repositories_do_not_open_postgres(tmp_path: Path) -> None:
         ] == 1
         assert db.reset_all_gemini_exhaustion() == 1
         assert db.get_gemini_quota_domain_model_state("account:key", "model") is None
+    finally:
+        db.close()
+
+
+def test_attention_snapshots_are_local_and_provider_replacement_is_atomic(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state" / "runtime.sqlite3"
+    LocalStateStore(path).initialize()
+    db = Database(
+        "postgresql://unused/runtime",
+        connection_factory=lambda _url: (_ for _ in ()).throw(
+            AssertionError("attention cache must not connect to PostgreSQL")
+        ),
+        local_state_path=path,
+    )
+    try:
+        db.replace_attention_provider_signals(
+            "library",
+            [
+                {
+                    "signal_id": "library.previews",
+                    "task_id": "library.generate_book_previews",
+                    "panel_id": "library",
+                    "section_id": "overview",
+                    "kind": "count",
+                    "count": 12,
+                    "label": "Book previews available",
+                    "href": "/tasks/generate-book-previews",
+                }
+            ],
+            source_event_id=7,
+        )
+        assert db.get_attention_snapshot()["signals"][0]["count"] == 12
+
+        db.replace_attention_provider_signals(
+            "library", [], source_event_id=9
+        )
+        snapshot = db.get_attention_snapshot()
+        assert snapshot["signals"] == []
+        assert snapshot["providers"]["library"]["source_event_id"] == 9
     finally:
         db.close()

@@ -27,6 +27,7 @@
         <a href="${item.href}" class="rail-link ${active ? "active" : ""}"
            ${active ? 'aria-current="page"' : ""} title="${item.title}">
           <i data-lucide="${item.icon}"></i><span class="rail-label">${item.title}</span>
+          ${item.id === "library" ? '<span class="attention-dot" data-library-attention hidden aria-hidden="true"></span>' : ""}
         </a>
       `;
     }).join("");
@@ -137,7 +138,41 @@
       document.getElementById("stop-all-btn"),
       global.stop_all_state,
     );
+    renderAttention(global.attention || {});
     window.lucide?.createIcons?.();
+  }
+
+  function renderAttention(attention) {
+    const signals = Array.isArray(attention?.signals) ? attention.signals : [];
+    const librarySignals = signals.filter((signal) => (
+      String(signal?.task_id || "").startsWith("library.")
+      || String(signal?.href || "").startsWith("/library")
+      || String(signal?.panel_id || "") === "library"
+    ));
+    const railDot = document.querySelector("[data-library-attention]");
+    if (railDot) {
+      railDot.hidden = librarySignals.length === 0;
+      railDot.setAttribute("aria-hidden", librarySignals.length ? "false" : "true");
+      const libraryLink = railDot.closest?.("a");
+      if (libraryLink) {
+        const label = librarySignals.length ? "Library, needs attention" : "Library";
+        libraryLink.title = label;
+        libraryLink.setAttribute("aria-label", label);
+      }
+    }
+    document.querySelectorAll("[data-attention-section]").forEach((node) => {
+      const sectionId = String(node.dataset.attentionSection || "");
+      const matches = signals.filter((signal) => String(signal?.section_id || "") === sectionId);
+      const count = matches.reduce(
+        (total, signal) => total + (signal?.kind === "count" ? Number(signal?.count || 0) : 0),
+        0,
+      );
+      node.hidden = matches.length === 0;
+      node.textContent = count > 0 ? String(count) : "";
+      node.classList.toggle("attention-dot", count === 0);
+      node.classList.toggle("attention-count", count > 0);
+      node.title = matches.map((signal) => String(signal?.label || "Needs attention")).join("; ");
+    });
   }
 
   async function refreshSystemState() {
@@ -160,6 +195,7 @@
       || eventType === "task.completed"
       || eventType === "task.failed"
       || eventType === "task.stopped"
+      || eventType === "attention.updated"
       || eventType === "system.stop_all_requested"
     ) {
       queueSystemRefresh();
@@ -174,7 +210,17 @@
     LIBRARY_NAV_ITEMS.forEach((item) => {
       const link = document.createElement("a");
       link.href = item.href;
-      link.textContent = item.title;
+      const label = document.createElement("span");
+      label.textContent = item.title;
+      link.appendChild(label);
+      const badge = document.createElement("span");
+      badge.dataset.attentionSection = item.href === "/library"
+        ? "overview"
+        : item.href.split("/").filter(Boolean).at(-1);
+      badge.className = "attention-count";
+      badge.hidden = true;
+      badge.setAttribute("aria-label", `${item.title} attention`);
+      link.appendChild(badge);
       if (item.match.test(pathname)) {
         link.classList.add("active");
         link.setAttribute("aria-current", "page");

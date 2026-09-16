@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
-LOCAL_STATE_SCHEMA_VERSION = 2
+LOCAL_STATE_SCHEMA_VERSION = 3
 _FOR_UPDATE_RE = re.compile(r"\s+FOR\s+UPDATE\b", re.IGNORECASE)
 
 
@@ -63,7 +63,7 @@ class LocalStateStore:
         self.path.parent.chmod(0o700)
         with self.connect() as conn:
             version = int(conn.execute("PRAGMA user_version").scalar() or 0)
-            if version not in (0, 1, LOCAL_STATE_SCHEMA_VERSION):
+            if version not in (0, 1, 2, LOCAL_STATE_SCHEMA_VERSION):
                 raise RuntimeError(
                     f"Unsupported local runtime schema version {version}; "
                     f"expected {LOCAL_STATE_SCHEMA_VERSION}"
@@ -330,6 +330,25 @@ CREATE TABLE IF NOT EXISTS events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL,
     task_id TEXT, run_id INTEGER, panel_id TEXT, ts TEXT NOT NULL,
     payload_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS attention_signals (
+    signal_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL,
+    task_id TEXT, panel_id TEXT NOT NULL, section_id TEXT,
+    kind TEXT NOT NULL, item_count INTEGER, label TEXT NOT NULL, href TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'fresh', source_event_id INTEGER NOT NULL DEFAULT 0,
+    error_text TEXT, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attention_signals_provider
+ON attention_signals(provider_id);
+CREATE TABLE IF NOT EXISTS attention_providers (
+    provider_id TEXT PRIMARY KEY, status TEXT NOT NULL,
+    source_event_id INTEGER NOT NULL DEFAULT 0, error_text TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS attention_state (
+    state_id INTEGER PRIMARY KEY CHECK(state_id = 1),
+    consumed_event_id INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS conveyor_definitions (
     conveyor_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0,

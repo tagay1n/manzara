@@ -9,6 +9,7 @@ Start with the matching row; use symbol search within its owners before reading 
 | Application assembly and routes | `app/factory.py`, `app/app_setup.py`, focused `app/*_routes.py` | `tests/test_api_*.py`, `tests/test_wiring_contracts.py` |
 | Database repositories (durable PostgreSQL and local runtime) | `app/repositories/`, `app/local_state.py`; `app/db.py` is the facade | `tests/test_db.py`, `tests/test_local_state.py`, repository-specific tests |
 | Task runtime | `app/tasks.py`, `app/task_runtime/`, run artifact modules | task-runtime API tests, `tests/test_run_*.py` |
+| Proactive attention signals | `app/attention.py`, `app/attention_registry.py`, flow-owned providers | `tests/test_attention.py`, frontend shell/tasks tests |
 | Editable conveyor | `app/conveyor.py`, `app/repositories/conveyor.py`, `static/conveyor.js` | `tests/test_conveyor.py`, frontend tasks-page tests |
 | Document eligibility | `app/document_sync_filter.py` | `tests/test_document_sync_filter.py` |
 | Shared Gemini runtime | `app/gemini_*.py`; read `docs/gemini-runtime.md` | `tests/test_gemini_*.py` |

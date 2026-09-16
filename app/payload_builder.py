@@ -142,6 +142,7 @@ class PayloadBuilder:
         task: Mapping[str, Any],
         *,
         task_slug_map: Mapping[str, str],
+        attention_by_task: Optional[Mapping[str, Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         task_id = str(task["task_id"])
         payload = {
@@ -156,7 +157,49 @@ class PayloadBuilder:
         gemini_workers = self._gemini_workers_payload(task)
         if gemini_workers is not None:
             payload["gemini_workers"] = gemini_workers
+        attention = (attention_by_task or {}).get(task_id)
+        if attention:
+            payload["attention"] = dict(attention)
         return payload
+
+    def _attention_payload(self) -> Dict[str, Any]:
+        service = getattr(self._state(), "attention_service", None)
+        if service is None:
+            return {"has_attention": False, "signals": [], "providers": {}}
+        return service.snapshot()
+
+    @staticmethod
+    def _attention_by_task(snapshot: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
+        grouped: Dict[str, list[Mapping[str, Any]]] = {}
+        for signal in snapshot.get("signals") or []:
+            task_id = str(signal.get("task_id") or "")
+            if task_id:
+                grouped.setdefault(task_id, []).append(signal)
+        result: Dict[str, Dict[str, Any]] = {}
+        for task_id, signals in grouped.items():
+            count_signals = [
+                item for item in signals if item.get("kind") == "count"
+            ]
+            count = sum(
+                int(item.get("count") or 0)
+                for item in count_signals
+            )
+            dots = [item for item in signals if item.get("kind") == "dot"]
+            primary = (count_signals if count > 0 else dots or signals)[0]
+            labels = list(
+                dict.fromkeys(
+                    str(item.get("label") or "Needs attention")
+                    for item in (count_signals if count > 0 else dots or signals)
+                )
+            )
+            result[task_id] = {
+                "kind": "count" if count > 0 else "dot",
+                "count": count if count > 0 else None,
+                "stale": any(item.get("status") != "fresh" for item in signals),
+                "label": "; ".join(labels),
+                "href": str(primary.get("href") or f"/tasks/{task_id}"),
+            }
+        return result
 
     @staticmethod
     def _gemini_workers_payload(task: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
@@ -197,6 +240,7 @@ class PayloadBuilder:
         payload: Dict[str, Any] = {
             "active_tasks": len(runs),
             "stop_all_state": self._resolve_stop_all_state(runs),
+            "attention": self._attention_payload(),
         }
         if include_failed_runs:
             payload["failed_runs"] = len(
@@ -282,11 +326,16 @@ class PayloadBuilder:
         panel_titles = state.db.get_panel_title_map()
         tasks = state.db.list_tasks_with_latest_run()
         task_slug_map, _ = self._task_slug_maps(tasks)
+        attention_by_task = self._attention_by_task(self._attention_payload())
         tasks_by_panel: Dict[str, list[Dict[str, Any]]] = {}
         for task in tasks:
             panel_id = task["panel_id"]
             tasks_by_panel.setdefault(panel_id, []).append(
-                self._task_with_latest_run_payload(task, task_slug_map=task_slug_map)
+                self._task_with_latest_run_payload(
+                    task,
+                    task_slug_map=task_slug_map,
+                    attention_by_task=attention_by_task,
+                )
             )
 
         panel_payloads = self._build_panel_payloads(
@@ -325,6 +374,7 @@ class PayloadBuilder:
         panel_titles = state.db.get_panel_title_map()
         tasks = state.db.list_tasks_with_latest_run()
         task_slug_map, _ = self._task_slug_maps(tasks)
+        attention_by_task = self._attention_by_task(self._attention_payload())
         task_groups: Dict[str, Dict[str, Any]] = {}
         for task in tasks:
             panel_id = str(task["panel_id"])
@@ -336,7 +386,13 @@ class PayloadBuilder:
                     "tasks": [],
                 },
             )
-            group["tasks"].append(self._task_with_latest_run_payload(task, task_slug_map=task_slug_map))
+            group["tasks"].append(
+                self._task_with_latest_run_payload(
+                    task,
+                    task_slug_map=task_slug_map,
+                    attention_by_task=attention_by_task,
+                )
+            )
 
         active_runs = state.db.list_active_runs()
         return {
@@ -427,6 +483,9 @@ class PayloadBuilder:
             "icon_running": task["icon_running"],
             "cwd": task["cwd"],
         }
+        attention = self._attention_by_task(self._attention_payload()).get(task_id)
+        if attention:
+            task_payload["attention"] = attention
         workers_payload = self._gemini_workers_payload(task_for_workers)
         if workers_payload is not None:
             task_payload["gemini_workers"] = workers_payload

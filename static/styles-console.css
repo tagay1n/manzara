@@ -106,6 +106,54 @@ pre,
   transition: opacity 120ms ease, transform 160ms ease;
 }
 
+.attention-dot,
+.attention-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: #fff;
+  background: var(--red);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
+.attention-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.attention-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font: 700 10px/1 "Ubuntu Mono", monospace;
+}
+
+.attention-stale {
+  opacity: 0.62;
+}
+
+.rail-link .attention-dot {
+  position: absolute;
+  margin: 5px 0 0 25px;
+}
+
+.context-nav a,
+.task-list-title {
+  align-items: center;
+  gap: 6px;
+}
+
+.context-nav a {
+  display: inline-flex;
+}
+
+.task-list-title {
+  display: flex;
+}
+
 .rail-expanded .rail-brand,
 .rail-expanded .rail-link {
   width: 100%;

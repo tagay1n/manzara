@@ -65,11 +65,15 @@ function renderTaskItem(task) {
   const openAttributes = unread
     ? ` data-task-open-id="${window.ManzaraCore.escapeHtml(task.task_id)}" data-task-open-run-id="${window.ManzaraCore.escapeHtml(String(task.run?.run_id || ""))}"`
     : "";
+  const attention = task.attention || null;
+  const attentionBadge = attention
+    ? `<span class="${attention.kind === "count" ? "attention-count" : "attention-dot"}${attention.stale ? " attention-stale" : ""}" title="${window.ManzaraCore.escapeHtml(attention.label || "Needs attention")}" aria-label="${window.ManzaraCore.escapeHtml(attention.label || "Needs attention")}">${attention.kind === "count" ? window.ManzaraCore.escapeHtml(String(attention.count || 0)) : ""}</span>`
+    : "";
   return `
     <article class="task-list-item task-status-${window.ManzaraCore.cssName(status, "idle")}${unreadClass}"
       draggable="true" data-conveyor-task-id="${window.ManzaraCore.escapeHtml(task.task_id)}">
       <a href="/tasks/${taskPathKey}" class="task-list-link"${openAttributes}>
-        <div class="task-list-title">${window.ManzaraCore.escapeHtml(task.title)}</div>
+        <div class="task-list-title">${window.ManzaraCore.escapeHtml(task.title)}${attentionBadge}</div>
         <div class="task-list-meta">
           ${window.ManzaraCore.renderTaskStatusBadge(task.run || { status }, { compact: true })}
         </div>

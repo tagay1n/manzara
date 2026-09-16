@@ -110,6 +110,14 @@ test("shared shell has no legacy schedules navigation", () => {
   assert.doesNotMatch(source, /title:\s*["']Schedules["']/);
 });
 
+test("shared shell renders cached attention without a manual refresh control", () => {
+  const source = readFileSync(new URL("../../static/shell.js", import.meta.url), "utf-8");
+  assert.match(source, /data-library-attention/);
+  assert.match(source, /data-attention-section/);
+  assert.match(source, /attention\.updated/);
+  assert.doesNotMatch(source, /refresh notifications/i);
+});
+
 test("shared shell has no command palette", () => {
   const source = readFileSync(new URL("../../static/shell.js", import.meta.url), "utf-8");
   assert.doesNotMatch(source, /command-trigger|command-dialog|command-input/);
