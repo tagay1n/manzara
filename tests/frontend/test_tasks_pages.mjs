@@ -26,12 +26,6 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
             slug: "quick",
             title: "Quick",
             task_type: "scan",
-            attention: {
-              kind: "count",
-              count: 123,
-              stale: false,
-              label: "Documents available",
-            },
             gemini_workers: {
               default: 1,
               next_run: 2,
@@ -72,7 +66,6 @@ test("tasks page bootstraps, renders global state, and wires SSE refresh", async
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /3 \/ 12/);
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /25%/);
   assert.match(harness.elements.get("task-flow-grid").innerHTML, /data-task-toggle-id="maintenance.quick"/);
-  assert.match(harness.elements.get("task-flow-grid").innerHTML, /attention-count[^>]*title="Documents available"[^>]*>123</);
   assert.match(
     harness.elements.get("task-flow-grid").innerHTML,
     /<input[^>]+type="number"[^>]+min="1"[^>]+max="9"[^>]+value="2"/,

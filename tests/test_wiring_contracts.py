@@ -16,7 +16,6 @@ from app.modules.library.collection_tasks import collection_task_definitions
 from app.modules.library.tasks import library_task_definitions
 from app.modules.maintenance.config import MaintenanceSettings
 from app.modules.maintenance.tasks import maintenance_task_definitions
-from app.attention_registry import TASK_ATTENTION_POLICIES
 from app.registry import build_startup_seed_registry
 
 
@@ -34,19 +33,6 @@ def test_maintenance_task_definitions_include_guarded_sync_task(tmp_path) -> Non
     assert by_id["maintenance.sync_documents_s3"]["title"] == "Upload to Backblaze S3"
     assert "maintenance.dump_state" not in task_ids
     assert not any(task_id.startswith("library.collection_") for task_id in task_ids)
-
-
-def test_every_product_task_has_an_attention_policy(tmp_path) -> None:
-    settings = MaintenanceSettings(monocorpus_repo_path=tmp_path)
-    task_ids = {
-        item["task_id"]
-        for item in [
-            *maintenance_task_definitions(settings),
-            *library_task_definitions(app_root=tmp_path),
-            *collection_task_definitions(app_root=tmp_path),
-        ]
-    }
-    assert set(TASK_ATTENTION_POLICIES) == task_ids
 
 
 def test_collection_tasks_belong_to_dedicated_flow(tmp_path) -> None:

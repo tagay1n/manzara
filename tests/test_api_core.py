@@ -155,46 +155,7 @@ def test_system_state_returns_lightweight_global_payload(test_client) -> None:
     assert set(payload["global"]) >= {
         "active_tasks",
         "stop_all_state",
-        "attention",
     }
-
-
-def test_tasks_payload_attaches_cached_attention_without_postgres_recount(
-    test_client,
-) -> None:
-    client, main_app = test_client
-    main_app.state.db.replace_attention_provider_signals(
-        "test",
-        [
-            {
-                "signal_id": "test.previews",
-                "task_id": "library.generate_book_previews",
-                "panel_id": "library",
-                "section_id": "overview",
-                "kind": "count",
-                "count": 123,
-                "label": "Book previews available",
-                "href": "/tasks/library.generate_book_previews",
-            }
-        ],
-        source_event_id=1,
-    )
-
-    payload = client.get("/api/tasks").json()
-    task = next(
-        task
-        for flow in payload["flows"]
-        for task in flow["tasks"]
-        if task["task_id"] == "library.generate_book_previews"
-    )
-    assert task["attention"] == {
-        "kind": "count",
-        "count": 123,
-        "stale": False,
-        "label": "Book previews available",
-        "href": "/tasks/library.generate_book_previews",
-    }
-    assert payload["global"]["attention"]["has_attention"] is True
 
 
 def test_dashboard_lists_operational_tasks(test_client) -> None:

@@ -31,7 +31,6 @@
     "gemini.pause.ended",
     "gemini.blackout.overridden",
     "library.collections.updated",
-    "attention.updated",
     "system.stop_all_requested",
   ];
 
@@ -272,7 +271,6 @@
     "task.renamed",
     "flow.renamed",
     "library.collection_updated",
-    "attention.updated",
   ]);
 
   function eventNeedsReconciliation(payload) {

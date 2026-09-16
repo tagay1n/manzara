@@ -8,8 +8,6 @@ from typing import Any, Dict
 
 from fastapi import FastAPI
 
-from app.attention import AttentionService
-from app.attention_registry import build_attention_providers
 from app.bootstrap import shutdown_app, startup_app
 from app.constants import (
     PANEL_DEFS,
@@ -65,9 +63,6 @@ class AppState:
         self.runner = TaskRunner(self.db)
         self.shutting_down = False
         self.conveyor_service = ConveyorService(self.db, self.runner)
-        self.attention_service = AttentionService(
-            self.db, build_attention_providers(settings)
-        )
 
 
 settings = load_settings()

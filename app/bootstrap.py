@@ -41,17 +41,11 @@ def startup_app(
             panel_id=None,
             payload={"recovered_conveyor_runs": recovered_conveyors},
         )
-    attention = getattr(state, "attention_service", None)
-    if attention is not None:
-        attention.start()
 
 
 def shutdown_app(*, state: Any) -> None:
     """Mark runtime as shutting down and release database connections."""
     state.shutting_down = True
-    attention = getattr(state, "attention_service", None)
-    if attention is not None:
-        attention.shutdown()
     conveyor = getattr(state, "conveyor_service", None)
     if conveyor is not None:
         conveyor.shutdown()
