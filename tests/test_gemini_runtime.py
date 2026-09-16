@@ -55,6 +55,41 @@ def test_connection_reset_is_classified_as_transient_transport_failure() -> None
     assert db.events[-1][0] == "gemini.request.transport_error"
 
 
+def test_terminated_upload_session_is_transient_despite_http_400() -> None:
+    class Db:
+        def __init__(self) -> None:
+            self.errors = []
+            self.events = []
+
+        def mark_gemini_error(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            self.errors.append((args, kwargs))
+
+        def insert_event(self, event_type, **kwargs):  # noqa: ANN001
+            self.events.append((event_type, kwargs))
+
+    class UploadTerminatedError(Exception):
+        status_code = 400
+
+    db = Db()
+    manager = GeminiRuntimeManager(
+        db, task_id="library.metadata_evaluate", panel_id="metadata"
+    )
+    lease = GeminiLease("account", "key-id", "secret", "secr...cret", "model")
+
+    with pytest.raises(GeminiTransportError, match="upload session terminated"):
+        manager._handle_error(
+            lease=lease,
+            error=UploadTerminatedError("Upload has already been terminated."),
+            run_id=55,
+        )
+
+    assert db.errors
+    event_type, event = db.events[-1]
+    assert event_type == "gemini.request.transport_error"
+    assert event["payload"]["reason"] == "upload_session_terminated"
+    assert event["payload"]["status_code"] == 400
+
+
 class _QuotaError(Exception):
     status_code = 429
 

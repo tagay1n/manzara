@@ -260,6 +260,11 @@ def _is_transport_error(error: Exception) -> bool:
     return False
 
 
+def _is_terminated_upload_error(error: Exception) -> bool:
+    """Return whether Gemini invalidated a resumable upload session."""
+    return "upload has already been terminated" in str(error).casefold()
+
+
 class GeminiRuntimeManager:
     """Shared Gemini key allocator with DB-backed runtime state + SSE events."""
 
@@ -752,6 +757,32 @@ class GeminiRuntimeManager:
             raise GeminiQuotaExceededError(
                 f"Gemini quota unavailable for domain={quota_domain_id} "
                 f"model={lease.model_name}"
+            ) from error
+
+        if status_code == 400 and _is_terminated_upload_error(error):
+            self.db.mark_gemini_error(
+                lease.key_id,
+                lease.model_name,
+                now_ts=_iso_utc(now_utc),
+                error_text=error_text,
+                exhausted=False,
+            )
+            self._emit(
+                "gemini.request.transport_error",
+                {
+                    "account_id": lease.account_id,
+                    "key_id": lease.key_id,
+                    "masked_key": lease.masked_key,
+                    "model_name": lease.model_name,
+                    "status_code": status_code,
+                    "reason": "upload_session_terminated",
+                    "error": error_text,
+                },
+                run_id=run_id,
+            )
+            raise GeminiTransportError(
+                f"Gemini upload session terminated for model={lease.model_name}: "
+                f"{error_text}"
             ) from error
 
         if status_code == 400:

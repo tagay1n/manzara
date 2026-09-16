@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.gemini_model_pool import (
+    GeminiModelPoolItemRejectedError,
     GeminiModelPoolOperationalError,
     GeminiModelPoolUnavailableError,
     GeminiModelResponseError,
@@ -162,7 +163,7 @@ def test_request_rejection_stops_pool_without_recording_document_failure() -> No
     failures: list[tuple[str, str]] = []
 
     with pytest.raises(
-        GeminiModelPoolOperationalError, match="unsupported response schema"
+        GeminiModelPoolItemRejectedError, match="unsupported response schema"
     ) as exc_info:
         run_ordered_model_pool(
             manager=manager,

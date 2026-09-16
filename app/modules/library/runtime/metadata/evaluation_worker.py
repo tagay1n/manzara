@@ -8,6 +8,7 @@ from typing import Any
 
 from app.gemini_model_pool import (
     GeminiModelPoolExhaustedError,
+    GeminiModelPoolItemRejectedError,
     GeminiModelPoolOperationalError,
     GeminiModelPoolUnavailableError,
 )
@@ -120,6 +121,20 @@ class LibraryApplicabilityWorker:
                 if globally_exhausted:
                     self.stop_event.set()
                     return
+                continue
+            except GeminiModelPoolItemRejectedError as exc:
+                self.log(
+                    f"Gemini rejected evaluation item md5={doc.md5} error={exc}"
+                )
+                if not self.dry_run:
+                    mark_evaluation_terminal(
+                        doc.md5,
+                        models=self.models,
+                        run_id=self.run_id,
+                        reason=f"{type(exc).__name__}: {exc}",
+                    )
+                    if self.progress is not None:
+                        self.progress.record_completed("terminal")
                 continue
             except GeminiModelPoolOperationalError as exc:
                 self.log(

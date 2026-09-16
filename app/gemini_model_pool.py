@@ -51,6 +51,10 @@ class GeminiModelPoolOperationalError(GeminiModelPoolError):
         super().__init__(message)
 
 
+class GeminiModelPoolItemRejectedError(GeminiModelPoolOperationalError):
+    """Gemini rejected one item's request without invalidating the task runtime."""
+
+
 @dataclass(frozen=True)
 class _ParsedResponse(Generic[T]):
     value: T
@@ -167,7 +171,7 @@ def run_ordered_model_pool(
                     str(attempt.error), retryable=True
                 ) from attempt.error
             if attempt.outcome == "request_rejected":
-                raise GeminiModelPoolOperationalError(
+                raise GeminiModelPoolItemRejectedError(
                     str(attempt.error)
                 ) from attempt.error
             if attempt.outcome == "timeout":
@@ -214,7 +218,7 @@ def run_ordered_model_pool(
                     str(attempt.error), retryable=True
                 ) from attempt.error
             if attempt.outcome == "request_rejected":
-                raise GeminiModelPoolOperationalError(
+                raise GeminiModelPoolItemRejectedError(
                     str(attempt.error)
                 ) from attempt.error
             if attempt.outcome in {"timeout", "response"}:
@@ -241,6 +245,7 @@ def run_ordered_model_pool(
 
 __all__ = [
     "GeminiModelPoolExhaustedError",
+    "GeminiModelPoolItemRejectedError",
     "GeminiModelPoolOperationalError",
     "GeminiModelPoolResult",
     "GeminiModelPoolUnavailableError",
