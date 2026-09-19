@@ -1,7 +1,8 @@
-"""PostgreSQL queue and checkpoints for legacy PDF content migration."""
+"""PostgreSQL queues and checkpoints for legacy content migration."""
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -266,8 +267,11 @@ class ContentStorageMigrationRepository:
                     UPDATE document
                     SET content_url=:destination_url
                     WHERE md5=:md5
-                      AND content_url IS NOT DISTINCT FROM :expected_url
                       AND mime_type IS NOT DISTINCT FROM :expected_mime_type
+                      AND (
+                            content_url IS NOT DISTINCT FROM :expected_url
+                            OR content_url IS NOT DISTINCT FROM :destination_url
+                          )
                     """
                 ),
                 {
@@ -348,6 +352,150 @@ class ContentStorageMigrationRepository:
                     """
                 ),
                 {"md5": md5, "run_id": run_id, "error_text": error_text[:4000]},
+            )
+
+    def list_match_cleanup(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT source_key, md5, source_etag, source_size,
+                               image_keys_json, deleted_images_json,
+                               source_archive_deleted, status, error_text
+                        FROM maintenance_content_match_cleanup
+                        WHERE status IN ('matched', 'deleting', 'failed')
+                        ORDER BY source_key
+                        """
+                    )
+                ).mappings()
+            ]
+
+    def checkpoint_match(
+        self,
+        source_key: str,
+        *,
+        md5: str,
+        source_etag: str,
+        source_size: int,
+        image_keys: tuple[str, ...],
+        run_id: int,
+    ) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO maintenance_content_match_cleanup (
+                        source_key, md5, source_etag, source_size,
+                        image_keys_json, deleted_images_json, status,
+                        created_at, updated_at
+                    ) VALUES (
+                        :source_key, :md5, :source_etag, :source_size,
+                        CAST(:image_keys AS JSONB), '[]'::JSONB, 'matched',
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT (source_key) DO UPDATE SET
+                        md5=EXCLUDED.md5,
+                        source_etag=EXCLUDED.source_etag,
+                        source_size=EXCLUDED.source_size,
+                        image_keys_json=CASE
+                            WHEN maintenance_content_match_cleanup.status
+                                 IN ('deleting', 'completed')
+                            THEN maintenance_content_match_cleanup.image_keys_json
+                            ELSE EXCLUDED.image_keys_json
+                        END,
+                        status=CASE
+                            WHEN maintenance_content_match_cleanup.status='completed'
+                            THEN 'completed'
+                            ELSE 'matched'
+                        END,
+                        error_text=NULL,
+                        updated_at=CURRENT_TIMESTAMP
+                    """
+                ),
+                {
+                    "source_key": source_key,
+                    "md5": md5,
+                    "source_etag": source_etag,
+                    "source_size": source_size,
+                    "image_keys": json.dumps(list(image_keys)),
+                    "run_id": run_id,
+                },
+            )
+
+    def checkpoint_match_archive_deleted(self, source_key: str, *, run_id: int) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE maintenance_content_match_cleanup
+                    SET source_archive_deleted=TRUE, status='deleting',
+                        error_text=NULL,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE source_key=:source_key
+                    """
+                ),
+                {"source_key": source_key, "run_id": run_id},
+            )
+
+    def checkpoint_match_image_deleted(
+        self, source_key: str, image_key: str
+    ) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE maintenance_content_match_cleanup
+                    SET deleted_images_json = CASE
+                            WHEN deleted_images_json @> CAST(:image_json AS JSONB)
+                            THEN deleted_images_json
+                            ELSE deleted_images_json || CAST(:image_json AS JSONB)
+                        END,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE source_key=:source_key
+                    """
+                ),
+                {
+                    "source_key": source_key,
+                    "image_json": json.dumps([image_key]),
+                },
+            )
+
+    def complete_match(self, source_key: str, *, run_id: int) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE maintenance_content_match_cleanup
+                    SET status='completed', error_text=NULL,
+                        completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+                    WHERE source_key=:source_key
+                    """
+                ),
+                {"source_key": source_key, "run_id": run_id},
+            )
+
+    def fail_match(
+        self, source_key: str, *, run_id: int, error_text: str
+    ) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE maintenance_content_match_cleanup
+                    SET status=CASE WHEN source_archive_deleted
+                                    THEN 'deleting' ELSE 'failed' END,
+                        error_text=:error_text,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE source_key=:source_key
+                    """
+                ),
+                {
+                    "source_key": source_key,
+                    "run_id": run_id,
+                    "error_text": error_text[:4000],
+                },
             )
 
 

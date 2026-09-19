@@ -19,6 +19,7 @@ def test_content_migration_checkpoint_tables_are_created(prepared_test_schema) -
         tables = set(inspect(engine).get_table_names(schema=schema))
         assert "maintenance_content_migration" in tables
         assert "maintenance_content_migration_images" in tables
+        assert "maintenance_content_match_cleanup" in tables
         columns = {
             item["name"]
             for item in inspect(engine).get_columns(
@@ -26,6 +27,19 @@ def test_content_migration_checkpoint_tables_are_created(prepared_test_schema) -
             )
         }
         assert {"status", "source_archive_deleted", "error_text"} <= columns
+        match_columns = {
+            item["name"]
+            for item in inspect(engine).get_columns(
+                "maintenance_content_match_cleanup", schema=schema
+            )
+        }
+        assert {
+            "source_key",
+            "md5",
+            "image_keys_json",
+            "deleted_images_json",
+            "source_archive_deleted",
+        } <= match_columns
     finally:
         with engine.begin() as conn:
             conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))

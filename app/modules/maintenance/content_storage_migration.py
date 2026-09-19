@@ -1,4 +1,4 @@
-"""Sequential migration of legacy extracted PDF content to Backblaze."""
+"""Sequential migration of legacy content to Backblaze and matched cleanup."""
 
 from __future__ import annotations
 
@@ -46,6 +46,10 @@ class ContentMigrationCandidate:
 
 
 class _StopAfterCheckpoint(RuntimeError):
+    pass
+
+
+class _AlreadyMigrated(RuntimeError):
     pass
 
 
@@ -324,6 +328,274 @@ def _delete_and_confirm(s3: Any, bucket: str, key: str) -> None:
         raise RuntimeError(f"Source object remains after deletion: s3://{bucket}/{key}")
 
 
+def _list_object_keys(s3: Any, bucket: str) -> list[str]:
+    keys: list[str] = []
+    token: str | None = None
+    while True:
+        request: dict[str, Any] = {"Bucket": bucket, "MaxKeys": 1000}
+        if token:
+            request["ContinuationToken"] = token
+        page = s3.list_objects_v2(**request)
+        keys.extend(
+            str(item.get("Key") or "")
+            for item in page.get("Contents", [])
+            if str(item.get("Key") or "")
+        )
+        if not page.get("IsTruncated"):
+            return keys
+        next_token = str(page.get("NextContinuationToken") or "").strip()
+        if not next_token or next_token == token:
+            raise RuntimeError(f"Object listing did not advance for bucket {bucket}")
+        token = next_token
+
+
+def _match_md5_from_archive_key(key: str) -> str | None:
+    match = re.fullmatch(r"([0-9a-f]{32})\.zip", str(key or "").strip().lower())
+    return match.group(1) if match else None
+
+
+def _match_cleanup_row_values(
+    row: Mapping[str, Any],
+) -> tuple[tuple[str, ...], set[str]]:
+    raw_images = row.get("image_keys_json") or ()
+    raw_deleted = row.get("deleted_images_json") or ()
+    if isinstance(raw_images, str):
+        raw_images = json.loads(raw_images)
+    if isinstance(raw_deleted, str):
+        raw_deleted = json.loads(raw_deleted)
+    return (
+        tuple(str(value) for value in raw_images),
+        {str(value) for value in raw_deleted},
+    )
+
+
+def _run_matched_content_cleanup(
+    *,
+    repository: Any,
+    state_db: Any,
+    legacy_s3: Any,
+    primary_s3: Any,
+    settings: DocumentStorageSettings,
+    run_id: int,
+    should_stop: Callable[[], bool],
+) -> tuple[dict[str, int], bool]:
+    """Delete Yandex content whose exact archive key already exists in B2."""
+    counters: Counter[str] = Counter(
+        matched_archives=0,
+        unmatched_archives=0,
+        matched_archives_deleted=0,
+        matched_images_deleted=0,
+        match_failed=0,
+    )
+    stopped = bool(should_stop())
+    print("content match cleanup: starting bucket scan", flush=True)
+    state_db.publish_run_progress(
+        task_id="maintenance.migrate_pdf_content",
+        run_id=run_id,
+        panel_id="library",
+        progress={
+            "stage": "matching",
+            "current": 0,
+            "total": 0,
+            "percent": 0,
+            **{key: int(value) for key, value in counters.items()},
+        },
+    )
+
+    def publish_matching_progress(current: int, total: int) -> None:
+        state_db.publish_run_progress(
+            task_id="maintenance.migrate_pdf_content",
+            run_id=run_id,
+            panel_id="library",
+            progress={
+                "stage": "matching",
+                "current": current,
+                "total": total,
+                "percent": round(current / total * 100, 2) if total else 100,
+                **{key: int(value) for key, value in counters.items()},
+            },
+        )
+
+    image_keys = _list_object_keys(legacy_s3, settings.legacy_content_images_bucket)
+    primary_content_keys = set(
+        _list_object_keys(primary_s3, settings.content_bucket)
+    )
+    print(
+        "content match cleanup: inventories loaded "
+        f"yandex_images={len(image_keys)} "
+        f"backblaze_archives={len(primary_content_keys)}",
+        flush=True,
+    )
+    image_keys_by_md5: dict[str, tuple[str, ...]] = {}
+    for md5 in {
+        str(row.get("md5") or "").strip().lower()
+        for row in repository.list_match_cleanup()
+        if row.get("md5")
+    }:
+        image_keys_by_md5[md5] = tuple(key for key in image_keys if md5 in key.lower())
+
+    def process(row: Mapping[str, Any]) -> None:
+        source_key = str(row["source_key"])
+        md5 = str(row["md5"]).strip().lower()
+        destination = _head_or_none(
+            primary_s3, settings.content_bucket, source_key
+        )
+        if destination is None:
+            raise RuntimeError(f"Backblaze archive is missing: {source_key}")
+        stored_images, deleted_images = _match_cleanup_row_values(row)
+        if "image_keys_json" not in row or row.get("image_keys_json") is None:
+            stored_images = image_keys_by_md5.setdefault(
+                md5, tuple(key for key in image_keys if md5 in key.lower())
+            )
+            repository.checkpoint_match(
+                source_key,
+                md5=md5,
+                source_etag=str(row.get("source_etag") or ""),
+                source_size=int(row.get("source_size") or 0),
+                image_keys=stored_images,
+                run_id=run_id,
+            )
+        if not bool(row.get("source_archive_deleted")):
+            _delete_and_confirm(
+                legacy_s3, settings.legacy_content_bucket, source_key
+            )
+            repository.checkpoint_match_archive_deleted(source_key, run_id=run_id)
+            counters["matched_archives_deleted"] += 1
+        for image_key in stored_images:
+            if image_key in deleted_images:
+                continue
+            if should_stop():
+                raise _StopAfterCheckpoint()
+            _delete_and_confirm(
+                legacy_s3, settings.legacy_content_images_bucket, image_key
+            )
+            repository.checkpoint_match_image_deleted(source_key, image_key)
+            counters["matched_images_deleted"] += 1
+        repository.complete_match(source_key, run_id=run_id)
+
+    pending = repository.list_match_cleanup()
+    for row in pending:
+        if stopped or should_stop():
+            stopped = True
+            break
+        try:
+            process(row)
+            counters["matched_archives"] += 1
+            print(
+                f"content match cleanup: completed key={row['source_key']} "
+                f"md5={row['md5']}",
+                flush=True,
+            )
+        except _StopAfterCheckpoint:
+            stopped = True
+            break
+        except Exception as exc:  # noqa: BLE001 - isolate each matched object.
+            repository.fail_match(
+                str(row["source_key"]),
+                run_id=run_id,
+                error_text=f"{type(exc).__name__}: {exc}",
+            )
+            counters["match_failed"] += 1
+
+    if stopped:
+        return counters, True
+
+    source_keys = _list_object_keys(legacy_s3, settings.legacy_content_bucket)
+    total = len(source_keys)
+    state_db.publish_run_progress(
+        task_id="maintenance.migrate_pdf_content",
+        run_id=run_id,
+        panel_id="library",
+        progress={
+            "stage": "matching",
+            "current": 0,
+            "total": total,
+            "percent": 0 if total else 100,
+            **{key: int(value) for key, value in counters.items()},
+        },
+    )
+    for source_index, source_key in enumerate(source_keys, start=1):
+        if should_stop():
+            stopped = True
+            break
+        if source_key not in primary_content_keys:
+            counters["unmatched_archives"] += 1
+            publish_matching_progress(source_index, total)
+            continue
+        md5 = _match_md5_from_archive_key(source_key)
+        if md5 is None:
+            counters["match_failed"] += 1
+            publish_matching_progress(source_index, total)
+            continue
+        counters["matched_archives"] += 1
+        try:
+            source_head = _head_or_none(
+                legacy_s3, settings.legacy_content_bucket, source_key
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate each object.
+            counters["match_failed"] += 1
+            print(
+                f"content match cleanup: failed key={source_key} "
+                f"error={type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            publish_matching_progress(source_index, total)
+            continue
+        if source_head is None:
+            publish_matching_progress(source_index, total)
+            continue
+        row = {
+            "source_key": source_key,
+            "md5": md5,
+            "source_etag": _etag(source_head.get("ETag")),
+            "source_size": int(source_head.get("ContentLength") or 0),
+            "image_keys_json": list(
+                image_keys_by_md5.setdefault(
+                    md5, tuple(key for key in image_keys if md5 in key.lower())
+                )
+            ),
+            "deleted_images_json": [],
+            "source_archive_deleted": False,
+        }
+        try:
+            repository.checkpoint_match(
+                source_key,
+                md5=md5,
+                source_etag=row["source_etag"],
+                source_size=row["source_size"],
+                image_keys=tuple(row["image_keys_json"]),
+                run_id=run_id,
+            )
+            process(row)
+            print(
+                f"content match cleanup: completed key={source_key} md5={md5}",
+                flush=True,
+            )
+        except _StopAfterCheckpoint:
+            stopped = True
+            break
+        except Exception as exc:  # noqa: BLE001 - isolate each matched object.
+            repository.fail_match(
+                source_key,
+                run_id=run_id,
+                error_text=f"{type(exc).__name__}: {exc}",
+            )
+            counters["match_failed"] += 1
+        publish_matching_progress(source_index, total)
+    print(
+        "content match cleanup: finished "
+        + json.dumps(
+            {
+                **{key: int(value) for key, value in counters.items()},
+                "stopped": stopped,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    return counters, stopped
+
+
 def _verify_checkpointed_destinations(
     *,
     repository: Any,
@@ -429,6 +701,11 @@ def run_content_storage_migration(
         cutover_raced=0,
         missing_images_removed=0,
         documents_with_missing_images=0,
+        matched_archives=0,
+        unmatched_archives=0,
+        matched_archives_deleted=0,
+        matched_images_deleted=0,
+        match_failed=0,
     )
     processed = 0
     stopped = bool(should_stop())
@@ -451,7 +728,69 @@ def run_content_storage_migration(
                     legacy_s3, settings.legacy_content_bucket, archive_key
                 )
                 if source_head is None:
-                    raise FileNotFoundError(f"Missing source archive {archive_key}")
+                    destination_url = object_url(
+                        settings.primary.endpoint_url,
+                        settings.content_bucket,
+                        archive_key,
+                    )
+                    destination_head = _head_or_none(
+                        primary_s3, settings.content_bucket, archive_key
+                    )
+                    if destination_head is None:
+                        raise FileNotFoundError(
+                            f"Missing source archive {archive_key}"
+                        )
+                    if not public_check(destination_url):
+                        raise RuntimeError(
+                            f"Existing destination archive is not publicly readable: "
+                            f"{destination_url}"
+                        )
+                    repository.checkpoint_archive(
+                        candidate.md5,
+                        source_etag="",
+                        source_size=0,
+                        destination_url=destination_url,
+                        destination_etag=_etag(destination_head.get("ETag")),
+                        destination_size=int(
+                            destination_head.get("ContentLength") or 0
+                        ),
+                        sha256=str(
+                            (destination_head.get("Metadata") or {}).get("sha256")
+                            or ""
+                        ),
+                        markdown_member="",
+                        run_id=run_id,
+                    )
+                    if not repository.cutover(
+                        candidate.md5,
+                        expected_url=candidate.source_content_url,
+                        destination_url=destination_url,
+                        expected_mime_type=candidate.mime_type,
+                        run_id=run_id,
+                    ):
+                        counters["cutover_raced"] += 1
+                        raise RuntimeError(
+                            "Document changed before missing-source cutover"
+                        )
+                    image_keys = tuple(
+                        key
+                        for key in _list_object_keys(
+                            legacy_s3, settings.legacy_content_images_bucket
+                        )
+                        if candidate.md5 in key.lower()
+                    )
+                    repository.checkpoint_match(
+                        archive_key,
+                        md5=candidate.md5,
+                        source_etag="",
+                        source_size=0,
+                        image_keys=image_keys,
+                        run_id=run_id,
+                    )
+                    repository.checkpoint_match_archive_deleted(
+                        archive_key, run_id=run_id
+                    )
+                    raise _AlreadyMigrated()
                 source_size = int(source_head.get("ContentLength") or 0)
                 source_etag = _etag(source_head.get("ETag"))
                 source_path = doc_dir / "source.zip"
@@ -610,6 +949,13 @@ def run_content_storage_migration(
                 counters["missing_images_removed"] += removed_image_count
                 counters["documents_with_missing_images"] += 1
             print(f"content migration: completed md5={candidate.md5}", flush=True)
+        except _AlreadyMigrated:
+            repository.complete(candidate.md5, run_id=run_id)
+            counters["migrated"] += 1
+            print(
+                f"content migration: recovered already-migrated md5={candidate.md5}",
+                flush=True,
+            )
         except _StopAfterCheckpoint:
             stopped = True
             print(
@@ -640,6 +986,18 @@ def run_content_storage_migration(
         if stopped or should_stop():
             stopped = True
             break
+    if not stopped and not should_stop():
+        match_counters, match_stopped = _run_matched_content_cleanup(
+            repository=repository,
+            state_db=state_db,
+            legacy_s3=legacy_s3,
+            primary_s3=primary_s3,
+            settings=settings,
+            run_id=run_id,
+            should_stop=should_stop,
+        )
+        counters.update(match_counters)
+        stopped = match_stopped
     summary = {
         "kind": "maintenance.pdf_content_migration_summary",
         "pending_before": total,

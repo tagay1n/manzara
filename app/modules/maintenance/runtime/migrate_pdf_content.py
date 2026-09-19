@@ -1,4 +1,4 @@
-"""Task entry point for sequential legacy PDF content migration."""
+"""Task entry point for sequential legacy content migration and cleanup."""
 
 from __future__ import annotations
 
@@ -41,7 +41,10 @@ from app.settings import load_settings  # noqa: E402
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Move Yandex-backed PDF content to Backblaze sequentially."
+        description=(
+            "Move Yandex-backed PDF content to Backblaze and clean up matched "
+            "legacy content sequentially."
+        )
     )
     parser.add_argument("--md5", default=None)
     parser.add_argument("--limit", type=int, default=None)
