@@ -63,13 +63,12 @@ def test_metadata_tasks_belong_to_dedicated_catalog(tmp_path) -> None:
         for task_id in (
             "maintenance.monocorpus_meta_evaluate",
             "library.metadata_extract",
-            "library.metadata_validate",
         )
     } == {
         "maintenance.monocorpus_meta_evaluate": ("metadata", "Evaluate metadata"),
         "library.metadata_extract": ("metadata", "Extract metadata"),
-        "library.metadata_validate": ("metadata", "Validate metadata"),
     }
+    assert "library.metadata_validate" not in by_id
 
 
 def test_startup_seed_registry_contains_only_panels_and_tasks() -> None:

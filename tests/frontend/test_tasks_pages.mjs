@@ -167,9 +167,9 @@ test("tasks page pulses an unopened terminal run and records task navigation loc
             },
           },
           {
-            task_id: "library.metadata_validate",
-            slug: "validate-metadata",
-            title: "Validate metadata",
+            task_id: "maintenance.monocorpus_meta_evaluate",
+            slug: "evaluate-metadata",
+            title: "Evaluate metadata",
             task_type: "scan",
             run: {
               run_id: 89,

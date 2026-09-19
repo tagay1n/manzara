@@ -21,7 +21,6 @@ def test_existing_metadata_tasks_and_history_are_moved(prepared_test_schema) -> 
     task_rows = (
         ("maintenance.monocorpus_meta_evaluate", "library", "Monocorpus meta evaluate"),
         ("library.metadata_extract", "library", "Extract metadata"),
-        ("library.metadata_validate", "library", "Validate metadata"),
     )
     try:
         command.upgrade(config, "20260830_0042")
@@ -69,15 +68,13 @@ def test_existing_metadata_tasks_and_history_are_moved(prepared_test_schema) -> 
                     f'''SELECT task_id,panel_id,title FROM "{schema}".task_definitions
                     WHERE task_id IN (
                         'maintenance.monocorpus_meta_evaluate',
-                        'library.metadata_extract',
-                        'library.metadata_validate'
+                        'library.metadata_extract'
                     ) ORDER BY task_id'''
                 )
             ).all()
             assert {row[0]: (row[1], row[2]) for row in definitions} == {
                 "maintenance.monocorpus_meta_evaluate": ("metadata", "Evaluate metadata"),
                 "library.metadata_extract": ("metadata", "Extract metadata"),
-                "library.metadata_validate": ("metadata", "Validate metadata"),
             }
             for table in ("runs", "events"):
                 panels = conn.execute(
@@ -85,8 +82,7 @@ def test_existing_metadata_tasks_and_history_are_moved(prepared_test_schema) -> 
                         f'''SELECT DISTINCT panel_id FROM "{schema}".{table}
                         WHERE task_id IN (
                             'maintenance.monocorpus_meta_evaluate',
-                            'library.metadata_extract',
-                            'library.metadata_validate'
+                            'library.metadata_extract'
                         )'''
                     )
                 ).scalars().all()

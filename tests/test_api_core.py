@@ -179,16 +179,18 @@ def test_dashboard_lists_operational_tasks(test_client) -> None:
     library_task_ids = {task["task_id"] for task in library["tasks"]}
     assert "maintenance.monocorpus_meta_evaluate" not in library_task_ids
     assert "library.metadata_extract" not in library_task_ids
-    assert "library.metadata_validate" not in library_task_ids
     assert not any(task_id.startswith("library.collection_") for task_id in library_task_ids)
 
     metadata = panels["metadata"]
     metadata_task_ids = {task["task_id"] for task in metadata["tasks"]}
-    assert {
+    assert metadata_task_ids == {
         "maintenance.monocorpus_meta_evaluate",
         "library.metadata_extract",
-        "library.metadata_validate",
-    } <= metadata_task_ids
+    }
+    all_task_ids = {
+        task["task_id"] for panel in panels.values() for task in panel["tasks"]
+    }
+    assert "library.metadata_validate" not in all_task_ids
 
     collections = panels["collections"]
     collection_task_ids = {task["task_id"] for task in collections["tasks"]}

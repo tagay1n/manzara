@@ -9,7 +9,6 @@ from typing import Any
 LIBRARY_GENERATE_BOOK_PREVIEWS_TASK_ID = "library.generate_book_previews"
 LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID = "library.prepare_document_cleanup"
 LIBRARY_METADATA_EXTRACT_TASK_ID = "library.metadata_extract"
-LIBRARY_METADATA_VALIDATE_TASK_ID = "library.metadata_validate"
 LIBRARY_EXTRACT_NON_PDF_TASK_ID = "library.extract_non_pdf"
 LIBRARY_SITE_EXPORT_TASK_ID = "library.site_export"
 
@@ -32,20 +31,6 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
                 "mode": "shell",
                 "value": py_bootstrap
                 + '"$PY_BIN" -m app.modules.library.runtime.run_site_export',
-            },
-        },
-        {
-            "task_id": LIBRARY_METADATA_VALIDATE_TASK_ID,
-            "panel_id": "metadata",
-            "title": "Validate metadata",
-            "task_type": "scan",
-            "icon_idle": "ListChecks",
-            "icon_running": "Square",
-            "cwd": str(root),
-            "command": {
-                "mode": "shell",
-                "value": py_bootstrap
-                + '"$PY_BIN" -m app.modules.library.runtime.run_metadata_validate',
             },
         },
         {
@@ -111,7 +96,6 @@ __all__ = [
     "LIBRARY_GENERATE_BOOK_PREVIEWS_TASK_ID",
     "LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID",
     "LIBRARY_METADATA_EXTRACT_TASK_ID",
-    "LIBRARY_METADATA_VALIDATE_TASK_ID",
     "LIBRARY_EXTRACT_NON_PDF_TASK_ID",
     "LIBRARY_SITE_EXPORT_TASK_ID",
     "library_task_definitions",
