@@ -1,0 +1,17 @@
+# Local credentials and configuration
+/config.yaml
+/config.local.yaml
+/config copy.yaml
+
+# Virtual environments and generated Python state
+/.venv/
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.ruff_cache/
+
+# Local databases, logs, and task artifacts
+/data/*.db
+/data/*.db-*
+*.log
+/_artifacts/
