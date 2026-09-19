@@ -569,12 +569,17 @@ def run_content_storage_migration(
                         raise RuntimeError(
                             "Document changed before missing-source cutover"
                         )
-                    image_keys = tuple(
-                        key
-                        for key in _list_object_keys(
-                            legacy_s3, settings.legacy_content_images_bucket
+                    image_keys = (
+                        non_pdf_image_keys_by_md5.get(candidate.md5, ())
+                        if candidate_is_non_pdf
+                        else tuple(
+                            key
+                            for key in _list_object_keys(
+                                legacy_s3,
+                                settings.legacy_content_images_bucket,
+                            )
+                            if candidate.md5 in key.lower()
                         )
-                        if candidate.md5 in key.lower()
                     )
                     for image_key in image_keys:
                         if should_stop():
