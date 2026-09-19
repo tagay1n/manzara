@@ -42,8 +42,8 @@ from app.settings import load_settings  # noqa: E402
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Move Yandex-backed PDF content to Backblaze and clean up matched "
-            "legacy content sequentially."
+            "Move Yandex-backed PDF and non-PDF content to Backblaze "
+            "sequentially."
         )
     )
     parser.add_argument("--md5", default=None)

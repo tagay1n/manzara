@@ -64,6 +64,43 @@ class ContentStorageMigrationRepository:
             params["limit"] = int(limit)
         with self.engine.connect() as conn:
             rows = conn.execute(text(sql), params).mappings().all()
+        return self._candidates_from_rows(rows, kind="PDF")
+
+    def list_non_pdf_work(
+        self, *, md5: str | None = None, limit: int | None = None
+    ) -> list[ContentMigrationCandidate]:
+        """Return non-PDF documents whose content still lives in Yandex."""
+        sql = """
+            SELECT d.md5, d.mime_type,
+                   COALESCE(state.source_content_url, d.content_url) source_content_url,
+                   COALESCE(state.status, 'pending') status
+            FROM document d
+            LEFT JOIN maintenance_content_migration state ON state.md5 = d.md5
+            WHERE LOWER(BTRIM(COALESCE(d.mime_type, ''))) <> 'application/pdf'
+              AND (
+                    state.status IN ('copying', 'cutover', 'deleting', 'failed')
+                    OR (
+                        state.md5 IS NULL
+                        AND d.content_url LIKE :legacy_prefix
+                    )
+                  )
+              AND (:md5 IS NULL OR d.md5 = :md5)
+            ORDER BY d.md5
+        """
+        params: dict[str, Any] = {
+            "legacy_prefix": self.legacy_prefix + "%",
+            "md5": str(md5).strip().lower() if md5 else None,
+        }
+        if limit is not None:
+            sql += " LIMIT :limit"
+            params["limit"] = int(limit)
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(sql), params).mappings().all()
+        return self._candidates_from_rows(rows, kind="non-PDF")
+
+    def _candidates_from_rows(
+        self, rows: Any, *, kind: str
+    ) -> list[ContentMigrationCandidate]:
         result: list[ContentMigrationCandidate] = []
         for row in rows:
             digest = str(row.get("md5") or "").strip().lower()
@@ -71,7 +108,8 @@ class ContentStorageMigrationRepository:
             parsed = parse_object_url(source_url, self.legacy_endpoint)
             if parsed != (self.legacy_bucket, f"{digest}.zip"):
                 raise RuntimeError(
-                    f"PDF {digest} has unexpected legacy content URL: {source_url}"
+                    f"{kind} document {digest} has unexpected legacy content URL: "
+                    f"{source_url}"
                 )
             result.append(
                 ContentMigrationCandidate(
@@ -93,9 +131,7 @@ class ContentStorageMigrationRepository:
                         FROM document d
                         LEFT JOIN maintenance_content_migration state
                           ON state.md5 = d.md5
-                        WHERE LOWER(BTRIM(COALESCE(d.mime_type, '')))
-                                  = 'application/pdf'
-                          AND (
+                        WHERE (
                                 state.status IN (
                                     'copying', 'cutover', 'deleting', 'failed'
                                 )

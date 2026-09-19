@@ -218,6 +218,7 @@ class DeniedImageS3(FakeS3):
 class FakeRepository:
     def __init__(self, candidate: ContentMigrationCandidate) -> None:
         self.candidate = candidate
+        self.non_pdf_candidates: list[ContentMigrationCandidate] = []
         self.cutovers: list[tuple[str, str, str]] = []
         self.completed: list[str] = []
         self.failed: list[str] = []
@@ -228,6 +229,9 @@ class FakeRepository:
 
     def list_work(self, **_kwargs):
         return [] if self.completed else [self.candidate]
+
+    def list_non_pdf_work(self, **_kwargs):
+        return list(self.non_pdf_candidates)
 
     def count_pending(self):
         return 0 if self.completed else 1
@@ -518,26 +522,34 @@ def test_task_is_registered_in_library_catalog_without_worker_option(tmp_path: P
     assert "worker" not in task["command"]["value"]
 
 
-def test_matching_non_pdf_archive_deletes_yandex_archive_and_md5_images(
-    tmp_path: Path,
-) -> None:
+def test_non_pdf_candidates_are_loaded_from_postgres_and_migrated(tmp_path: Path) -> None:
+    pdf_md5 = "a" * 32
     md5 = "b" * 32
-    candidate = ContentMigrationCandidate(
-        "a" * 32,
+    source_url = f"https://storage.yandexcloud.net/ttcontent/{md5}.zip"
+    pdf = ContentMigrationCandidate(
+        pdf_md5,
         "application/pdf",
-        f"https://storage.yandexcloud.net/ttcontent/{'a' * 32}.zip",
+        f"https://storage.yandexcloud.net/ttcontent/{pdf_md5}.zip",
         "completed",
     )
-    repository = FakeRepository(candidate)
-    repository.completed.append(candidate.md5)
-    legacy = FakeS3(page_size=1)
+    non_pdf = ContentMigrationCandidate(md5, "application/msword", source_url, "pending")
+    repository = FakeRepository(pdf)
+    repository.completed.append(pdf.md5)
+    repository.non_pdf_candidates.append(non_pdf)
+    legacy = FakeS3()
     primary = FakeS3()
-    archive_key = f"{md5}.zip"
-    legacy.add("ttcontent", archive_key, b"non-pdf archive")
-    legacy.add("ttimg", f"{md5}-1.png", b"image-1")
-    legacy.add("ttimg", f"prefix/{md5}/2.jpg", b"image-2")
-    legacy.add("ttimg", f"{'c' * 32}-1.png", b"other")
-    primary.add("ttcontent", archive_key, b"backblaze archive")
+    image_key = f"prefix/{md5}/1.png"
+    unreferenced_image_key = f"unused/{md5}/2.jpg"
+    legacy.add("ttimg", image_key, b"image")
+    legacy.add("ttimg", unreferenced_image_key, b"unused-image")
+    legacy.add(
+        "ttcontent",
+        f"{md5}.zip",
+        _archive(
+            md5,
+            f"![image](https://storage.yandexcloud.net/ttimg/{image_key})",
+        ),
+    )
 
     state_db = FakeStateDb()
     result = run_content_storage_migration(
@@ -552,96 +564,18 @@ def test_matching_non_pdf_archive_deletes_yandex_archive_and_md5_images(
         public_check=lambda _url: True,
     )
 
-    assert result["matched_archives"] == 1
-    assert result["matched_archives_deleted"] == 1
-    assert result["matched_images_deleted"] == 2
-    assert ("ttcontent", archive_key) not in legacy.objects
-    assert ("ttimg", f"{md5}-1.png") not in legacy.objects
-    assert ("ttimg", f"prefix/{md5}/2.jpg") not in legacy.objects
-    assert ("ttimg", f"{'c' * 32}-1.png") in legacy.objects
-    assert any(
-        item.get("stage") == "matching"
-        and item.get("current") == 1
-        and item.get("total") == 1
-        and item.get("percent") == 100
-        for item in state_db.progress
-    )
-
-
-def test_unmatched_or_invalid_content_objects_remain_in_yandex(tmp_path: Path) -> None:
-    md5 = "d" * 32
-    candidate = ContentMigrationCandidate(
-        "a" * 32,
-        "application/pdf",
-        f"https://storage.yandexcloud.net/ttcontent/{'a' * 32}.zip",
-        "completed",
-    )
-    repository = FakeRepository(candidate)
-    repository.completed.append(candidate.md5)
-    legacy = FakeS3()
-    primary = FakeS3()
-    legacy.add("ttcontent", f"{md5}.zip", b"unmatched")
-    legacy.add("ttcontent", "not-an-md5-object", b"invalid")
-    legacy.add("ttimg", f"{md5}-1.png", b"image")
-
-    result = run_content_storage_migration(
-        repository=repository,
-        state_db=FakeStateDb(),
-        legacy_s3=legacy,
-        primary_s3=primary,
-        settings=_settings(tmp_path),
-        workspace=tmp_path / "run",
-        run_id=9,
-        should_stop=lambda: False,
-        public_check=lambda _url: True,
-    )
-
-    assert result["unmatched_archives"] == 2
-    assert ("ttcontent", f"{md5}.zip") in legacy.objects
-    assert ("ttcontent", "not-an-md5-object") in legacy.objects
-    assert ("ttimg", f"{md5}-1.png") in legacy.objects
-
-
-def test_matched_cleanup_resumes_after_archive_checkpoint(tmp_path: Path) -> None:
-    md5 = "e" * 32
-    candidate = ContentMigrationCandidate(
-        "a" * 32,
-        "application/pdf",
-        f"https://storage.yandexcloud.net/ttcontent/{'a' * 32}.zip",
-        "completed",
-    )
-    repository = FakeRepository(candidate)
-    repository.completed.append(candidate.md5)
-    repository.match_cleanup[f"{md5}.zip"] = {
-        "source_key": f"{md5}.zip",
-        "md5": md5,
-        "source_etag": "etag",
-        "source_size": 1,
-        "image_keys_json": [f"{md5}-1.png"],
-        "deleted_images_json": [],
-        "source_archive_deleted": True,
-        "status": "deleting",
-    }
-    legacy = FakeS3()
-    primary = FakeS3()
-    legacy.add("ttimg", f"{md5}-1.png", b"image")
-    primary.add("ttcontent", f"{md5}.zip", b"backblaze archive")
-
-    result = run_content_storage_migration(
-        repository=repository,
-        state_db=FakeStateDb(),
-        legacy_s3=legacy,
-        primary_s3=primary,
-        settings=_settings(tmp_path),
-        workspace=tmp_path / "run",
-        run_id=9,
-        should_stop=lambda: False,
-        public_check=lambda _url: True,
-    )
-
-    assert result["matched_images_deleted"] == 1
-    assert ("ttimg", f"{md5}-1.png") not in legacy.objects
-    assert repository.match_cleanup[f"{md5}.zip"]["status"] == "completed"
+    assert result["non_pdf_candidates"] == 1
+    assert result["non_pdf_migrated"] == 1
+    assert result["non_pdf_failed"] == 0
+    assert repository.completed == [pdf_md5, md5]
+    assert ("ttcontent", f"{md5}.zip") not in legacy.objects
+    assert ("ttimg", image_key) not in legacy.objects
+    assert ("ttimg", unreferenced_image_key) not in legacy.objects
+    assert any(item.get("stage") == "matching" for item in state_db.progress)
+    archive_body = primary.objects[("ttcontent", f"{md5}.zip")]["Body"]
+    with zipfile.ZipFile(BytesIO(archive_body)) as archive:
+        markdown = archive.read(f"{md5}.md").decode()
+    assert f"https://b2.test/ttimgs/{image_key}" in markdown
 
 
 def test_missing_yandex_archive_recovers_from_public_backblaze_archive(

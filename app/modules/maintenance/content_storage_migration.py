@@ -1,4 +1,4 @@
-"""Sequential migration of legacy content to Backblaze and matched cleanup."""
+"""Sequential migration of legacy PDF and non-PDF content to Backblaze."""
 
 from __future__ import annotations
 
@@ -119,7 +119,13 @@ def rewrite_content_archive(
         if parsed is None or parsed[0] != legacy_bucket:
             return None
         key = parsed[1]
-        if not key.startswith(f"{digest}-") or "/" in key or key in {"", ".", ".."}:
+        safe_key = PurePosixPath(key)
+        if (
+            digest not in key.lower()
+            or safe_key.is_absolute()
+            or ".." in safe_key.parts
+            or key in {"", ".", ".."}
+        ):
             raise ValueError(
                 f"Legacy image key does not belong to document {digest}: {key}"
             )
@@ -349,253 +355,6 @@ def _list_object_keys(s3: Any, bucket: str) -> list[str]:
         token = next_token
 
 
-def _match_md5_from_archive_key(key: str) -> str | None:
-    match = re.fullmatch(r"([0-9a-f]{32})\.zip", str(key or "").strip().lower())
-    return match.group(1) if match else None
-
-
-def _match_cleanup_row_values(
-    row: Mapping[str, Any],
-) -> tuple[tuple[str, ...], set[str]]:
-    raw_images = row.get("image_keys_json") or ()
-    raw_deleted = row.get("deleted_images_json") or ()
-    if isinstance(raw_images, str):
-        raw_images = json.loads(raw_images)
-    if isinstance(raw_deleted, str):
-        raw_deleted = json.loads(raw_deleted)
-    return (
-        tuple(str(value) for value in raw_images),
-        {str(value) for value in raw_deleted},
-    )
-
-
-def _run_matched_content_cleanup(
-    *,
-    repository: Any,
-    state_db: Any,
-    legacy_s3: Any,
-    primary_s3: Any,
-    settings: DocumentStorageSettings,
-    run_id: int,
-    should_stop: Callable[[], bool],
-) -> tuple[dict[str, int], bool]:
-    """Delete Yandex content whose exact archive key already exists in B2."""
-    counters: Counter[str] = Counter(
-        matched_archives=0,
-        unmatched_archives=0,
-        matched_archives_deleted=0,
-        matched_images_deleted=0,
-        match_failed=0,
-    )
-    stopped = bool(should_stop())
-    print("content match cleanup: starting bucket scan", flush=True)
-    state_db.publish_run_progress(
-        task_id="maintenance.migrate_pdf_content",
-        run_id=run_id,
-        panel_id="library",
-        progress={
-            "stage": "matching",
-            "current": 0,
-            "total": 0,
-            "percent": 0,
-            **{key: int(value) for key, value in counters.items()},
-        },
-    )
-
-    def publish_matching_progress(current: int, total: int) -> None:
-        state_db.publish_run_progress(
-            task_id="maintenance.migrate_pdf_content",
-            run_id=run_id,
-            panel_id="library",
-            progress={
-                "stage": "matching",
-                "current": current,
-                "total": total,
-                "percent": round(current / total * 100, 2) if total else 100,
-                **{key: int(value) for key, value in counters.items()},
-            },
-        )
-
-    image_keys = _list_object_keys(legacy_s3, settings.legacy_content_images_bucket)
-    primary_content_keys = set(
-        _list_object_keys(primary_s3, settings.content_bucket)
-    )
-    print(
-        "content match cleanup: inventories loaded "
-        f"yandex_images={len(image_keys)} "
-        f"backblaze_archives={len(primary_content_keys)}",
-        flush=True,
-    )
-    image_keys_by_md5: dict[str, tuple[str, ...]] = {}
-    for md5 in {
-        str(row.get("md5") or "").strip().lower()
-        for row in repository.list_match_cleanup()
-        if row.get("md5")
-    }:
-        image_keys_by_md5[md5] = tuple(key for key in image_keys if md5 in key.lower())
-
-    def process(row: Mapping[str, Any]) -> None:
-        source_key = str(row["source_key"])
-        md5 = str(row["md5"]).strip().lower()
-        destination = _head_or_none(
-            primary_s3, settings.content_bucket, source_key
-        )
-        if destination is None:
-            raise RuntimeError(f"Backblaze archive is missing: {source_key}")
-        stored_images, deleted_images = _match_cleanup_row_values(row)
-        if "image_keys_json" not in row or row.get("image_keys_json") is None:
-            stored_images = image_keys_by_md5.setdefault(
-                md5, tuple(key for key in image_keys if md5 in key.lower())
-            )
-            repository.checkpoint_match(
-                source_key,
-                md5=md5,
-                source_etag=str(row.get("source_etag") or ""),
-                source_size=int(row.get("source_size") or 0),
-                image_keys=stored_images,
-                run_id=run_id,
-            )
-        if not bool(row.get("source_archive_deleted")):
-            _delete_and_confirm(
-                legacy_s3, settings.legacy_content_bucket, source_key
-            )
-            repository.checkpoint_match_archive_deleted(source_key, run_id=run_id)
-            counters["matched_archives_deleted"] += 1
-        for image_key in stored_images:
-            if image_key in deleted_images:
-                continue
-            if should_stop():
-                raise _StopAfterCheckpoint()
-            _delete_and_confirm(
-                legacy_s3, settings.legacy_content_images_bucket, image_key
-            )
-            repository.checkpoint_match_image_deleted(source_key, image_key)
-            counters["matched_images_deleted"] += 1
-        repository.complete_match(source_key, run_id=run_id)
-
-    pending = repository.list_match_cleanup()
-    for row in pending:
-        if stopped or should_stop():
-            stopped = True
-            break
-        try:
-            process(row)
-            counters["matched_archives"] += 1
-            print(
-                f"content match cleanup: completed key={row['source_key']} "
-                f"md5={row['md5']}",
-                flush=True,
-            )
-        except _StopAfterCheckpoint:
-            stopped = True
-            break
-        except Exception as exc:  # noqa: BLE001 - isolate each matched object.
-            repository.fail_match(
-                str(row["source_key"]),
-                run_id=run_id,
-                error_text=f"{type(exc).__name__}: {exc}",
-            )
-            counters["match_failed"] += 1
-
-    if stopped:
-        return counters, True
-
-    source_keys = _list_object_keys(legacy_s3, settings.legacy_content_bucket)
-    total = len(source_keys)
-    state_db.publish_run_progress(
-        task_id="maintenance.migrate_pdf_content",
-        run_id=run_id,
-        panel_id="library",
-        progress={
-            "stage": "matching",
-            "current": 0,
-            "total": total,
-            "percent": 0 if total else 100,
-            **{key: int(value) for key, value in counters.items()},
-        },
-    )
-    for source_index, source_key in enumerate(source_keys, start=1):
-        if should_stop():
-            stopped = True
-            break
-        if source_key not in primary_content_keys:
-            counters["unmatched_archives"] += 1
-            publish_matching_progress(source_index, total)
-            continue
-        md5 = _match_md5_from_archive_key(source_key)
-        if md5 is None:
-            counters["match_failed"] += 1
-            publish_matching_progress(source_index, total)
-            continue
-        counters["matched_archives"] += 1
-        try:
-            source_head = _head_or_none(
-                legacy_s3, settings.legacy_content_bucket, source_key
-            )
-        except Exception as exc:  # noqa: BLE001 - isolate each object.
-            counters["match_failed"] += 1
-            print(
-                f"content match cleanup: failed key={source_key} "
-                f"error={type(exc).__name__}: {exc}",
-                flush=True,
-            )
-            publish_matching_progress(source_index, total)
-            continue
-        if source_head is None:
-            publish_matching_progress(source_index, total)
-            continue
-        row = {
-            "source_key": source_key,
-            "md5": md5,
-            "source_etag": _etag(source_head.get("ETag")),
-            "source_size": int(source_head.get("ContentLength") or 0),
-            "image_keys_json": list(
-                image_keys_by_md5.setdefault(
-                    md5, tuple(key for key in image_keys if md5 in key.lower())
-                )
-            ),
-            "deleted_images_json": [],
-            "source_archive_deleted": False,
-        }
-        try:
-            repository.checkpoint_match(
-                source_key,
-                md5=md5,
-                source_etag=row["source_etag"],
-                source_size=row["source_size"],
-                image_keys=tuple(row["image_keys_json"]),
-                run_id=run_id,
-            )
-            process(row)
-            print(
-                f"content match cleanup: completed key={source_key} md5={md5}",
-                flush=True,
-            )
-        except _StopAfterCheckpoint:
-            stopped = True
-            break
-        except Exception as exc:  # noqa: BLE001 - isolate each matched object.
-            repository.fail_match(
-                source_key,
-                run_id=run_id,
-                error_text=f"{type(exc).__name__}: {exc}",
-            )
-            counters["match_failed"] += 1
-        publish_matching_progress(source_index, total)
-    print(
-        "content match cleanup: finished "
-        + json.dumps(
-            {
-                **{key: int(value) for key, value in counters.items()},
-                "stopped": stopped,
-            },
-            sort_keys=True,
-        ),
-        flush=True,
-    )
-    return counters, stopped
-
-
 def _verify_checkpointed_destinations(
     *,
     repository: Any,
@@ -686,8 +445,20 @@ def run_content_storage_migration(
     md5: str | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    """Move candidates sequentially with PostgreSQL-backed recovery points."""
-    candidates = repository.list_work(md5=md5, limit=limit)
+    """Move PDF rows, then PostgreSQL-selected non-PDF rows, sequentially."""
+    pdf_candidates = repository.list_work(md5=md5, limit=limit)
+    remaining_limit = (
+        None if limit is None else max(int(limit) - len(pdf_candidates), 0)
+    )
+    non_pdf_candidates = repository.list_non_pdf_work(
+        md5=md5, limit=remaining_limit
+    )
+    print(
+        "content migration: phase 2 selected "
+        f"non_pdf_candidates={len(non_pdf_candidates)}",
+        flush=True,
+    )
+    candidates = pdf_candidates + non_pdf_candidates
     total = len(candidates)
     counters: Counter[str] = Counter(
         migrated=0,
@@ -701,19 +472,45 @@ def run_content_storage_migration(
         cutover_raced=0,
         missing_images_removed=0,
         documents_with_missing_images=0,
-        matched_archives=0,
-        unmatched_archives=0,
-        matched_archives_deleted=0,
-        matched_images_deleted=0,
-        match_failed=0,
+        non_pdf_candidates=len(non_pdf_candidates),
+        non_pdf_migrated=0,
+        non_pdf_failed=0,
     )
     processed = 0
     stopped = bool(should_stop())
     workspace.mkdir(parents=True, exist_ok=True)
+    non_pdf_image_keys_by_md5: dict[str, tuple[str, ...]] = {}
+    if non_pdf_candidates:
+        image_inventory = _list_object_keys(
+            legacy_s3, settings.legacy_content_images_bucket
+        )
+        non_pdf_md5s = {candidate.md5 for candidate in non_pdf_candidates}
+        non_pdf_image_keys_by_md5 = {
+            digest: tuple(key for key in image_inventory if digest in key.lower())
+            for digest in non_pdf_md5s
+        }
+        print(
+            "content migration: phase 2 image inventory loaded "
+            f"objects={len(image_inventory)}",
+            flush=True,
+        )
+    initial_stage = "migrating" if pdf_candidates else "matching"
     _publish_progress(
-        state_db, run_id, current=0, total=total, counters=counters, stage="migrating"
+        state_db,
+        run_id,
+        current=0,
+        total=total,
+        counters=counters,
+        stage=initial_stage,
     )
-    for candidate in candidates:
+    for candidate_index, candidate in enumerate(candidates):
+        candidate_is_non_pdf = candidate_index >= len(pdf_candidates)
+        if candidate_is_non_pdf:
+            print(
+                f"content migration: phase=non_pdf md5={candidate.md5} "
+                f"mime={candidate.mime_type}",
+                flush=True,
+            )
         if stopped or should_stop():
             stopped = True
             break
@@ -779,6 +576,14 @@ def run_content_storage_migration(
                         )
                         if candidate.md5 in key.lower()
                     )
+                    for image_key in image_keys:
+                        if should_stop():
+                            raise _StopAfterCheckpoint()
+                        _delete_and_confirm(
+                            legacy_s3,
+                            settings.legacy_content_images_bucket,
+                            image_key,
+                        )
                     repository.checkpoint_match(
                         archive_key,
                         md5=candidate.md5,
@@ -943,8 +748,23 @@ def run_content_storage_migration(
                 )
                 repository.checkpoint_image_deleted(candidate.md5, image_key)
                 counters["source_images_deleted"] += 1
+            if candidate_is_non_pdf:
+                checkpointed_image_keys = {str(image["image_key"]) for image in images}
+                for image_key in non_pdf_image_keys_by_md5.get(candidate.md5, ()):
+                    if image_key in checkpointed_image_keys:
+                        continue
+                    if should_stop():
+                        raise _StopAfterCheckpoint()
+                    _delete_and_confirm(
+                        legacy_s3,
+                        settings.legacy_content_images_bucket,
+                        image_key,
+                    )
+                    counters["source_images_deleted"] += 1
             repository.complete(candidate.md5, run_id=run_id)
             counters["migrated"] += 1
+            if candidate_is_non_pdf:
+                counters["non_pdf_migrated"] += 1
             if removed_image_count:
                 counters["missing_images_removed"] += removed_image_count
                 counters["documents_with_missing_images"] += 1
@@ -952,6 +772,8 @@ def run_content_storage_migration(
         except _AlreadyMigrated:
             repository.complete(candidate.md5, run_id=run_id)
             counters["migrated"] += 1
+            if candidate_is_non_pdf:
+                counters["non_pdf_migrated"] += 1
             print(
                 f"content migration: recovered already-migrated md5={candidate.md5}",
                 flush=True,
@@ -969,6 +791,8 @@ def run_content_storage_migration(
                 error_text=f"{type(exc).__name__}: {exc}",
             )
             counters["failed"] += 1
+            if candidate_is_non_pdf:
+                counters["non_pdf_failed"] += 1
             print(
                 f"content migration: failed md5={candidate.md5} "
                 f"error={type(exc).__name__}: {exc}",
@@ -981,23 +805,11 @@ def run_content_storage_migration(
             current=processed,
             total=total,
             counters=counters,
-            stage="migrating",
+            stage="matching" if candidate_is_non_pdf else "migrating",
         )
         if stopped or should_stop():
             stopped = True
             break
-    if not stopped and not should_stop():
-        match_counters, match_stopped = _run_matched_content_cleanup(
-            repository=repository,
-            state_db=state_db,
-            legacy_s3=legacy_s3,
-            primary_s3=primary_s3,
-            settings=settings,
-            run_id=run_id,
-            should_stop=should_stop,
-        )
-        counters.update(match_counters)
-        stopped = match_stopped
     summary = {
         "kind": "maintenance.pdf_content_migration_summary",
         "pending_before": total,
