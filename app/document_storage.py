@@ -14,8 +14,7 @@ from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote, unquote, urlparse
 
 
-DEFAULT_S3_ENDPOINT = "https://storage.yandexcloud.net"
-DEFAULT_S3_REGION = "ru-central1"
+DEFAULT_S3_ENDPOINT = "https://s3.eu-central-003.backblazeb2.com"
 DEFAULT_MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024
 DEFAULT_DOCUMENT_CACHE_MAX_BYTES = 50 * 1024**3
 DOCUMENT_CACHE_TARGET_NUMERATOR = 9
@@ -52,26 +51,21 @@ class S3ConnectionSettings:
 
 @dataclass(frozen=True)
 class DocumentStorageSettings:
-    """Resolved source, primary, and legacy document storage settings."""
+    """Resolved upstream source and primary document storage settings."""
 
     cache_path: Path
     source_path: str
     restricted_path: str
     filtered_out_path: str
     primary: S3ConnectionSettings
-    legacy: S3ConnectionSettings
     public_bucket: str
     private_bucket: str
-    legacy_public_bucket: str
-    legacy_private_bucket: str
     encryption_key: str
     cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES
     yadisk_token: str = ""
     preview_bucket: str = ""
     content_bucket: str = ""
     content_images_bucket: str = ""
-    legacy_content_bucket: str = ""
-    legacy_content_images_bucket: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,8 +103,6 @@ def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorag
     yandex = _mapping(payload.get("yandex"))
     disk = _mapping(yandex.get("disk"))
     disk_documents = _mapping(disk.get("documents"))
-    legacy_cloud = _mapping(yandex.get("cloud"))
-    legacy_buckets = _mapping(legacy_cloud.get("bucket"))
     primary_storage = _mapping(documents.get("primary_storage"))
     primary_buckets = _mapping(primary_storage.get("bucket"))
     return DocumentStorageSettings(
@@ -136,31 +128,11 @@ def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorag
                 primary_storage, "secret_access_key", "documents.primary_storage"
             ),
         ),
-        legacy=S3ConnectionSettings(
-            endpoint_url=str(
-                legacy_cloud.get("endpoint_url") or DEFAULT_S3_ENDPOINT
-            ).rstrip("/"),
-            region_name=str(
-                legacy_cloud.get("region_name") or DEFAULT_S3_REGION
-            ).strip(),
-            access_key_id=_required(
-                legacy_cloud, "aws_access_key_id", "yandex.cloud"
-            ),
-            secret_access_key=_required(
-                legacy_cloud, "aws_secret_access_key", "yandex.cloud"
-            ),
-        ),
         public_bucket=_required(
             primary_buckets, "public", "documents.primary_storage.bucket"
         ),
         private_bucket=_required(
             primary_buckets, "private", "documents.primary_storage.bucket"
-        ),
-        legacy_public_bucket=_required(
-            legacy_buckets, "document", "yandex.cloud.bucket"
-        ),
-        legacy_private_bucket=_required(
-            legacy_buckets, "document_private", "yandex.cloud.bucket"
         ),
         encryption_key=_required(payload, "encryption_key", "config"),
         cache_max_bytes=_cache_max_bytes(documents),
@@ -170,8 +142,6 @@ def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorag
         content_images_bucket=str(
             primary_buckets.get("content_images") or ""
         ).strip(),
-        legacy_content_bucket=str(legacy_buckets.get("content") or "").strip(),
-        legacy_content_images_bucket=str(legacy_buckets.get("image") or "").strip(),
     )
 
 

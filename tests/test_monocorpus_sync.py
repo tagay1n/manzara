@@ -6,8 +6,6 @@ import base64
 import hashlib
 from pathlib import Path
 
-from botocore.exceptions import ClientError
-
 from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
 from app.modules.maintenance.runtime.sync_monocorpus import (
     _apply_cleanup,
@@ -208,11 +206,8 @@ def test_cleanup_canceled_after_listing_is_not_executed() -> None:
         repository=repository,
         yadisk=yadisk,
         primary_s3=None,
-        legacy_s3=None,
         settings=None,
-        config={},
         run_id=3,
-        missing_legacy_buckets=set(),
     )
 
     assert (removed, outcome) == (0, "canceled")
@@ -262,11 +257,8 @@ def test_missing_cleanup_source_and_target_is_canceled_without_deleting_state() 
         repository=repository,
         yadisk=yadisk,
         primary_s3=_S3(),
-        legacy_s3=_S3(),
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {}}}},
         run_id=630,
-        missing_legacy_buckets=set(),
     )
 
     assert removed == 0
@@ -300,11 +292,8 @@ def test_cleanup_overwrites_target_and_removes_local_cache(tmp_path: Path) -> No
         repository=repository,
         yadisk=yadisk,
         primary_s3=_S3(),
-        legacy_s3=_S3(),
         settings=_settings(cache_path=tmp_path),
-        config={"yandex": {"cloud": {"bucket": {}}}},
         run_id=909,
-        missing_legacy_buckets=set(),
     )
 
     assert removed == 0
@@ -339,11 +328,8 @@ def test_document_delete_removes_managed_state_and_local_cache(tmp_path: Path) -
         repository=repository,
         yadisk=yadisk,
         primary_s3=_S3(),
-        legacy_s3=_S3(),
         settings=_settings(cache_path=tmp_path),
-        config={"yandex": {"cloud": {"bucket": {}}}},
         run_id=910,
-        missing_legacy_buckets=set(),
     )
 
     assert removed == 0
@@ -362,23 +348,6 @@ class _S3:
         raise AssertionError("catalog Sync must not upload document bytes")
 
 
-class _MissingBucketS3(_S3):
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    def list_objects_v2(self, *, Bucket, **_kwargs):  # noqa: N803, ANN001
-        self.calls.append(Bucket)
-        if Bucket == "missing-legacy":
-            raise ClientError(
-                {
-                    "Error": {"Code": "NoSuchBucket", "Message": "missing"},
-                    "ResponseMetadata": {"HTTPStatusCode": 404},
-                },
-                "ListObjectsV2",
-            )
-        return {"Contents": [], "IsTruncated": False}
-
-
 def _settings(*, cache_path: Path = Path("/tmp/cache")) -> DocumentStorageSettings:
     connection = S3ConnectionSettings("https://s3.test", "region", "key", "secret")
     return DocumentStorageSettings(
@@ -387,14 +356,11 @@ def _settings(*, cache_path: Path = Path("/tmp/cache")) -> DocumentStorageSettin
         restricted_path="/documents/private",
         filtered_out_path="/filtered",
         primary=connection,
-        legacy=connection,
         public_bucket="public",
         private_bucket="private",
         preview_bucket="ttpreviews",
         content_bucket="ttcontent-b2",
         content_images_bucket="ttcontent-images-b2",
-        legacy_public_bucket="legacy-public",
-        legacy_private_bucket="legacy-private",
         encryption_key=base64.urlsafe_b64encode(b"0" * 32).decode(),
     )
 
@@ -411,9 +377,7 @@ def test_duplicate_md5_is_queued_before_yandex_removal() -> None:
         db=_Db(),
         yadisk=yadisk,
         primary_s3=_S3(),
-        legacy_s3=_S3(),
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {}}}},
         run_id=3,
         should_stop=lambda: False,
     )
@@ -455,9 +419,7 @@ def test_restricted_and_existing_public_documents_are_not_published() -> None:
         db=_Db(),
         yadisk=yadisk,
         primary_s3=_S3(),
-        legacy_s3=_S3(),
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {}}}},
         run_id=4,
         should_stop=lambda: False,
     )
@@ -477,9 +439,7 @@ def test_filtered_resource_is_not_published_or_saved() -> None:
         db=_Db(),
         yadisk=yadisk,
         primary_s3=_S3(),
-        legacy_s3=_S3(),
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {}}}},
         run_id=5,
         should_stop=lambda: False,
     )
@@ -510,9 +470,7 @@ def test_zero_byte_resource_is_planned_and_moved_during_same_sync() -> None:
         db=_Db(),
         yadisk=yadisk,
         primary_s3=_S3(),
-        legacy_s3=_S3(),
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {}}}},
         run_id=6,
         should_stop=lambda: False,
     )
@@ -542,9 +500,7 @@ def test_multiple_zero_byte_resources_with_same_md5_move_independently() -> None
         db=_Db(),
         yadisk=yadisk,
         primary_s3=_S3(),
-        legacy_s3=_S3(),
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {}}}},
         run_id=7,
         should_stop=lambda: False,
     )
@@ -574,39 +530,13 @@ def test_missing_yandex_size_is_not_assumed_to_be_zero() -> None:
         db=_Db(),
         yadisk=yadisk,
         primary_s3=_S3(),
-        legacy_s3=_S3(),
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {}}}},
         run_id=8,
         should_stop=lambda: False,
     )
 
     assert result["corrupted_zero_detected"] == 0
     assert repository.documents[md5]["ya_path"] == "/documents/book.pdf"
-
-
-def test_cleanup_treats_absent_legacy_bucket_as_empty() -> None:
-    legacy_s3 = _MissingBucketS3()
-    missing_buckets: set[str] = set()
-    removed = _cleanup_managed_storage(
-        md5="a" * 32,
-        primary_s3=_S3(),
-        legacy_s3=legacy_s3,
-        settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {"document": "missing-legacy"}}}},
-        missing_legacy_buckets=missing_buckets,
-    )
-    removed += _cleanup_managed_storage(
-        md5="b" * 32,
-        primary_s3=_S3(),
-        legacy_s3=legacy_s3,
-        settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {"document": "missing-legacy"}}}},
-        missing_legacy_buckets=missing_buckets,
-    )
-
-    assert removed == 0
-    assert legacy_s3.calls.count("missing-legacy") == 1
 
 
 class _MutablePagedS3:
@@ -651,9 +581,7 @@ def test_cleanup_removes_all_backblaze_preview_objects_for_document() -> None:
     removed = _cleanup_managed_storage(
         md5=md5,
         primary_s3=primary_s3,
-        legacy_s3=_S3(),
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {}}}},
     )
 
     assert removed == 2
@@ -682,9 +610,7 @@ def test_cleanup_removes_backblaze_content_and_embedded_images() -> None:
     removed = _cleanup_managed_storage(
         md5=md5,
         primary_s3=primary_s3,
-        legacy_s3=_S3(),
         settings=_settings(),
-        config={"yandex": {"cloud": {"bucket": {}}}},
     )
 
     assert removed == 3

@@ -147,16 +147,8 @@ def settings(cache: Path) -> DocumentStorageSettings:
             access_key_id="primary-access",
             secret_access_key="primary-secret",
         ),
-        legacy=S3ConnectionSettings(
-            endpoint_url="https://s3.legacy.example.test",
-            region_name="legacy-region",
-            access_key_id="legacy-access",
-            secret_access_key="legacy-secret",
-        ),
         public_bucket="public-docs",
         private_bucket="private-docs",
-        legacy_public_bucket="legacy-public-docs",
-        legacy_private_bucket="legacy-private-docs",
         encryption_key=base64.urlsafe_b64encode(b"0" * 32).decode(),
     )
 

@@ -1,4 +1,4 @@
-"""Embedded and legacy media collection, conversion, and URL rewriting."""
+"""Embedded media collection, conversion, and URL rewriting."""
 
 from __future__ import annotations
 
@@ -8,9 +8,6 @@ import shutil
 from html import escape
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlsplit
-
-import requests
 from PIL import Image
 
 from app.modules.library.non_pdf_converters import _run
@@ -19,8 +16,6 @@ from app.modules.library.non_pdf_types import ExtractedAsset
 
 _BROWSER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
-_LEGACY_IMAGE_PREFIX = "https://storage.yandexcloud.net/ttimg/"
-
 _MARKDOWN_IMAGE_PATTERN = re.compile(
     r"(?m)(?<!\\)!\[(?P<alt>[^\]\n]*)\]\((?P<url>https?://[^)\n]+)\)"
 )
@@ -28,66 +23,6 @@ _MARKDOWN_IMAGE_PATTERN = re.compile(
 _HTML_IMAGE_SRC_PATTERN = re.compile(
     r"(?is)(?P<prefix><img\b[^>]*?\bsrc=[\"'])(?P<url>[^\"']+)(?P<suffix>[\"'])"
 )
-
-
-def _collect_markdown_assets(
-    markdown: str, *, workspace: Path
-) -> tuple[ExtractedAsset, ...]:
-    occurrences: list[tuple[int, str]] = []
-    for pattern in (_MARKDOWN_IMAGE_PATTERN, _HTML_IMAGE_SRC_PATTERN):
-        occurrences.extend(
-            (match.start(), str(match.group("url")))
-            for match in pattern.finditer(markdown)
-        )
-    refs: list[str] = []
-    for _position, ref in sorted(occurrences):
-        if ref.startswith(_LEGACY_IMAGE_PREFIX) and ref not in refs:
-            refs.append(ref)
-    return tuple(
-        ExtractedAsset(
-            ref,
-            _download_legacy_image(ref, workspace=workspace, ordinal=ordinal),
-            ordinal,
-        )
-        for ordinal, ref in enumerate(refs, start=1)
-    )
-
-
-def _download_legacy_image(url: str, *, workspace: Path, ordinal: int) -> Path:
-    if not url.startswith(_LEGACY_IMAGE_PREFIX):
-        raise ValueError(f"Legacy image URL is not allowed: {url}")
-    suffix = Path(urlsplit(url).path).suffix.lower()
-    if suffix not in _BROWSER_IMAGE_SUFFIXES:
-        suffix = ".bin"
-    destination = workspace / "remote-media" / f"{ordinal}{suffix}"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    size = 0
-    with requests.get(
-        url,
-        stream=True,
-        allow_redirects=False,
-        timeout=(10, 60),
-    ) as response:
-        response.raise_for_status()
-        content_type = str(response.headers.get("Content-Type") or "").lower()
-        if content_type and not (
-            content_type.startswith("image/")
-            or content_type == "application/octet-stream"
-        ):
-            raise ValueError(f"Legacy image has non-image content type: {content_type}")
-        with destination.open("wb") as stream:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if not chunk:
-                    continue
-                size += len(chunk)
-                if size > 50 * 1024 * 1024:
-                    raise ValueError("Legacy image exceeds the 50 MiB limit")
-                stream.write(chunk)
-    if size <= 0:
-        raise ValueError("Legacy image download is empty")
-    with Image.open(destination) as image:
-        image.verify()
-    return _browser_image(destination, workspace=workspace, ordinal=ordinal)
 
 
 def _rewrite_source_markdown_images(

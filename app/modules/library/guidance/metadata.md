@@ -2,7 +2,7 @@
 
 ## Extraction
 
-- Select only documents with a verified primary-storage checkpoint. Reuse the MD5-verified source cache; populate misses only from configured Backblaze storage. Do not add Yandex, legacy S3, or compatibility source branches.
+- Select only documents with a verified primary-storage checkpoint. Reuse the MD5-verified source cache; populate misses only from configured Backblaze storage.
 - Preserve the adopted prompt, Schema.org validation, PDF edge-page slicing, and normalization unless the owner requests a version change.
 - Read upstream source metadata only from `library_upstream_metadata`; include its prompt-safe fields as non-authoritative supporting evidence in both text and PDF extraction paths.
 - Persist content failures after every model attempt and resume with the next untried model. Quota, service, storage, and stop conditions are retryable, not terminal exclusions.

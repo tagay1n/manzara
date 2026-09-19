@@ -106,7 +106,7 @@ def build_structured_run_summary(
                     {"label": "Uploaded", "value": str(uploaded)},
                     {"label": "Recovered", "value": str(recovered)},
                     {"label": "From cache", "value": str(source_cache)},
-                    {"label": "From Yandex", "value": str(source_yandex)},
+                    {"label": "From Yandex Disk", "value": str(source_yandex)},
                     {"label": "Skipped", "value": str(skipped)},
                 ]
             )
@@ -383,46 +383,6 @@ def build_structured_run_summary(
             )
         else:
             summary["message"] = "Non-PDF extraction completed."
-        return summary
-
-    if task_id == "maintenance.migrate_pdf_content" and status == "completed":
-        data = artifacts if isinstance(artifacts, dict) else {}
-        migrated = int(data.get("migrated") or 0)
-        failed = int(data.get("failed") or 0)
-        images = int(data.get("images_uploaded") or 0) + int(
-            data.get("images_reused") or 0
-        )
-        missing_images = int(data.get("missing_images_removed") or 0)
-        repaired_documents = int(data.get("documents_with_missing_images") or 0)
-        pending = int(data.get("pending_after") or 0)
-        highlights = [
-            {"label": "Migrated", "value": str(migrated)},
-            {"label": "Images", "value": str(images)},
-        ]
-        if missing_images or repaired_documents:
-            highlights.extend(
-                [
-                    {"label": "Missing images removed", "value": str(missing_images)},
-                    {"label": "Documents repaired", "value": str(repaired_documents)},
-                ]
-            )
-        highlights.extend(
-            [
-                {"label": "Failed", "value": str(failed)},
-                {"label": "Pending", "value": str(pending)},
-            ]
-        )
-        summary["highlights"].extend(highlights)
-        summary["message"] = (
-            f"PDF content migration completed: {migrated} migrated, "
-            f"{failed} failed, {pending} pending."
-        )
-        if missing_images or repaired_documents:
-            summary["message"] = (
-                f"PDF content migration completed: {migrated} migrated, "
-                f"{failed} failed, {pending} pending; {missing_images} missing images "
-                f"removed from {repaired_documents} documents."
-            )
         return summary
 
     if task_id == "library.site_export" and status == "completed":

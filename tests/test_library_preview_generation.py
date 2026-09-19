@@ -455,17 +455,6 @@ def test_preview_settings_use_backblaze_for_source_and_target(
                     "filtered_out_path": "/documents/filtered-out",
                 },
             },
-            "cloud": {
-                "endpoint_url": "https://storage.yandexcloud.net",
-                "region_name": "ru-central1",
-                "aws_access_key_id": "yc-id",
-                "aws_secret_access_key": "yc-secret",
-                "bucket": {
-                    "document": "legacy-docs",
-                    "document_private": "legacy-private",
-                    "upstream_metadata": "upstream",
-                },
-            },
         },
         "encryption_key": "encryption-key",
     }

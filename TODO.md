@@ -20,7 +20,7 @@ The most troublesome supported formats are:
 | Legacy DOC / RTF | LibreOffice timeouts, mixed inline images, and image-only scans requiring OCR | Highest |
 | FB2 | Duplicated section titles and custom XML/image handling | High |
 | EPUB | Nested images, broken internal XHTML links, and leaked source attributes | High |
-| Markdown / text | Legacy Yandex images, external URL ownership, and CP866 mistaken for UTF-16 | Medium |
+| Markdown / text | External URL ownership and CP866 mistaken for UTF-16 | Medium |
 | DOCX / ODT | Generally extracted cleanly | Lower |
 
 Largest unsupported groups observed:

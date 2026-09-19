@@ -21,7 +21,6 @@ from app.document_storage import (
 from app.modules.library.runtime.dirs import Dirs
 from app.modules.library.runtime.integrations.s3 import (
     create_document_session,
-    create_session,
 )
 from app.modules.runtime_shared_utils import get_in_workdir
 
@@ -161,7 +160,7 @@ class EvaluationDocuments:
         self.excerpt_chars = excerpt_chars
         self.log = log
         self._document_s3client = None
-        self._yandex_s3client = None
+        self._content_s3client = None
 
     def load_content_excerpt(self, doc: EvaluationTask) -> str | None:
         if self.excerpt_chars <= 0:
@@ -169,10 +168,14 @@ class EvaluationDocuments:
         if not doc.content_url:
             return None
         try:
-            content_bucket = self.config["yandex"]["cloud"]["bucket"]["content"]
+            content_bucket = load_document_storage_settings(
+                self.config
+            ).content_bucket
+            if not content_bucket:
+                raise ValueError("Primary content bucket is not configured")
             local_zip = get_in_workdir(Dirs.CONTENT, file=f"{doc.md5}.zip")
             if not os.path.exists(local_zip):
-                s3client = self._get_yandex_s3client()
+                s3client = self._get_content_s3client()
                 local_zip, _, _ = _ensure_local_zip(
                     doc.md5, doc.content_url, s3client, content_bucket
                 )
@@ -224,7 +227,7 @@ class EvaluationDocuments:
             self._document_s3client = create_document_session(self.config)
         return self._document_s3client
 
-    def _get_yandex_s3client(self):
-        if self._yandex_s3client is None:
-            self._yandex_s3client = create_session(self.config)
-        return self._yandex_s3client
+    def _get_content_s3client(self):
+        if self._content_s3client is None:
+            self._content_s3client = create_document_session(self.config)
+        return self._content_s3client

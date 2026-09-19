@@ -45,7 +45,7 @@ class _Engine:
         return _Connection(self)
 
 
-def test_candidate_queue_backfills_legacy_content_and_versions_unsupported() -> None:
+def test_candidate_queue_prioritizes_existing_content_and_versions_unsupported() -> None:
     repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
     repository.engine = _Engine()
 

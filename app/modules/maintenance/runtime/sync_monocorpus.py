@@ -10,7 +10,6 @@ from typing import Any, Callable, Iterable, Mapping
 
 from boto3 import Session
 from botocore.config import Config
-from botocore.exceptions import ClientError
 from yadisk_client import YaDisk
 from yadisk.exceptions import PathExistsError, PathNotFoundError
 
@@ -209,67 +208,34 @@ def _delete_prefix(
     s3: Any,
     bucket: str,
     md5: str,
-    *,
-    missing_bucket_ok: bool = False,
-    missing_buckets: set[str] | None = None,
 ) -> int:
-    if missing_buckets is not None and bucket in missing_buckets:
-        return 0
     deleted = 0
     previous_keys: tuple[str, ...] = ()
-    try:
-        while True:
-            page = s3.list_objects_v2(Bucket=bucket, Prefix=md5, MaxKeys=1000)
-            keys = tuple(
-                str(item.get("Key") or "")
-                for item in page.get("Contents", [])
-                if str(item.get("Key") or "")
+    while True:
+        page = s3.list_objects_v2(Bucket=bucket, Prefix=md5, MaxKeys=1000)
+        keys = tuple(
+            str(item.get("Key") or "")
+            for item in page.get("Contents", [])
+            if str(item.get("Key") or "")
+        )
+        if not keys:
+            return deleted
+        if keys == previous_keys:
+            raise RuntimeError(
+                f"Managed S3 objects did not disappear after deletion: "
+                f"s3://{bucket}/{md5}*"
             )
-            if not keys:
-                return deleted
-            if keys == previous_keys:
-                raise RuntimeError(
-                    f"Managed S3 objects did not disappear after deletion: "
-                    f"s3://{bucket}/{md5}*"
-                )
-            previous_keys = keys
-            for key in keys:
-                s3.delete_object(Bucket=bucket, Key=key)
-                deleted += 1
-    except ClientError as exc:
-        code = str(exc.response.get("Error", {}).get("Code") or "")
-        if missing_bucket_ok and code == "NoSuchBucket":
-            if missing_buckets is not None:
-                missing_buckets.add(bucket)
-            print(
-                f"monocorpus sync: warning legacy bucket missing; cleanup skipped bucket={bucket}",
-                flush=True,
-            )
-            return 0
-        raise
-
-
-def _managed_legacy_buckets(config: Mapping[str, Any]) -> list[str]:
-    yandex = config.get("yandex") if isinstance(config.get("yandex"), Mapping) else {}
-    cloud = yandex.get("cloud") if isinstance(yandex.get("cloud"), Mapping) else {}
-    buckets = cloud.get("bucket") if isinstance(cloud.get("bucket"), Mapping) else {}
-    return sorted(
-        {
-            str(buckets.get(key) or "").strip()
-            for key in ("document", "document_private")
-            if str(buckets.get(key) or "").strip()
-        }
-    )
+        previous_keys = keys
+        for key in keys:
+            s3.delete_object(Bucket=bucket, Key=key)
+            deleted += 1
 
 
 def _cleanup_managed_storage(
     *,
     md5: str,
     primary_s3: Any,
-    legacy_s3: Any,
     settings: DocumentStorageSettings,
-    config: Mapping[str, Any],
-    missing_legacy_buckets: set[str] | None = None,
 ) -> int:
     deleted = 0
     for bucket in {settings.public_bucket, settings.private_bucket}:
@@ -284,14 +250,6 @@ def _cleanup_managed_storage(
         deleted += _delete_prefix(
             primary_s3, settings.content_images_bucket, f"{md5}/"
         )
-    for bucket in _managed_legacy_buckets(config):
-        deleted += _delete_prefix(
-            legacy_s3,
-            bucket,
-            md5,
-            missing_bucket_ok=True,
-            missing_buckets=missing_legacy_buckets,
-        )
     return deleted
 
 
@@ -301,11 +259,8 @@ def _apply_cleanup(
     repository: MonocorpusSyncRepository,
     yadisk: Any,
     primary_s3: Any,
-    legacy_s3: Any,
     settings: DocumentStorageSettings,
-    config: Mapping[str, Any],
     run_id: int,
-    missing_legacy_buckets: set[str],
 ) -> tuple[int, str]:
     cleanup_id = int(item["cleanup_id"])
     try:
@@ -360,10 +315,7 @@ def _apply_cleanup(
             removed_objects = _cleanup_managed_storage(
                 md5=str(item["md5"]),
                 primary_s3=primary_s3,
-                legacy_s3=legacy_s3,
                 settings=settings,
-                config=config,
-                missing_legacy_buckets=missing_legacy_buckets,
             )
             print(
                 f"monocorpus sync: storage cleanup complete cleanup_id={cleanup_id} "
@@ -428,9 +380,7 @@ def run_monocorpus_sync(
     db: Any,
     yadisk: Any,
     primary_s3: Any,
-    legacy_s3: Any,
     settings: DocumentStorageSettings,
-    config: Mapping[str, Any],
     run_id: int,
     should_stop: Callable[[], bool],
 ) -> dict[str, Any]:
@@ -452,7 +402,6 @@ def run_monocorpus_sync(
         "objects_removed": 0,
         "failed": 0,
     }
-    missing_legacy_buckets: set[str] = set()
     print(f"monocorpus sync: start run_id={run_id}", flush=True)
     cleanup_items = repository.list_active_cleanup()
     cleanup_total = len(cleanup_items)
@@ -475,11 +424,8 @@ def run_monocorpus_sync(
             repository=repository,
             yadisk=yadisk,
             primary_s3=primary_s3,
-            legacy_s3=legacy_s3,
             settings=settings,
-            config=config,
             run_id=run_id,
-            missing_legacy_buckets=missing_legacy_buckets,
         )
         counters["objects_removed"] += removed
         counters[f"cleanups_{outcome}"] += 1
@@ -535,11 +481,8 @@ def run_monocorpus_sync(
                 repository=repository,
                 yadisk=yadisk,
                 primary_s3=primary_s3,
-                legacy_s3=legacy_s3,
                 settings=settings,
-                config=config,
                 run_id=run_id,
-                missing_legacy_buckets=missing_legacy_buckets,
             )
             counters["objects_removed"] += removed
             counters[f"cleanups_{cleanup_outcome}"] += 1
@@ -601,11 +544,8 @@ def run_monocorpus_sync(
                     repository=repository,
                     yadisk=yadisk,
                     primary_s3=primary_s3,
-                    legacy_s3=legacy_s3,
                     settings=settings,
-                    config=config,
                     run_id=run_id,
-                    missing_legacy_buckets=missing_legacy_buckets,
                 )
                 counters[f"cleanups_{outcome}"] += 1
                 counters["failed"] += int(outcome == "failed")
@@ -668,8 +608,7 @@ def run_monocorpus_sync(
 def main() -> int:
     run_id = _run_id()
     app_settings = load_settings()
-    config = load_runtime_config()
-    settings = load_document_storage_settings(config)
+    settings = load_document_storage_settings(load_runtime_config())
     repository = MonocorpusSyncRepository(
         app_settings.database_url, schema=app_settings.database_schema
     )
@@ -681,7 +620,6 @@ def main() -> int:
     if yadisk.check_token() is False:
         raise RuntimeError("Yandex Disk token validation failed")
     primary_s3 = _s3_client(settings.primary)
-    legacy_s3 = _s3_client(settings.legacy)
     stop_state = {"requested": False}
 
     def request_stop(_signum: int, _frame: Any) -> None:
@@ -695,9 +633,7 @@ def main() -> int:
             db=db,
             yadisk=yadisk,
             primary_s3=primary_s3,
-            legacy_s3=legacy_s3,
             settings=settings,
-            config=config,
             run_id=run_id,
             should_stop=lambda: bool(stop_state["requested"]),
         )

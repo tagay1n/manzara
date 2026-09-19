@@ -43,7 +43,7 @@ documents:
 
 encryption_key: "<REDACTED>"
 
-# Upstream document services (Yandex Cloud is still used for legacy data)
+# Upstream document service
 yandex:
   disk:
     oauth_token: "<REDACTED>"
@@ -51,17 +51,6 @@ yandex:
       source_path: /neurotatarlar/kitaplar/monocorpus
       restricted_path: /neurotatarlar/kitaplar/monocorpus/__ТАРАТМАСКА_DONT_SHARE_НЕ_ДЕЛИТЬСЯ
       filtered_out_path: /neurotatarlar/kitaplar/filtered_out
-  cloud:
-    endpoint_url: https://storage.yandexcloud.net
-    region_name: ru-central1
-    aws_access_key_id: "<REDACTED>"
-    aws_secret_access_key: "<REDACTED>"
-    bucket:
-      document: ttdoc
-      document_private: ttdoc-private
-      content: ttcontent
-      image: ttimg
-
 # Supported language codes for metadata evaluation
 sup_langs:
   tt:

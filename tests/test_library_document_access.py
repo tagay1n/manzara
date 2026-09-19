@@ -32,16 +32,8 @@ def _settings() -> DocumentStorageSettings:
             access_key_id="primary-key",
             secret_access_key="primary-secret",
         ),
-        legacy=S3ConnectionSettings(
-            endpoint_url="https://storage.yandex.test",
-            region_name="ru-test-1",
-            access_key_id="legacy-key",
-            secret_access_key="legacy-secret",
-        ),
         public_bucket="public-docs",
         private_bucket="private-docs",
-        legacy_public_bucket="legacy-public",
-        legacy_private_bucket="legacy-private",
         encryption_key=base64.urlsafe_b64encode(b"0" * 32).decode(),
     )
 
@@ -85,28 +77,12 @@ def test_document_access_signs_private_primary_url() -> None:
     assert result == "https://signed.primary.test/book.pdf"
 
 
-def test_document_access_signs_legacy_private_url() -> None:
+def test_document_access_leaves_non_primary_locator_unchanged() -> None:
     settings = _settings()
-    encrypted = encrypt(
-        "https://storage.yandex.test/legacy-private/book.pdf",
-        {"encryption_key": settings.encryption_key},
-    )
-
-    class FakeS3:
-        def generate_presigned_url(self, operation, *, Params, ExpiresIn):  # noqa: ANN001, N803
-            assert operation == "get_object"
-            assert Params == {"Bucket": "legacy-private", "Key": "book.pdf"}
-            return "https://signed.yandex.test/book.pdf"
-
-    result = resolve_stored_document_url(
-        {"document_url": encrypted},
-        settings=settings,
-        client_factory=lambda connection: FakeS3()
-        if connection is settings.legacy
-        else None,
-    )
-
-    assert result == "https://signed.yandex.test/book.pdf"
+    url = "https://archive.example.test/book.pdf"
+    assert resolve_stored_document_url(
+        {"document_url": url}, settings=settings, client_factory=lambda _conn: None
+    ) == url
 
 
 def test_cache_document_for_local_open_downloads_verified_primary_document(

@@ -55,7 +55,7 @@ class PreviewGenerationSettings:
     workspace: Path
     model_cache_dir: Path | None = None
     source_endpoint_url: str = DEFAULT_S3_ENDPOINT
-    source_region_name: str = "ru-central1"
+    source_region_name: str = "eu-central-003"
     encryption_key: str = ""
     cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES
 

@@ -24,7 +24,7 @@ from app.modules.library.non_pdf_formats import (
     detect_document_format,
 )
 from app.modules.library.non_pdf_pptx import pptx_to_html
-from app.modules.library.non_pdf_media import _collect_assets, _collect_markdown_assets
+from app.modules.library.non_pdf_media import _collect_assets
 from app.modules.library.non_pdf_rendering import (
     render_markdown,
     validate_rendered_markdown,
@@ -101,12 +101,7 @@ def prepare_extraction(
             raise CorruptDocumentError("text_decode", str(exc)) from exc
         if detected == "text" and not text_value.endswith("\n"):
             text_value += "\n"
-        assets = (
-            _collect_markdown_assets(text_value, workspace=workspace)
-            if detected == "markdown"
-            else ()
-        )
-        return PreparedExtraction(detected, workspace, None, text_value, assets)
+        return PreparedExtraction(detected, workspace, None, text_value, ())
 
     pandoc_source = Path(source)
     pandoc_format = detected

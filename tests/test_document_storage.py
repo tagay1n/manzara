@@ -53,17 +53,6 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
                     "filtered_out_path": "/documents/filtered-out",
                 },
             },
-            "cloud": {
-                "aws_access_key_id": "access",
-                "aws_secret_access_key": "secret",
-                "bucket": {
-                    "document": "public-docs",
-                    "document_private": "private-docs",
-                    "content": "ttcontent",
-                    "image": "ttimg",
-                    "upstream_metadata": "upstream",
-                },
-            },
         },
         "encryption_key": "key",
     }
@@ -82,10 +71,6 @@ def test_load_document_storage_settings_uses_explicit_sources_and_buckets(
     assert settings.private_bucket == "manzara-documents-private"
     assert settings.content_bucket == "ttcontent"
     assert settings.content_images_bucket == "ttcontent-images"
-    assert settings.legacy_content_bucket == "ttcontent"
-    assert settings.legacy_content_images_bucket == "ttimg"
-    assert settings.legacy.endpoint_url == "https://storage.yandexcloud.net"
-    assert settings.legacy_public_bucket == "public-docs"
     assert not hasattr(settings, "upstream_bucket")
 
     payload["documents"]["cache_max_gib"] = 12
@@ -117,14 +102,6 @@ def test_cache_max_gib_must_be_a_positive_integer(tmp_path: Path, value: object)
                     "source_path": "/source",
                     "restricted_path": "/restricted",
                     "filtered_out_path": "/filtered",
-                },
-            },
-            "cloud": {
-                "aws_access_key_id": "key",
-                "aws_secret_access_key": "secret",
-                "bucket": {
-                    "document": "legacy-public",
-                    "document_private": "legacy-private",
                 },
             },
         },
@@ -333,11 +310,8 @@ def _primary_settings(tmp_path: Path) -> DocumentStorageSettings:
         restricted_path="/unused/private",
         filtered_out_path="/unused/filtered",
         primary=connection,
-        legacy=connection,
         public_bucket="public-docs",
         private_bucket="private-docs",
-        legacy_public_bucket="unused",
-        legacy_private_bucket="unused-private",
         encryption_key="unused",
     )
 
@@ -374,7 +348,7 @@ def test_primary_download_rejects_non_primary_url(tmp_path: Path) -> None:
         download_verified_primary_document(
             settings=_primary_settings(tmp_path),
             s3=object(),
-            document_url="https://storage.yandexcloud.net/docs/book.pdf",
+            document_url="https://storage.example.test/docs/book.pdf",
             expected_md5="a" * 32,
             destination=tmp_path / "book.pdf",
         )

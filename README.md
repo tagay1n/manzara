@@ -10,7 +10,7 @@ The name means a panorama or landscape opening before the viewer (`Манзар�
 - Alembic-managed PostgreSQL schema and a versioned local SQLite schema
 - Modular Library and Maintenance flows in one monorepo
 - Server-sent events for live task state, progress, artifacts, and logs
-- S3-compatible primary document storage with Yandex Disk as legacy upstream storage
+- Backblaze B2 primary document storage with Yandex Disk as the upstream document source
 
 See `docs/architecture.md` for the ownership map. Operational invariants live in the nearest `AGENTS.md` and its routed module guidance.
 
@@ -145,7 +145,7 @@ node --test tests/frontend/*.mjs
 PYTHONPATH=. .venv/bin/python -m ruff check app tests
 ```
 
-Use focused files while iterating. Credential-backed Gemini, Backblaze, Yandex, and converter workflows still require deliberate smoke testing against configured services. The stable verification checklist is in `docs/verification.md`.
+Use focused files while iterating. Credential-backed Gemini, Backblaze, Yandex Disk, and converter workflows still require deliberate smoke testing against configured services. The stable verification checklist is in `docs/verification.md`.
 
 ## API entry points
 

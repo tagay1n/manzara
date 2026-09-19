@@ -17,6 +17,7 @@ Start with the matching row; use symbol search within its owners before reading 
 | Maintenance flow | `app/modules/maintenance/`; read its routing `AGENTS.md` | Maintenance/storage-specific tests |
 | PostgreSQL backup/recovery | `.github/workflows/nightly-postgres-backup.yml`, `scripts/backup_postgres_to_b2.py` | `tests/test_postgres_logical_backup.py` |
 | PostgreSQL cloud migration | `scripts/migrate_postgres_to_aiven.py` | `tests/test_aiven_migration.py` |
+| Primary document storage | `app/document_storage.py`, `app/modules/maintenance/runtime/sync_documents_s3.py` | `tests/test_document_storage.py`, `tests/test_document_s3_sync.py` |
 | Frontend | `static/`; read `static/AGENTS.md` | `tests/frontend/` |
 | Migrations | `alembic/versions/` for durable PostgreSQL; `app/local_state.py` for disposable SQLite | migration tests, `tests/test_local_state.py`, `alembic heads` |
 

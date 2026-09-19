@@ -14,7 +14,6 @@ LIBRARY_PERSONALITY_SUGGESTIONS_REFRESH_TASK_ID = (
 LIBRARY_PUBLISHER_SUGGESTIONS_REFRESH_TASK_ID = "library.publisher_suggestions_refresh"
 MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID = "maintenance.sync_documents_s3"
 MAINTENANCE_MONOCORPUS_SYNC_TASK_ID = "maintenance.monocorpus_sync"
-MAINTENANCE_MIGRATE_PDF_CONTENT_TASK_ID = "maintenance.migrate_pdf_content"
 
 
 def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str, Any]]:
@@ -47,22 +46,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str
     monocorpus_sync_cmd = (
         py_bootstrap + '"$PY_BIN" -m app.modules.maintenance.runtime.sync_monocorpus'
     )
-    content_migration_cmd = (
-        py_bootstrap
-        + '"$PY_BIN" -m app.modules.maintenance.runtime.migrate_pdf_content'
-    )
-
     return [
-        {
-            "task_id": MAINTENANCE_MIGRATE_PDF_CONTENT_TASK_ID,
-            "panel_id": "library",
-            "title": "Move PDF content to Backblaze",
-            "task_type": "transfer",
-            "icon_idle": "CloudUpload",
-            "icon_running": "Square",
-            "cwd": str(app_root),
-            "command": {"mode": "shell", "value": content_migration_cmd},
-        },
         {
             "task_id": MAINTENANCE_MONOCORPUS_SYNC_TASK_ID,
             "panel_id": "maintenance",

@@ -6,7 +6,9 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
 
-def test_content_migration_checkpoint_tables_are_created(prepared_test_schema) -> None:
+def test_retired_content_migration_checkpoint_tables_are_removed(
+    prepared_test_schema,
+) -> None:
     database_url, _ = prepared_test_schema
     schema = f"manzara_content_move_{uuid.uuid4().hex[:10]}"
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
@@ -17,29 +19,9 @@ def test_content_migration_checkpoint_tables_are_created(prepared_test_schema) -
     try:
         command.upgrade(config, "head")
         tables = set(inspect(engine).get_table_names(schema=schema))
-        assert "maintenance_content_migration" in tables
-        assert "maintenance_content_migration_images" in tables
-        assert "maintenance_content_match_cleanup" in tables
-        columns = {
-            item["name"]
-            for item in inspect(engine).get_columns(
-                "maintenance_content_migration", schema=schema
-            )
-        }
-        assert {"status", "source_archive_deleted", "error_text"} <= columns
-        match_columns = {
-            item["name"]
-            for item in inspect(engine).get_columns(
-                "maintenance_content_match_cleanup", schema=schema
-            )
-        }
-        assert {
-            "source_key",
-            "md5",
-            "image_keys_json",
-            "deleted_images_json",
-            "source_archive_deleted",
-        } <= match_columns
+        assert "maintenance_content_migration" not in tables
+        assert "maintenance_content_migration_images" not in tables
+        assert "maintenance_content_match_cleanup" not in tables
     finally:
         with engine.begin() as conn:
             conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))

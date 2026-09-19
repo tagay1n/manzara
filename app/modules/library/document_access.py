@@ -56,33 +56,27 @@ def resolve_stored_document_url(
     client_factory: Callable[[S3ConnectionSettings], Any] = _create_s3_client,
     expires_seconds: int = 900,
 ) -> str | None:
-    """Resolve a document locator and sign private primary or legacy S3 objects."""
+    """Resolve a document locator and sign private primary S3 objects."""
     source = str(row.get("document_url") or row.get("ya_public_url") or "").strip()
     if not source:
         return None
     if source.startswith("enc:"):
         source = decrypt(source, {"encryption_key": settings.encryption_key})
 
-    storage_options = (
-        (settings.primary, settings.private_bucket),
-        (settings.legacy, settings.legacy_private_bucket),
-    )
-    for connection, private_bucket in storage_options:
-        location = parse_object_url(source, connection.endpoint_url)
-        if not location:
-            continue
-        bucket, key = location
-        if bucket != private_bucket:
-            return source
-        client = client_factory(connection)
-        return str(
-            client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": bucket, "Key": key},
-                ExpiresIn=max(60, int(expires_seconds)),
-            )
+    location = parse_object_url(source, settings.primary.endpoint_url)
+    if not location:
+        return source
+    bucket, key = location
+    if bucket != settings.private_bucket:
+        return source
+    client = client_factory(settings.primary)
+    return str(
+        client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": key},
+            ExpiresIn=max(60, int(expires_seconds)),
         )
-    return source
+    )
 
 
 def _load_document_row(state: Any, md5: str) -> Mapping[str, Any] | None:

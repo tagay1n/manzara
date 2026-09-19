@@ -150,11 +150,8 @@ def _storage(cache_path: Path) -> DocumentStorageSettings:
         restricted_path="/documents/private",
         filtered_out_path="/filtered",
         primary=connection,
-        legacy=connection,
         public_bucket="public",
         private_bucket="private",
-        legacy_public_bucket="legacy-public",
-        legacy_private_bucket="legacy-private",
         encryption_key="unused",
     )
 
