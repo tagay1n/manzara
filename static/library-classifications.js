@@ -189,7 +189,7 @@ function renderChangeTray() {
   const reviewButton = document.getElementById("taxonomy-review");
   reviewButton.disabled = total === 0 || state.applying;
   reviewButton.textContent = state.applying ? "Applying…" : "Review and apply";
-  document.getElementById("tree-status").textContent = total ? `${total} staged change${total === 1 ? "" : "s"}` : "All changes are staged locally until review.";
+  document.getElementById("tree-status").textContent = total ? `${total} staged change${total === 1 ? "" : "s"}` : "";
 }
 function observeDocumentLeaves() {
   state.documentObserver?.disconnect();
