@@ -129,14 +129,14 @@ def test_normalization_preserves_order_while_gemini_calls_run_concurrently(monke
             return []
 
     result = normalization._heuristic_suggestions(
-        Db(), "publisher", limit=3, use_gemini=True, manager=object(), workers=2
+        Db(), "personality", limit=3, use_gemini=True, manager=object(), workers=2
     )
 
     assert maximum_active == 2
     assert [item["raw_name"] for item in result] == [item["raw_name"] for item in items]
 
 
-def test_normalization_matches_against_retained_aliases(monkeypatch) -> None:
+def test_personality_normalization_matches_against_retained_aliases(monkeypatch) -> None:
     from app.modules.library import normalization_suggestions as normalization
 
     monkeypatch.setattr(
@@ -171,7 +171,7 @@ def test_normalization_matches_against_retained_aliases(monkeypatch) -> None:
             }]
 
     result = normalization._heuristic_suggestions(
-        Db(), "publisher", limit=1, use_gemini=False
+        Db(), "personality", limit=1, use_gemini=False
     )
 
     assert result[0]["suggestion_kind"] == "link"

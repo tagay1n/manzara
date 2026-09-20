@@ -31,6 +31,7 @@ def test_maintenance_task_definitions_include_guarded_sync_task(tmp_path) -> Non
     assert "maintenance.monocorpus_sync" in task_ids
     assert by_id["maintenance.monocorpus_sync"]["title"] == "Sync"
     assert by_id["maintenance.sync_documents_s3"]["title"] == "Upload to Backblaze S3"
+    assert "library.publisher_suggestions_refresh" not in task_ids
     assert "maintenance.dump_state" not in task_ids
     assert not any(task_id.startswith("library.collection_") for task_id in task_ids)
 

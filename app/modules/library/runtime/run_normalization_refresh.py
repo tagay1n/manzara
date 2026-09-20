@@ -28,7 +28,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Refresh normalization suggestions")
     parser.add_argument(
         "--entity-type",
-        choices=["personality", "publisher"],
+        choices=["personality"],
         required=True,
         help="Entity domain to refresh",
     )

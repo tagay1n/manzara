@@ -466,6 +466,143 @@ class NormalizationRepository:
             "event": {"event_id": event_id, "entity_type": entity_type, "action": "rename_canonical", "payload": payload, "reverted": False, "created_at": now},
         }
 
+    def apply_publisher_change_set(self, change_set: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply a publisher workbench draft in one durable transaction.
+
+        The workbench deliberately uses exact retained raw names only.  This
+        method owns every write so a conflict rolls back the whole draft.
+        """
+        now = utc_now()
+
+        def alias(conn: Any, raw_name: str, canonical_id: int, reason: str) -> None:
+            name = str(raw_name).strip()
+            existing = conn.execute(
+                """SELECT canonical_id, decision_status FROM normalization_aliases
+                   WHERE entity_type='publisher' AND raw_name=? FOR UPDATE""",
+                (name,),
+            ).fetchone()
+            if (
+                existing
+                and str(existing["decision_status"]) == "linked"
+                and int(existing["canonical_id"] or 0) != canonical_id
+            ):
+                raise ValueError("Publisher alias is already linked to another canonical")
+            conn.execute(
+                """
+                INSERT INTO normalization_aliases (
+                    entity_type, raw_name, normalized_name, script_label,
+                    docs_count, mentions_count, marker_count, decision_status,
+                    canonical_id, confidence, source, reason, created_at, updated_at
+                ) VALUES ('publisher', ?, ?, 'other', 0, 0, 0, 'linked', ?, 1.0,
+                          'publisher_batch', ?, ?, ?)
+                ON CONFLICT(entity_type, raw_name) DO UPDATE SET
+                    decision_status='linked', canonical_id=excluded.canonical_id,
+                    confidence=1.0, source='publisher_batch', reason=excluded.reason,
+                    updated_at=excluded.updated_at
+                """,
+                (name, name.casefold(), canonical_id, reason, now, now),
+            )
+
+        def active_canonical(conn: Any, canonical_id: int) -> Dict[str, Any]:
+            row = conn.execute(
+                """SELECT * FROM normalization_canonicals
+                   WHERE canonical_id=? AND entity_type='publisher' FOR UPDATE""",
+                (canonical_id,),
+            ).fetchone()
+            if not row or str(row["status"]) != "active":
+                raise ValueError("Publisher canonical is missing or inactive")
+            return dict(row)
+
+        with self._lock:
+            with self._connect() as conn:
+                before = {
+                    "canonicals": [dict(row) for row in conn.execute("SELECT * FROM normalization_canonicals WHERE entity_type='publisher' ORDER BY canonical_id FOR UPDATE").fetchall()],
+                    "aliases": [dict(row) for row in conn.execute("SELECT * FROM normalization_aliases WHERE entity_type='publisher' ORDER BY alias_id FOR UPDATE").fetchall()],
+                }
+                touched: set[int] = set()
+                for rename in change_set["renames"]:
+                    canonical = active_canonical(conn, int(rename["canonical_id"]))
+                    canonical_id = int(canonical["canonical_id"])
+                    old_name = str(canonical["display_name"]).strip()
+                    new_name = str(rename["display_name"]).strip()
+                    conn.execute(
+                        "UPDATE normalization_canonicals SET display_name=?, normalized_name=?, updated_at=? WHERE canonical_id=?",
+                        (new_name, new_name.casefold(), now, canonical_id),
+                    )
+                    alias(conn, old_name, canonical_id, "rename")
+                    alias(conn, new_name, canonical_id, "rename")
+                    touched.add(canonical_id)
+
+                for raw_name in change_set["keeps"]:
+                    existing = conn.execute(
+                        "SELECT * FROM normalization_aliases WHERE entity_type='publisher' AND raw_name=? FOR UPDATE",
+                        (raw_name,),
+                    ).fetchone()
+                    if existing and str(existing["decision_status"]) == "linked":
+                        raise ValueError("Raw publisher name is already linked")
+                    cur = conn.execute(
+                        """INSERT INTO normalization_canonicals
+                           (entity_type, display_name, normalized_name, status, merged_into_id, notes, created_at, updated_at)
+                           VALUES ('publisher', ?, ?, 'active', NULL, '', ?, ?)""",
+                        (raw_name, raw_name.casefold(), now, now),
+                    )
+                    canonical_id = int(cur.lastrowid)
+                    alias(conn, raw_name, canonical_id, "keep")
+                    touched.add(canonical_id)
+
+                for merge in change_set["merges"]:
+                    canonical_rows = [active_canonical(conn, int(value)) for value in merge["canonical_ids"]]
+                    target_id = min((int(row["canonical_id"]) for row in canonical_rows), default=0)
+                    if not target_id:
+                        cur = conn.execute(
+                            """INSERT INTO normalization_canonicals
+                               (entity_type, display_name, normalized_name, status, merged_into_id, notes, created_at, updated_at)
+                               VALUES ('publisher', ?, ?, 'active', NULL, '', ?, ?)""",
+                            (merge["display_name"], str(merge["display_name"]).casefold(), now, now),
+                        )
+                        target_id = int(cur.lastrowid)
+                    for raw_name in merge["raw_names"]:
+                        existing = conn.execute(
+                            "SELECT * FROM normalization_aliases WHERE entity_type='publisher' AND raw_name=? FOR UPDATE",
+                            (raw_name,),
+                        ).fetchone()
+                        if existing and str(existing["decision_status"]) == "linked":
+                            raise ValueError("Raw publisher name is already linked")
+                    for canonical in canonical_rows:
+                        source_id = int(canonical["canonical_id"])
+                        conn.execute(
+                            "UPDATE normalization_aliases SET canonical_id=?, updated_at=? WHERE entity_type='publisher' AND canonical_id=? AND decision_status='linked'",
+                            (target_id, now, source_id),
+                        )
+                        alias(conn, str(canonical["display_name"]), target_id, "merge")
+                        if source_id != target_id:
+                            conn.execute(
+                                "UPDATE normalization_canonicals SET status='merged', merged_into_id=?, updated_at=? WHERE canonical_id=?",
+                                (target_id, now, source_id),
+                            )
+                    final_name = str(merge["display_name"]).strip()
+                    conn.execute(
+                        "UPDATE normalization_canonicals SET display_name=?, normalized_name=?, updated_at=? WHERE canonical_id=?",
+                        (final_name, final_name.casefold(), now, target_id),
+                    )
+                    for raw_name in merge["raw_names"]:
+                        alias(conn, raw_name, target_id, "merge")
+                    alias(conn, final_name, target_id, "merge")
+                    touched.add(target_id)
+
+                after = {
+                    "canonicals": [dict(row) for row in conn.execute("SELECT * FROM normalization_canonicals WHERE entity_type='publisher' ORDER BY canonical_id").fetchall()],
+                    "aliases": [dict(row) for row in conn.execute("SELECT * FROM normalization_aliases WHERE entity_type='publisher' ORDER BY alias_id").fetchall()],
+                }
+                event_payload = {"change_set": change_set, "before": before, "after": after, "touched_canonical_ids": sorted(touched)}
+                cur = conn.execute(
+                    """INSERT INTO normalization_events (entity_type, action, payload_json, reverted, created_at)
+                       VALUES ('publisher', 'apply_publisher_change_set', ?, 0, ?)""",
+                    (json.dumps(event_payload, ensure_ascii=False), now),
+                )
+                event_id = int(cur.lastrowid)
+        return {"ok": True, "event_id": event_id, "touched_canonical_ids": sorted(touched)}
+
     def dismiss_normalization_suggestion(
         self, entity_type: str, suggestion_id: int
     ) -> Dict[str, Any]:

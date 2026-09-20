@@ -176,7 +176,7 @@ def test_library_normalization_bulk_reject_rejects_invalid_raw_names_shape(
     assert response.json()["detail"] == "raw_names must be a list of strings"
 
 
-def test_library_normalization_refresh_suggestions_endpoint(
+def test_personality_normalization_refresh_suggestions_endpoint(
     test_client, override_operations
 ) -> None:
     client, _main_app = test_client
@@ -191,7 +191,7 @@ def test_library_normalization_refresh_suggestions_endpoint(
     )
 
     response = client.post(
-        "/api/library/normalization/publisher/suggestions/refresh",
+        "/api/library/normalization/personality/suggestions/refresh",
         json={"limit": 77, "use_gemini": False},
     )
     assert response.status_code == 200
@@ -201,88 +201,22 @@ def test_library_normalization_refresh_suggestions_endpoint(
     assert payload["event"]["use_gemini"] is False
 
 
-def test_library_publisher_group_endpoint(test_client, override_operations) -> None:
-    client, _main_app = test_client
-    captured = {}
-
-    def _create_group(_db, entity_type, **kwargs):
-        captured.update(entity_type=entity_type, **kwargs)
-        return {
-            "canonical": {"canonical_id": 17, "display_name": kwargs["display_name"]},
-            "aliases": [{"raw_name": value} for value in kwargs["raw_names"]],
-            "event": {"event_id": 21},
-        }
-
-    override_operations("normalization", create_canonical_group=_create_group)
-    response = client.post(
-        "/api/library/normalization/publisher/groups",
-        json={
-            "display_name": "Татарстан китап нәшрияты",
-            "raw_names": ["Таткнигоиздат", "Tatknigoizdat"],
-            "suggestion_ids": [4, 5],
-        },
-    )
-
-    assert response.status_code == 200
-    assert captured == {
-        "entity_type": "publisher",
-        "display_name": "Татарстан китап нәшрияты",
-        "raw_names": ["Таткнигоиздат", "Tatknigoizdat"],
-        "suggestion_ids": [4, 5],
-    }
-    assert response.json()["canonical"]["canonical_id"] == 17
-
-
-def test_library_publisher_group_rejects_non_string_aliases(test_client) -> None:
+def test_publisher_legacy_suggestion_routes_are_not_supported(test_client) -> None:
     client, _main_app = test_client
     response = client.post(
-        "/api/library/normalization/publisher/groups",
-        json={"display_name": "Publisher", "raw_names": ["Alias", 7]},
+        "/api/library/normalization/publisher/suggestions/refresh",
+        json={"limit": 7},
     )
-    assert response.status_code == 400
-    assert response.json()["detail"] == "raw_names must be a list of strings"
+    assert response.status_code == 404
 
 
-def test_library_normalization_rename_canonical_endpoint(
-    test_client, override_operations
-) -> None:
+def test_publisher_legacy_mutation_route_is_not_supported(test_client) -> None:
     client, _main_app = test_client
-    override_operations(
-        "normalization",
-        rename_canonical=lambda _db, entity_type, **kwargs: {
-            "canonical": {
-                "canonical_id": kwargs["canonical_id"],
-                "entity_type": entity_type,
-                "display_name": kwargs["display_name"],
-            },
-            "event": {"event_id": 22},
-        },
-    )
     response = client.patch(
         "/api/library/normalization/publisher/canonicals/17",
         json={"display_name": "Canonical Publisher"},
     )
-    assert response.status_code == 200
-    assert response.json()["canonical"]["display_name"] == "Canonical Publisher"
-
-
-def test_library_normalization_dismiss_suggestion_endpoint(
-    test_client, override_operations
-) -> None:
-    client, _main_app = test_client
-    override_operations(
-        "normalization",
-        dismiss_suggestion=lambda _db, entity_type, **kwargs: {
-            "suggestion_id": kwargs["suggestion_id"],
-            "entity_type": entity_type,
-            "status": "dismissed",
-        },
-    )
-    response = client.post(
-        "/api/library/normalization/publisher/suggestions/8/dismiss",
-    )
-    assert response.status_code == 200
-    assert response.json()["status"] == "dismissed"
+    assert response.status_code == 404
 
 
 def test_library_normalization_rejects_unknown_entity(test_client) -> None:

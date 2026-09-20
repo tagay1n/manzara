@@ -26,6 +26,8 @@ def register_library_normalization_routes(
         normalized = str(entity_type or "").strip().lower()
         if normalized not in allowed_entities:
             raise HTTPException(status_code=404, detail="Normalization entity type not found")
+        if normalized == "publisher":
+            raise HTTPException(status_code=404, detail="Publisher suggestions are not supported")
         return normalized
 
     def _parse_suggestion_ids(payload: Dict[str, Any]) -> list[int]:
@@ -67,6 +69,23 @@ def register_library_normalization_routes(
         operations = operations_provider()
         normalized = _require_normalization_entity(entity_type)
         return state, operations, normalized
+
+    @app.get("/api/library/publishers")
+    def get_library_publishers() -> JSONResponse:
+        """Return the publisher-specific canonical and unresolved-name list."""
+        state = state_provider()
+        return JSONResponse(operations_provider().get_publishers(state.db))
+
+    @app.post("/api/library/publishers/change-set/apply")
+    def apply_library_publisher_changes(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+        """Atomically apply the current publisher page draft."""
+        state = state_provider()
+        try:
+            return JSONResponse(operations_provider().apply_publishers(state.db, payload))
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 409 if "already linked" in detail.lower() or "missing or inactive" in detail.lower() else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
 
     @app.get("/api/library/normalization/{entity_type}")
     def get_library_normalization(entity_type: str) -> JSONResponse:

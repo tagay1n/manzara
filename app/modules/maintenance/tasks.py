@@ -11,7 +11,6 @@ MONOCORPUS_META_EVALUATE_TASK_ID = "maintenance.monocorpus_meta_evaluate"
 LIBRARY_PERSONALITY_SUGGESTIONS_REFRESH_TASK_ID = (
     "library.personality_suggestions_refresh"
 )
-LIBRARY_PUBLISHER_SUGGESTIONS_REFRESH_TASK_ID = "library.publisher_suggestions_refresh"
 MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID = "maintenance.sync_documents_s3"
 MAINTENANCE_MONOCORPUS_SYNC_TASK_ID = "maintenance.monocorpus_sync"
 
@@ -35,10 +34,6 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str
     personality_refresh_cmd = (
         py_bootstrap
         + f'"$PY_BIN" "{norm_refresh_runner}" --entity-type personality --limit 180'
-    )
-    publisher_refresh_cmd = (
-        py_bootstrap
-        + f'"$PY_BIN" "{norm_refresh_runner}" --entity-type publisher --limit 180'
     )
     document_sync_cmd = (
         py_bootstrap + '"$PY_BIN" -m app.modules.maintenance.runtime.sync_documents_s3'
@@ -88,16 +83,5 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str
             "icon_running": "Square",
             "cwd": str(app_root),
             "command": {"mode": "shell", "value": personality_refresh_cmd},
-        },
-        {
-            "task_id": LIBRARY_PUBLISHER_SUGGESTIONS_REFRESH_TASK_ID,
-            "gemini_workers_default": 1,
-            "panel_id": "library",
-            "title": "Find publisher matches",
-            "task_type": "metadata",
-            "icon_idle": "Sparkles",
-            "icon_running": "Square",
-            "cwd": str(app_root),
-            "command": {"mode": "shell", "value": publisher_refresh_cmd},
         },
     ]

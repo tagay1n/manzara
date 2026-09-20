@@ -163,6 +163,8 @@ def _heuristic_suggestions(
     manager: Optional[GeminiRuntimeManager] = None,
     workers: int = 1,
 ) -> List[Dict[str, Any]]:
+    if str(entity_type).strip().lower() != "personality":
+        raise ValueError("Suggestions are available only for personality")
     canonicals = db.list_normalization_canonicals(entity_type)
     aliases_by_canonical: Dict[int, List[str]] = {}
     for alias in db.list_normalization_aliases(entity_type):
@@ -324,6 +326,8 @@ def refresh_suggestions(
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Regenerate open suggestion set from unresolved queue."""
+    if str(entity_type).strip().lower() != "personality":
+        raise ValueError("Suggestions are available only for personality")
     _entity_config(entity_type)
     limit = max(1, min(1000, int(limit)))
 

@@ -141,55 +141,21 @@ function createPersonalitiesResolver({
 }
 
 function createPublishersResolver({
-  groupCalls = [],
+  applyCalls = [],
 } = {}) {
   return (path, options = {}) => {
-    if (path === "/api/library/normalization/publisher") {
-      return {
-        global: { active_tasks: 0, stop_all_state: "disabled" },
-        dashboard: {
-          available: true,
-          config_source: "test",
-          stats: {
-            total_aliases: 2,
-            canonicals: 1,
-            linked: 0,
-            unreviewed: 1,
-            suggested: 1,
-            coverage_pct: 0,
-          },
-        },
-      };
-    }
-    if (path.startsWith("/api/library/normalization/publisher/queue?")) {
+    if (path === "/api/library/publishers") {
       return {
         available: true,
-        page: 1,
-        total_pages: 1,
-        total: 2,
+        new_count: 1, publisher_count: 1, snapshot_token: "snapshot-1",
         items: [
-          {
-            raw_name: "Таткнигоиздат", normalized_name: "таткнигоиздат",
-            script_label: "cyrillic", docs_count: 4, mentions_count: 4,
-            queue_status: "unreviewed", canonical_id: null, canonical_name: null, suggestion: null,
-          },
-          {
-            raw_name: "Tatknigoizdat", normalized_name: "tatknigoizdat",
-            script_label: "latin", docs_count: 2, mentions_count: 2,
-            queue_status: "suggested", canonical_id: 1, canonical_name: "Tatar Book Publisher",
-            suggestion: { suggestion_id: 8, kind: "link", target_canonical_id: 1, confidence: 0.91 },
-          },
+          { key: "raw:Таткнигоиздат", raw_name: "Таткнигоиздат", canonical_id: null, display_name: "Таткнигоиздат", aliases: [], document_count: 4, is_new: true },
+          { key: "canonical:1", raw_name: null, canonical_id: 1, display_name: "Tatar Book Publisher", aliases: ["Tatknigoizdat"], document_count: 2, is_new: false },
         ],
       };
     }
-    if (path.startsWith("/api/library/normalization/publisher/canonicals?")) {
-      return { available: true, items: [{ canonical_id: 1, display_name: "Tatar Book Publisher", linked_aliases: 1 }] };
-    }
-    if (path === "/api/library/normalization/publisher/history?limit=100") return { available: true, items: [] };
-    if (path === "/api/tasks/library.publisher_suggestions_refresh?limit=1") return { task: { task_id: "library.publisher_suggestions_refresh" }, runs: [] };
-    if (path === "/api/library/normalization/publisher/groups") {
-      groupCalls.push(JSON.parse(options.body || "{}"));
-      return { canonical: { canonical_id: 2 }, aliases: [], event: { event_id: 1 } };
+    if (path === "/api/library/publishers/change-set/apply") {
+      applyCalls.push(JSON.parse(options.body || "{}")); return { ok: true };
     }
     throw new Error(`unexpected path: ${path}`);
   };
@@ -494,7 +460,7 @@ test("library publishers page renders API error state", async () => {
     ids: PUBLISHERS_PAGE_IDS,
     selectors: [".classification-tabs", ".publisher-row-select"],
     apiResolver(path) {
-      if (path.startsWith("/api/library/normalization/publisher")) {
+      if (path.startsWith("/api/library/publishers")) {
         throw new Error("publishers unavailable");
       }
       if (path.startsWith("/api/tasks/")) return { task: {}, runs: [] };
@@ -512,31 +478,26 @@ test("library publishers page renders API error state", async () => {
   );
 });
 
-test("library publishers page groups selected aliases with a manual canonical name", async () => {
-  const groupCalls = [];
+test("library publishers page stages a new publisher and applies one batch", async () => {
+  const applyCalls = [];
   const harness = createHarness({
     source: LIBRARY_PUBLISHERS_SOURCE,
     locationPathname: "/library/publishers",
     ids: PUBLISHERS_PAGE_IDS,
     selectors: [".classification-tabs", ".publisher-row-select"],
-    promptResult: "Татарстан китап нәшрияты",
-    confirmResult: true,
-    apiResolver: createPublishersResolver({ groupCalls }),
+    apiResolver: createPublishersResolver({ applyCalls }),
   });
   await harness.flush();
 
-  harness.elements.get("publisher-table-body").dispatch("change", { target: { closest: () => ({ checked: true, dataset: { raw: encodeURIComponent("Таткнигоиздат") } }) } });
-  harness.elements.get("filter-search").value = "Tat";
-  harness.elements.get("filter-apply").dispatch("click");
+  assert.match(harness.elements.get("publisher-table-body").innerHTML, /Tatar Book Publisher/);
+  assert.doesNotMatch(harness.elements.get("publisher-table-body").innerHTML, /Suggested match|Evidence/);
+  harness.elements.get("publisher-table-body").dispatch("click", { target: { closest: (selector) => selector === ".publisher-keep" ? { dataset: { key: encodeURIComponent("raw:Таткнигоиздат") } } : null } });
   await harness.flush();
-  assert.equal(harness.elements.get("publisher-selection-count").textContent, "1 name selected");
-  harness.elements.get("publisher-create-group").dispatch("click");
+  assert.equal(harness.elements.get("publisher-pending-count").textContent, "1 pending changes");
+  harness.elements.get("publisher-apply").dispatch("click");
   await harness.flush();
-
-  assert.equal(groupCalls.length, 1);
-  assert.equal(groupCalls[0].display_name, "Татарстан китап нәшрияты");
-  assert.deepEqual(groupCalls[0].raw_names, ["Таткнигоиздат"]);
-  assert.equal(harness.elements.get("publisher-selection-bar").hidden, true);
+  assert.equal(applyCalls.length, 1);
+  assert.deepEqual(applyCalls[0].keeps, ["Таткнигоиздат"]);
 });
 
 test("library collections page renders API error state", async () => {
