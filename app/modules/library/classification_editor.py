@@ -47,8 +47,8 @@ def _valid_id(value: Any, field: str) -> int:
 
 
 def _valid_path(value: Any) -> list[str]:
-    if not isinstance(value, list) or not 2 <= len(value) <= 8:
-        raise ValueError("classification path must contain 2 to 8 levels")
+    if not isinstance(value, list) or not 1 <= len(value) <= 8:
+        raise ValueError("classification path must contain 1 to 8 levels")
     path: list[str] = []
     for raw in value:
         if not isinstance(raw, str):

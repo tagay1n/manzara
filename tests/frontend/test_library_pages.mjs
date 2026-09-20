@@ -357,6 +357,50 @@ test("library classifications stages a subtree rename and supports undo", async 
   assert.doesNotMatch(treeRoot.innerHTML, /Books/);
 });
 
+test("library classifications can promote a nested subtree to the top hierarchy", async () => {
+  const harness = createHarness({
+    source: LIBRARY_CLASSIFICATIONS_SOURCE,
+    ids: CLASSIFICATIONS_PAGE_IDS,
+    selectors: [".classification-tabs"],
+    apiResolver: createClassificationsResolver({ tree: [{ name: "Literature", path: ["Literature"], usage_count: 4, classifications: [], children: [{ name: "Tatar", path: ["Literature", "Tatar"], usage_count: 4, classifications: [{ classification_id: 11, ddc: "891.7", usage_count: 4 }], children: [] }] }] }),
+  });
+  await harness.flush();
+  const treeRoot = harness.elements.get("tree-root");
+  treeRoot.dispatch("click", {
+    target: {
+      closest(selector) {
+        return selector === ".tree-toggle" ? { dataset: { treePath: '["Literature"]' } } : null;
+      },
+    },
+  });
+  assert.match(treeRoot.innerHTML, /Move to top/);
+  assert.equal(treeRoot.classList.contains("is-dragging"), false);
+  treeRoot.dispatch("dragstart", {
+    target: {
+      closest(selector) {
+        return selector === "[data-drag-path]" ? { dataset: { dragPath: '["Literature","Tatar"]' } } : null;
+      },
+    },
+  });
+  assert.equal(treeRoot.classList.contains("is-dragging"), true);
+  treeRoot.dispatch("dragend");
+  assert.equal(treeRoot.classList.contains("is-dragging"), false);
+
+  treeRoot.dispatch("click", {
+    target: {
+      closest(selector) {
+        return selector === "[data-action]" ? { dataset: { action: "move-to-root", path: '["Literature","Tatar"]' } } : null;
+      },
+    },
+  });
+
+  assert.match(treeRoot.innerHTML, /data-drop-root/);
+  harness.elements.get("taxonomy-review").dispatch("click");
+  await harness.flush();
+  const apply = harness.apiCalls.find((entry) => entry.path.endsWith("/change-set/apply"));
+  assert.deepEqual(JSON.parse(apply.options.body).changes, [{ classification_id: 11, path: ["Tatar"] }]);
+});
+
 test("library classifications reviews then atomically applies staged changes", async () => {
   const harness = createHarness({
     source: LIBRARY_CLASSIFICATIONS_SOURCE,

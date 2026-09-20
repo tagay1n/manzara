@@ -119,11 +119,20 @@ def test_prepare_change_set_rejects_boolean_ids_and_invalid_paths() -> None:
             rows,
             {"base_revision": revision, "changes": [{"classification_id": True, "path": ["A", "B"]}]},
         )
-    with pytest.raises(ValueError, match="2 to 8"):
+    with pytest.raises(ValueError, match="1 to 8"):
         _prepare_change_set(
             rows,
             {"base_revision": revision, "changes": [{"classification_id": 1, "path": []}]},
         )
+
+    plan = _prepare_change_set(
+        rows,
+        {
+            "base_revision": revision,
+            "changes": [{"classification_id": 1, "path": ["Tatar"]}],
+        },
+    )
+    assert plan["changes"] == [{"classification_id": 1, "path": ["Tatar"]}]
 
 
 def test_tree_includes_terminal_classifications_even_without_documents() -> None:

@@ -1146,6 +1146,25 @@ button {
   border-color: #3d8dff;
 }
 
+.taxonomy-root-drop {
+  display: none;
+  border: 1px dashed #396596;
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: #9bccff;
+  text-align: center;
+  transition: border-color 100ms ease, background 100ms ease;
+}
+
+.tree-root.is-dragging .taxonomy-root-drop {
+  display: block;
+}
+
+.taxonomy-root-drop:focus-visible {
+  outline: 2px solid #6aa8ff;
+  outline-offset: 2px;
+}
+
 .document-list {
   list-style: none;
   margin: 6px 0 8px 28px;

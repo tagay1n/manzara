@@ -174,6 +174,7 @@ function renderTreeNodes(nodes, depth = 0) {
       <span class="taxonomy-node-actions"><button class="icon-btn" data-action="edit-name" data-path="${encoded}">Edit</button>
       <button class="icon-btn" data-action="add-above" data-path="${encoded}" title="Insert level above">+↑</button>
       <button class="icon-btn" data-action="add-below" data-path="${encoded}" title="Insert level below">+↓</button>
+      ${node.path.length > 1 ? `<button class="icon-btn" data-action="move-to-root" data-path="${encoded}" title="Move this category and its children to the top hierarchy">Move to top</button>` : ""}
       <button class="icon-btn danger" data-action="remove" data-path="${encoded}">Remove</button></span></div>
       ${expanded ? `<div class="tree-branch">${node.classifications.length ? `<div class="classification-pills">${node.classifications.map((row) => `<button class="classification-pill ${state.mergeSource === row.id ? "is-selected" : ""}" draggable="true" data-drag-classification="${row.id}" data-drop-classification="${row.id}" title="Drag onto another DDC, or select source then target, to merge"><span>${escapeHtml(row.ddc || "No DDC")}</span><span class="tree-count">${row.usage}</span></button>`).join("")}</div>` : ""}${renderDocuments(node.path)}${renderTreeNodes(node.children, depth + 1)}</div>` : ""}</li>`;
   }).join("")}</ul>`;
@@ -205,7 +206,7 @@ function observeDocumentLeaves() {
   document.querySelectorAll("[data-auto-document-path]").forEach((node) => state.documentObserver.observe(node));
 }
 function renderEditor() {
-  document.getElementById("tree-root").innerHTML = renderTreeNodes(buildDraftTree());
+  document.getElementById("tree-root").innerHTML = `<div class="taxonomy-root-drop taxonomy-drop-target" data-drop-root>Drop a category here to move it to the top hierarchy</div>${renderTreeNodes(buildDraftTree())}`;
   renderChangeTray(); observeDocumentLeaves();
 }
 
@@ -248,7 +249,7 @@ async function addLevel(path, placement) {
   });
 }
 async function removeLevel(path) {
-  if (path.length <= 2) return window.ManzaraUI.toast("A classification must keep at least two category levels.");
+  if (path.length <= 1) return window.ManzaraUI.toast("A classification must keep at least one category level.");
   if (terminalIds(path).length) return window.ManzaraUI.toast("This category has directly assigned classifications. Merge them first.");
   const confirmed = await window.ManzaraUI.confirm({ title: "Remove hierarchy level", message: `Promote every child of “${path.at(-1)}” one level?`, acceptLabel: "Stage removal", destructive: true });
   if (confirmed) stage(() => {
@@ -257,6 +258,7 @@ async function removeLevel(path) {
   });
 }
 function moveSubtree(source, target) {
+  if (!target.length && source.length <= 1) return;
   if (samePath(source, target) || isPrefix(source, target)) return window.ManzaraUI.toast("A category cannot be moved into itself or its descendants.");
   const ids = subtreeIds(source); if (!ids.length) return;
   if (ids.some((id) => target.length + 1 + state.draft.get(id).path.length - source.length > 8)) return window.ManzaraUI.toast("That move would exceed the eight-level limit.");
@@ -371,7 +373,7 @@ function attachTreeHandlers() {
         "edit-name": () => { state.editingPath = pathKey(path); renderEditor(); },
         "save-name": () => renameNode(path, action.closest(".taxonomy-inline-editor")?.querySelector(".taxonomy-name-input")?.value),
         "cancel-name": () => { state.editingPath = null; renderEditor(); },
-        "add-above": () => addLevel(path, "above"), "add-below": () => addLevel(path, "below"), remove: () => removeLevel(path),
+        "add-above": () => addLevel(path, "above"), "add-below": () => addLevel(path, "below"), "move-to-root": () => moveSubtree(path, []), remove: () => removeLevel(path),
       };
       Promise.resolve(jobs[action.dataset.action]?.()).catch((error) => window.ManzaraUI.toast(error.message)); return;
     }
@@ -393,16 +395,21 @@ function attachTreeHandlers() {
   root.addEventListener("dragstart", (event) => {
     const pill = event.target.closest("[data-drag-classification]"); const row = event.target.closest("[data-drag-path]");
     if (pill) state.dragged = { type: "classification", id: toInt(pill.dataset.dragClassification) };
-    else if (row) state.dragged = { type: "path", path: parseDatasetPath(row.dataset.dragPath) };
+    else if (row) {
+      state.dragged = { type: "path", path: parseDatasetPath(row.dataset.dragPath) };
+      root.classList.add("is-dragging");
+    }
   });
-  root.addEventListener("dragover", (event) => { if (event.target.closest("[data-drop-path], [data-drop-classification]")) event.preventDefault(); });
+  root.addEventListener("dragover", (event) => { if (event.target.closest("[data-drop-root], [data-drop-path], [data-drop-classification]")) event.preventDefault(); });
   root.addEventListener("drop", (event) => {
-    event.preventDefault(); const targetClass = event.target.closest("[data-drop-classification]"); const targetPath = event.target.closest("[data-drop-path]");
+    event.preventDefault(); const targetClass = event.target.closest("[data-drop-classification]"); const targetPath = event.target.closest("[data-drop-path]"); const rootTarget = event.target.closest("[data-drop-root]");
     if (state.dragged?.type === "classification" && targetClass) mergeClassification(state.dragged.id, toInt(targetClass.dataset.dropClassification));
     else if (state.dragged?.type === "path" && targetPath) { const path = parseDatasetPath(targetPath.dataset.dropPath); if (path) moveSubtree(state.dragged.path, path); }
+    else if (state.dragged?.type === "path" && rootTarget) moveSubtree(state.dragged.path, []);
     state.dragged = null;
+    root.classList.remove("is-dragging");
   });
-  root.addEventListener("dragend", () => { state.dragged = null; });
+  root.addEventListener("dragend", () => { state.dragged = null; root.classList.remove("is-dragging"); });
 }
 
 function attachUiHandlers() {
