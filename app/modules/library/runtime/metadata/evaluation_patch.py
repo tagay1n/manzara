@@ -8,7 +8,7 @@ from typing import Any
 
 from app.modules.library.metadata_contract import is_english_facet
 from app.modules.library.runtime.metadata.isbn_utils import canonicalize_isbn_values
-from app.modules.library.runtime.metadata.schema import BookPatch
+from app.modules.library.runtime.metadata.schema import MetadataPatch
 from app.modules.library.runtime.metadata.url_utils import normalize_url_list
 
 from .evaluation_text import _clean_text, _extract_candidate_strings
@@ -22,15 +22,15 @@ INT_RE = re.compile(r"\d+")
 def _collect_patch_fields(schema_org: dict | str | None) -> list[str]:
     schema = schema_org if isinstance(schema_org, dict) else {}
     fields = [
-        "isbn",
         "datePublished",
-        "numberOfPages",
         "name",
         "author",
         "publisher",
         "genre",
         "description",
     ]
+    if schema.get("@type") == "Book":
+        fields.extend(("isbn", "numberOfPages"))
     return [
         name
         for name in fields
@@ -60,10 +60,10 @@ def _is_missing(value: Any) -> bool:
 
 
 def _normalize_metadata_patch(
-    raw_patch: BookPatch | dict[str, Any] | None, doc: Any, config: dict
-) -> BookPatch | None:
+    raw_patch: MetadataPatch | dict[str, Any] | None, doc: Any, config: dict
+) -> MetadataPatch | None:
     if not isinstance(raw_patch, dict):
-        if isinstance(raw_patch, BookPatch):
+        if isinstance(raw_patch, MetadataPatch):
             raw_patch = json.loads(
                 raw_patch.model_dump_json(
                     by_alias=True,
@@ -112,7 +112,7 @@ def _normalize_metadata_patch(
 
     if not patch:
         return None
-    return BookPatch.model_validate(patch)
+    return MetadataPatch.model_validate(patch)
 
 
 def _normalize_isbn_values(value: Any) -> list[str] | None:

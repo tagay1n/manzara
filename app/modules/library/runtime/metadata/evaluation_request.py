@@ -26,6 +26,12 @@ from .evaluation_text import _drop_none_values, _format_response_for_log
 from .evaluation_types import Evaluation, EvaluationTask
 
 
+def _persisted_work_type(schema_org: dict | str | None) -> Any:
+    if isinstance(schema_org, dict):
+        return schema_org.get("@type")
+    return None
+
+
 def evaluate_document(
     doc: EvaluationTask,
     *,
@@ -60,6 +66,7 @@ def evaluate_document(
             "page_count": doc.page_count,
             "upstream_metadata": upstream_metadata,
             "pdf_slice_attached": bool(files),
+            "work_type": _persisted_work_type(doc.schema_org),
             "missing_fields": _collect_patch_fields(doc.schema_org),
             "known_classifications": [
                 {"ddc": item["ddc"], "path": item["path"]}
@@ -67,6 +74,9 @@ def evaluate_document(
             ],
         }
     )
+    payload["work_type"] = _persisted_work_type(doc.schema_org)
+    if payload["work_type"] != "Book":
+        payload.pop("isbn", None)
 
     prompt = build_library_applicability_prompt(payload, content_excerpt=excerpt)
     documents.dump_prompt(doc.md5, prompt)

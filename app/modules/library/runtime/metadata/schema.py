@@ -126,8 +126,8 @@ class Book(BaseModel):
     isBasedOn: Optional[CreativeWork] = None
 
 
-class BookPatch(Book):
-    """Partial Book payload used for metadata patching."""
+class MetadataPatch(Book):
+    """Partial schema.org payload used for metadata patching."""
 
     context: Optional[str] = Field(alias="@context", default=None)
     type: Optional[str] = Field(alias="@type", default=None)

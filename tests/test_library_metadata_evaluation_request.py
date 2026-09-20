@@ -9,6 +9,9 @@ from app.modules.library.runtime.metadata import (
 from app.modules.library.runtime.metadata.evaluation_documents import (
     EvaluationDocuments,
 )
+from app.modules.library.runtime.prompts.metadata_evaluation import (
+    build_library_applicability_prompt,
+)
 
 
 def test_request_advances_to_next_model_after_incomplete_response_and_logs_attempts(
@@ -73,3 +76,37 @@ def test_request_advances_to_next_model_after_incomplete_response_and_logs_attem
     assert f"md5={evaluation_document().md5}" in output
     assert "model=model-first" in output
     assert "model=model-second" in output
+
+
+def test_prompt_describes_persisted_type_and_only_requested_patch_fields() -> None:
+    prompt = "\n".join(
+        part["text"]
+        for part in build_library_applicability_prompt(
+            {
+                "work_type": "Newspaper",
+                "missing_fields": ["name", "publisher", "genre"],
+            }
+        )
+    )
+
+    assert "persisted schema.org work type is `Newspaper`" in prompt
+    assert "must not change `@type`" in prompt
+    assert "Allowed keys: name, publisher, genre" in prompt
+    assert "isbn" not in prompt
+    assert "numberOfPages" not in prompt
+
+
+def test_book_prompt_describes_optional_book_only_gap_fills() -> None:
+    prompt = "\n".join(
+        part["text"]
+        for part in build_library_applicability_prompt(
+            {
+                "work_type": "Book",
+                "missing_fields": ["name", "isbn", "numberOfPages"],
+            }
+        )
+    )
+
+    assert "persisted schema.org work type is `Book`" in prompt
+    assert "Allowed keys: name, isbn, numberOfPages" in prompt
+    assert "optional, evidence-based gap fills" in prompt

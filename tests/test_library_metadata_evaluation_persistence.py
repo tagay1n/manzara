@@ -7,7 +7,7 @@ import pytest
 
 from app.modules.library.runtime.metadata import evaluation_persistence as persistence
 from app.modules.library.runtime.metadata.evaluation_types import Evaluation
-from app.modules.library.runtime.metadata.schema import BookPatch
+from app.modules.library.runtime.metadata.schema import MetadataPatch
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def test_applicable_result_fills_gaps_and_commits_before_clearing_checkpoint(
         reason="Tatar literary work",
         library_ddc="894.36",
         library_path=["Literature", "Tatar literature"],
-        metadata_patch=BookPatch(
+        metadata_patch=MetadataPatch(
             name="Replacement title",
             publisher={"@type": "Organization", "name": "Press"},
         ),

@@ -62,9 +62,17 @@ def _parse_evaluation_response(
         )
     merged = _schema_after_evaluation(doc.schema_org, evaluation)
     if issues := metadata_contract_issues(merged):
-        codes = ", ".join(sorted({item["code"] for item in issues}))
+        issue_pairs = ", ".join(
+            f"{code}@{path}"
+            for code, path in sorted(
+                {
+                    (str(item.get("code") or "unknown"), str(item.get("path") or "$"))
+                    for item in issues
+                }
+            )
+        )
         raise GeminiModelResponseError(
-            f"metadata evaluation violates {CONTRACT_VERSION}: {codes}"
+            f"metadata evaluation violates {CONTRACT_VERSION}: {issue_pairs}"
         )
     return evaluation
 

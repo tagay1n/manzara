@@ -16,7 +16,7 @@ from app.modules.library.runtime.models import (
 from app.modules.runtime_shared_utils import get_session
 from app.settings import _load_local_state_path
 
-EVALUATION_PROMPT_VERSION = "prompt.v3"
+EVALUATION_PROMPT_VERSION = "prompt.v4"
 _FLOW_ID = "library.metadata_evaluate"
 
 

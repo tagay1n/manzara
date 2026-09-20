@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.modules.library.runtime.metadata.schema import BookPatch
+from app.modules.library.runtime.metadata.schema import MetadataPatch
 
 
 class Evaluation(BaseModel):
@@ -15,7 +15,7 @@ class Evaluation(BaseModel):
 
     applicable: bool = True
     reason: str | None = None
-    metadata_patch: BookPatch | None = None
+    metadata_patch: MetadataPatch | None = None
     library_ddc: str | None = None
     library_path: list[str] | None = None
 

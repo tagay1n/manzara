@@ -21,21 +21,9 @@ LIBRARY_APPLICABILITY_TASK_TEXT = (
 METADATA_GAP_FILL_RULES_TEXT = (
     "Metadata gap filling rules (apply first): "
     "only use verifiable information from provided evidence; if uncertain do not guess; "
-    "do not fabricate author/date/ISBN/page count; keep UTF-8; "
+    "do not fabricate metadata; keep UTF-8; "
     "when multiple values are explicitly present include all as arrays. "
-    "For each requested field, put either extracted/normalized value or null in metadata_patch. "
-    "If page count is missing then return null."
-)
-
-METADATA_PATCH_SHAPE_TEXT = (
-    "metadata_patch must be a schema.org Book-compatible PARTIAL object (or null). "
-    "Allowed keys: name, author, publisher, datePublished, isbn, inLanguage, description, "
-    "numberOfPages, genre. Keep genre values as concise canonical English labels. "
-    "Do not include keys that were not requested. "
-    "Use schema.org-compatible nested shapes: "
-    "author=[{'@type':'Person'|'Organization','name':...}], "
-    "publisher={'@type':'Organization','name':...}. Keep description in the same "
-    "language and script as inLanguage; use English only for an English document."
+    "For each requested field, put either extracted/normalized value or null in metadata_patch."
 )
 
 LIBRARY_APPLICABILITY_RULES_TEXT = (
@@ -79,8 +67,19 @@ OUTPUT_CONTRACT_TEXT = (
 )
 
 
-def _build_missing_fields_text(missing_fields: list[str] | None) -> str:
-    items = [field for field in (missing_fields or []) if field in MISSING_FIELD_REQUESTS]
+def _requested_patch_fields(work_type: Any, missing_fields: list[str] | None) -> list[str]:
+    fields: list[str] = []
+    for field in missing_fields or []:
+        if field not in MISSING_FIELD_REQUESTS or field in fields:
+            continue
+        if field in {"isbn", "numberOfPages"} and work_type != "Book":
+            continue
+        fields.append(field)
+    return fields
+
+
+def _build_missing_fields_text(missing_fields: list[str]) -> str:
+    items = missing_fields
     if not items:
         return "No metadata gaps are requested in this run; metadata_patch must be null."
     lines = ["Missing metadata fields to fill (value or null):"]
@@ -89,17 +88,55 @@ def _build_missing_fields_text(missing_fields: list[str] | None) -> str:
     return "\n".join(lines)
 
 
+def _build_metadata_patch_shape_text(
+    work_type: Any, missing_fields: list[str]
+) -> str:
+    persisted_type = work_type if isinstance(work_type, str) and work_type else "unknown"
+    fields = missing_fields
+    allowed_keys = ", ".join(fields) if fields else "none"
+    text = (
+        f"The persisted schema.org work type is `{persisted_type}`. "
+        "metadata_patch must be a schema.org-compatible PARTIAL object (or null) for that work type. "
+        "You must not change `@type`; it is not a patch key. "
+        f"Allowed keys: {allowed_keys}. "
+        "Do not include keys that were not requested."
+    )
+    if "genre" in fields:
+        text += " Keep genre values as concise canonical English labels."
+    if "author" in fields:
+        text += " Use author=[{'@type':'Person'|'Organization','name':...}]."
+    if "publisher" in fields:
+        text += " Use publisher={'@type':'Organization','name':...}."
+    if "description" in fields:
+        text += (
+            " Keep description in the same language and script as inLanguage; "
+            "use English only for an English document."
+        )
+    if persisted_type == "Book" and {"isbn", "numberOfPages"} & set(fields):
+        text += (
+            " For Books, isbn and numberOfPages are optional, evidence-based gap fills "
+            "only when requested."
+        )
+    return text
+
+
 def build_library_applicability_prompt(
     payload: dict[str, Any],
     *,
     content_excerpt: str | None = None,
 ) -> list[dict[str, str]]:
     """Build a structured prompt: gap-fill metadata, then evaluate, then classify."""
-    missing_fields_text = _build_missing_fields_text(payload.get("missing_fields"))
+    requested_fields = _requested_patch_fields(
+        payload.get("work_type"), payload.get("missing_fields")
+    )
+    missing_fields_text = _build_missing_fields_text(requested_fields)
+    metadata_patch_shape_text = _build_metadata_patch_shape_text(
+        payload.get("work_type"), requested_fields
+    )
     prompt = [
         {"text": LIBRARY_APPLICABILITY_TASK_TEXT},
         {"text": METADATA_GAP_FILL_RULES_TEXT},
-        {"text": METADATA_PATCH_SHAPE_TEXT},
+        {"text": metadata_patch_shape_text},
         {"text": missing_fields_text},
         {"text": LIBRARY_APPLICABILITY_RULES_TEXT},
         {"text": LIBRARY_CLASSIFICATION_RULES_TEXT},
@@ -120,7 +157,6 @@ def build_library_applicability_prompt(
 __all__ = [
     "LIBRARY_APPLICABILITY_TASK_TEXT",
     "METADATA_GAP_FILL_RULES_TEXT",
-    "METADATA_PATCH_SHAPE_TEXT",
     "LIBRARY_APPLICABILITY_RULES_TEXT",
     "LIBRARY_CLASSIFICATION_RULES_TEXT",
     "OUTPUT_CONTRACT_TEXT",
