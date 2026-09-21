@@ -70,6 +70,8 @@ def register_page_routes(
             raise HTTPException(status_code=404, detail="Normalization entity type not found")
         if entity_type == "publisher":
             return RedirectResponse(url="/library/publishers", status_code=307)
+        if entity_type == "personality":
+            return RedirectResponse(url="/library/personalities", status_code=307)
         return _page_response(static_dir / "library-normalization.html")
 
     app.add_api_route("/library/normalization/{entity_type}", _normalization_page, methods=["GET"])

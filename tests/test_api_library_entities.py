@@ -3,126 +3,36 @@
 from __future__ import annotations
 
 
-def test_library_personalities_overview_endpoint(
+def test_library_personalities_endpoint_returns_canonical_workbench(
     test_client, override_operations
 ) -> None:
     client, _main_app = test_client
-
     override_operations(
-        "payload",
-        get_personality_overview=lambda: {
+        "normalization",
+        get_personalities=lambda _db: {
             "available": True,
-            "error": None,
-            "config_source": "config.yaml",
-            "stats": {
-                "total_mentions": 120,
-                "docs_with_authors": 80,
-                "unique_raw_names": 40,
-                "unique_normalized_names": 30,
-                "mixed_script_mentions": 5,
-                "patronymic_mentions": 12,
-            },
-            "top_personalities": [{"raw_name": "Габдулла Тукай", "docs_count": 9}],
+            "personality_count": 1,
+            "snapshot_token": "snapshot",
+            "items": [{"key": "canonical:7", "canonical_id": 7, "display_name": "Тукай Габдулла", "aliases": ["Габдулла Тукай"], "document_count": 2}],
         },
     )
-
     response = client.get("/api/library/personalities")
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["overview"]["available"] is True
-    assert payload["overview"]["stats"]["total_mentions"] == 120
-    assert payload["overview"]["top_personalities"][0]["raw_name"] == "Габдулла Тукай"
-
-
-def test_library_personalities_table_endpoint(test_client, override_operations) -> None:
-    client, _main_app = test_client
-
-    override_operations(
-        "entities",
-        list_personalities=lambda **_kwargs: {
-            "available": True,
-            "error": None,
-            "config_source": "config.yaml",
-            "page": 1,
-            "page_size": 25,
-            "total": 1,
-            "total_pages": 1,
-            "items": [
-                {
-                    "raw_name": "Габдулла Тукай",
-                    "normalized_name": "габдулла тукай",
-                    "script_label": "cyrillic",
-                    "docs_count": 9,
-                    "mentions_count": 10,
-                    "patronymic_mentions": 0,
-                }
-            ],
-        },
-    )
-
-    response = client.get("/api/library/personalities/table?page=1&page_size=25")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["available"] is True
-    assert payload["items"][0]["raw_name"] == "Габдулла Тукай"
-
-
-def test_library_personalities_insights_endpoint(
-    test_client, override_operations
-) -> None:
-    client, _main_app = test_client
-
-    override_operations(
-        "entities",
-        get_personality_insights=lambda **_kwargs: {
-            "available": True,
-            "error": None,
-            "config_source": "config.yaml",
-            "script_distribution": [
-                {"script_label": "cyrillic", "mentions_count": 10, "share_pct": 100.0}
-            ],
-            "variant_clusters": [
-                {"normalized_name": "габдулла тукай", "variants_count": 2}
-            ],
-            "ambiguous_queue": {"total": 1, "items": [{"raw_name": "Тукай"}]},
-        },
-    )
-
-    response = client.get("/api/library/personalities/insights")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["available"] is True
-    assert payload["script_distribution"][0]["script_label"] == "cyrillic"
-    assert payload["ambiguous_queue"]["total"] == 1
+    assert response.json()["items"][0]["canonical_id"] == 7
 
 
 def test_library_publishers_overview_endpoint(test_client, override_operations) -> None:
     client, _main_app = test_client
 
-    override_operations(
-        "payload",
-        get_publisher_overview=lambda: {
-            "available": True,
-            "error": None,
-            "config_source": "config.yaml",
-            "stats": {
-                "total_mentions": 90,
-                "docs_with_publishers": 70,
-                "unique_raw_names": 35,
-                "unique_normalized_names": 28,
-                "mixed_script_mentions": 4,
-                "org_marker_mentions": 17,
-            },
-            "top_publishers": [{"raw_name": "Таткнигоиздат", "docs_count": 11}],
-        },
-    )
+    override_operations("normalization", get_publishers=lambda _db: {
+        "available": True, "publisher_count": 1, "items": [], "snapshot_token": "snapshot"
+    })
 
     response = client.get("/api/library/publishers")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["overview"]["available"] is True
-    assert payload["overview"]["stats"]["docs_with_publishers"] == 70
-    assert payload["overview"]["top_publishers"][0]["raw_name"] == "Таткнигоиздат"
+    assert payload["available"] is True
+    assert payload["publisher_count"] == 1
 
 
 def test_library_publisher_documents_endpoint(test_client, override_operations) -> None:

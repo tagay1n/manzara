@@ -32,6 +32,7 @@ def test_maintenance_task_definitions_include_guarded_sync_task(tmp_path) -> Non
     assert by_id["maintenance.monocorpus_sync"]["title"] == "Sync"
     assert by_id["maintenance.sync_documents_s3"]["title"] == "Upload to Backblaze S3"
     assert "library.publisher_suggestions_refresh" not in task_ids
+    assert "library.personality_suggestions_refresh" not in task_ids
     assert "maintenance.dump_state" not in task_ids
     assert not any(task_id.startswith("library.collection_") for task_id in task_ids)
 
@@ -70,6 +71,11 @@ def test_metadata_tasks_belong_to_dedicated_catalog(tmp_path) -> None:
         "library.metadata_extract": ("metadata", "Extract metadata"),
     }
     assert "library.metadata_validate" not in by_id
+    personality = by_id["library.normalize_personalities"]
+    assert (personality["panel_id"], personality["title"]) == (
+        "library", "Normalize personalities"
+    )
+    assert personality["gemini_workers_default"] == 1
 
 
 def test_startup_seed_registry_contains_only_panels_and_tasks() -> None:
@@ -161,6 +167,9 @@ def test_route_operation_services_expose_expected_attributes() -> None:
     entities = build_entities_operations()
 
     assert callable(normalization.get_review_queue)
+    assert callable(normalization.get_personalities)
+    assert callable(normalization.list_personality_documents)
+    assert callable(normalization.apply_personalities)
     assert callable(normalization.list_canonicals)
     assert callable(normalization.create_canonical)
     assert callable(normalization.create_canonical_group)
@@ -187,8 +196,6 @@ def test_route_operation_services_expose_expected_attributes() -> None:
     assert callable(classification.preview_change_set)
     assert callable(classification.apply_change_set)
 
-    assert callable(entities.list_personalities)
-    assert callable(entities.get_personality_insights)
     assert callable(entities.list_publishers)
     assert callable(entities.get_publisher_insights)
     assert callable(entities.list_library_collections)

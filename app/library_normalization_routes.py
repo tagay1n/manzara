@@ -70,6 +70,31 @@ def register_library_normalization_routes(
         normalized = _require_normalization_entity(entity_type)
         return state, operations, normalized
 
+    @app.get("/api/library/personalities")
+    def get_library_personalities() -> JSONResponse:
+        """Return active, successfully structured canonical personalities only."""
+        state = state_provider()
+        return JSONResponse(operations_provider().get_personalities(state.db))
+
+    @app.get("/api/library/personalities/documents")
+    def get_library_personality_documents(
+        personality_key: str = q_text(max_length=500), page: int = q_page()
+    ) -> JSONResponse:
+        state = state_provider()
+        try:
+            return JSONResponse(operations_provider().list_personality_documents(state.db, personality_key, page=page))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/library/personalities/change-set/apply")
+    def apply_library_personality_changes(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+        state = state_provider()
+        try:
+            return JSONResponse(operations_provider().apply_personalities(state.db, payload))
+        except ValueError as exc:
+            detail = str(exc)
+            raise HTTPException(status_code=409 if "conflict" in detail else 400, detail=detail) from exc
+
     @app.get("/api/library/publishers")
     def get_library_publishers() -> JSONResponse:
         """Return the publisher-specific canonical and unresolved-name list."""

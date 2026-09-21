@@ -49,6 +49,9 @@ class CoreReadPayloadBuilders(Protocol):
 
 
 class NormalizationOperations(Protocol):
+    get_personalities: Callable[..., Any]
+    list_personality_documents: Callable[..., Any]
+    apply_personalities: Callable[..., Any]
     get_publishers: Callable[..., Any]
     list_publisher_documents: Callable[..., Any]
     apply_publishers: Callable[..., Any]
@@ -83,8 +86,6 @@ class ClassificationOperations(Protocol):
 
 
 class EntitiesOperations(Protocol):
-    list_personalities: Callable[..., Any]
-    get_personality_insights: Callable[..., Any]
     list_publishers: Callable[..., Any]
     get_publisher_insights: Callable[..., Any]
     list_library_collections: Callable[..., Any]

@@ -238,7 +238,7 @@ def test_gemini_400_rejection_does_not_exhaust_or_pause_key(test_client, monkeyp
 
     manager = GeminiRuntimeManager(
         main_app.state.db,
-        task_id="library.personality_suggestions_refresh",
+        task_id="library.normalize_personalities",
         panel_id="library",
     )
 

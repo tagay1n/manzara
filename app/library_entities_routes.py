@@ -22,45 +22,6 @@ def register_library_entities_routes(
 ) -> None:
     """Register personalities/publishers/collections endpoints."""
 
-    @app.get("/api/library/personalities")
-    def get_library_personalities() -> JSONResponse:
-        """Return personality overview payload."""
-        return JSONResponse(build_personality_payload())
-
-    @app.get("/api/library/personalities/table")
-    def get_library_personalities_table(
-        search: str = q_text(),
-        script_label: str = q_text(max_length=40),
-        min_docs: int = q_non_negative(),
-        page: int = q_page(),
-        page_size: int = q_page_size(default=25, max_value=100),
-        sort: str = q_text(default="docs_desc", max_length=40),
-    ) -> JSONResponse:
-        """Return paginated personalities table."""
-        operations = operations_provider()
-        payload = operations.list_personalities(
-            search=search,
-            script_label=script_label,
-            min_docs=min_docs,
-            page=page,
-            page_size=page_size,
-            sort=sort,
-        )
-        return JSONResponse(payload)
-
-    @app.get("/api/library/personalities/insights")
-    def get_library_personalities_insights(
-        cluster_limit: int = q_limit(default=24, minimum=1, maximum=100),
-        queue_limit: int = q_limit(default=40, minimum=1, maximum=200),
-    ) -> JSONResponse:
-        """Return personalities insight tabs payload."""
-        operations = operations_provider()
-        payload = operations.get_personality_insights(
-            cluster_limit=cluster_limit,
-            queue_limit=queue_limit,
-        )
-        return JSONResponse(payload)
-
     @app.get("/api/library/publishers")
     def get_library_publishers() -> JSONResponse:
         """Return publisher overview payload."""

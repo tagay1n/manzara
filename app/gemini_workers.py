@@ -16,7 +16,7 @@ GEMINI_TASK_IDS = frozenset(
         "library.metadata_extract",
         "maintenance.monocorpus_meta_evaluate",
         "library.collection_validate",
-        "library.personality_suggestions_refresh",
+        "library.normalize_personalities",
     }
 )
 

@@ -18,7 +18,7 @@ from app.modules.library.runtime import run_collection_validate
         "app/modules/library/runtime/run_collection_detect.py",
         "app/modules/library/runtime/run_collection_validate.py",
         "app/modules/library/runtime/run_collection_apply.py",
-        "app/modules/library/runtime/run_normalization_refresh.py",
+        "app/modules/library/runtime/run_normalize_personalities.py",
         "app/modules/library/runtime/run_generate_book_previews.py",
         "app/modules/library/runtime/run_metadata_extract.py",
         "app/modules/library/runtime/run_extract_non_pdf.py",

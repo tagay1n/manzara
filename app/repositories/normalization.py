@@ -47,6 +47,17 @@ class NormalizationRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_personality_source_documents(self) -> List[Dict[str, Any]]:
+        """Return the eligible JSON-LD source snapshot for personality extraction."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT md5, schema_org
+                   FROM metadata
+                   WHERE lib IS TRUE AND schema_org IS NOT NULL
+                   ORDER BY md5"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
 
     def get_normalization_canonical(self, canonical_id: int) -> Optional[Dict[str, Any]]:
         """Return one canonical entity by id."""
@@ -207,6 +218,174 @@ class NormalizationRepository:
                 (entity_type, int(canonical_id)),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_personality_checkpoint(self, raw_name: str) -> Optional[Dict[str, Any]]:
+        """Return the durable per-exact-name normalization checkpoint."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM personality_normalization_checkpoints WHERE raw_name=?",
+                (raw_name,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_personality_checkpoints(self) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM personality_normalization_checkpoints ORDER BY raw_name"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_personality_checkpoint(
+        self,
+        *,
+        raw_name: str,
+        source_fingerprint: str,
+        document_count: int,
+        mention_count: int,
+        source_roles: list[str],
+        prompt_version: str,
+        schema_version: str,
+        state: str,
+        attempted_models: Dict[str, Any] | None = None,
+        failure_context: str | None = None,
+        retryable: bool = False,
+        canonical_id: int | None = None,
+        completed: bool = False,
+    ) -> None:
+        """Upsert one resumable checkpoint in PostgreSQL immediately."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO personality_normalization_checkpoints (
+                        raw_name, source_fingerprint, document_count, mention_count,
+                        source_roles, prompt_version, schema_version, state,
+                        attempted_models, failure_context, retryable, canonical_id,
+                        updated_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?)
+                    ON CONFLICT(raw_name) DO UPDATE SET
+                        source_fingerprint=excluded.source_fingerprint,
+                        document_count=excluded.document_count,
+                        mention_count=excluded.mention_count,
+                        source_roles=excluded.source_roles,
+                        prompt_version=excluded.prompt_version,
+                        schema_version=excluded.schema_version,
+                        state=excluded.state,
+                        attempted_models=excluded.attempted_models,
+                        failure_context=excluded.failure_context,
+                        retryable=excluded.retryable,
+                        canonical_id=excluded.canonical_id,
+                        updated_at=excluded.updated_at,
+                        completed_at=excluded.completed_at
+                    """,
+                    (
+                        raw_name, source_fingerprint, int(document_count), int(mention_count),
+                        json.dumps(sorted(set(source_roles)), ensure_ascii=False), prompt_version,
+                        schema_version, state, json.dumps(attempted_models or {}, ensure_ascii=False),
+                        failure_context, bool(retryable), canonical_id, now, now if completed else None,
+                    ),
+                )
+
+    def persist_personality_normalization(
+        self,
+        *,
+        raw_name: str,
+        source_fingerprint: str,
+        document_count: int,
+        mention_count: int,
+        source_roles: list[str],
+        components: Dict[str, Any],
+        display_name: str,
+        identity_key: str,
+        model: str,
+        prompt_version: str,
+        schema_version: str,
+    ) -> Dict[str, Any]:
+        """Atomically retain a successful alias and exact-compatible canonical."""
+        now = utc_now()
+        fields = ("surname_full", "surname_initials", "name_full", "name_initials", "father_name_full", "father_name_initials", "title", "sex")
+        values = [components.get(field) for field in fields]
+        with self._lock:
+            with self._connect() as conn:
+                matches = conn.execute(
+                    """SELECT * FROM normalization_canonicals
+                       WHERE entity_type='personality' AND status='active' AND identity_key=?
+                       FOR UPDATE""",
+                    (identity_key,),
+                ).fetchall()
+                canonical = None
+                for row in matches:
+                    candidate = dict(row)
+                    if all(
+                        not candidate.get(field) or not components.get(field)
+                        or candidate.get(field) == components.get(field)
+                        for field in fields if field != "title"
+                    ):
+                        canonical = candidate
+                        break
+                if canonical is None:
+                    cur = conn.execute(
+                        """INSERT INTO normalization_canonicals (
+                            entity_type, display_name, normalized_name, status, merged_into_id,
+                            notes, surname_full, surname_initials, name_full, name_initials,
+                            father_name_full, father_name_initials, title, sex, identity_key,
+                            created_at, updated_at
+                        ) VALUES ('personality', ?, ?, 'active', NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (display_name, identity_key, *values, identity_key, now, now),
+                    )
+                    canonical_id = int(cur.lastrowid)
+                else:
+                    canonical_id = int(canonical["canonical_id"])
+                conn.execute(
+                    """INSERT INTO normalization_aliases (
+                        entity_type, raw_name, normalized_name, script_label, docs_count,
+                        mentions_count, marker_count, decision_status, canonical_id, confidence,
+                        source, reason, surname_full, surname_initials, name_full, name_initials,
+                        father_name_full, father_name_initials, title, sex, source_roles,
+                        successful_model, prompt_version, schema_version, created_at, updated_at
+                    ) VALUES ('personality', ?, ?, 'other', ?, ?, 0, 'linked', ?, 1.0,
+                        'gemini_personality_normalizer', 'structured_success', ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?::jsonb, ?, ?, ?, ?, ?)
+                    ON CONFLICT(entity_type, raw_name) DO UPDATE SET
+                        normalized_name=excluded.normalized_name, docs_count=excluded.docs_count,
+                        mentions_count=excluded.mentions_count, decision_status='linked',
+                        canonical_id=excluded.canonical_id, confidence=1.0, source=excluded.source,
+                        reason=excluded.reason, surname_full=excluded.surname_full,
+                        surname_initials=excluded.surname_initials, name_full=excluded.name_full,
+                        name_initials=excluded.name_initials, father_name_full=excluded.father_name_full,
+                        father_name_initials=excluded.father_name_initials, title=excluded.title,
+                        sex=excluded.sex, source_roles=excluded.source_roles,
+                        successful_model=excluded.successful_model,
+                        prompt_version=excluded.prompt_version, schema_version=excluded.schema_version,
+                        updated_at=excluded.updated_at
+                    """,
+                    (raw_name, identity_key, int(document_count), int(mention_count), canonical_id,
+                     *values, json.dumps(sorted(set(source_roles)), ensure_ascii=False), model,
+                     prompt_version, schema_version, now, now),
+                )
+                conn.execute(
+                    """INSERT INTO personality_normalization_checkpoints (
+                        raw_name, source_fingerprint, document_count, mention_count, source_roles,
+                        prompt_version, schema_version, state, attempted_models, failure_context,
+                        retryable, canonical_id, updated_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, 'succeeded', '{}'::jsonb, NULL, FALSE, ?, ?, ?)
+                    ON CONFLICT(raw_name) DO UPDATE SET
+                        source_fingerprint=excluded.source_fingerprint, document_count=excluded.document_count,
+                        mention_count=excluded.mention_count, source_roles=excluded.source_roles,
+                        prompt_version=excluded.prompt_version, schema_version=excluded.schema_version,
+                        state='succeeded', attempted_models='{}'::jsonb, failure_context=NULL,
+                        retryable=FALSE, canonical_id=excluded.canonical_id, updated_at=excluded.updated_at,
+                        completed_at=excluded.completed_at
+                    """,
+                    (raw_name, source_fingerprint, int(document_count), int(mention_count),
+                     json.dumps(sorted(set(source_roles)), ensure_ascii=False), prompt_version,
+                     schema_version, canonical_id, now, now),
+                )
+                row = conn.execute(
+                    "SELECT * FROM normalization_canonicals WHERE canonical_id=?", (canonical_id,)
+                ).fetchone()
+        return dict(row)
 
     def create_normalization_group(
         self,
@@ -602,6 +781,55 @@ class NormalizationRepository:
                 )
                 event_id = int(cur.lastrowid)
         return {"ok": True, "event_id": event_id, "touched_canonical_ids": sorted(touched)}
+
+    def apply_personality_change_set(self, change_set: Dict[str, Any]) -> Dict[str, Any]:
+        """Atomically rename or exact-manually-merge active canonical people."""
+        now = utc_now()
+        with self._lock:
+            with self._connect() as conn:
+                def canonical(canonical_id: int) -> Dict[str, Any]:
+                    row = conn.execute("SELECT * FROM normalization_canonicals WHERE canonical_id=? AND entity_type='personality' FOR UPDATE", (canonical_id,)).fetchone()
+                    if not row or row["status"] != "active":
+                        raise ValueError("personality canonical is missing or inactive")
+                    return dict(row)
+
+                def retain_alias(name: str, canonical_id: int, reason: str) -> None:
+                    conn.execute("""INSERT INTO normalization_aliases (
+                        entity_type, raw_name, normalized_name, script_label, docs_count, mentions_count,
+                        marker_count, decision_status, canonical_id, confidence, source, reason,
+                        source_roles, successful_model, created_at, updated_at
+                    ) VALUES ('personality', ?, ?, 'other', 0, 0, 0, 'linked', ?, 1.0,
+                        'personality_workbench', ?, '[]'::jsonb, 'manual', ?, ?)
+                    ON CONFLICT(entity_type, raw_name) DO UPDATE SET canonical_id=excluded.canonical_id,
+                        decision_status='linked', source=excluded.source, reason=excluded.reason,
+                        successful_model=COALESCE(normalization_aliases.successful_model, excluded.successful_model), updated_at=excluded.updated_at""",
+                        (name, name.casefold(), canonical_id, reason, now, now))
+
+                touched: set[int] = set()
+                for rename in change_set["renames"]:
+                    row = canonical(int(rename["canonical_id"]))
+                    canonical_id = int(row["canonical_id"])
+                    old = str(row["display_name"])
+                    new = str(rename["display_name"])
+                    conn.execute("UPDATE normalization_canonicals SET display_name=?, normalized_name=?, updated_at=? WHERE canonical_id=?", (new, new.casefold(), now, canonical_id))
+                    retain_alias(old, canonical_id, "rename")
+                    retain_alias(new, canonical_id, "rename")
+                    touched.add(canonical_id)
+                for merge in change_set["merges"]:
+                    rows = [canonical(int(value)) for value in merge["canonical_ids"]]
+                    target_id = min(int(row["canonical_id"]) for row in rows)
+                    for row in rows:
+                        source_id = int(row["canonical_id"])
+                        conn.execute("UPDATE normalization_aliases SET canonical_id=?, updated_at=? WHERE entity_type='personality' AND canonical_id=? AND decision_status='linked'", (target_id, now, source_id))
+                        retain_alias(str(row["display_name"]), target_id, "merge")
+                        if source_id != target_id:
+                            conn.execute("UPDATE normalization_canonicals SET status='merged', merged_into_id=?, updated_at=? WHERE canonical_id=?", (target_id, now, source_id))
+                    final_name = str(merge["display_name"])
+                    conn.execute("UPDATE normalization_canonicals SET display_name=?, normalized_name=?, updated_at=? WHERE canonical_id=?", (final_name, final_name.casefold(), now, target_id))
+                    retain_alias(final_name, target_id, "merge")
+                    touched.add(target_id)
+                cur = conn.execute("INSERT INTO normalization_events (entity_type, action, payload_json, reverted, created_at) VALUES ('personality', 'apply_personality_change_set', ?, 0, ?)", (json.dumps(change_set, ensure_ascii=False), now))
+        return {"ok": True, "event_id": int(cur.lastrowid), "touched_canonical_ids": sorted(touched)}
 
     def dismiss_normalization_suggestion(
         self, entity_type: str, suggestion_id: int

@@ -78,11 +78,12 @@ from app.modules.library.publisher_workbench import (
     get_publishers,
     list_publisher_documents,
 )
-from app.modules.library.personalities import (
-    get_personality_insights,
-    get_personality_overview,
-    list_personalities,
+from app.modules.library.personality_workbench import (
+    apply_personalities,
+    get_personalities,
+    list_personality_documents,
 )
+from app.modules.library.personalities import get_personality_overview
 from app.modules.library.publishers import (
     get_publisher_insights,
     get_publisher_overview,
@@ -144,6 +145,9 @@ class CoreReadPayloadBuildersService:
 
 @dataclass(frozen=True)
 class NormalizationOperationsService:
+    get_personalities: Callable[..., Any]
+    list_personality_documents: Callable[..., Any]
+    apply_personalities: Callable[..., Any]
     get_publishers: Callable[..., Any]
     list_publisher_documents: Callable[..., Any]
     apply_publishers: Callable[..., Any]
@@ -180,8 +184,6 @@ class ClassificationOperationsService:
 
 @dataclass(frozen=True)
 class EntitiesOperationsService:
-    list_personalities: Callable[..., Any]
-    get_personality_insights: Callable[..., Any]
     list_publishers: Callable[..., Any]
     get_publisher_insights: Callable[..., Any]
     list_library_collections: Callable[..., Any]
@@ -237,6 +239,9 @@ def build_payload_builder_operations() -> PayloadBuilderOperations:
 def build_normalization_operations() -> NormalizationOperations:
     """Build normalization route operations service."""
     return NormalizationOperationsService(
+        get_personalities=get_personalities,
+        list_personality_documents=list_personality_documents,
+        apply_personalities=apply_personalities,
         get_publishers=get_publishers,
         list_publisher_documents=list_publisher_documents,
         apply_publishers=apply_publishers,
@@ -277,8 +282,6 @@ def build_classification_operations() -> ClassificationOperations:
 def build_entities_operations() -> EntitiesOperations:
     """Build entities/personality/publisher/collection operations service."""
     return EntitiesOperationsService(
-        list_personalities=list_personalities,
-        get_personality_insights=get_personality_insights,
         list_publishers=list_publishers,
         get_publisher_insights=get_publisher_insights,
         list_library_collections=list_library_collections,
