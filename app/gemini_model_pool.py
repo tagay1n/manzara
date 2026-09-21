@@ -140,6 +140,10 @@ def run_ordered_model_pool(
     failed = {str(model) for model in already_attempted}
     unavailable: list[str] = []
     paused: list[tuple[str, GeminiServerPauseError]] = []
+    quota_attempts: dict[str, int] = {}
+    max_quota_rotations = int(
+        getattr(manager, "max_quota_rotations_per_model", 3)
+    )
 
     for model_name in ordered:
         if model_name in failed:
@@ -154,7 +158,11 @@ def run_ordered_model_pool(
                 run_id=run_id,
             )
             if attempt.outcome == "quota":
-                # The key was exhausted, not the model or document.
+                quota_attempts[model_name] = quota_attempts.get(model_name, 0) + 1
+                if quota_attempts[model_name] >= max_quota_rotations:
+                    unavailable.append(model_name)
+                    break
+                # Rotate only through the bounded number of quota domains.
                 continue
             if attempt.outcome == "unavailable":
                 unavailable.append(model_name)
@@ -208,6 +216,11 @@ def run_ordered_model_pool(
                 run_id=run_id,
             )
             if attempt.outcome == "quota":
+                quota_attempts[model_name] = quota_attempts.get(model_name, 0) + 1
+                if quota_attempts[model_name] >= max_quota_rotations:
+                    if model_name not in unavailable:
+                        unavailable.append(model_name)
+                    break
                 continue
             if attempt.outcome == "unavailable":
                 if model_name not in unavailable:

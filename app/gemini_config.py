@@ -25,6 +25,17 @@ class GeminiKey:
     quota_domain_id: str = ""
 
 
+@dataclass(frozen=True)
+class GeminiRuntimeLimits:
+    """Shared request and quota-circuit limits for every Gemini workflow."""
+
+    max_requests_per_minute: int = 10
+    max_quota_rotations_per_model: int = 3
+    generic_429_circuit_breaker_threshold: int = 3
+    generic_429_window_seconds: int = 60
+    generic_429_pause_seconds: int = 60
+
+
 def _candidate_config_paths() -> Sequence[Path]:
     env_override = str(os.environ.get("MANZARA_CONFIG_PATH") or "").strip()
     if env_override:
@@ -138,6 +149,56 @@ def _iter_new_shape(payload: Dict[str, Any]) -> Iterable[GeminiKey]:
 def load_gemini_keys() -> List[GeminiKey]:
     """Load configured Gemini keys from the account-grouped config shape."""
     return list(_iter_new_shape(_load_config_payload()))
+
+
+def _positive_runtime_integer(
+    runtime: Dict[str, Any], field: str, default: int
+) -> int:
+    value = runtime.get(field, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"gemini.runtime.{field} must be a positive integer")
+    return value
+
+
+def load_gemini_runtime_limits() -> GeminiRuntimeLimits:
+    """Load strict shared limits, retaining safe defaults when omitted."""
+    payload = _load_config_payload()
+    gemini = payload.get("gemini")
+    raw_runtime = gemini.get("runtime") if isinstance(gemini, dict) else None
+    if raw_runtime is None:
+        runtime: Dict[str, Any] = {}
+    elif isinstance(raw_runtime, dict):
+        runtime = raw_runtime
+    else:
+        raise ValueError("gemini.runtime must be a mapping")
+    defaults = GeminiRuntimeLimits()
+    return GeminiRuntimeLimits(
+        max_requests_per_minute=_positive_runtime_integer(
+            runtime,
+            "max_requests_per_minute",
+            defaults.max_requests_per_minute,
+        ),
+        max_quota_rotations_per_model=_positive_runtime_integer(
+            runtime,
+            "max_quota_rotations_per_model",
+            defaults.max_quota_rotations_per_model,
+        ),
+        generic_429_circuit_breaker_threshold=_positive_runtime_integer(
+            runtime,
+            "generic_429_circuit_breaker_threshold",
+            defaults.generic_429_circuit_breaker_threshold,
+        ),
+        generic_429_window_seconds=_positive_runtime_integer(
+            runtime,
+            "generic_429_window_seconds",
+            defaults.generic_429_window_seconds,
+        ),
+        generic_429_pause_seconds=_positive_runtime_integer(
+            runtime,
+            "generic_429_pause_seconds",
+            defaults.generic_429_pause_seconds,
+        ),
+    )
 
 
 def load_configured_gemini_model_names() -> List[str]:

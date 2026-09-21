@@ -113,6 +113,71 @@ def test_keys_default_to_independent_quota_domains_and_allow_project_grouping(
     assert keys[2].quota_domain_id == "project-shared"
 
 
+def test_runtime_limits_have_safe_shared_defaults(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.local.yaml"
+    config_path.write_text("gemini: {}\n", encoding="utf-8")
+    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
+
+    limits = gemini_config.load_gemini_runtime_limits()
+
+    assert limits.max_requests_per_minute == 10
+    assert limits.max_quota_rotations_per_model == 3
+    assert limits.generic_429_circuit_breaker_threshold == 3
+    assert limits.generic_429_window_seconds == 60
+    assert limits.generic_429_pause_seconds == 60
+
+
+def test_runtime_limits_are_strict_positive_integers(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.local.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gemini": {
+                    "runtime": {
+                        "max_requests_per_minute": False,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
+
+    with pytest.raises(ValueError, match="max_requests_per_minute"):
+        gemini_config.load_gemini_runtime_limits()
+
+
+def test_runtime_limits_load_configured_values(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.local.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "gemini": {
+                    "runtime": {
+                        "max_requests_per_minute": 12,
+                        "max_quota_rotations_per_model": 2,
+                        "generic_429_circuit_breaker_threshold": 4,
+                        "generic_429_window_seconds": 90,
+                        "generic_429_pause_seconds": 120,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
+
+    limits = gemini_config.load_gemini_runtime_limits()
+
+    assert limits.max_requests_per_minute == 12
+    assert limits.max_quota_rotations_per_model == 2
+    assert limits.generic_429_circuit_breaker_threshold == 4
+    assert limits.generic_429_window_seconds == 90
+    assert limits.generic_429_pause_seconds == 120
+
+
 def test_normalization_uses_full_shared_ordered_model_pool(monkeypatch) -> None:
     from app.modules.library import normalization_suggestions as normalization
 

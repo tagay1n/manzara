@@ -11,7 +11,6 @@ from app.modules.library.non_pdf_extraction import (
     PreparedExtraction,
     prepare_extraction,
     render_markdown,
-    validate_rendered_markdown,
 )
 from app.modules.library.non_pdf_media import _collect_assets
 

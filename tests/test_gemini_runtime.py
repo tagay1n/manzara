@@ -180,6 +180,96 @@ def test_generic_429_cools_quota_domain_without_exhausting_key(monkeypatch) -> N
     assert db.events[-1][0] == "gemini.quota.cooldown.started"
 
 
+def test_three_distinct_generic_429_domains_open_shared_model_circuit(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 9, 13, 10, 0, tzinfo=timezone.utc)
+
+    class Db:
+        def __init__(self) -> None:
+            self.pauses = []
+            self.events = []
+
+        def mark_gemini_error(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return None
+
+        def get_gemini_quota_domain_model_state(self, *_args):  # noqa: ANN002
+            return None
+
+        def set_gemini_quota_domain_model_cooldown(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return None
+
+        def record_gemini_generic_quota_signal(self, **_kwargs):  # noqa: ANN003
+            return 3
+
+        def set_gemini_model_pause(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            self.pauses.append((args, kwargs))
+
+        def insert_event(self, event_type, **kwargs):  # noqa: ANN001
+            self.events.append((event_type, kwargs))
+
+    db = Db()
+    manager = GeminiRuntimeManager(db, task_id="task", panel_id="library")
+    lease = GeminiLease(
+        "account", "key-id", "secret", "masked", "model", quota_domain_id="project-c"
+    )
+    monkeypatch.setattr("app.gemini_runtime._utc_now", lambda: now)
+
+    with pytest.raises(GeminiQuotaExceededError):
+        manager._handle_error(
+            lease=lease,
+            error=_QuotaError({"error": {"message": "Resource exhausted"}}),
+            run_id=3,
+        )
+
+    assert db.pauses[0][0] == (
+        "model",
+        "2026-09-13T10:01:00+00:00",
+    )
+    assert db.pauses[0][1] == {"reason": "generic_429_circuit_breaker"}
+    assert any(event[0] == "gemini.model.quota_circuit_opened" for event in db.events)
+
+
+def test_global_request_gate_waits_before_reserving_another_physical_call(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 9, 13, 10, 0, tzinfo=timezone.utc)
+
+    class Db:
+        def __init__(self) -> None:
+            self.claims = 0
+            self.events = []
+
+        def try_claim_gemini_request_slot(self, **_kwargs):  # noqa: ANN003
+            self.claims += 1
+            if self.claims == 1:
+                return {
+                    "claimed": False,
+                    "oldest_request_at": "2026-09-13T09:59:30+00:00",
+                    "requests_in_window": 10,
+                }
+            return {
+                "claimed": True,
+                "oldest_request_at": None,
+                "requests_in_window": 10,
+            }
+
+        def insert_event(self, event_type, **kwargs):  # noqa: ANN001
+            self.events.append((event_type, kwargs))
+
+    db = Db()
+    manager = GeminiRuntimeManager(db, task_id="task", panel_id="library")
+    waits = []
+    monkeypatch.setattr("app.gemini_runtime._utc_now", lambda: now)
+    monkeypatch.setattr(manager, "_sleep_until", lambda wait_until: waits.append(wait_until))
+
+    manager._reserve_request_capacity(model_name="model", run_id=7)
+
+    assert db.claims == 2
+    assert waits == [datetime(2026, 9, 13, 10, 0, 30, tzinfo=timezone.utc)]
+    assert [event[0] for event in db.events] == ["gemini.rate_limit.waiting"]
+
+
 def test_explicit_daily_429_exhausts_the_whole_quota_domain_model() -> None:
     class Db:
         def __init__(self) -> None:
@@ -370,6 +460,7 @@ def test_long_request_renews_and_releases_account_lease(monkeypatch) -> None:
         def __init__(self) -> None:
             self.renewals = 0
             self.releases = 0
+            self.quota_signal_clears = 0
 
         def renew_gemini_account_lease(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
             self.renewals += 1
@@ -381,6 +472,10 @@ def test_long_request_renews_and_releases_account_lease(monkeypatch) -> None:
 
         def mark_gemini_success(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
             return None
+
+        def clear_gemini_generic_quota_signals(self, _model_name):  # noqa: ANN001
+            self.quota_signal_clears += 1
+            return 1
 
         def insert_event(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
             return None
@@ -399,3 +494,4 @@ def test_long_request_renews_and_releases_account_lease(monkeypatch) -> None:
     assert result == "ok"
     assert db.renewals >= 2
     assert db.releases == 1
+    assert db.quota_signal_clears == 1

@@ -66,3 +66,59 @@ def test_personality_change_set_accepts_strict_structured_correction() -> None:
         personality_workbench.validate_change_set({
             "corrections": [{"canonical_id": 1, "components": {"unknown": "x"}}]
         })
+
+
+def test_personality_repository_applies_structured_correction_and_retains_old_name(
+    test_client,
+) -> None:
+    _client, main_app = test_client
+    db = main_app.state.db
+    canonical = db.persist_personality_normalization(
+        raw_name="Г. Тукай",
+        source_fingerprint="source-v1",
+        document_count=2,
+        mention_count=3,
+        source_roles=["author"],
+        components={
+            "surname_full": "Тукай",
+            "surname_initials": None,
+            "name_full": None,
+            "name_initials": "Г.",
+            "father_name_full": None,
+            "father_name_initials": None,
+            "title": None,
+            "sex": "M",
+        },
+        display_name="Тукай Г.",
+        identity_key="тукай г.",
+        model="gemini-test",
+        prompt_version="prompt-v1",
+        schema_version="schema-v1",
+    )
+    canonical_id = int(canonical["canonical_id"])
+    change_set = personality_workbench.validate_change_set(
+        {
+            "corrections": [
+                {
+                    "canonical_id": canonical_id,
+                    "components": {
+                        "surname_full": "Тукай",
+                        "name_full": "Габдулла",
+                        "father_name_full": "Мөхәммәтгариф",
+                        "sex": "M",
+                    },
+                }
+            ]
+        }
+    )
+
+    result = db.apply_personality_change_set(change_set)
+
+    updated = db.get_normalization_canonical(canonical_id)
+    assert result["touched_canonical_ids"] == [canonical_id]
+    assert updated["display_name"] == "Тукай Габдулла Мөхәммәтгариф улы"
+    assert updated["surname_full"] == "Тукай"
+    assert updated["name_full"] == "Габдулла"
+    assert updated["father_name_full"] == "Мөхәммәтгариф"
+    assert updated["identity_key"] == change_set["corrections"][0]["identity_key"]
+    assert db.get_normalization_alias("personality", "Тукай Г.")["canonical_id"] == canonical_id

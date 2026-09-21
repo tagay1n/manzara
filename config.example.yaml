@@ -9,6 +9,13 @@ local_state_path: ~/.manzara/state/runtime.sqlite3
 # AI models and quota accounts
 gemini:
   metadata_extraction_operational_retry_cooldown_seconds: 21600
+  runtime:
+    # Shared across every Gemini-backed task and persisted in local runtime state.
+    max_requests_per_minute: 10
+    max_quota_rotations_per_model: 3
+    generic_429_circuit_breaker_threshold: 3
+    generic_429_window_seconds: 60
+    generic_429_pause_seconds: 60
   model_pool:
     - "gemini-3.7-flash"
     - "gemini-3.6-flash"

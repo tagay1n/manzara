@@ -708,23 +708,6 @@ class NormalizationRepository:
                     "aliases": [dict(row) for row in conn.execute("SELECT * FROM normalization_aliases WHERE entity_type='publisher' ORDER BY alias_id FOR UPDATE").fetchall()],
                 }
                 touched: set[int] = set()
-                component_fields = (
-                    "surname_full", "surname_initials", "name_full", "name_initials",
-                    "father_name_full", "father_name_initials", "title", "sex",
-                )
-                for correction in change_set.get("corrections", []):
-                    row = canonical(int(correction["canonical_id"]))
-                    canonical_id = int(row["canonical_id"])
-                    old = str(row["display_name"])
-                    components = correction["components"]
-                    assignments = ", ".join(f"{field}=?" for field in component_fields)
-                    conn.execute(
-                        f"UPDATE normalization_canonicals SET {assignments}, display_name=?, normalized_name=?, identity_key=?, updated_at=? WHERE canonical_id=?",
-                        (*[components.get(field) for field in component_fields], correction["display_name"], correction["identity_key"], correction["identity_key"], now, canonical_id),
-                    )
-                    if old != correction["display_name"]:
-                        retain_alias(old, canonical_id, "structured_correction")
-                    touched.add(canonical_id)
                 for rename in change_set["renames"]:
                     canonical = active_canonical(conn, int(rename["canonical_id"]))
                     canonical_id = int(canonical["canonical_id"])
@@ -832,6 +815,46 @@ class NormalizationRepository:
                         (name, name.casefold(), canonical_id, reason, now, now))
 
                 touched: set[int] = set()
+                component_fields = (
+                    "surname_full",
+                    "surname_initials",
+                    "name_full",
+                    "name_initials",
+                    "father_name_full",
+                    "father_name_initials",
+                    "title",
+                    "sex",
+                )
+                for correction in change_set.get("corrections", []):
+                    row = canonical(int(correction["canonical_id"]))
+                    canonical_id = int(row["canonical_id"])
+                    old = str(row["display_name"])
+                    components = correction["components"]
+                    assignments = ", ".join(
+                        f"{field}=?" for field in component_fields
+                    )
+                    conn.execute(
+                        f"""UPDATE normalization_canonicals
+                            SET {assignments}, display_name=?, normalized_name=?,
+                                identity_key=?, updated_at=?
+                            WHERE canonical_id=?""",
+                        (
+                            *[
+                                components.get(field)
+                                for field in component_fields
+                            ],
+                            correction["display_name"],
+                            correction["identity_key"],
+                            correction["identity_key"],
+                            now,
+                            canonical_id,
+                        ),
+                    )
+                    if old != correction["display_name"]:
+                        retain_alias(
+                            old, canonical_id, "structured_correction"
+                        )
+                    touched.add(canonical_id)
                 for rename in change_set["renames"]:
                     row = canonical(int(rename["canonical_id"]))
                     canonical_id = int(row["canonical_id"])
@@ -855,7 +878,8 @@ class NormalizationRepository:
                     retain_alias(final_name, target_id, "merge")
                     touched.add(target_id)
                 cur = conn.execute("INSERT INTO normalization_events (entity_type, action, payload_json, reverted, created_at) VALUES ('personality', 'apply_personality_change_set', ?, 0, ?)", (json.dumps(change_set, ensure_ascii=False), now))
-        return {"ok": True, "event_id": int(cur.lastrowid), "touched_canonical_ids": sorted(touched)}
+                event_id = int(cur.lastrowid)
+        return {"ok": True, "event_id": event_id, "touched_canonical_ids": sorted(touched)}
 
     def dismiss_normalization_suggestion(
         self, entity_type: str, suggestion_id: int

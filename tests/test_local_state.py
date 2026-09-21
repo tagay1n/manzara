@@ -33,6 +33,8 @@ def test_local_state_is_private_wal_database_with_runtime_tables(tmp_path: Path)
         "events",
         "gemini_keys",
         "gemini_quota_domain_model_state",
+        "gemini_request_slots",
+        "gemini_generic_quota_signals",
         "ai_item_checkpoints",
     } <= tables
 
@@ -191,5 +193,92 @@ def test_operational_repositories_do_not_open_postgres(tmp_path: Path) -> None:
         ] == 1
         assert db.reset_all_gemini_exhaustion() == 1
         assert db.get_gemini_quota_domain_model_state("account:key", "model") is None
+    finally:
+        db.close()
+
+
+def test_gemini_request_slots_enforce_one_global_cross_task_limit(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state" / "runtime.sqlite3"
+    LocalStateStore(path).initialize()
+    db = Database(
+        "postgresql://unused/runtime",
+        connection_factory=lambda _url: (_ for _ in ()).throw(
+            AssertionError("must remain local")
+        ),
+        local_state_path=path,
+    )
+    try:
+        first = db.try_claim_gemini_request_slot(
+            model_name="model-a",
+            task_id="task-a",
+            run_id=1,
+            now_ts="2026-09-21T10:00:30+00:00",
+            window_start_ts="2026-09-21T09:59:30+00:00",
+            max_requests=2,
+        )
+        second = db.try_claim_gemini_request_slot(
+            model_name="model-b",
+            task_id="task-b",
+            run_id=2,
+            now_ts="2026-09-21T10:00:31+00:00",
+            window_start_ts="2026-09-21T09:59:31+00:00",
+            max_requests=2,
+        )
+        denied = db.try_claim_gemini_request_slot(
+            model_name="model-a",
+            task_id="task-c",
+            run_id=3,
+            now_ts="2026-09-21T10:00:32+00:00",
+            window_start_ts="2026-09-21T09:59:32+00:00",
+            max_requests=2,
+        )
+
+        assert first["claimed"] is True
+        assert second["claimed"] is True
+        assert denied == {
+            "claimed": False,
+            "oldest_request_at": "2026-09-21T10:00:30+00:00",
+            "requests_in_window": 2,
+        }
+    finally:
+        db.close()
+
+
+def test_generic_quota_signals_count_distinct_domains_and_clear_on_success(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state" / "runtime.sqlite3"
+    LocalStateStore(path).initialize()
+    db = Database(
+        "postgresql://unused/runtime",
+        connection_factory=lambda _url: (_ for _ in ()).throw(
+            AssertionError("must remain local")
+        ),
+        local_state_path=path,
+    )
+    try:
+        first = db.record_gemini_generic_quota_signal(
+            model_name="model",
+            quota_domain_id="project-a",
+            now_ts="2026-09-21T10:00:00+00:00",
+            window_start_ts="2026-09-21T09:59:00+00:00",
+        )
+        repeated = db.record_gemini_generic_quota_signal(
+            model_name="model",
+            quota_domain_id="project-a",
+            now_ts="2026-09-21T10:00:10+00:00",
+            window_start_ts="2026-09-21T09:59:10+00:00",
+        )
+        second = db.record_gemini_generic_quota_signal(
+            model_name="model",
+            quota_domain_id="project-b",
+            now_ts="2026-09-21T10:00:20+00:00",
+            window_start_ts="2026-09-21T09:59:20+00:00",
+        )
+
+        assert (first, repeated, second) == (1, 1, 2)
+        assert db.clear_gemini_generic_quota_signals("model") == 2
     finally:
         db.close()

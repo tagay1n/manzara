@@ -17,6 +17,7 @@ from app.gemini_config import (
     GeminiKey,
     load_configured_gemini_model_names,
     load_gemini_keys,
+    load_gemini_runtime_limits,
 )
 
 
@@ -286,6 +287,11 @@ class GeminiRuntimeManager:
         self.worker_id = worker_id
         self._configured_keys: Optional[List[GeminiKey]] = None
         self._prepared_models: set[str] = set()
+        self._limits = load_gemini_runtime_limits()
+
+    @property
+    def max_quota_rotations_per_model(self) -> int:
+        return self._limits.max_quota_rotations_per_model
 
     def _emit(
         self, event_type: str, payload: Dict[str, Any], *, run_id: Optional[int] = None
@@ -534,6 +540,54 @@ class GeminiRuntimeManager:
                 return
             time.sleep(min(float(remaining), _MAX_WAIT_SLICE_SECONDS))
 
+    def _reserve_request_capacity(
+        self, *, model_name: str, run_id: Optional[int]
+    ) -> None:
+        """Reserve a global physical-request slot, waiting stop-safely if full."""
+        claim = getattr(self.db, "try_claim_gemini_request_slot", None)
+        if claim is None:
+            return
+        waiting_event_emitted = False
+        while True:
+            if self.should_stop():
+                raise GeminiStopRequestedError(
+                    "Gemini rate-limit wait interrupted by graceful stop"
+                )
+            now_utc = _utc_now()
+            decision = claim(
+                model_name=model_name,
+                task_id=self.task_id,
+                run_id=run_id,
+                now_ts=_iso_utc(now_utc),
+                window_start_ts=_iso_utc(now_utc - timedelta(seconds=60)),
+                max_requests=self._limits.max_requests_per_minute,
+            )
+            if bool(decision.get("claimed")):
+                return
+            oldest = _parse_ts(decision.get("oldest_request_at"))
+            wait_until = (
+                oldest + timedelta(seconds=60)
+                if oldest is not None
+                else now_utc + timedelta(seconds=1)
+            )
+            if not waiting_event_emitted:
+                self._emit(
+                    "gemini.rate_limit.waiting",
+                    {
+                        "model_name": model_name,
+                        "max_requests_per_minute": (
+                            self._limits.max_requests_per_minute
+                        ),
+                        "requests_in_window": int(
+                            decision.get("requests_in_window") or 0
+                        ),
+                        "wait_until": _iso_utc(wait_until),
+                    },
+                    run_id=run_id,
+                )
+                waiting_event_emitted = True
+            self._sleep_until(wait_until)
+
     def acquire_key(
         self, *, model_name: str, run_id: Optional[int] = None
     ) -> GeminiLease:
@@ -588,6 +642,7 @@ class GeminiRuntimeManager:
                 continue
 
             key = decision["key"]
+            self._reserve_request_capacity(model_name=model_name, run_id=run_id)
             lease_token = uuid.uuid4().hex
             lease_expires_at = now_utc + timedelta(seconds=_ACCOUNT_LEASE_TTL_SECONDS)
             claim_account = getattr(self.db, "try_claim_gemini_account", None)
@@ -754,6 +809,53 @@ class GeminiRuntimeManager:
                     },
                     run_id=run_id,
                 )
+                record_signal = getattr(
+                    self.db, "record_gemini_generic_quota_signal", None
+                )
+                domain_count = 0
+                if record_signal is not None:
+                    domain_count = record_signal(
+                        model_name=lease.model_name,
+                        quota_domain_id=quota_domain_id,
+                        now_ts=now_ts,
+                        window_start_ts=_iso_utc(
+                            now_utc
+                            - timedelta(
+                                seconds=self._limits.generic_429_window_seconds
+                            )
+                        ),
+                    )
+                if (
+                    domain_count
+                    >= self._limits.generic_429_circuit_breaker_threshold
+                ):
+                    pause_until = now_utc + timedelta(
+                        seconds=self._limits.generic_429_pause_seconds
+                    )
+                    set_model_pause = getattr(
+                        self.db, "set_gemini_model_pause", None
+                    )
+                    if set_model_pause is not None:
+                        set_model_pause(
+                            lease.model_name,
+                            _iso_utc(pause_until),
+                            reason="generic_429_circuit_breaker",
+                        )
+                    self._emit(
+                        "gemini.model.quota_circuit_opened",
+                        {
+                            "model_name": lease.model_name,
+                            "distinct_quota_domains": domain_count,
+                            "threshold": (
+                                self._limits.generic_429_circuit_breaker_threshold
+                            ),
+                            "window_seconds": (
+                                self._limits.generic_429_window_seconds
+                            ),
+                            "pause_until": _iso_utc(pause_until),
+                        },
+                        run_id=run_id,
+                    )
             raise GeminiQuotaExceededError(
                 f"Gemini quota unavailable for domain={quota_domain_id} "
                 f"model={lease.model_name}"
@@ -949,6 +1051,11 @@ class GeminiRuntimeManager:
                     raise
             else:
                 now_utc = _utc_now()
+                clear_signals = getattr(
+                    self.db, "clear_gemini_generic_quota_signals", None
+                )
+                if clear_signals is not None:
+                    clear_signals(lease.model_name)
                 clear_quota = getattr(
                     self.db, "clear_gemini_quota_domain_model_state", None
                 )

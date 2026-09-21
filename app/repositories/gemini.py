@@ -62,6 +62,84 @@ class GeminiRepository:
                         (item["account_id"], now, now),
                     )
 
+    def try_claim_gemini_request_slot(
+        self,
+        *,
+        model_name: str,
+        task_id: Optional[str],
+        run_id: Optional[int],
+        now_ts: str,
+        window_start_ts: str,
+        max_requests: int,
+    ) -> Dict[str, Any]:
+        """Atomically reserve one slot in the shared sliding request window."""
+        with self._runtime_connect(immediate=True) as conn:
+            conn.execute(
+                "DELETE FROM gemini_request_slots WHERE requested_at <= ?",
+                (window_start_ts,),
+            )
+            row = conn.execute(
+                "SELECT COUNT(*) AS request_count, MIN(requested_at) AS oldest_request_at "
+                "FROM gemini_request_slots"
+            ).fetchone() or {}
+            request_count = int(row.get("request_count") or 0)
+            if request_count >= max_requests:
+                return {
+                    "claimed": False,
+                    "oldest_request_at": row.get("oldest_request_at"),
+                    "requests_in_window": request_count,
+                }
+            conn.execute(
+                """INSERT INTO gemini_request_slots (
+                       model_name, task_id, run_id, requested_at
+                   ) VALUES (?, ?, ?, ?)""",
+                (model_name, task_id, run_id, now_ts),
+            )
+            return {
+                "claimed": True,
+                "oldest_request_at": row.get("oldest_request_at"),
+                "requests_in_window": request_count + 1,
+            }
+
+    def record_gemini_generic_quota_signal(
+        self,
+        *,
+        model_name: str,
+        quota_domain_id: str,
+        now_ts: str,
+        window_start_ts: str,
+    ) -> int:
+        """Record one generic 429 and count distinct recent quota domains."""
+        with self._runtime_connect(immediate=True) as conn:
+            conn.execute(
+                "DELETE FROM gemini_generic_quota_signals "
+                "WHERE model_name = ? AND last_seen_at <= ?",
+                (model_name, window_start_ts),
+            )
+            conn.execute(
+                """INSERT INTO gemini_generic_quota_signals (
+                       model_name, quota_domain_id, last_seen_at
+                   ) VALUES (?, ?, ?)
+                   ON CONFLICT(model_name, quota_domain_id) DO UPDATE SET
+                       last_seen_at=excluded.last_seen_at""",
+                (model_name, quota_domain_id, now_ts),
+            )
+            row = conn.execute(
+                "SELECT COUNT(*) AS domain_count "
+                "FROM gemini_generic_quota_signals WHERE model_name = ?",
+                (model_name,),
+            ).fetchone() or {}
+        return int(row.get("domain_count") or 0)
+
+    def clear_gemini_generic_quota_signals(self, model_name: str) -> int:
+        """Close the generic-429 circuit history after a successful request."""
+        with self._runtime_connect(immediate=True) as conn:
+            cur = conn.execute(
+                "DELETE FROM gemini_generic_quota_signals WHERE model_name = ?",
+                (model_name,),
+            )
+        return int(cur.rowcount or 0)
+
     def ensure_gemini_runtime_cycle(self, cycle_label: str) -> Dict[str, Any]:
         """Read the current cycle cheaply and reset it atomically when needed."""
         now = utc_now()

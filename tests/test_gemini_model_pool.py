@@ -84,6 +84,32 @@ def test_model_pool_retries_same_model_after_quota_key_rotation() -> None:
     assert manager.calls == ["first", "first"]
 
 
+def test_model_pool_bounds_quota_domain_rotation_per_model() -> None:
+    manager = _Manager(
+        {
+            "first": [
+                GeminiQuotaExceededError("domain one"),
+                GeminiQuotaExceededError("domain two"),
+                GeminiQuotaExceededError("domain three"),
+                "must not run",
+            ]
+        }
+    )
+
+    with pytest.raises(GeminiModelPoolUnavailableError) as exc_info:
+        run_ordered_model_pool(
+            manager=manager,
+            models=["first"],
+            run_id=18,
+            request=lambda _model, _key, _lease: None,
+            parse=lambda raw: raw,
+            record_failure=lambda *_args: None,
+        )
+
+    assert exc_info.value.unavailable_models == ("first",)
+    assert manager.calls == ["first", "first", "first"]
+
+
 def test_model_pool_does_not_mark_unavailable_model_as_content_failure() -> None:
     manager = _Manager(
         {
