@@ -20,11 +20,11 @@ from pydantic import BaseModel, ConfigDict, model_validator
 _PERSON_ROLES = ("author", "editor", "translator", "illustrator", "contributor")
 _COMPONENT_FIELDS = (
     "surname_full",
-    "surname_initials",
+    "surname_initial",
     "name_full",
-    "name_initials",
+    "name_initial",
     "father_name_full",
-    "father_name_initials",
+    "father_name_initial",
     "title",
 )
 
@@ -43,9 +43,9 @@ def _initials(value: str | None) -> str | None:
     parts = [part.strip() for part in value.replace(".", " ").split() if part.strip()]
     if not parts:
         return None
-    if any(len(part) != 1 or not part.isalpha() for part in parts):
-        raise ValueError("initial fields must contain initials such as А.")
-    return " ".join(f"{part.upper()}." for part in parts)
+    if len(parts) != 1 or len(parts[0]) != 1 or not parts[0].isalpha():
+        raise ValueError("initial fields must contain one initial such as А.")
+    return f"{parts[0].upper()}."
 
 
 class PersonComponents(BaseModel):
@@ -54,11 +54,11 @@ class PersonComponents(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     surname_full: str | None = None
-    surname_initials: str | None = None
+    surname_initial: str | None = None
     name_full: str | None = None
-    name_initials: str | None = None
+    name_initial: str | None = None
     father_name_full: str | None = None
-    father_name_initials: str | None = None
+    father_name_initial: str | None = None
     title: str | None = None
     sex: Literal["M", "F"] | None = None
 
@@ -66,16 +66,16 @@ class PersonComponents(BaseModel):
     def normalize_and_validate(self) -> "PersonComponents":
         for field in _COMPONENT_FIELDS:
             value = _text(getattr(self, field))
-            if field.endswith("_initials"):
+            if field.endswith("_initial"):
                 value = _initials(value)
             setattr(self, field, value)
         if not any(
             getattr(self, field)
             for field in (
                 "surname_full",
-                "surname_initials",
+                "surname_initial",
                 "name_full",
-                "name_initials",
+                "name_initial",
             )
         ):
             raise ValueError("at least one usable surname or personal-name component is required")
@@ -156,9 +156,9 @@ def extract_personality_candidates(documents: list[dict[str, Any]]) -> list[Pers
 def build_canonical_name(components: PersonComponents) -> str:
     """Derive the visible canonical name without using titles as identity."""
     parts = [
-        components.surname_full or components.surname_initials,
-        components.name_full or components.name_initials,
-        components.father_name_full or components.father_name_initials,
+        components.surname_full or components.surname_initial,
+        components.name_full or components.name_initial,
+        components.father_name_full or components.father_name_initial,
     ]
     result = [part for part in parts if part]
     if parts[2] and components.sex == "M":
@@ -171,9 +171,9 @@ def build_canonical_name(components: PersonComponents) -> str:
 def personality_identity_key(components: PersonComponents) -> str:
     """Stable exact-match key; titles and inferred sex are intentionally excluded."""
     values = [
-        components.surname_full or components.surname_initials or "",
-        components.name_full or components.name_initials or "",
-        components.father_name_full or components.father_name_initials or "",
+        components.surname_full or components.surname_initial or "",
+        components.name_full or components.name_initial or "",
+        components.father_name_full or components.father_name_initial or "",
     ]
     return "\x1f".join(unicodedata.normalize("NFC", value).casefold() for value in values)
 
@@ -184,6 +184,21 @@ def personality_source_fingerprint(candidate: PersonalityCandidate) -> str:
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
+def storage_components(components: PersonComponents) -> dict[str, str | None]:
+    """Map singular external fields onto the existing durable column names."""
+    values = components.model_dump()
+    return {
+        "surname_full": values["surname_full"],
+        "surname_initials": values["surname_initial"],
+        "name_full": values["name_full"],
+        "name_initials": values["name_initial"],
+        "father_name_full": values["father_name_full"],
+        "father_name_initials": values["father_name_initial"],
+        "title": values["title"],
+        "sex": values["sex"],
+    }
+
+
 __all__ = [
     "PersonComponents",
     "PersonalityCandidate",
@@ -191,4 +206,5 @@ __all__ = [
     "extract_personality_candidates",
     "personality_identity_key",
     "personality_source_fingerprint",
+    "storage_components",
 ]

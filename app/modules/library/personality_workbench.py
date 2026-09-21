@@ -7,16 +7,23 @@ import json
 from typing import Any
 
 from app.modules.library.publisher_workbench import _DOCUMENT_PAGE_SIZE, _id, _name
+from app.modules.library.personality_normalization import (
+    PersonComponents,
+    build_canonical_name,
+    personality_identity_key,
+    storage_components,
+)
 from app.modules.library.stats import create_runtime_engine, dispose_runtime_engine
 from sqlalchemy import text
 
 
 def validate_change_set(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict) or set(payload) - {"renames", "merges", "snapshot_token"}:
+    if not isinstance(payload, dict) or set(payload) - {"renames", "merges", "corrections", "snapshot_token"}:
         raise ValueError("personality change set has unsupported fields")
     renames_raw = payload.get("renames", [])
     merges_raw = payload.get("merges", [])
-    if not isinstance(renames_raw, list) or not isinstance(merges_raw, list):
+    corrections_raw = payload.get("corrections", [])
+    if not isinstance(renames_raw, list) or not isinstance(merges_raw, list) or not isinstance(corrections_raw, list):
         raise ValueError("personality changes must be lists")
     renames = []
     seen: set[int] = set()
@@ -28,6 +35,21 @@ def validate_change_set(payload: Any) -> dict[str, Any]:
             raise ValueError("canonical_id appears more than once")
         seen.add(canonical_id)
         renames.append({"canonical_id": canonical_id, "display_name": _name(item.get("display_name"))})
+    corrections = []
+    for item in corrections_raw:
+        if not isinstance(item, dict) or set(item) != {"canonical_id", "components"}:
+            raise ValueError("correction must contain canonical_id and components")
+        canonical_id = _id(item.get("canonical_id"), "canonical_id")
+        if canonical_id in seen:
+            raise ValueError("personality appears in multiple changes")
+        try:
+            components = PersonComponents.model_validate(item.get("components"))
+        except Exception as exc:  # external payload boundary
+            raise ValueError(f"invalid correction components: {exc}") from exc
+        seen.add(canonical_id)
+        corrections.append({"canonical_id": canonical_id, "components": storage_components(components),
+                            "display_name": build_canonical_name(components),
+                            "identity_key": personality_identity_key(components)})
     merges = []
     for item in merges_raw:
         if not isinstance(item, dict) or set(item) - {"canonical_ids", "display_name"}:
@@ -39,7 +61,7 @@ def validate_change_set(payload: Any) -> dict[str, Any]:
             raise ValueError("personality appears in multiple changes")
         seen.update(ids)
         merges.append({"canonical_ids": ids, "display_name": _name(item.get("display_name"))})
-    return {"snapshot_token": str(payload.get("snapshot_token") or ""), "renames": renames, "merges": merges}
+    return {"snapshot_token": str(payload.get("snapshot_token") or ""), "renames": renames, "corrections": corrections, "merges": merges}
 
 
 def get_personalities(db: Any) -> dict[str, Any]:
@@ -58,6 +80,16 @@ def get_personalities(db: Any) -> dict[str, Any]:
         items.append({"key": f"canonical:{canonical_id}", "canonical_id": canonical_id,
             "display_name": str(canonical.get("display_name") or ""), "aliases": aliases_for_row,
             "document_count": sum(int(row.get("docs_count") or 0) for row in linked),
+            "components": {
+                "surname_full": canonical.get("surname_full"),
+                "surname_initial": canonical.get("surname_initials"),
+                "name_full": canonical.get("name_full"),
+                "name_initial": canonical.get("name_initials"),
+                "father_name_full": canonical.get("father_name_full"),
+                "father_name_initial": canonical.get("father_name_initials"),
+                "title": canonical.get("title"),
+                "sex": canonical.get("sex"),
+            },
             "is_new": False})
     items.sort(key=lambda item: (item["display_name"].casefold(), item["canonical_id"]))
     token = hashlib.sha256(json.dumps([(item["canonical_id"], item["display_name"], item["aliases"], item["document_count"]) for item in items], ensure_ascii=False).encode()).hexdigest()

@@ -32,6 +32,15 @@ class NormalizationRepository:
                     c.status,
                     c.merged_into_id,
                     c.notes,
+                    c.surname_full,
+                    c.surname_initials,
+                    c.name_full,
+                    c.name_initials,
+                    c.father_name_full,
+                    c.father_name_initials,
+                    c.title,
+                    c.sex,
+                    c.identity_key,
                     c.created_at,
                     c.updated_at,
                     COUNT(a.alias_id) AS linked_aliases
@@ -699,6 +708,23 @@ class NormalizationRepository:
                     "aliases": [dict(row) for row in conn.execute("SELECT * FROM normalization_aliases WHERE entity_type='publisher' ORDER BY alias_id FOR UPDATE").fetchall()],
                 }
                 touched: set[int] = set()
+                component_fields = (
+                    "surname_full", "surname_initials", "name_full", "name_initials",
+                    "father_name_full", "father_name_initials", "title", "sex",
+                )
+                for correction in change_set.get("corrections", []):
+                    row = canonical(int(correction["canonical_id"]))
+                    canonical_id = int(row["canonical_id"])
+                    old = str(row["display_name"])
+                    components = correction["components"]
+                    assignments = ", ".join(f"{field}=?" for field in component_fields)
+                    conn.execute(
+                        f"UPDATE normalization_canonicals SET {assignments}, display_name=?, normalized_name=?, identity_key=?, updated_at=? WHERE canonical_id=?",
+                        (*[components.get(field) for field in component_fields], correction["display_name"], correction["identity_key"], correction["identity_key"], now, canonical_id),
+                    )
+                    if old != correction["display_name"]:
+                        retain_alias(old, canonical_id, "structured_correction")
+                    touched.add(canonical_id)
                 for rename in change_set["renames"]:
                     canonical = active_canonical(conn, int(rename["canonical_id"]))
                     canonical_id = int(canonical["canonical_id"])

@@ -42,6 +42,7 @@ from app.modules.library.personality_normalization import (
     extract_personality_candidates,
     personality_identity_key,
     personality_source_fingerprint,
+    storage_components,
 )
 from app.modules.library.personality_normalization_prompt import (
     PERSONALITY_NORMALIZATION_PROMPT_VERSION,
@@ -215,7 +216,7 @@ def run_personality_normalization(
             canonical = db.persist_personality_normalization(raw_name=candidate.raw_name,
                 source_fingerprint=fingerprint, document_count=candidate.document_count,
                 mention_count=candidate.mention_count, source_roles=list(candidate.roles),
-                components=components.model_dump(), display_name=build_canonical_name(components),
+                components=storage_components(components), display_name=build_canonical_name(components),
                 identity_key=personality_identity_key(components), model=result.model_name,
                 prompt_version=PERSONALITY_NORMALIZATION_PROMPT_VERSION, schema_version=SCHEMA_VERSION)
             model_successes[result.model_name] += 1
