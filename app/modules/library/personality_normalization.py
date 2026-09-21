@@ -11,6 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 import unicodedata
 from typing import Any, Literal
 
@@ -88,6 +89,7 @@ class PersonalityCandidate:
     document_count: int
     mention_count: int
     roles: tuple[str, ...]
+    document_languages: tuple[str, ...] = ()
 
 
 def _as_items(value: Any) -> list[Any]:
@@ -120,10 +122,20 @@ def _relationship_people(value: Any) -> list[str]:
     return names
 
 
+def _document_languages(schema_org: dict[str, Any]) -> tuple[str, ...]:
+    """Return safe BCP-47-like language hints from untrusted metadata."""
+    values = {
+        value
+        for item in _as_items(schema_org.get("inLanguage"))
+        if (value := _text(item)) and re.fullmatch(r"[A-Za-z0-9-]{1,35}", value)
+    }
+    return tuple(sorted(values, key=str.casefold))
+
+
 def extract_personality_candidates(documents: list[dict[str, Any]]) -> list[PersonalityCandidate]:
     """Aggregate exact raw Person names from the supported JSON-LD relations."""
     aggregate: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"documents": set(), "mentions": 0, "roles": set()}
+        lambda: {"documents": set(), "mentions": 0, "roles": set(), "languages": set()}
     )
     for document in documents:
         schema_org = document.get("schema_org")
@@ -135,6 +147,7 @@ def extract_personality_candidates(documents: list[dict[str, Any]]) -> list[Pers
         if not isinstance(schema_org, dict):
             continue
         document_id = str(document.get("md5") or "")
+        document_languages = _document_languages(schema_org)
         for role in _PERSON_ROLES:
             for raw_name in _relationship_people(schema_org.get(role)):
                 item = aggregate[raw_name]
@@ -142,12 +155,14 @@ def extract_personality_candidates(documents: list[dict[str, Any]]) -> list[Pers
                     item["documents"].add(document_id)
                 item["mentions"] += 1
                 item["roles"].add(role)
+                item["languages"].update(document_languages)
     return [
         PersonalityCandidate(
             raw_name=raw_name,
             document_count=len(item["documents"]),
             mention_count=int(item["mentions"]),
             roles=tuple(sorted(item["roles"])),
+            document_languages=tuple(sorted(item["languages"], key=str.casefold)),
         )
         for raw_name, item in sorted(aggregate.items(), key=lambda pair: pair[0].casefold())
     ]
@@ -180,7 +195,8 @@ def personality_identity_key(components: PersonComponents) -> str:
 
 def personality_source_fingerprint(candidate: PersonalityCandidate) -> str:
     """Version-independent candidate fingerprint for rerun eligibility."""
-    payload = [candidate.raw_name, candidate.document_count, candidate.mention_count, list(candidate.roles)]
+    payload = [candidate.raw_name, candidate.document_count, candidate.mention_count,
+               list(candidate.roles), list(candidate.document_languages)]
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 

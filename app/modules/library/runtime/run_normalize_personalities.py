@@ -55,6 +55,7 @@ from app.settings import load_settings
 TASK_ID = "library.normalize_personalities"
 PANEL_ID = "library"
 SCHEMA_VERSION = "person-components-v1"
+_RESPONSE_LOG_MAX_CHARS = 8_000
 
 
 def _parse_args() -> argparse.Namespace:
@@ -79,6 +80,26 @@ def _checkpoint_attempts(checkpoint: dict[str, Any] | None) -> dict[str, Any]:
         except json.JSONDecodeError:
             value = {}
     return dict(value) if isinstance(value, dict) else {}
+
+
+def format_personality_response_for_log(response: Any) -> str:
+    """Render one bounded model response for the worker-attributed task log."""
+    raw = str(response or "")
+    if len(raw) > _RESPONSE_LOG_MAX_CHARS:
+        return json.dumps(
+            {
+                "response_truncated": True,
+                "invalid_response": raw[:_RESPONSE_LOG_MAX_CHARS],
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        decoded = {"invalid_response": raw}
+    return json.dumps(decoded, ensure_ascii=False, indent=2, sort_keys=True)
 
 
 def _eligible_candidates(
@@ -153,6 +174,7 @@ def run_personality_normalization(
         if run_id is not None:
             db.publish_run_progress(task_id=TASK_ID, run_id=run_id, panel_id=PANEL_ID, progress=payload)
 
+    progress()
     emit_gemini_worker_log(f"library personalities: start eligible={len(eligible)} total={len(source_candidates)}", worker_id=worker_id)
     outcome = "completed"
     for candidate in eligible:
@@ -167,7 +189,17 @@ def run_personality_normalization(
         def call_model(model_name: str, api_key: str, _lease: Any) -> str:
             model_attempts[model_name] += 1
             emit_gemini_worker_log(f"library personalities: model attempt raw_name={candidate.raw_name} model={model_name}", worker_id=worker_id)
-            return request_json(api_key=api_key, model_name=model_name, contents=[build_personality_normalization_prompt(candidate.raw_name)], response_schema=PersonComponents)
+            response = request_json(api_key=api_key, model_name=model_name,
+                contents=[build_personality_normalization_prompt(
+                    candidate.raw_name, document_languages=candidate.document_languages
+                )],
+                response_schema=PersonComponents)
+            emit_gemini_worker_log(
+                f"library personalities: model response raw_name={candidate.raw_name} model={model_name}\n"
+                + format_personality_response_for_log(response),
+                worker_id=worker_id,
+            )
+            return response
 
         def parse(raw: str) -> PersonComponents:
             try:
