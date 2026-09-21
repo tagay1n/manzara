@@ -487,6 +487,24 @@ test("library publishers page renders API error state", async () => {
   );
 });
 
+test("library publishers page shows loading progress in the table instead of the header", () => {
+  const harness = createHarness({
+    source: LIBRARY_PUBLISHERS_SOURCE,
+    locationPathname: "/library/publishers",
+    ids: PUBLISHERS_PAGE_IDS,
+    selectors: [".classification-tabs", ".publisher-row-select"],
+    apiResolver(path) {
+      if (path === "/api/library/publishers") return new Promise(() => {});
+      throw new Error(`unexpected path: ${path}`);
+    },
+  });
+
+  assert.equal(harness.elements.get("publisher-count").textContent, "");
+  assert.equal(harness.elements.get("publisher-status").textContent, "");
+  assert.match(harness.elements.get("publisher-table-body").innerHTML, /inline-spinner/);
+  assert.match(harness.elements.get("publisher-table-body").innerHTML, /Loading publishers/);
+});
+
 test("library publishers page stages a new publisher and applies one batch", async () => {
   const applyCalls = [];
   const harness = createHarness({
@@ -502,11 +520,70 @@ test("library publishers page stages a new publisher and applies one batch", asy
   assert.doesNotMatch(harness.elements.get("publisher-table-body").innerHTML, /Suggested match|Evidence/);
   harness.elements.get("publisher-table-body").dispatch("click", { target: { closest: (selector) => selector === ".publisher-keep" ? { dataset: { key: encodeURIComponent("raw:Таткнигоиздат") } } : null } });
   await harness.flush();
-  assert.equal(harness.elements.get("publisher-pending-count").textContent, "1 pending changes");
+  assert.equal(harness.elements.get("publisher-apply").disabled, false);
   harness.elements.get("publisher-apply").dispatch("click");
   await harness.flush();
   assert.equal(applyCalls.length, 1);
   assert.deepEqual(applyCalls[0].keeps, ["Таткнигоиздат"]);
+});
+
+test("library publishers page keeps merge controls in the header and enables drafts after a merge", async () => {
+  const harness = createHarness({
+    source: LIBRARY_PUBLISHERS_SOURCE,
+    locationPathname: "/library/publishers",
+    ids: PUBLISHERS_PAGE_IDS,
+    selectors: [".classification-tabs", ".publisher-row-select"],
+    apiResolver: createPublishersResolver(),
+  });
+  await harness.flush();
+
+  const merge = harness.elements.get("publisher-merge");
+  const apply = harness.elements.get("publisher-apply");
+  const discard = harness.elements.get("publisher-discard");
+  assert.equal(merge.disabled, true);
+  assert.equal(apply.disabled, true);
+  assert.equal(discard.disabled, true);
+
+  harness.elements.get("publisher-select-page").dispatch("change", { target: { checked: true } });
+  assert.equal(merge.disabled, false);
+  merge.dispatch("click");
+  assert.equal(harness.elements.get("publisher-merge-dialog").open, true);
+  harness.elements.get("publisher-merge-name").value = "Tatar Book Publisher";
+  harness.elements.get("publisher-merge-form").dispatch("submit", { preventDefault() {} });
+
+  assert.equal(harness.elements.get("publisher-merge-dialog").open, false);
+  assert.equal(apply.disabled, false);
+  assert.equal(discard.disabled, false);
+});
+
+test("library publishers page shows progress while applying staged changes", async () => {
+  let finishApply;
+  const normalApi = createPublishersResolver();
+  const harness = createHarness({
+    source: LIBRARY_PUBLISHERS_SOURCE,
+    locationPathname: "/library/publishers",
+    ids: PUBLISHERS_PAGE_IDS,
+    selectors: [".classification-tabs", ".publisher-row-select"],
+    apiResolver(path, options) {
+      if (path === "/api/library/publishers/change-set/apply") {
+        return new Promise((resolve) => { finishApply = resolve; });
+      }
+      return normalApi(path, options);
+    },
+  });
+  await harness.flush();
+  harness.elements.get("publisher-table-body").dispatch("click", { target: { closest: (selector) => selector === ".publisher-keep" ? { dataset: { key: encodeURIComponent("raw:Таткнигоиздат") } } : null } });
+  harness.elements.get("publisher-apply").dispatch("click");
+  await harness.flush();
+
+  const apply = harness.elements.get("publisher-apply");
+  assert.equal(apply.disabled, true);
+  assert.equal(apply.getAttribute("aria-busy"), "true");
+  assert.match(apply.innerHTML, /Applying changes/);
+  finishApply({ ok: true });
+  await harness.flush();
+  assert.equal(apply.disabled, true);
+  assert.equal(apply.getAttribute("aria-busy"), "false");
 });
 
 test("library publishers page shows a paginated list of document links", async () => {
