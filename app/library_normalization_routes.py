@@ -76,6 +76,23 @@ def register_library_normalization_routes(
         state = state_provider()
         return JSONResponse(operations_provider().get_publishers(state.db))
 
+    @app.get("/api/library/publishers/documents")
+    def get_library_publisher_documents(
+        publisher_key: str = q_text(max_length=500),
+        page: int = q_page(),
+    ) -> JSONResponse:
+        """Return one bounded page of source documents for a publisher row."""
+        state = state_provider()
+        try:
+            payload = operations_provider().list_publisher_documents(
+                state.db,
+                publisher_key,
+                page=page,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(payload)
+
     @app.post("/api/library/publishers/change-set/apply")
     def apply_library_publisher_changes(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
         """Atomically apply the current publisher page draft."""

@@ -125,6 +125,37 @@ def test_library_publishers_overview_endpoint(test_client, override_operations) 
     assert payload["overview"]["top_publishers"][0]["raw_name"] == "Таткнигоиздат"
 
 
+def test_library_publisher_documents_endpoint(test_client, override_operations) -> None:
+    client, _main_app = test_client
+
+    override_operations(
+        "normalization",
+        list_publisher_documents=lambda _db, publisher_key, *, page: {
+            "available": True,
+            "publisher_key": publisher_key,
+            "page": page,
+            "page_size": 10,
+            "total": 11,
+            "has_more": True,
+            "items": [
+                {
+                    "md5": "a" * 32,
+                    "label": "/books/tatar-book.pdf",
+                }
+            ],
+        },
+    )
+
+    response = client.get("/api/library/publishers/documents?publisher_key=canonical%3A7&page=2")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["publisher_key"] == "canonical:7"
+    assert payload["page"] == 2
+    assert payload["page_size"] == 10
+    assert payload["items"][0]["md5"] == "a" * 32
+
+
 def test_library_publishers_table_endpoint(test_client, override_operations) -> None:
     client, _main_app = test_client
 

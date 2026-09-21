@@ -50,6 +50,7 @@ class CoreReadPayloadBuilders(Protocol):
 
 class NormalizationOperations(Protocol):
     get_publishers: Callable[..., Any]
+    list_publisher_documents: Callable[..., Any]
     apply_publishers: Callable[..., Any]
     get_review_queue: Callable[..., Any]
     list_canonicals: Callable[..., Any]

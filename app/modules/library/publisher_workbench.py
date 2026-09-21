@@ -7,10 +7,16 @@ import json
 from typing import Any
 
 from app.db import Database
-from app.modules.library.normalization_queries import _query_aggregated_mentions
+from app.modules.library.normalization_queries import (
+    _mentions_cte_sql,
+    _query_aggregated_mentions,
+)
+from app.modules.library.stats import create_runtime_engine, dispose_runtime_engine
+from sqlalchemy import text
 
 _MAX_CHANGES = 200
 _MAX_NAME = 240
+_DOCUMENT_PAGE_SIZE = 10
 
 
 def _name(value: Any, field: str = "display_name") -> str:
@@ -120,6 +126,88 @@ def get_publishers(db: Database) -> dict[str, Any]:
     items.sort(key=lambda item: (not bool(item["is_new"]), str(item["display_name"]).casefold(), str(item["key"])))
     token_source = [(item["key"], item["display_name"], item["aliases"], item["document_count"]) for item in items]
     return {"available": True, "config_source": config_source, "items": items, "new_count": sum(1 for item in items if item["is_new"]), "publisher_count": sum(1 for item in items if not item["is_new"]), "snapshot_token": hashlib.sha256(json.dumps(token_source, ensure_ascii=False, sort_keys=True).encode()).hexdigest()}
+
+
+def _publisher_names(db: Database, publisher_key: str) -> list[str]:
+    key = str(publisher_key or "").strip()
+    if key.startswith("raw:"):
+        return [_name(key.removeprefix("raw:"), "publisher_key")]
+    if not key.startswith("canonical:"):
+        raise ValueError("publisher_key must identify a publisher row")
+    raw_id = key.removeprefix("canonical:")
+    if not raw_id.isascii() or not raw_id.isdecimal():
+        raise ValueError("publisher_key must identify a publisher row")
+    canonical_id = _id(int(raw_id), "publisher_key")
+    canonical = next(
+        (
+            item
+            for item in db.list_normalization_canonicals("publisher")
+            if int(item.get("canonical_id") or 0) == canonical_id
+            and item.get("status") == "active"
+        ),
+        None,
+    )
+    if canonical is None:
+        raise ValueError("publisher canonical is missing or inactive")
+    names = {_name(canonical.get("display_name"), "publisher name")}
+    for alias in db.list_normalization_aliases("publisher"):
+        if (
+            int(alias.get("canonical_id") or 0) == canonical_id
+            and alias.get("decision_status") == "linked"
+        ):
+            raw_name = str(alias.get("raw_name") or "").strip()
+            if raw_name:
+                names.add(raw_name)
+    return sorted(names, key=str.casefold)
+
+
+def list_publisher_documents(
+    db: Database,
+    publisher_key: str,
+    *,
+    page: int = 1,
+) -> dict[str, Any]:
+    """List a fixed-size page of documents for one publisher row."""
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        raise ValueError("page must be a positive integer")
+    names = _publisher_names(db, publisher_key)
+    offset = (page - 1) * _DOCUMENT_PAGE_SIZE
+    engine, config_source = create_runtime_engine()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"""
+                    {_mentions_cte_sql("publisher")}
+                    SELECT DISTINCT m.md5, d.ya_path
+                    FROM mentions m
+                    JOIN document d ON d.md5 = m.md5
+                    WHERE m.raw_name = ANY(:names)
+                    ORDER BY d.ya_path ASC NULLS LAST, m.md5 ASC
+                    LIMIT :limit OFFSET :offset
+                    """
+                ),
+                {"names": names, "limit": _DOCUMENT_PAGE_SIZE + 1, "offset": offset},
+            ).mappings().all()
+    finally:
+        dispose_runtime_engine(engine)
+    items = [
+        {
+            "md5": str(row.get("md5") or ""),
+            "label": str(row.get("ya_path") or row.get("md5") or ""),
+        }
+        for row in rows[:_DOCUMENT_PAGE_SIZE]
+    ]
+    return {
+        "available": True,
+        "config_source": config_source,
+        "publisher_key": str(publisher_key).strip(),
+        "page": page,
+        "page_size": _DOCUMENT_PAGE_SIZE,
+        "total": None,
+        "has_more": len(rows) > _DOCUMENT_PAGE_SIZE,
+        "items": items,
+    }
 
 
 def apply_publishers(db: Database, payload: Any) -> dict[str, Any]:

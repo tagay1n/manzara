@@ -142,6 +142,7 @@ function createPersonalitiesResolver({
 
 function createPublishersResolver({
   applyCalls = [],
+  documentCalls = [],
 } = {}) {
   return (path, options = {}) => {
     if (path === "/api/library/publishers") {
@@ -156,6 +157,14 @@ function createPublishersResolver({
     }
     if (path === "/api/library/publishers/change-set/apply") {
       applyCalls.push(JSON.parse(options.body || "{}")); return { ok: true };
+    }
+    if (path.startsWith("/api/library/publishers/documents?")) {
+      documentCalls.push(path);
+      return {
+        available: true, publisher_key: "canonical:1", page: 1, page_size: 10,
+        total: 11, has_more: true,
+        items: [{ md5: "a".repeat(32), label: "/books/tatar-book.pdf" }],
+      };
     }
     throw new Error(`unexpected path: ${path}`);
   };
@@ -498,6 +507,33 @@ test("library publishers page stages a new publisher and applies one batch", asy
   await harness.flush();
   assert.equal(applyCalls.length, 1);
   assert.deepEqual(applyCalls[0].keeps, ["Таткнигоиздат"]);
+});
+
+test("library publishers page shows a paginated list of document links", async () => {
+  const documentCalls = [];
+  const harness = createHarness({
+    source: LIBRARY_PUBLISHERS_SOURCE,
+    locationPathname: "/library/publishers",
+    ids: PUBLISHERS_PAGE_IDS,
+    selectors: [".classification-tabs", ".publisher-row-select"],
+    apiResolver: createPublishersResolver({ documentCalls }),
+  });
+  await harness.flush();
+
+  harness.elements.get("publisher-table-body").dispatch("click", {
+    target: { closest: (selector) => selector === ".publisher-documents-toggle" ? { dataset: { key: encodeURIComponent("canonical:1") } } : null },
+  });
+  await harness.flush();
+
+  const table = harness.elements.get("publisher-table-body").innerHTML;
+  assert.match(table, /tatar-book\.pdf/);
+  assert.match(table, /\/api\/library\/documents\/a{32}\/open/);
+  assert.match(table, /Next 10/);
+  harness.elements.get("publisher-table-body").dispatch("click", {
+    target: { closest: (selector) => selector === ".publisher-documents-next" ? { dataset: { key: encodeURIComponent("canonical:1"), page: "2" } } : null },
+  });
+  await harness.flush();
+  assert.match(documentCalls[1], /page=2/);
 });
 
 test("library collections page renders API error state", async () => {

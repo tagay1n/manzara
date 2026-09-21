@@ -66,3 +66,52 @@ def test_publisher_change_set_validation_rejects_boolean_ids_and_duplicate_membe
                 ]
             }
         )
+
+
+def test_publisher_documents_uses_all_canonical_aliases_and_pages_by_ten(monkeypatch) -> None:
+    class _Rows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [
+                {"md5": "a" * 32, "ya_path": "/books/one.pdf"},
+                {"md5": "b" * 32, "ya_path": "/books/two.pdf"},
+            ]
+
+    class _Connection:
+        def execute(self, statement, params):
+            assert "FROM mentions m" in str(statement)
+            assert params == {
+                "names": ["Tat Books", "Tatar Books"],
+                "limit": 11,
+                "offset": 10,
+            }
+            return _Rows()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class _Engine:
+        def connect(self):
+            return _Connection()
+
+    monkeypatch.setattr(
+        publisher_workbench,
+        "create_runtime_engine",
+        lambda: (_Engine(), "test"),
+    )
+    monkeypatch.setattr(publisher_workbench, "dispose_runtime_engine", lambda _engine: None)
+
+    payload = publisher_workbench.list_publisher_documents(_Db(), "canonical:7", page=2)
+
+    assert payload["page_size"] == 10
+    assert payload["page"] == 2
+    assert payload["has_more"] is False
+    assert payload["items"] == [
+        {"md5": "a" * 32, "label": "/books/one.pdf"},
+        {"md5": "b" * 32, "label": "/books/two.pdf"},
+    ]

@@ -1177,9 +1177,10 @@ textarea:focus,
 .publisher-name { padding:0; border:0; color:inherit; background:transparent; font:inherit; font-weight:650; text-align:left; cursor:text; }
 .publisher-name:focus-visible { outline:2px solid var(--accent, #3ea6ff); outline-offset:3px; border-radius:.2rem; }
 .publisher-sort { display:inline-flex; align-items:center; gap:.2rem; padding:0; border:0; color:inherit; background:transparent; font:inherit; font-weight:inherit; white-space:nowrap; cursor:pointer; }
-.publisher-sort:focus-visible, .publisher-alias-toggle:focus-visible { outline:2px solid var(--accent, #3ea6ff); outline-offset:3px; border-radius:.2rem; }
-.publisher-alias-toggle { margin-top:.22rem; padding:0; border:0; color:var(--muted, #9aa5b3); background:transparent; font:inherit; font-size:.78rem; cursor:pointer; }
+.publisher-sort:focus-visible, .publisher-alias-toggle:focus-visible, .publisher-documents-toggle:focus-visible, .publisher-documents-next:focus-visible { outline:2px solid var(--accent, #3ea6ff); outline-offset:3px; border-radius:.2rem; }
+.publisher-alias-toggle, .publisher-documents-toggle, .publisher-documents-next { margin-top:.22rem; padding:0; border:0; color:var(--muted, #9aa5b3); background:transparent; font:inherit; font-size:.78rem; cursor:pointer; }
 .publisher-aliases { margin-top:.22rem; }
+.publisher-documents { display:flex; flex-wrap:wrap; gap:.35rem; align-items:center; margin-top:.22rem; }
 .publisher-filter { position:relative; width:min(28rem, 100%); margin:.4rem 0 .7rem; }
 .publisher-filter-input { width:100%; }
 .publisher-filter-clear { position:absolute; right:.45rem; top:50%; transform:translateY(-50%); width:1.45rem; height:1.45rem; padding:0; border:0; border-radius:50%; color:var(--muted, #9aa5b3); background:transparent; font-size:1.15rem; line-height:1; cursor:pointer; }

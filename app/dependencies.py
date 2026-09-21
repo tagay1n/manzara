@@ -73,7 +73,11 @@ from app.modules.library.normalization_suggestions import (
     list_suggestions,
     refresh_suggestions,
 )
-from app.modules.library.publisher_workbench import apply_publishers, get_publishers
+from app.modules.library.publisher_workbench import (
+    apply_publishers,
+    get_publishers,
+    list_publisher_documents,
+)
 from app.modules.library.personalities import (
     get_personality_insights,
     get_personality_overview,
@@ -141,6 +145,7 @@ class CoreReadPayloadBuildersService:
 @dataclass(frozen=True)
 class NormalizationOperationsService:
     get_publishers: Callable[..., Any]
+    list_publisher_documents: Callable[..., Any]
     apply_publishers: Callable[..., Any]
     get_review_queue: Callable[..., Any]
     list_canonicals: Callable[..., Any]
@@ -233,6 +238,7 @@ def build_normalization_operations() -> NormalizationOperations:
     """Build normalization route operations service."""
     return NormalizationOperationsService(
         get_publishers=get_publishers,
+        list_publisher_documents=list_publisher_documents,
         apply_publishers=apply_publishers,
         get_review_queue=get_review_queue,
         list_canonicals=list_canonicals,
