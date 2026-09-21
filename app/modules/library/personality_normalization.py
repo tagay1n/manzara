@@ -176,10 +176,12 @@ def build_canonical_name(components: PersonComponents) -> str:
         components.father_name_full or components.father_name_initial,
     ]
     result = [part for part in parts if part]
-    if parts[2] and components.sex == "M":
+    if components.father_name_full and components.sex == "M":
         result.append("улы")
-    elif parts[2] and components.sex == "F":
+    elif components.father_name_full and components.sex == "F":
         result.append("кызы")
+    if components.title:
+        result.append(components.title)
     return " ".join(result)
 
 

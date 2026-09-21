@@ -106,7 +106,21 @@ def test_candidate_extraction_ignores_organizations_blank_names_and_non_people()
                 "father_name_initial": "С.",
                 "sex": "M",
             },
-            "Пушкин А. С. улы",
+            "Пушкин А. С.",
+        ),
+        (
+            {
+                "surname_full": "Тукай",
+                "name_full": "Габдулла",
+                "father_name_full": "Мөхәммәтгариф",
+                "sex": "M",
+                "title": "хәзрәт",
+            },
+            "Тукай Габдулла Мөхәммәтгариф улы хәзрәт",
+        ),
+        (
+            {"surname_full": "Тукай", "name_full": "Габдулла", "title": "хәзрәт"},
+            "Тукай Габдулла хәзрәт",
         ),
         (
             {"surname_full": "Shakespeare", "name_full": "William"},
