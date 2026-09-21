@@ -1,0 +1,309 @@
+<div id="publishers-concept" aria-label="Publishers page concept">
+  <style>
+    #publishers-concept {
+      --pc-bg: light-dark(#f4f5f7, #111315);
+      --pc-panel: light-dark(#ffffff, #191c1f);
+      --pc-panel-2: light-dark(#f8f9fa, #202429);
+      --pc-text: light-dark(#17191c, #f2f4f5);
+      --pc-muted: light-dark(#6b7178, #a9b0b7);
+      --pc-border: light-dark(#dfe2e6, #343a40);
+      --pc-accent: light-dark(#24272b, #eef1f3);
+      --pc-accent-text: light-dark(#ffffff, #15181b);
+      --pc-new-bg: light-dark(#fff2cc, #493b12);
+      --pc-new-text: light-dark(#6b5000, #ffe9a1);
+      --pc-pending-bg: light-dark(#e9eefc, #202d53);
+      --pc-pending-text: light-dark(#294b96, #b9ccff);
+      color: var(--pc-text);
+      background: transparent;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #publishers-concept * { box-sizing: border-box; }
+    #publishers-concept .pc-window {
+      background: var(--pc-bg);
+      min-height: 620px;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--pc-border);
+    }
+    #publishers-concept .pc-topbar {
+      height: 54px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 20px;
+      background: var(--pc-panel);
+      border-bottom: 1px solid var(--pc-border);
+    }
+    #publishers-concept .pc-brand { font-weight: 650; letter-spacing: -.02em; }
+    #publishers-concept .pc-nav { color: var(--pc-muted); font-size: 14px; }
+    #publishers-concept .pc-nav.active { color: var(--pc-text); font-weight: 600; }
+    #publishers-concept .pc-main { max-width: 940px; margin: 0 auto; padding: 30px 24px 92px; }
+    #publishers-concept .pc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 18px; }
+    #publishers-concept h2 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 650; letter-spacing: -.025em; }
+    #publishers-concept .pc-count { color: var(--pc-muted); font-size: 13px; }
+    #publishers-concept .pc-selection {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      min-height: 48px;
+      padding: 8px 12px;
+      margin-bottom: 10px;
+      background: var(--pc-panel);
+      border: 1px solid var(--pc-border);
+      border-radius: 10px;
+    }
+    #publishers-concept .pc-selection[hidden] { display: none; }
+    #publishers-concept button,
+    #publishers-concept input { font: inherit; }
+    #publishers-concept button { cursor: pointer; }
+    #publishers-concept .pc-btn {
+      appearance: none;
+      border: 1px solid var(--pc-border);
+      background: var(--pc-panel);
+      color: var(--pc-text);
+      border-radius: 8px;
+      padding: 8px 13px;
+      font-weight: 600;
+      line-height: 1.1;
+    }
+    #publishers-concept .pc-btn.primary { background: var(--pc-accent); color: var(--pc-accent-text); border-color: transparent; }
+    #publishers-concept .pc-btn.ghost { border-color: transparent; background: transparent; color: var(--pc-muted); }
+    #publishers-concept .pc-btn:disabled { opacity: .45; cursor: default; }
+    #publishers-concept .pc-table-wrap { background: var(--pc-panel); border: 1px solid var(--pc-border); border-radius: 12px; overflow: hidden; }
+    #publishers-concept table { width: 100%; border-collapse: collapse; }
+    #publishers-concept th { color: var(--pc-muted); font-size: 12px; font-weight: 600; text-align: left; padding: 10px 14px; background: var(--pc-panel-2); }
+    #publishers-concept td { padding: 14px; border-top: 1px solid var(--pc-border); vertical-align: top; }
+    #publishers-concept th:first-child,
+    #publishers-concept td:first-child { width: 44px; text-align: center; }
+    #publishers-concept th:last-child,
+    #publishers-concept td:last-child { width: 142px; text-align: right; color: var(--pc-muted); font-variant-numeric: tabular-nums; }
+    #publishers-concept .pc-doc-cell { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+    #publishers-concept .pc-keep { padding: 6px 9px; }
+    #publishers-concept .pc-name { font-weight: 620; line-height: 1.35; user-select: none; }
+    #publishers-concept .pc-name-input { width: min(100%, 440px); padding: 7px 9px; color: var(--pc-text); background: var(--pc-panel); border: 1px solid var(--pc-accent); border-radius: 7px; }
+    #publishers-concept .pc-aliases { color: var(--pc-muted); font-size: 12px; margin-top: 5px; line-height: 1.45; }
+    #publishers-concept .pc-tag { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 999px; margin-left: 7px; font-size: 11px; font-weight: 650; vertical-align: 1px; }
+    #publishers-concept .pc-tag.new { color: var(--pc-new-text); background: var(--pc-new-bg); }
+    #publishers-concept .pc-tag.pending { color: var(--pc-pending-text); background: var(--pc-pending-bg); }
+    #publishers-concept .pc-pager { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 10px; color: var(--pc-muted); font-size: 12px; }
+    #publishers-concept .pc-applybar {
+      position: absolute;
+      left: 50%;
+      bottom: 20px;
+      transform: translateX(-50%);
+      width: min(620px, calc(100% - 40px));
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px 10px 16px;
+      color: var(--pc-text);
+      background: var(--pc-panel);
+      border: 1px solid var(--pc-border);
+      border-radius: 12px;
+      box-shadow: 0 12px 32px light-dark(rgba(20,25,30,.14), rgba(0,0,0,.35));
+    }
+    #publishers-concept .pc-window { position: relative; }
+    #publishers-concept .pc-applybar[hidden] { display: none; }
+    #publishers-concept .pc-apply-actions { display: flex; gap: 6px; }
+    #publishers-concept .pc-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 4;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: light-dark(rgba(22,25,28,.34), rgba(0,0,0,.58));
+    }
+    #publishers-concept .pc-overlay[hidden] { display: none; }
+    #publishers-concept .pc-dialog { width: min(470px, 100%); background: var(--pc-panel); border: 1px solid var(--pc-border); border-radius: 14px; padding: 20px; box-shadow: 0 18px 50px rgba(0,0,0,.22); }
+    #publishers-concept .pc-dialog h3 { margin: 0 0 5px; font-size: 18px; }
+    #publishers-concept .pc-dialog p { margin: 0 0 16px; color: var(--pc-muted); font-size: 13px; }
+    #publishers-concept .pc-choice { display: flex; align-items: center; gap: 9px; padding: 9px 0; }
+    #publishers-concept .pc-custom { width: 100%; margin-top: 8px; padding: 9px 10px; color: var(--pc-text); background: var(--pc-panel); border: 1px solid var(--pc-border); border-radius: 8px; }
+    #publishers-concept .pc-dialog-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 18px; }
+    @media (max-width: 620px) {
+      #publishers-concept .pc-main { padding: 22px 12px 100px; }
+      #publishers-concept .pc-nav { display: none; }
+      #publishers-concept .pc-selection { align-items: flex-start; flex-direction: column; }
+      #publishers-concept th:last-child,
+      #publishers-concept td:last-child { display: none; }
+      #publishers-concept .pc-applybar { align-items: flex-start; flex-direction: column; }
+      #publishers-concept .pc-apply-actions { width: 100%; }
+      #publishers-concept .pc-apply-actions .pc-btn { flex: 1; }
+    }
+  </style>
+
+  <div class="pc-window">
+    <div class="pc-topbar">
+      <div class="pc-brand">Manzara</div>
+      <div class="pc-nav">Library</div>
+      <div class="pc-nav active">Publishers</div>
+    </div>
+    <main class="pc-main">
+      <div class="pc-head">
+        <h2>Publishers</h2>
+        <div class="pc-count"><span id="pc-new-count">2 new</span> · 84 publishers</div>
+      </div>
+
+      <div id="pc-selection" class="pc-selection" hidden>
+        <span><strong id="pc-selected-count">0 selected</strong></span>
+        <button id="pc-merge" class="pc-btn primary" type="button">Merge</button>
+      </div>
+
+      <div class="pc-table-wrap">
+        <table aria-label="Publisher list">
+          <thead><tr><th><input id="pc-all" type="checkbox" aria-label="Select all visible publishers"></th><th>Publisher</th><th>Books</th></tr></thead>
+          <tbody id="pc-rows">
+            <tr data-row data-name="Татарстан китап нәшрияты" data-aliases="Tatarstan kitap näşriyatı · ТКН">
+              <td><input class="pc-check" type="checkbox" aria-label="Select Татарстан китап нәшрияты"></td>
+              <td><div class="pc-name" title="Double-click to rename">Татарстан китап нәшрияты</div><div class="pc-aliases">Tatarstan kitap näşriyatı · ТКН</div></td><td><div class="pc-doc-cell"><span>486</span></div></td>
+            </tr>
+            <tr data-row data-name="Мәгариф нәшрияты" data-aliases="Мәгариф · Magarif">
+              <td><input class="pc-check" type="checkbox" aria-label="Select Мәгариф нәшрияты"></td>
+              <td><div class="pc-name" title="Double-click to rename">Мәгариф нәшрияты</div><div class="pc-aliases">Мәгариф · Magarif</div></td><td><div class="pc-doc-cell"><span>219</span></div></td>
+            </tr>
+            <tr data-row data-new data-name="Казан утлары" data-aliases="">
+              <td><input class="pc-check" type="checkbox" aria-label="Select Казан утлары"></td>
+              <td><div class="pc-name" title="Double-click to rename">Казан утлары <span class="pc-tag new">New</span></div><div class="pc-aliases">Found in the latest metadata extraction</div></td><td><div class="pc-doc-cell"><span>3</span><button class="pc-btn pc-keep" type="button">Keep</button></div></td>
+            </tr>
+            <tr data-row data-name="Kazan University Press" data-aliases="Казан университеты нәшрияты">
+              <td><input class="pc-check" type="checkbox" aria-label="Select Kazan University Press"></td>
+              <td><div class="pc-name" title="Double-click to rename">Kazan University Press</div><div class="pc-aliases">Казан университеты нәшрияты</div></td><td><div class="pc-doc-cell"><span>97</span></div></td>
+            </tr>
+            <tr data-row data-new data-name="Tatar kitapları" data-aliases="">
+              <td><input class="pc-check" type="checkbox" aria-label="Select Tatar kitapları"></td>
+              <td><div class="pc-name" title="Double-click to rename">Tatar kitapları <span class="pc-tag new">New</span></div><div class="pc-aliases">Found in the latest metadata extraction</div></td><td><div class="pc-doc-cell"><span>1</span><button class="pc-btn pc-keep" type="button">Keep</button></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pc-pager"><span>1–50 of 84</span><button class="pc-btn ghost" type="button">Previous</button><button class="pc-btn ghost" type="button">Next</button></div>
+    </main>
+
+    <div id="pc-applybar" class="pc-applybar" hidden aria-live="polite">
+      <strong id="pc-change-count">1 pending change</strong>
+      <div class="pc-apply-actions"><button id="pc-discard" class="pc-btn ghost" type="button">Discard</button><button id="pc-apply" class="pc-btn primary" type="button">Apply changes</button></div>
+    </div>
+
+    <div id="pc-overlay" class="pc-overlay" hidden>
+      <div class="pc-dialog" role="dialog" aria-modal="true" aria-labelledby="pc-dialog-title">
+        <h3 id="pc-dialog-title">Merge publishers</h3>
+        <p>Choose the canonical name. Every selected name will remain as an alias.</p>
+        <div id="pc-choices"></div>
+        <input id="pc-custom" class="pc-custom" type="text" placeholder="Or type a new name" aria-label="New canonical publisher name">
+        <div class="pc-dialog-actions"><button id="pc-cancel" class="pc-btn ghost" type="button">Cancel</button><button id="pc-stage" class="pc-btn primary" type="button">Merge</button></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const root = document.getElementById('publishers-concept');
+      const selection = root.querySelector('#pc-selection');
+      const selectedCount = root.querySelector('#pc-selected-count');
+      const applybar = root.querySelector('#pc-applybar');
+      const changeCount = root.querySelector('#pc-change-count');
+      const overlay = root.querySelector('#pc-overlay');
+      const rows = () => [...root.querySelectorAll('[data-row]')];
+      let changes = 0;
+
+      function checkedRows() { return rows().filter(row => row.querySelector('.pc-check').checked); }
+      function updateSelection() {
+        const count = checkedRows().length;
+        selection.hidden = count < 1;
+        selectedCount.textContent = `${count} selected`;
+        root.querySelector('#pc-merge').disabled = count < 2;
+      }
+      function markChange() {
+        changes += 1;
+        applybar.hidden = false;
+        changeCount.textContent = `${changes} pending ${changes === 1 ? 'change' : 'changes'}`;
+      }
+      root.addEventListener('change', event => {
+        if (event.target.matches('.pc-check')) updateSelection();
+        if (event.target.id === 'pc-all') {
+          rows().forEach(row => { row.querySelector('.pc-check').checked = event.target.checked; });
+          updateSelection();
+        }
+      });
+      root.addEventListener('dblclick', event => {
+        const name = event.target.closest('.pc-name');
+        if (!name) return;
+        const row = name.closest('[data-row]');
+        const input = document.createElement('input');
+        input.className = 'pc-name-input';
+        input.value = row.dataset.name;
+        name.replaceWith(input);
+        input.focus(); input.select();
+        const finish = save => {
+          const value = save && input.value.trim() ? input.value.trim() : row.dataset.name;
+          const div = document.createElement('div');
+          div.className = 'pc-name';
+          div.title = 'Double-click to rename';
+          div.textContent = value;
+          if (save && value !== row.dataset.name) {
+            row.dataset.name = value;
+            const tag = document.createElement('span'); tag.className = 'pc-tag pending'; tag.textContent = 'Pending'; div.append(' ', tag);
+            markChange();
+          }
+          input.replaceWith(div);
+        };
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); });
+        input.addEventListener('blur', () => { if (input.isConnected) finish(true); });
+      });
+      root.querySelector('#pc-merge').addEventListener('click', () => {
+        const selected = checkedRows();
+        const choices = root.querySelector('#pc-choices');
+        choices.innerHTML = '';
+        selected.forEach((row, index) => {
+          const label = document.createElement('label'); label.className = 'pc-choice';
+          const radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'pc-canonical'; radio.value = row.dataset.name; radio.checked = index === 0;
+          label.append(radio, document.createTextNode(row.dataset.name)); choices.append(label);
+        });
+        root.querySelector('#pc-custom').value = '';
+        overlay.hidden = false;
+      });
+      root.querySelector('#pc-cancel').addEventListener('click', () => { overlay.hidden = true; });
+      root.querySelector('#pc-stage').addEventListener('click', () => {
+        const selected = checkedRows();
+        const custom = root.querySelector('#pc-custom').value.trim();
+        const chosen = root.querySelector('input[name="pc-canonical"]:checked');
+        const canonical = custom || (chosen ? chosen.value : 'Merged publisher');
+        const keeper = selected[0];
+        const aliases = selected.flatMap(row => [row.dataset.name, row.dataset.aliases].filter(Boolean));
+        keeper.dataset.name = canonical;
+        keeper.dataset.aliases = [...new Set(aliases.filter(name => name !== canonical))].join(' · ');
+        keeper.querySelector('.pc-name').textContent = canonical;
+        const tag = document.createElement('span'); tag.className = 'pc-tag pending'; tag.textContent = 'Pending'; keeper.querySelector('.pc-name').append(' ', tag);
+        keeper.querySelector('.pc-aliases').textContent = keeper.dataset.aliases;
+        selected.slice(1).forEach(row => row.hidden = true);
+        selected.forEach(row => { row.querySelector('.pc-check').checked = false; });
+        overlay.hidden = true; updateSelection(); markChange();
+      });
+      root.addEventListener('click', event => {
+        const keep = event.target.closest('.pc-keep');
+        if (!keep) return;
+        const row = keep.closest('[data-row]');
+        row.removeAttribute('data-new');
+        row.querySelector('.pc-tag.new')?.remove();
+        keep.remove();
+        markChange();
+      });
+      root.querySelector('#pc-discard').addEventListener('click', () => { changes = 0; applybar.hidden = true; });
+      root.querySelector('#pc-apply').addEventListener('click', event => { event.target.textContent = 'Applied'; event.target.disabled = true; changeCount.textContent = 'Changes saved'; });
+      updateSelection();
+
+      if (globalThis.Tweak) {
+        const display = { density: 'comfortable', aliases: 'inline' };
+        const tweak = new Tweak({ container: root, onChange: () => {
+          root.querySelectorAll('td').forEach(td => td.style.padding = display.density === 'compact' ? '9px 14px' : '14px');
+          root.querySelectorAll('.pc-aliases').forEach(alias => alias.style.display = display.aliases === 'hidden' ? 'none' : 'block');
+        }});
+        tweak.addSelect(display, 'density', { label: 'Row density', options: ['comfortable', 'compact'], reference: 'publishers.density' });
+        tweak.addSelect(display, 'aliases', { label: 'Aliases', options: [{label:'Show inline', value:'inline'}, {label:'Hide', value:'hidden'}], reference: 'publishers.aliases' });
+      }
+    })();
+  </script>
+</div>

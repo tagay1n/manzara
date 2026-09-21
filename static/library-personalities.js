@@ -1,6 +1,6 @@
 "use strict";
 
-const state = {snapshot:null, selected:new Set(), renames:new Map(), corrections:new Map(), merges:[], filter:"", aliases:new Set(), documents:new Map(), openDocuments:new Set(), loading:true, applying:false};
+const state = {snapshot:null, selected:new Set(), renames:new Map(), corrections:new Map(), merges:[], filter:"", sort:{field:"name",direction:"asc"}, aliases:new Set(), documents:new Map(), openDocuments:new Set(), loading:true, applying:false};
 const api = (path, options={}) => window.ManzaraCore.api(path, options);
 const esc = (value) => window.ManzaraCore.escapeHtml(value);
 const key = (row) => String(row.key);
@@ -25,7 +25,13 @@ function rows() {
     if (correction) return {...row, display_name:canonicalName(correction), pending:true};
     if (state.renames.has(key(row))) return {...row, display_name:state.renames.get(key(row)), aliases:[...new Set([...row.aliases, row.display_name, state.renames.get(key(row))])], pending:true};
     return row;
-  }).concat(draftMerges).filter((row) => !state.filter || [row.display_name, ...(row.aliases || [])].some((value) => String(value).toLocaleLowerCase().includes(state.filter.toLocaleLowerCase())));
+  }).concat(draftMerges).filter((row) => !state.filter || [row.display_name, ...(row.aliases || [])].some((value) => String(value).toLocaleLowerCase().includes(state.filter.toLocaleLowerCase())))
+    .sort((a, b) => {
+      const order = state.sort.field === "documents"
+        ? Number(a.document_count || 0) - Number(b.document_count || 0)
+        : String(a.display_name || "").localeCompare(String(b.display_name || ""), undefined, {sensitivity:"base"});
+      return state.sort.direction === "asc" ? order : -order;
+    });
 }
 function changes() {
   const inMerge = new Set(state.merges.flatMap((item) => item.canonical_ids));
@@ -35,13 +41,16 @@ function pendingCount() { const payload = changes(); return payload.renames.leng
 async function docs(row, page=1) { state.documents.set(key(row), {loading:true}); render(); try { state.documents.set(key(row), await api(`/api/library/personalities/documents?personality_key=${encodeURIComponent(key(row))}&page=${page}`)); } catch (error) { state.documents.set(key(row), {error:error.message || "Could not load documents."}); } render(); }
 function render() {
   const visible = rows();
+  document.getElementById("personality-sort-name").textContent = `Personality${state.sort.field === "name" ? (state.sort.direction === "asc" ? " ↑" : " ↓") : ""}`;
+  document.getElementById("personality-sort-documents").textContent = `Documents${state.sort.field === "documents" ? (state.sort.direction === "asc" ? " ↑" : " ↓") : ""}`;
   document.getElementById("personality-count").textContent = state.loading ? "" : `${state.snapshot?.personality_count || 0} personalities`;
   document.getElementById("personality-clear").hidden = !state.filter;
   document.getElementById("personality-body").innerHTML = state.loading ? '<tr><td colspan="3" class="workflow-footnote">Loading personalities…</td></tr>' : visible.map((row) => {
     const id = key(row), expanded = state.aliases.has(id), aliases = (row.aliases || []).filter((value) => value !== row.display_name), open = state.openDocuments.has(id), page = state.documents.get(id);
     const links = !open ? "" : page?.loading ? "Loading documents…" : page?.error ? esc(page.error) : page ? `${page.items.map((item) => `<a href="/api/library/documents/${encodeURIComponent(item.md5)}/open" target="_blank" rel="noopener">${esc(item.label)}</a>`).join(" · ")}${page.has_more ? ` <button class="publisher-documents-next" data-key="${encodeURIComponent(id)}" data-page="${Number(page.page)+1}">Next 10</button>` : ""}` : "";
-    return `<tr class="${row.pending ? "publisher-pending" : ""}"><td>${row.canonical_id ? `<input class="personality-select" type="checkbox" data-key="${encodeURIComponent(id)}" ${state.selected.has(id) ? "checked" : ""} aria-label="Select ${esc(row.display_name)}">` : ""}</td><td><button class="publisher-name personality-name" data-key="${encodeURIComponent(id)}">${esc(row.display_name)}</button>${row.canonical_id ? `<button class="publisher-alias-toggle personality-correct" data-key="${encodeURIComponent(id)}">Correct details</button>` : ""}${aliases.length ? `<div><button class="publisher-alias-toggle personality-alias-toggle" data-key="${encodeURIComponent(id)}" aria-expanded="${expanded}">${expanded ? "Hide" : "Show"} ${aliases.length} aliases</button>${expanded ? `<div class="workflow-footnote publisher-aliases">${esc(aliases.join(" · "))}</div>` : ""}</div>` : ""}<div><button class="publisher-documents-toggle" data-key="${encodeURIComponent(id)}" aria-expanded="${open}">${open ? "Hide" : "Show"} documents</button><div class="workflow-footnote publisher-documents">${links}</div></div></td><td>${Number(row.document_count || 0)}</td></tr>`;
+    return `<tr class="${row.pending ? "publisher-pending" : ""}"><td>${row.canonical_id ? `<input class="personality-select" type="checkbox" data-key="${encodeURIComponent(id)}" ${state.selected.has(id) ? "checked" : ""} aria-label="Select ${esc(row.display_name)}">` : ""}</td><td><div class="personality-name-row"><button class="publisher-name personality-name" data-key="${encodeURIComponent(id)}">${esc(row.display_name)}</button>${row.canonical_id ? `<button class="icon-btn quiet rename-inline-btn personality-correct" data-key="${encodeURIComponent(id)}" aria-label="Edit normalized details" title="Edit normalized details"><i data-lucide="square-pen" aria-hidden="true"></i></button>` : ""}${aliases.length ? `<button class="publisher-alias-toggle personality-alias-toggle personality-row-action" data-key="${encodeURIComponent(id)}" aria-expanded="${expanded}">${expanded ? "Hide" : "Show"} ${aliases.length} aliases</button>` : ""}<button class="publisher-documents-toggle personality-row-action" data-key="${encodeURIComponent(id)}" aria-expanded="${open}">${open ? "Hide" : "Show"} documents</button></div>${expanded && aliases.length ? `<div class="workflow-footnote publisher-aliases">${esc(aliases.join(" · "))}</div>` : ""}${open ? `<div class="workflow-footnote publisher-documents">${links}</div>` : ""}</td><td>${Number(row.document_count || 0)}</td></tr>`;
   }).join("") || '<tr><td colspan="3">No normalized personalities yet.</td></tr>';
+  window.lucide?.createIcons?.();
   const selected = visible.filter((row) => row.canonical_id && state.selected.has(key(row)));
   document.getElementById("personality-merge").disabled = state.applying || selected.length < 2;
   document.getElementById("personality-apply").disabled = state.applying || !pendingCount();
@@ -62,6 +71,9 @@ document.getElementById("personality-body").addEventListener("change", (event) =
 document.getElementById("personality-correct-form").addEventListener("submit", (event) => { event.preventDefault(); const dialog=document.getElementById("personality-correct-dialog"), components={}; fields.forEach((field)=>{components[field]=document.getElementById(formIds[field]).value || null;}); if (!components.surname_full && !components.surname_initial && !components.name_full && !components.name_initial) { window.ManzaraUI.toast("A surname or given name is required.", {tone:"warning"}); return; } state.corrections.set(dialog.dataset.key, components); state.renames.delete(dialog.dataset.key); dialog.close(); render(); });
 document.getElementById("personality-filter").addEventListener("input", (event)=>{state.filter=event.target.value.trim();render();});
 document.getElementById("personality-clear").addEventListener("click", ()=>{state.filter="";document.getElementById("personality-filter").value="";render();});
+const toggleSort = (field) => { state.sort.direction = state.sort.field === field && state.sort.direction === "asc" ? "desc" : "asc"; state.sort.field = field; render(); };
+document.getElementById("personality-sort-name").addEventListener("click", () => toggleSort("name"));
+document.getElementById("personality-sort-documents").addEventListener("click", () => toggleSort("documents"));
 document.getElementById("personality-all").addEventListener("change", (event)=>{rows().filter((row)=>row.canonical_id).forEach((row)=>event.target.checked?state.selected.add(key(row)):state.selected.delete(key(row)));render();});
 document.getElementById("personality-merge").addEventListener("click", ()=>{const selected=rows().filter((row)=>row.canonical_id&&state.selected.has(key(row)));document.getElementById("personality-merge-name").value=selected[0].display_name;document.getElementById("personality-merge-dialog").showModal();});
 document.getElementById("personality-merge-form").addEventListener("submit", (event)=>{event.preventDefault();const display_name=document.getElementById("personality-merge-name").value.trim(),canonical_ids=rows().filter((row)=>row.canonical_id&&state.selected.has(key(row))).map((row)=>row.canonical_id);if(display_name&&canonical_ids.length>1){state.merges.push({canonical_ids,display_name});state.selected.clear();document.getElementById("personality-merge-dialog").close();render();}});

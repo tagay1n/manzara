@@ -1296,3 +1296,14 @@ textarea:focus,
   }
 
 }
+
+.personality-correction-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+.personality-correction-grid label { display:grid; align-content:start; gap:.3rem; }
+.personality-correction-grid .filter-input { box-sizing:border-box; width:100%; min-width:0; }
+@media (max-width: 520px) { .personality-correction-grid { grid-template-columns:minmax(0, 1fr); } }
+.personality-name-row { display:flex; align-items:center; gap:.35rem; }
+.personality-name-row { flex-wrap:wrap; }
+.personality-name-row .publisher-alias-toggle,
+.personality-name-row .publisher-documents-toggle { margin-top:0; }
+.personality-name-row { column-gap:.55rem; }
+.personality-name-row .personality-row-action { border-left:1px solid var(--line); padding-left:.55rem; }
