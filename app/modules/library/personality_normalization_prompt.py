@@ -23,7 +23,7 @@ DISABLED_PERSONALITY_NORMALIZATION_EXAMPLES = (
     },
 )
 
-PERSONALITY_NORMALIZATION_PROMPT_VERSION = "personality-components-v7"
+PERSONALITY_NORMALIZATION_PROMPT_VERSION = "personality-components-v8"
 
 
 def build_personality_normalization_prompt(

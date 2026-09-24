@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import signal
 import sys
+import threading
 from typing import Any, Callable, Sequence
 
 
@@ -42,6 +43,7 @@ from app.modules.library.personality_normalization import (
     extract_personality_candidates,
     personality_identity_key,
     personality_source_fingerprint,
+    preprocess_personality_name_for_model,
     storage_components,
 )
 from app.modules.library.personality_normalization_prompt import (
@@ -56,6 +58,7 @@ TASK_ID = "library.normalize_personalities"
 PANEL_ID = "library"
 SCHEMA_VERSION = "person-components-v1"
 _RESPONSE_LOG_MAX_CHARS = 8_000
+_PREPROCESSING_COMPATIBLE_PROMPT_VERSION = "personality-components-v7"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -110,10 +113,20 @@ def _eligible_candidates(
     skipped = 0
     for candidate in candidates:
         checkpoint = by_name.get(candidate.raw_name)
+        model_input_unchanged = (
+            preprocess_personality_name_for_model(candidate.raw_name) == candidate.raw_name
+        )
+        prompt_current = checkpoint and (
+            checkpoint.get("prompt_version") == PERSONALITY_NORMALIZATION_PROMPT_VERSION
+            or (
+                model_input_unchanged
+                and checkpoint.get("prompt_version") == _PREPROCESSING_COMPATIBLE_PROMPT_VERSION
+            )
+        )
         current = (
             checkpoint
             and checkpoint.get("source_fingerprint") == personality_source_fingerprint(candidate)
-            and checkpoint.get("prompt_version") == PERSONALITY_NORMALIZATION_PROMPT_VERSION
+            and prompt_current
             and checkpoint.get("schema_version") == SCHEMA_VERSION
         )
         if current and checkpoint.get("state") == "succeeded":
@@ -136,16 +149,74 @@ def run_personality_normalization(
     candidates: Sequence[PersonalityCandidate] | None = None,
     limit: int | None = None,
     workers: int = 1,
+    _progress_sink: Callable[[dict[str, Any]], None] | None = None,
+    _preselected: bool = False,
 ) -> dict[str, Any]:
     """Run single-person structured requests, persisting after every person."""
     source_candidates = list(candidates) if candidates is not None else extract_personality_candidates(db.list_personality_source_documents())
-    if workers > 1 and len(source_candidates) > 1:
-        count = min(int(workers), len(source_candidates))
-        partitions = [source_candidates[index::count] for index in range(count)]
+    if _preselected:
+        eligible, skipped = source_candidates, 0
+    else:
+        eligible, skipped = _eligible_candidates(source_candidates, db.list_personality_checkpoints())
+        if limit is not None:
+            eligible = eligible[:max(0, int(limit))]
+    if workers > 1 and len(eligible) > 1:
+        count = min(int(workers), len(eligible))
+        partitions = [eligible[index::count] for index in range(count)]
+        progress_lock = threading.Lock()
+        worker_progress: list[dict[str, Any] | None] = [None] * count
+
+        def combined_progress() -> dict[str, Any]:
+            totals: Counter[str] = Counter()
+            attempts: Counter[str] = Counter()
+            successes: Counter[str] = Counter()
+            for snapshot in worker_progress:
+                if snapshot is None:
+                    continue
+                totals.update({key: int(snapshot.get(key) or 0) for key in (
+                    "succeeded", "skipped", "deferred", "failed",
+                )})
+                attempts.update(snapshot.get("model_attempts") or {})
+                successes.update(snapshot.get("model_successes") or {})
+            processed = sum(totals.values())
+            return {
+                "current": processed, "total": len(eligible),
+                "processed": processed, "succeeded": totals["succeeded"],
+                "skipped": totals["skipped"], "deferred": totals["deferred"],
+                "failed": totals["failed"], "model_attempts": dict(attempts),
+                "model_successes": dict(successes),
+            }
+
+        def publish_worker_progress(index: int, snapshot: dict[str, Any]) -> None:
+            with progress_lock:
+                worker_progress[index] = snapshot
+                if run_id is not None:
+                    db.publish_run_progress(
+                        task_id=TASK_ID, run_id=run_id, panel_id=PANEL_ID,
+                        progress=combined_progress(),
+                    )
+
+        if run_id is not None:
+            db.publish_run_progress(
+                task_id=TASK_ID, run_id=run_id, panel_id=PANEL_ID,
+                progress=combined_progress(),
+            )
+
+        def run_partition(index: int) -> dict[str, Any]:
+            return run_personality_normalization(
+                db=db, models=models, run_id=run_id, should_stop=should_stop,
+                request_json=request_json, candidates=partitions[index], limit=None,
+                workers=1, _preselected=True,
+                _progress_sink=lambda snapshot: publish_worker_progress(index, snapshot),
+            )
+
         with ThreadPoolExecutor(max_workers=count, thread_name_prefix="personalities-worker") as executor:
-            summaries = list(executor.map(lambda partition: run_personality_normalization(
-                db=db, models=models, run_id=run_id, should_stop=should_stop, request_json=request_json,
-                candidates=partition, limit=None, workers=1), partitions))
+            summaries = list(executor.map(run_partition, range(count)))
+        if run_id is not None:
+            db.publish_run_progress(
+                task_id=TASK_ID, run_id=run_id, panel_id=PANEL_ID,
+                progress=combined_progress(), force=True,
+            )
         totals: Counter[str] = Counter()
         attempts: Counter[str] = Counter()
         successes: Counter[str] = Counter()
@@ -153,25 +224,26 @@ def run_personality_normalization(
             totals.update({key: int(summary.get(key) or 0) for key in ("processed", "succeeded", "skipped", "deferred", "failed")})
             attempts.update(summary.get("model_attempts") or {})
             successes.update(summary.get("model_successes") or {})
+        totals["processed"] += skipped
+        totals["skipped"] += skipped
         return {"kind": "library.personality_normalization_summary", "outcome": next((item.get("outcome") for item in summaries if item.get("outcome") != "completed"), "completed"), "total": len(source_candidates), **dict(totals), "model_attempts": dict(attempts), "model_successes": dict(successes), "workers": count}
-    eligible, skipped = _eligible_candidates(source_candidates, db.list_personality_checkpoints())
-    if limit is not None:
-        eligible = eligible[:max(0, int(limit))]
-    counters: Counter[str] = Counter(skipped=skipped)
+    counters: Counter[str] = Counter()
     model_attempts: Counter[str] = Counter()
     model_successes: Counter[str] = Counter()
     worker_id = current_gemini_worker_id("personalities")
     manager = GeminiRuntimeManager(db, task_id=TASK_ID, panel_id=PANEL_ID, should_stop=should_stop, worker_id=worker_id)
 
     def progress() -> None:
-        processed = sum(counters[key] for key in ("succeeded", "skipped", "deferred", "failed"))
+        processed = sum(counters[key] for key in ("succeeded", "deferred", "failed"))
         payload = {
-            "current": processed, "total": len(source_candidates), "processed": processed,
+            "current": processed, "total": len(eligible), "processed": processed,
             "succeeded": counters["succeeded"], "skipped": counters["skipped"],
             "deferred": counters["deferred"], "failed": counters["failed"],
             "model_attempts": dict(model_attempts), "model_successes": dict(model_successes),
         }
-        if run_id is not None:
+        if _progress_sink is not None:
+            _progress_sink(payload)
+        elif run_id is not None:
             db.publish_run_progress(task_id=TASK_ID, run_id=run_id, panel_id=PANEL_ID, progress=payload)
 
     progress()
@@ -184,6 +256,7 @@ def run_personality_normalization(
         checkpoint = db.get_personality_checkpoint(candidate.raw_name)
         attempts = _checkpoint_attempts(checkpoint)
         fingerprint = personality_source_fingerprint(candidate)
+        model_input_name = preprocess_personality_name_for_model(candidate.raw_name)
         emit_gemini_worker_log(f"library personalities: person start raw_name={candidate.raw_name}", worker_id=worker_id)
 
         def call_model(model_name: str, api_key: str, _lease: Any) -> str:
@@ -191,7 +264,7 @@ def run_personality_normalization(
             emit_gemini_worker_log(f"library personalities: model attempt raw_name={candidate.raw_name} model={model_name}", worker_id=worker_id)
             response = request_json(api_key=api_key, model_name=model_name,
                 contents=[build_personality_normalization_prompt(
-                    candidate.raw_name, document_languages=candidate.document_languages
+                    model_input_name, document_languages=candidate.document_languages
                 )],
                 response_schema=PersonComponents)
             emit_gemini_worker_log(
@@ -256,7 +329,9 @@ def run_personality_normalization(
             emit_gemini_worker_log(f"library personalities: person success raw_name={candidate.raw_name} canonical_id={canonical['canonical_id']}", worker_id=worker_id)
         progress()
     summary = {"kind": "library.personality_normalization_summary", "outcome": outcome,
-        "total": len(source_candidates), "processed": sum(counters.values()), **dict(counters),
+        "total": len(source_candidates), "processed": sum(counters.values()) + skipped,
+        "skipped": skipped,
+        **dict(counters),
         "model_attempts": dict(model_attempts), "model_successes": dict(model_successes)}
     return summary
 

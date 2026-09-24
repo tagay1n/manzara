@@ -28,6 +28,9 @@ _COMPONENT_FIELDS = (
     "father_name_initial",
     "title",
 )
+_CYRILLIC_NAME_WORD = re.compile(
+    r"[А-Яа-яЁёӘәҖҗҢңӨөҮүҺһІіҒғҚқҪҫ]{2,}"
+)
 
 
 def _text(value: Any) -> str | None:
@@ -168,6 +171,23 @@ def extract_personality_candidates(documents: list[dict[str, Any]]) -> list[Pers
     ]
 
 
+def preprocess_personality_name_for_model(raw_name: str) -> str:
+    """Repair leading OCR-confused Cyrillic З initials for model input only."""
+    if not raw_name.startswith("3.") or not _CYRILLIC_NAME_WORD.search(raw_name[2:]):
+        return raw_name
+
+    chunks: list[str] = []
+    cursor = 0
+    while raw_name.startswith("3.", cursor):
+        chunks.append("З.")
+        cursor += 2
+        whitespace_start = cursor
+        while cursor < len(raw_name) and raw_name[cursor].isspace():
+            cursor += 1
+        chunks.append(raw_name[whitespace_start:cursor])
+    return "".join(chunks) + raw_name[cursor:]
+
+
 def build_canonical_name(components: PersonComponents) -> str:
     """Derive the visible canonical name without using titles as identity."""
     parts = [
@@ -224,5 +244,6 @@ __all__ = [
     "extract_personality_candidates",
     "personality_identity_key",
     "personality_source_fingerprint",
+    "preprocess_personality_name_for_model",
     "storage_components",
 ]

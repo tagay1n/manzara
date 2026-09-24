@@ -11,8 +11,10 @@ from app.modules.library.personality_normalization import (
     PersonalityCandidate,
     build_canonical_name,
     extract_personality_candidates,
+    preprocess_personality_name_for_model,
 )
 from app.modules.library.runtime.run_normalize_personalities import (
+    _eligible_candidates,
     format_personality_response_for_log,
     run_personality_normalization,
 )
@@ -77,6 +79,45 @@ def test_candidate_extraction_ignores_organizations_blank_names_and_non_people()
     ])
 
     assert candidates == []
+
+
+@pytest.mark.parametrize(
+    ("raw_name", "expected"),
+    [
+        ("3. В. Шәйхразиева", "З. В. Шәйхразиева"),
+        ("3.3. Хәкимов", "З.З. Хәкимов"),
+        ("3. 3. Хәкимов", "З. З. Хәкимов"),
+        ("3.З.Рәмиев", "З.З.Рәмиев"),
+        ("3. Бикмөхәммәтова", "З. Бикмөхәммәтова"),
+        ("3. William Shakespeare", "3. William Shakespeare"),
+        ("2. Мостафин", "2. Мостафин"),
+        ("3. А.", "3. А."),
+    ],
+)
+def test_model_input_preprocessing_repairs_only_leading_cyrillic_ze_ocr(
+    raw_name: str, expected: str
+) -> None:
+    assert preprocess_personality_name_for_model(raw_name) == expected
+
+
+def test_v7_checkpoints_remain_current_only_when_model_input_is_unchanged() -> None:
+    unchanged = PersonalityCandidate("Габдулла Тукай", 1, 1, ("author",))
+    corrected = PersonalityCandidate("3. В. Шәйхразиева", 1, 1, ("author",))
+    checkpoints = [
+        {
+            "raw_name": candidate.raw_name,
+            "source_fingerprint": personality_runner.personality_source_fingerprint(candidate),
+            "prompt_version": "personality-components-v7",
+            "schema_version": personality_runner.SCHEMA_VERSION,
+            "state": "succeeded",
+        }
+        for candidate in (unchanged, corrected)
+    ]
+
+    eligible, skipped = _eligible_candidates([unchanged, corrected], checkpoints)
+
+    assert [candidate.raw_name for candidate in eligible] == [corrected.raw_name]
+    assert skipped == 1
 
 
 @pytest.mark.parametrize(
@@ -189,6 +230,123 @@ def test_runner_publishes_a_determinate_initial_progress_snapshot_before_first_p
     }]
 
 
+@pytest.mark.parametrize(("limit", "selected"), [(None, 3), (2, 2)])
+def test_parallel_runner_publishes_aggregate_monotonic_progress(
+    monkeypatch: pytest.MonkeyPatch, limit: int | None, selected: int,
+) -> None:
+    skipped = PersonalityCandidate("Already done", 1, 1, ("author",))
+    candidates = [
+        skipped,
+        PersonalityCandidate("Person one", 1, 1, ("author",)),
+        PersonalityCandidate("Person two", 1, 1, ("author",)),
+        PersonalityCandidate("Person three", 1, 1, ("author",)),
+    ]
+
+    class _Db:
+        def __init__(self) -> None:
+            self.progress: list[dict[str, object]] = []
+            self.forced: list[bool] = []
+
+        def list_personality_checkpoints(self) -> list[dict[str, object]]:
+            return [{
+                "raw_name": skipped.raw_name,
+                "source_fingerprint": personality_runner.personality_source_fingerprint(skipped),
+                "prompt_version": PERSONALITY_NORMALIZATION_PROMPT_VERSION,
+                "schema_version": personality_runner.SCHEMA_VERSION,
+                "state": "succeeded",
+            }]
+
+        def get_personality_checkpoint(self, _raw_name: str) -> None:
+            return None
+
+        def publish_run_progress(self, **kwargs: object) -> None:
+            self.progress.append(kwargs["progress"])
+            self.forced.append(bool(kwargs.get("force")))
+
+        def persist_personality_normalization(self, **_kwargs: object) -> dict[str, int]:
+            return {"canonical_id": 1}
+
+    def model_pool(**kwargs: object):
+        raw = kwargs["request"]("model-one", "key", None)
+        return type("Result", (), {
+            "model_name": "model-one", "value": kwargs["parse"](raw),
+        })()
+
+    db = _Db()
+    monkeypatch.setattr(personality_runner, "run_ordered_model_pool", model_pool)
+    summary = run_personality_normalization(
+        db=db,
+        models=["model-one"],
+        run_id=7,
+        should_stop=lambda: False,
+        candidates=candidates,
+        request_json=lambda **_kwargs: '{"surname_full":"Person"}',
+        workers=2,
+        limit=limit,
+    )
+
+    assert summary["succeeded"] == selected
+    assert summary["skipped"] == 1
+    assert summary["total"] == len(candidates)
+    assert summary["processed"] == selected + 1
+    assert db.progress[0]["current"] == 0
+    assert all(item["total"] == selected for item in db.progress)
+    assert [item["current"] for item in db.progress] == sorted(
+        item["current"] for item in db.progress
+    )
+    assert db.progress[-1] == {
+        "current": selected, "total": selected, "processed": selected,
+        "succeeded": selected,
+        "skipped": 0, "deferred": 0, "failed": 0,
+        "model_attempts": {"model-one": selected},
+        "model_successes": {"model-one": selected},
+    }
+    assert db.forced[-1] is True
+
+
+def test_runner_progress_total_uses_eligible_candidates_after_limit() -> None:
+    skipped = PersonalityCandidate("Already done", 1, 1, ("author",))
+
+    class _Db:
+        def __init__(self) -> None:
+            self.progress: list[dict[str, object]] = []
+
+        def list_personality_checkpoints(self) -> list[dict[str, object]]:
+            return [{
+                "raw_name": skipped.raw_name,
+                "source_fingerprint": personality_runner.personality_source_fingerprint(skipped),
+                "prompt_version": PERSONALITY_NORMALIZATION_PROMPT_VERSION,
+                "schema_version": personality_runner.SCHEMA_VERSION,
+                "state": "succeeded",
+            }]
+
+        def publish_run_progress(self, **kwargs: object) -> None:
+            self.progress.append(kwargs["progress"])
+
+    db = _Db()
+    summary = run_personality_normalization(
+        db=db,
+        models=[],
+        run_id=7,
+        should_stop=lambda: True,
+        candidates=[
+            skipped,
+            PersonalityCandidate("Person one", 1, 1, ("author",)),
+            PersonalityCandidate("Person two", 1, 1, ("author",)),
+        ],
+        limit=1,
+    )
+
+    assert summary["skipped"] == 1
+    assert summary["total"] == 3
+    assert summary["processed"] == 1
+    assert db.progress == [{
+        "current": 0, "total": 1, "processed": 0, "succeeded": 0,
+        "skipped": 0, "deferred": 0, "failed": 0,
+        "model_attempts": {}, "model_successes": {},
+    }]
+
+
 def test_response_log_format_is_pretty_json_and_bounds_invalid_output() -> None:
     assert format_personality_response_for_log('{"name_full":"Габдулла","sex":"M"}') == (
         '{\n  "name_full": "Габдулла",\n  "sex": "M"\n}'
@@ -226,6 +384,53 @@ def test_runner_logs_each_pretty_response_with_worker_prefix(monkeypatch: pytest
 
     response_lines = [line for line in capsys.readouterr().out.splitlines() if '"surname_full"' in line]
     assert response_lines == ['[worker=personalities-1]   "surname_full": "Тукай"']
+
+
+def test_runner_preprocesses_model_input_without_changing_persisted_raw_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Db:
+        def __init__(self) -> None:
+            self.persisted: dict[str, object] = {}
+
+        def list_personality_checkpoints(self) -> list[dict[str, object]]:
+            return []
+
+        def get_personality_checkpoint(self, _raw_name: str) -> None:
+            return None
+
+        def publish_run_progress(self, **_kwargs: object) -> None:
+            return None
+
+        def persist_personality_normalization(self, **kwargs: object) -> dict[str, int]:
+            self.persisted = kwargs
+            return {"canonical_id": 1}
+
+    def model_pool(**kwargs: object):
+        raw = kwargs["request"]("model-one", "key", None)
+        return type("Result", (), {
+            "model_name": "model-one", "value": kwargs["parse"](raw),
+        })()
+
+    prompts: list[str] = []
+
+    def request_json(**kwargs: object) -> str:
+        prompts.extend(kwargs["contents"])
+        return '{"surname_full":"Шәйхразиева","name_initial":"З.","father_name_initial":"В."}'
+
+    db = _Db()
+    monkeypatch.setattr(personality_runner, "run_ordered_model_pool", model_pool)
+    personality_runner.run_personality_normalization(
+        db=db,
+        models=["model-one"],
+        run_id=1,
+        should_stop=lambda: False,
+        candidates=[PersonalityCandidate("3. В. Шәйхразиева", 1, 1, ("author",))],
+        request_json=request_json,
+    )
+
+    assert "<raw_name>З. В. Шәйхразиева</raw_name>" in prompts[0]
+    assert db.persisted["raw_name"] == "3. В. Шәйхразиева"
 
 
 def test_versioned_prompt_covers_multilingual_examples_and_non_hallucination_policy() -> None:
