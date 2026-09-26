@@ -11,7 +11,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_nightly_google_export_workflow_contract() -> None:
     workflow_path = REPO_ROOT / ".github" / "workflows" / "nightly-google-export.yml"
-    workflow = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    workflow = yaml.load(
+        workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
+    )
 
     assert workflow["name"] == "Nightly Google Sheets & Drive Export"
     triggers = workflow["on"]
@@ -50,16 +52,21 @@ def test_nightly_google_export_workflow_contract() -> None:
         in credentials_step["run"]
     )
     assert "MANZARA_DATABASE_URL must start with postgres://" in credentials_step["run"]
-    export_step = by_name["Export catalog to Google Drive and Sheets"]
+    export_step = by_name[
+        "Validate sharing and export catalog to Google Drive and Sheets"
+    ]
     assert export_step["env"] == {
         "MANZARA_ARTIFACTS_ROOT": "${{ runner.temp }}/manzara"
     }
     assert "python -m app.modules.maintenance.runtime.dump_state" in export_step["run"]
+    assert "--validate-sharing" in export_step["run"]
 
 
 def test_nightly_postgres_backup_uses_an_off_hour_schedule() -> None:
     workflow_path = REPO_ROOT / ".github" / "workflows" / "nightly-postgres-backup.yml"
-    workflow = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    workflow = yaml.load(
+        workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
+    )
 
     assert workflow["name"] == "Nightly PostgreSQL Logical Backup"
     triggers = workflow["on"]

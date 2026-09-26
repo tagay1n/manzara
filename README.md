@@ -74,6 +74,16 @@ PostgreSQL document catalog to the established Google Drive folder and Google Sh
 worksheet every day at 03:07 Europe/Moscow (00:07 UTC). It can also be started
 manually with the workflow's **Run workflow** action.
 
+Before creating export files or uploading to either Google destination, the workflow
+validates every document in the same remote PostgreSQL snapshot used for export.
+Documents in the designated restricted folder (including subfolders) must have
+`sharing_restricted = true`, an encrypted `enc:` link in `document_url` when a link
+is present, and a null or blank `ya_public_url`. Violations of those restricted-document rules fail the
+workflow and report document MD5s and failed rules without printing links. Missing
+values on unrestricted documents do not block the export. Encryption is checked by
+its storage marker; links are not decrypted.
+The CLI enables this gate with `--validate-sharing`.
+
 Configure these repository Actions secrets before the first run:
 
 - `MANZARA_DATABASE_URL` — the complete cloud PostgreSQL URL beginning with

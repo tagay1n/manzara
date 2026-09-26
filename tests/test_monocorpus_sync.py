@@ -624,3 +624,129 @@ def test_cleanup_removes_backblaze_content_and_embedded_images() -> None:
         and request["Prefix"] == f"{md5}/"
         for request in primary_s3.requests
     )
+
+
+def test_restricted_links_are_cleared_from_remote_and_existing_metadata() -> None:
+    for public_metadata in (True, False):
+        content = b"restricted existing"
+        md5 = hashlib.md5(content).hexdigest()  # noqa: S324
+        path = "/documents/private/secret.pdf"
+        yadisk = _YaDisk({path: content}, public_metadata=public_metadata)
+        repository = _Repository(
+            yadisk,
+            documents={
+                md5: {
+                    "md5": md5,
+                    "mime_type": "application/pdf",
+                    "ya_path": path,
+                    "ya_public_url": "https://disk/stale",
+                    "ya_public_key": "stale-key",
+                    "ya_resource_id": "resource:secret.pdf",
+                    "full": True,
+                    "sharing_restricted": True,
+                }
+            },
+        )
+        result = run_monocorpus_sync(
+            repository=repository,
+            db=_Db(),
+            yadisk=yadisk,
+            primary_s3=_S3(),
+            settings=_settings(),
+            run_id=4,
+            should_stop=lambda: False,
+        )
+        assert result["updated"] == 1
+        assert repository.documents[md5]["ya_public_url"] is None
+        assert repository.documents[md5]["ya_public_key"] is None
+        assert repository.saved[0]["reset_primary_storage"] is False
+        assert yadisk.published == []
+
+
+def test_new_restricted_document_discards_public_yandex_metadata() -> None:
+    content = b"new restricted"
+    md5 = hashlib.md5(content).hexdigest()  # noqa: S324
+    yadisk = _YaDisk({"/documents/private/new.pdf": content})
+    repository = _Repository(yadisk)
+    run_monocorpus_sync(
+        repository=repository,
+        db=_Db(),
+        yadisk=yadisk,
+        primary_s3=_S3(),
+        settings=_settings(),
+        run_id=4,
+        should_stop=lambda: False,
+    )
+    assert repository.documents[md5]["ya_public_url"] is None
+    assert repository.documents[md5]["ya_public_key"] is None
+    assert yadisk.published == []
+
+
+def test_sync_restores_missing_or_invalid_path_from_one_catalog_snapshot() -> None:
+    for stored_path in (None, "", "   ", "invalid/path", "disk:"):
+        content = b"restore missing path"
+        md5 = hashlib.md5(content).hexdigest()  # noqa: S324
+        source_path = "/documents/restored.pdf"
+
+        class YandexWithRootMetadata(_YaDisk):
+            def get_meta(self, *_args, **_kwargs):
+                raise AssertionError(
+                    "Invalid canonical paths must not be checked in Yandex"
+                )
+
+        class CountedRepository(_Repository):
+            reads = 0
+
+            def list_documents(self):
+                self.reads += 1
+                return super().list_documents()
+
+        yadisk = YandexWithRootMetadata({source_path: content})
+        repository = CountedRepository(
+            yadisk,
+            documents={
+                md5: {
+                    "md5": md5,
+                    "mime_type": "application/pdf",
+                    "ya_path": stored_path,
+                    "ya_public_url": None,
+                    "ya_public_key": None,
+                    "ya_resource_id": None,
+                    "full": True,
+                    "sharing_restricted": False,
+                }
+            },
+        )
+        result = run_monocorpus_sync(
+            repository=repository,
+            db=_Db(),
+            yadisk=yadisk,
+            primary_s3=_S3(),
+            settings=_settings(),
+            run_id=4,
+            should_stop=lambda: False,
+        )
+        assert repository.reads == 1
+        assert result["updated"] == 1
+        assert result["created"] == 0
+        assert result["duplicate_resources_queued"] == 0
+        assert len(repository.saved) == 1
+        assert repository.documents[md5]["ya_path"] == source_path
+        assert repository.documents[md5]["ya_public_url"] == "https://disk/restored.pdf"
+        assert yadisk.timeline == []
+        assert source_path in yadisk.files
+
+        # A later run compares against its snapshot and needs no write.
+        repository.saved.clear()
+        second = run_monocorpus_sync(
+            repository=repository,
+            db=_Db(),
+            yadisk=yadisk,
+            primary_s3=_S3(),
+            settings=_settings(),
+            run_id=5,
+            should_stop=lambda: False,
+        )
+        assert repository.reads == 2
+        assert second["unchanged"] == 1
+        assert repository.saved == []

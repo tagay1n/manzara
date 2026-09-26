@@ -505,14 +505,19 @@ def run_monocorpus_sync(
             print(f"monocorpus sync: warning missing md5 path={source_path}", flush=True)
             continue
         current = existing.get(md5)
+        canonical_path = (
+            str((current or {}).get("ya_path") or "")
+            .strip()
+            .removeprefix("disk:")
+            .rstrip("/")
+        )
         if md5 in seen or (
             current
-            and str(current.get("ya_path") or "").removeprefix("disk:")
-            != source_path.removeprefix("disk:")
+            and canonical_path.startswith("/")
+            and canonical_path != source_path.removeprefix("disk:")
         ):
             canonical_exists = True
             if current and md5 not in seen:
-                canonical_path = str(current.get("ya_path") or "")
                 canonical_exists = _meta_or_none(yadisk, canonical_path) is not None
             if canonical_exists:
                 cleanup_id, created = repository.enqueue_cleanup(
@@ -557,6 +562,9 @@ def run_monocorpus_sync(
         public_key = str(
             resource.get("public_key") or (current or {}).get("ya_public_key") or ""
         ) or None
+        if restricted:
+            public_url = None
+            public_key = None
         if not restricted and not public_url:
             yadisk.publish(source_path)
             published = _meta_or_none(yadisk, source_path) or {}

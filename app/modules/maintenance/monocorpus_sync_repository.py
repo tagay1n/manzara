@@ -135,6 +135,9 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
             **payload,
             "reset_primary_storage": bool(reset_primary_storage),
         }
+        if values["sharing_restricted"]:
+            values["ya_public_url"] = None
+            values["ya_public_key"] = None
         with self.engine.begin() as conn:
             updated = conn.execute(
                 text(
@@ -153,8 +156,10 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                             WHEN :reset_primary_storage
                             THEN NULL ELSE primary_storage_verified_at END,
                         mime_type=:mime_type, ya_path=:ya_path,
-                        ya_public_url=COALESCE(:ya_public_url, ya_public_url),
-                        ya_public_key=COALESCE(:ya_public_key, ya_public_key),
+                        ya_public_url=CASE WHEN :sharing_restricted THEN NULL
+                            ELSE COALESCE(:ya_public_url, ya_public_url) END,
+                        ya_public_key=CASE WHEN :sharing_restricted THEN NULL
+                            ELSE COALESCE(:ya_public_key, ya_public_key) END,
                         ya_resource_id=COALESCE(:ya_resource_id, ya_resource_id),
                         "full"=:full, sharing_restricted=:sharing_restricted
                     WHERE md5=:md5

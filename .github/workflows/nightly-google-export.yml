@@ -59,7 +59,8 @@ jobs:
             | base64 --decode > "$credentials_dir/personal_token.json"
           chmod 600 "$credentials_dir/personal_token.json"
 
-      - name: Export catalog to Google Drive and Sheets
+      # Validate the same remote database snapshot that will be exported.
+      - name: Validate sharing and export catalog to Google Drive and Sheets
         env:
           MANZARA_ARTIFACTS_ROOT: ${{ runner.temp }}/manzara
-        run: python -m app.modules.maintenance.runtime.dump_state
+        run: python -m app.modules.maintenance.runtime.dump_state --validate-sharing

@@ -13,6 +13,7 @@ import zipfile
 from sqlalchemy import Engine, text
 
 from app.modules.library.runtime.metadata.fields import extract_flat_fields
+from app.modules.maintenance.catalog_sharing import validate_catalog_sharing
 
 
 SCOPES = (
@@ -112,7 +113,9 @@ def prepare_document_export(
         for column in FLAT_METADATA_COLUMNS:
             record[column] = flattened.get(column)
         record["meta"] = (
-            json.dumps(schema_org, ensure_ascii=False) if schema_org is not None else None
+            json.dumps(schema_org, ensure_ascii=False)
+            if schema_org is not None
+            else None
         )
         rows.append(record)
 
@@ -132,7 +135,9 @@ def prepare_document_export(
     return columns, [[record.get(column) for column in columns] for record in rows]
 
 
-def write_csv(path: Path, columns: Sequence[str], rows: Iterable[Sequence[Any]]) -> None:
+def write_csv(
+    path: Path, columns: Sequence[str], rows: Iterable[Sequence[Any]]
+) -> None:
     """Write one UTF-8 CSV using the supplied stable column order."""
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
@@ -146,7 +151,9 @@ def create_zip(csv_path: Path, zip_path: Path, title: str) -> None:
         archive.write(csv_path, arcname=f"{title}.csv")
 
 
-def load_google_credentials(credentials_dir: Path, legacy_dir: Path | None = None) -> Any:
+def load_google_credentials(
+    credentials_dir: Path, legacy_dir: Path | None = None
+) -> Any:
     """Load OAuth credentials, falling back to the former monocorpus files."""
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -268,6 +275,7 @@ def run_dump(
     workspace: Path,
     credentials_dir: Path,
     legacy_credentials_dir: Path | None = None,
+    validate_sharing: bool = False,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> dict[str, Any]:
     """Execute the complete export and return a compact run summary."""
@@ -279,6 +287,12 @@ def run_dump(
 
     print("dump state: reading document catalog", flush=True)
     source_columns, records = fetch_document_rows(engine)
+    if validate_sharing:
+        validate_catalog_sharing(records)
+        print(
+            f"dump state: sharing validation passed for {len(records)} documents",
+            flush=True,
+        )
     columns, rows = prepare_document_export(records, source_columns=source_columns)
     write_csv(csv_path, columns, rows)
     create_zip(csv_path, zip_path, title)
