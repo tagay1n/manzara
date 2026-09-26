@@ -44,12 +44,15 @@ def _text(value: Any) -> str | None:
 def _initials(value: str | None) -> str | None:
     if value is None:
         return None
-    parts = [part.strip() for part in value.replace(".", " ").split() if part.strip()]
-    if not parts:
-        return None
-    if len(parts) != 1 or len(parts[0]) != 1 or not parts[0].isalpha():
-        raise ValueError("initial fields must contain one initial such as А.")
-    return f"{parts[0].upper()}."
+    # Explicit transliteration units discussed for this catalog: х, ш, ц, ю.
+    # They represent one initial, rather than an arbitrary multi-letter word.
+    transliterations = {"kh": "Kh", "sh": "Sh", "ts": "Ts", "ju": "Ju"}
+    letter = value[:-1] if value.endswith(".") else value
+    if len(letter) == 1 and letter.isalpha():
+        return f"{letter.upper()}."
+    if letter.casefold() in transliterations:
+        return f"{transliterations[letter.casefold()]}."
+    raise ValueError("initial fields require one letter or Kh., Sh., Ts., Ju.")
 
 
 class PersonComponents(BaseModel):
@@ -84,6 +87,43 @@ class PersonComponents(BaseModel):
         ):
             raise ValueError("at least one usable surname or personal-name component is required")
         return self
+
+
+class PersonalityResponse(BaseModel):
+    """Complete model decision; negative outcomes carry no identity components."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+
+    outcome: Literal["normalized", "not_person", "unusable"]
+    reason: str | None
+    surname_full: str | None
+    surname_initial: str | None
+    name_full: str | None
+    name_initial: str | None
+    father_name_full: str | None
+    father_name_initial: str | None
+    title: str | None
+    sex: Literal["M", "F"] | None
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "PersonalityResponse":
+        if self.outcome == "normalized":
+            if self.reason is not None:
+                raise ValueError("normalized outcomes require a null reason")
+            components = PersonComponents.model_validate(self.model_dump(exclude={"outcome", "reason"}))
+            for field, value in components.model_dump().items():
+                setattr(self, field, value)
+        else:
+            if not _text(self.reason):
+                raise ValueError("negative outcomes require a nonblank reason")
+            if any(getattr(self, field) is not None for field in (*_COMPONENT_FIELDS, "sex")):
+                raise ValueError("negative outcomes must have null identity components")
+        return self
+
+    def person_components(self) -> PersonComponents | None:
+        if self.outcome != "normalized":
+            return None
+        return PersonComponents.model_validate(self.model_dump(exclude={"outcome", "reason"}))
 
 
 @dataclass(frozen=True)
@@ -239,6 +279,7 @@ def storage_components(components: PersonComponents) -> dict[str, str | None]:
 
 __all__ = [
     "PersonComponents",
+    "PersonalityResponse",
     "PersonalityCandidate",
     "build_canonical_name",
     "extract_personality_candidates",

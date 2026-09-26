@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import sys
@@ -85,6 +86,28 @@ def _checkpoint_attempts(checkpoint: dict[str, Any] | None) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _checkpoint_attempts_for_candidate(
+    checkpoint: dict[str, Any] | None, candidate: PersonalityCandidate,
+) -> dict[str, Any]:
+    """Release only exclusions caused by the superseded single-letter rule."""
+    attempts = _checkpoint_attempts(checkpoint)
+    for model, failure in list(attempts.items()):
+        if not isinstance(failure, dict) or failure.get("kind") != "response":
+            continue
+        error = str(failure.get("error") or "")
+        if "initial fields must contain one initial such as" not in error:
+            continue
+        evidence = candidate.raw_name + " " + error
+        if re.search(r"(?<![\w.])(?:Kh|Sh|Ts|Ju)\.(?![\w.])", evidence, re.IGNORECASE):
+            attempts[model] = {**failure, "kind": "recovered_response"}
+    return attempts
+
+
+def _excluded_models(attempts: dict[str, Any]) -> set[str]:
+    return {model for model, failure in attempts.items()
+            if not isinstance(failure, dict) or failure.get("kind") != "recovered_response"}
+
+
 def format_personality_response_for_log(response: Any) -> str:
     """Render one bounded model response for the worker-attributed task log."""
     raw = str(response or "")
@@ -132,10 +155,16 @@ def _eligible_candidates(
         if current and checkpoint.get("state") == "succeeded":
             skipped += 1
             continue
-        if current and checkpoint.get("state") == "failed" and not checkpoint.get("retryable"):
+        recovered = any(failure.get("kind") == "recovered_response"
+                        for failure in _checkpoint_attempts_for_candidate(checkpoint, candidate).values()
+                        if isinstance(failure, dict))
+        if current and checkpoint.get("state") == "failed" and not checkpoint.get("retryable") and not recovered:
             skipped += 1
             continue
         eligible.append(candidate)
+    # Stable partition before applying any candidate limit. Durable checkpoints
+    # retain this priority across restarts, including interrupted processing.
+    eligible.sort(key=lambda candidate: candidate.raw_name in by_name)
     return eligible, skipped
 
 
@@ -151,6 +180,7 @@ def run_personality_normalization(
     workers: int = 1,
     _progress_sink: Callable[[dict[str, Any]], None] | None = None,
     _preselected: bool = False,
+    _claim_candidate: Callable[[], PersonalityCandidate | None] | None = None,
 ) -> dict[str, Any]:
     """Run single-person structured requests, persisting after every person."""
     source_candidates = list(candidates) if candidates is not None else extract_personality_candidates(db.list_personality_source_documents())
@@ -162,7 +192,12 @@ def run_personality_normalization(
             eligible = eligible[:max(0, int(limit))]
     if workers > 1 and len(eligible) > 1:
         count = min(int(workers), len(eligible))
-        partitions = [eligible[index::count] for index in range(count)]
+        queue = deque(eligible)
+        queue_lock = threading.Lock()
+
+        def claim_candidate() -> PersonalityCandidate | None:
+            with queue_lock:
+                return queue.popleft() if queue else None
         progress_lock = threading.Lock()
         worker_progress: list[dict[str, Any] | None] = [None] * count
 
@@ -205,8 +240,8 @@ def run_personality_normalization(
         def run_partition(index: int) -> dict[str, Any]:
             return run_personality_normalization(
                 db=db, models=models, run_id=run_id, should_stop=should_stop,
-                request_json=request_json, candidates=partitions[index], limit=None,
-                workers=1, _preselected=True,
+                request_json=request_json, candidates=[], limit=None,
+                workers=1, _preselected=True, _claim_candidate=claim_candidate,
                 _progress_sink=lambda snapshot: publish_worker_progress(index, snapshot),
             )
 
@@ -249,12 +284,16 @@ def run_personality_normalization(
     progress()
     emit_gemini_worker_log(f"library personalities: start eligible={len(eligible)} total={len(source_candidates)}", worker_id=worker_id)
     outcome = "completed"
-    for candidate in eligible:
+    remaining = iter(eligible)
+    while True:
         if should_stop():
             outcome = "stopped"
             break
+        candidate = _claim_candidate() if _claim_candidate else next(remaining, None)
+        if candidate is None:
+            break
         checkpoint = db.get_personality_checkpoint(candidate.raw_name)
-        attempts = _checkpoint_attempts(checkpoint)
+        attempts = _checkpoint_attempts_for_candidate(checkpoint, candidate)
         fingerprint = personality_source_fingerprint(candidate)
         model_input_name = preprocess_personality_name_for_model(candidate.raw_name)
         emit_gemini_worker_log(f"library personalities: person start raw_name={candidate.raw_name}", worker_id=worker_id)
@@ -281,7 +320,10 @@ def run_personality_normalization(
                 raise GeminiModelResponseError(str(exc)) from exc
 
         def record_failure(model_name: str, kind: str, error: str) -> None:
+            previous = attempts.get(model_name)
             attempts[model_name] = {"kind": kind, "error": error}
+            if isinstance(previous, dict) and previous.get("kind") == "recovered_response":
+                attempts[model_name]["previous_failure"] = previous
             db.save_personality_checkpoint(raw_name=candidate.raw_name, source_fingerprint=fingerprint,
                 document_count=candidate.document_count, mention_count=candidate.mention_count,
                 source_roles=list(candidate.roles), prompt_version=PERSONALITY_NORMALIZATION_PROMPT_VERSION,
@@ -291,7 +333,7 @@ def run_personality_normalization(
         try:
             result = run_ordered_model_pool(manager=manager, models=models, request=call_model,
                 parse=parse, record_failure=record_failure, run_id=run_id,
-                already_attempted=attempts.keys())
+                already_attempted=_excluded_models(attempts))
         except GeminiModelPoolExhaustedError as exc:
             db.save_personality_checkpoint(raw_name=candidate.raw_name, source_fingerprint=fingerprint,
                 document_count=candidate.document_count, mention_count=candidate.mention_count,
@@ -300,6 +342,15 @@ def run_personality_normalization(
                 failure_context=str(exc), retryable=False)
             counters["failed"] += 1
         except GeminiModelPoolItemRejectedError as exc:
+            # An item-level rejection also closes recoveries for models that
+            # were not reached. Keep their old evidence without reopening the
+            # terminal item on the next run.
+            attempts = {
+                model: {**failure, "kind": "recovery_blocked", "recovery_blocked_by": str(exc)}
+                if isinstance(failure, dict) and failure.get("kind") == "recovered_response"
+                else failure
+                for model, failure in attempts.items()
+            }
             db.save_personality_checkpoint(raw_name=candidate.raw_name, source_fingerprint=fingerprint,
                 document_count=candidate.document_count, mention_count=candidate.mention_count,
                 source_roles=list(candidate.roles), prompt_version=PERSONALITY_NORMALIZATION_PROMPT_VERSION,
