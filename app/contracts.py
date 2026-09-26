@@ -50,6 +50,8 @@ class CoreReadPayloadBuilders(Protocol):
 
 class NormalizationOperations(Protocol):
     get_personalities: Callable[..., Any]
+    get_personality_decisions: Callable[..., Any]
+    retry_personality_decision: Callable[..., Any]
     list_personality_documents: Callable[..., Any]
     apply_personalities: Callable[..., Any]
     get_publishers: Callable[..., Any]

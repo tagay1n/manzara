@@ -16,7 +16,7 @@ Public API: `app/modules/library/normalization.py`. HTTP wiring: `app/library_no
 | Audit history, undo | `app/modules/library/normalization_history.py` | `tests/test_library_normalization.py`, `tests/test_api_library_normalization.py` |
 | Coverage, merge recommendations | `app/modules/library/normalization_quality.py` | `tests/test_api_library_normalization.py` |
 | AI suggestions, refresh workers | `app/modules/library/normalization_suggestions.py` | `tests/test_gemini_workers.py`, `tests/test_gemini_config.py` |
-| Canonical personality extraction, structured response, workbench | `app/modules/library/personality_normalization.py`, `app/modules/library/personality_normalization_prompt.py`, `app/modules/library/personality_workbench.py`, `app/modules/library/runtime/run_normalize_personalities.py` | `tests/test_library_personality_normalization.py`, `tests/test_library_personality_workbench.py` |
+| Canonical personality extraction, structured response, workbench | `app/modules/library/personality_normalization.py`, `app/modules/library/personality_normalization_prompt.py`, `app/modules/library/personality_workbench.py`, `app/modules/library/runtime/run_normalize_personalities.py` | `tests/test_library_personality_normalization.py`, `tests/test_library_personality_outcomes.py`, `tests/test_library_personality_workbench.py`, `tests/frontend/test_personality_decisions.mjs` |
 
 ## Documents and conversion
 

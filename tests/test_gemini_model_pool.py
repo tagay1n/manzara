@@ -301,3 +301,46 @@ def test_deferred_model_rotates_quota_limited_key() -> None:
 
     assert result.value == "good"
     assert manager.calls == ["first", "first", "first"]
+
+
+@pytest.mark.parametrize("error", [
+    GeminiQuotaExceededError("429 cooldown"),
+    GeminiServerPauseError("503 demand"),
+    GeminiServerPauseError("504 gateway deadline"),
+    GeminiRequestTimeoutError("local request deadline"),
+    GeminiTransportError("network lost"),
+])
+def test_opt_in_yields_transient_item_without_same_person_fallback(error):
+    manager = _Manager({"first": [error], "second": ["must not run"]})
+    failures = []
+    with pytest.raises(GeminiModelPoolOperationalError) as exc:
+        run_ordered_model_pool(manager=manager, models=["first", "second"], run_id=None,
+            request=lambda *_args: None, parse=lambda raw: raw,
+            record_failure=lambda *args: failures.append(args), yield_on_transient=True)
+    assert exc.value.retryable is True
+    assert manager.calls == ["first"]
+    assert failures == []
+
+
+def test_opt_in_unavailable_pool_retains_earliest_shared_cooldown():
+    from datetime import datetime, timedelta, timezone
+    from app.gemini_runtime import GeminiQuotaCooldownError
+    later = datetime.now(timezone.utc) + timedelta(minutes=2)
+    earlier = later - timedelta(minutes=1)
+    manager = _Manager({"first": [GeminiQuotaCooldownError("cooldown", retry_at=later)],
+                        "second": [GeminiQuotaCooldownError("cooldown", retry_at=earlier)]})
+    with pytest.raises(GeminiModelPoolUnavailableError) as exc:
+        run_ordered_model_pool(manager=manager, models=["first", "second"], run_id=None,
+            request=lambda *_args: None, parse=lambda raw: raw, record_failure=lambda *_args: None,
+            yield_on_transient=True)
+    assert exc.value.retry_at == earlier
+    assert manager.calls == ["first", "second"]
+
+
+def test_opt_in_propagates_fatal_runtime_errors():
+    manager = _Manager({"first": [GeminiRuntimeError("Invalid credentials")], "second": ["must not run"]})
+    with pytest.raises(GeminiRuntimeError, match="Invalid credentials"):
+        run_ordered_model_pool(manager=manager, models=["first", "second"], run_id=None,
+            request=lambda *_args: None, parse=lambda raw: raw, record_failure=lambda *_args: None,
+            yield_on_transient=True)
+    assert manager.calls == ["first"]

@@ -10,3 +10,11 @@ Read this only when changing `app/gemini_*.py` or a Gemini-consuming workflow.
 - A `400` rejects only the item. A `5xx` starts the shared 60-second model pause.
 - Transport and `5xx` failures share a bounded retry budget. Authentication/configuration errors are task-fatal. Uploaded Gemini files use shared best-effort cleanup.
 - Parallel workflows emit every physical stdout line through the shared worker logger using `[worker=<flow>-<one-based-id>]`; pool-level messages use `worker=coordinator`. Keep multiline responses attributed line by line so the task viewer can color and group them without parsing business content.
+
+Personality normalization opts into `run_ordered_model_pool(...,
+yield_on_transient=True)`: it yields the item immediately on 429, service 5xx,
+transport failures and local deadlines. The shared runtime first records its
+normal key/quota/model state. These transient outcomes do not exclude a model as
+a content failure. The personality queue handles one later turn after the first
+pass, with stop-aware waits and durable deferral. Other workflows retain the
+default ordered fallback and bounded same-item retry policy.

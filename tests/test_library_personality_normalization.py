@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
 from app.modules.library.runtime import run_normalize_personalities as personality_runner
 from app.modules.library.personality_normalization import (
     PersonComponents,
+    PersonalityResponse,
     PersonalityCandidate,
     build_canonical_name,
     extract_personality_candidates,
@@ -23,6 +26,11 @@ from app.modules.library.personality_normalization_prompt import (
     PERSONALITY_NORMALIZATION_PROMPT_VERSION,
     build_personality_normalization_prompt,
 )
+
+
+def _normalized_response(**components):
+    return json.dumps({"outcome": "normalized", "reason": None,
+                      **{field: None for field in PersonComponents.model_fields}, **components}, ensure_ascii=False)
 
 
 def test_candidate_extraction_covers_supported_relationships_and_deduplicates_exact_names() -> None:
@@ -223,11 +231,13 @@ def test_runner_publishes_a_determinate_initial_progress_snapshot_before_first_p
     )
 
     assert summary["outcome"] == "stopped"
-    assert db.progress == [{
+    assert db.progress[0] == {
         "current": 0, "total": 1, "processed": 0, "succeeded": 0,
         "skipped": 0, "deferred": 0, "failed": 0,
+        "not_person": 0, "unusable": 0, "retry_pending": 0,
         "model_attempts": {}, "model_successes": {},
-    }]
+    }
+    assert db.progress[-1] == db.progress[0]
 
 
 @pytest.mark.parametrize(("limit", "selected"), [(None, 3), (2, 2)])
@@ -280,7 +290,7 @@ def test_parallel_runner_publishes_aggregate_monotonic_progress(
         run_id=7,
         should_stop=lambda: False,
         candidates=candidates,
-        request_json=lambda **_kwargs: '{"surname_full":"Person"}',
+        request_json=lambda **_kwargs: _normalized_response(surname_full="Person"),
         workers=2,
         limit=limit,
     )
@@ -298,6 +308,7 @@ def test_parallel_runner_publishes_aggregate_monotonic_progress(
         "current": selected, "total": selected, "processed": selected,
         "succeeded": selected,
         "skipped": 0, "deferred": 0, "failed": 0,
+        "not_person": 0, "unusable": 0, "retry_pending": 0,
         "model_attempts": {"model-one": selected},
         "model_successes": {"model-one": selected},
     }
@@ -340,11 +351,13 @@ def test_runner_progress_total_uses_eligible_candidates_after_limit() -> None:
     assert summary["skipped"] == 1
     assert summary["total"] == 3
     assert summary["processed"] == 1
-    assert db.progress == [{
+    assert db.progress[0] == {
         "current": 0, "total": 1, "processed": 0, "succeeded": 0,
         "skipped": 0, "deferred": 0, "failed": 0,
+        "not_person": 0, "unusable": 0, "retry_pending": 0,
         "model_attempts": {}, "model_successes": {},
-    }]
+    }
+    assert db.progress[-1] == db.progress[0]
 
 
 def test_response_log_format_is_pretty_json_and_bounds_invalid_output() -> None:
@@ -379,11 +392,11 @@ def test_runner_logs_each_pretty_response_with_worker_prefix(monkeypatch: pytest
     personality_runner.run_personality_normalization(
         db=_Db(), models=["model-one"], run_id=1, should_stop=lambda: False,
         candidates=[PersonalityCandidate("Габдулла Тукай", 1, 1, ("author",))],
-        request_json=lambda **_kwargs: '{"surname_full":"Тукай","name_full":"Габдулла"}',
+        request_json=lambda **_kwargs: _normalized_response(surname_full="Тукай", name_full="Габдулла"),
     )
 
     response_lines = [line for line in capsys.readouterr().out.splitlines() if '"surname_full"' in line]
-    assert response_lines == ['[worker=personalities-1]   "surname_full": "Тукай"']
+    assert response_lines == ['[worker=personalities-1]   "surname_full": "Тукай",']
 
 
 def test_runner_preprocesses_model_input_without_changing_persisted_raw_name(
@@ -416,7 +429,7 @@ def test_runner_preprocesses_model_input_without_changing_persisted_raw_name(
 
     def request_json(**kwargs: object) -> str:
         prompts.extend(kwargs["contents"])
-        return '{"surname_full":"Шәйхразиева","name_initial":"З.","father_name_initial":"В."}'
+        return _normalized_response(surname_full="Шәйхразиева", name_initial="З.", father_name_initial="В.")
 
     db = _Db()
     monkeypatch.setattr(personality_runner, "run_ordered_model_pool", model_pool)
@@ -593,7 +606,7 @@ def test_parallel_workers_claim_untouched_work_from_one_shared_queue(monkeypatch
             order.append(name)
             if name == "C":
                 untouched_processed.set()
-        return '{"name_full":"Person"}'
+        return _normalized_response(name_full="Person")
 
     monkeypatch.setattr(personality_runner, "run_ordered_model_pool", pool)
     run_personality_normalization(db=Db(), models=["model"], run_id=None,
@@ -637,7 +650,7 @@ def test_runner_retries_corrected_initials_model_without_clearing_other_model_fa
     summary = run_personality_normalization(
         db=Db(), models=["initials-model", "bad-json-model"], run_id=None,
         should_stop=lambda: False, candidates=[candidate],
-        request_json=lambda **kwargs: '{"surname_full":"Minnullina","name_full":"Fatyma","father_name_initial":"Kh."}',
+        request_json=lambda **kwargs: _normalized_response(surname_full="Minnullina", name_full="Fatyma", father_name_initial="Kh."),
     )
     assert summary["succeeded"] == 1
     assert persisted[0]["raw_name"] == candidate.raw_name
@@ -661,7 +674,7 @@ def test_runner_applies_limit_after_untouched_priority(monkeypatch) -> None:
             return {"canonical_id": 1}
 
     def pool(**kwargs):
-        return type("Result", (), {"model_name": "model", "value": PersonComponents(name_full="Person")})()
+        return type("Result", (), {"model_name": "model", "value": PersonalityResponse.model_validate_json(_normalized_response(name_full="Person"))})()
 
     monkeypatch.setattr(personality_runner, "run_ordered_model_pool", pool)
     run_personality_normalization(db=Db(), models=["model"], run_id=None, should_stop=lambda: False,

@@ -81,6 +81,8 @@ from app.modules.library.publisher_workbench import (
 from app.modules.library.personality_workbench import (
     apply_personalities,
     get_personalities,
+    get_personality_decisions,
+    retry_personality_decision,
     list_personality_documents,
 )
 from app.modules.library.personalities import get_personality_overview
@@ -146,6 +148,8 @@ class CoreReadPayloadBuildersService:
 @dataclass(frozen=True)
 class NormalizationOperationsService:
     get_personalities: Callable[..., Any]
+    get_personality_decisions: Callable[..., Any]
+    retry_personality_decision: Callable[..., Any]
     list_personality_documents: Callable[..., Any]
     apply_personalities: Callable[..., Any]
     get_publishers: Callable[..., Any]
@@ -240,6 +244,8 @@ def build_normalization_operations() -> NormalizationOperations:
     """Build normalization route operations service."""
     return NormalizationOperationsService(
         get_personalities=get_personalities,
+        get_personality_decisions=get_personality_decisions,
+        retry_personality_decision=retry_personality_decision,
         list_personality_documents=list_personality_documents,
         apply_personalities=apply_personalities,
         get_publishers=get_publishers,

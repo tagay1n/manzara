@@ -9,8 +9,9 @@ const formIds = {surname_full:"personality-surname", surname_initial:"personalit
 
 function canonicalName(c) {
   const parts = [c.surname_full || c.surname_initial, c.name_full || c.name_initial, c.father_name_full || c.father_name_initial].filter(Boolean);
-  if ((c.father_name_full || c.father_name_initial) && c.sex === "M") parts.push("улы");
-  if ((c.father_name_full || c.father_name_initial) && c.sex === "F") parts.push("кызы");
+  if (c.father_name_full && c.sex === "M") parts.push("улы");
+  if (c.father_name_full && c.sex === "F") parts.push("кызы");
+  if (c.title) parts.push(c.title);
   return parts.join(" ");
 }
 function rows() {
@@ -44,6 +45,8 @@ function render() {
   document.getElementById("personality-sort-name").textContent = `Personality${state.sort.field === "name" ? (state.sort.direction === "asc" ? " ↑" : " ↓") : ""}`;
   document.getElementById("personality-sort-documents").textContent = `Documents${state.sort.field === "documents" ? (state.sort.direction === "asc" ? " ↑" : " ↓") : ""}`;
   document.getElementById("personality-count").textContent = state.loading ? "" : `${state.snapshot?.personality_count || 0} personalities`;
+  const counts = state.snapshot?.decision_counts || {};
+  document.getElementById("personality-decision-counts").textContent = `Not a person: ${counts.not_person || 0} · Needs review: ${counts.unusable || 0} · Failed: ${counts.failed || 0} · Deferred: ${counts.deferred || 0}`;
   document.getElementById("personality-clear").hidden = !state.filter;
   document.getElementById("personality-body").innerHTML = state.loading ? '<tr><td colspan="3" class="workflow-footnote">Loading personalities…</td></tr>' : visible.map((row) => {
     const id = key(row), expanded = state.aliases.has(id), aliases = (row.aliases || []).filter((value) => value !== row.display_name), open = state.openDocuments.has(id), page = state.documents.get(id);
@@ -81,3 +84,50 @@ document.getElementById("personality-discard").addEventListener("click", ()=>{st
 document.getElementById("personality-apply").addEventListener("click", async()=>{state.applying=true;render();try{await api("/api/library/personalities/change-set/apply",{method:"POST",body:JSON.stringify(changes())});state.renames.clear();state.corrections.clear();state.merges=[];state.selected.clear();await load();}catch(error){window.ManzaraUI.toast(error.message||"Could not apply changes.",{tone:"error"});}finally{state.applying=false;render();}});
 window.addEventListener("beforeunload", (event)=>{if(pendingCount()){event.preventDefault();event.returnValue="";}});
 render();load();
+
+
+const review = {page: 1, state: "all", payload: null, loading: true, error: "", request: 0, retrying: new Set()};
+const decisionLabels = {not_person: "Not a person", unusable: "Needs review", failed: "Failed", deferred: "Deferred", retry_requested: "Retry requested"};
+function renderDecisions() {
+  const body = document.getElementById("personality-decisions-body");
+  if (review.loading) body.innerHTML = '<tr><td colspan="4">Loading decisions…</td></tr>';
+  else if (review.error) body.innerHTML = `<tr><td colspan="4">${esc(review.error)}</td></tr>`;
+  else body.innerHTML = (review.payload?.items || []).map(row => {
+    const canRetry = ["not_person", "unusable"].includes(row.state);
+    return `<tr><td>${esc(row.raw_name)}</td><td><strong>${esc(decisionLabels[row.state] || row.state)}</strong><div class="workflow-footnote">${esc(row.reason || "")}</div></td><td>${Number(row.document_count || 0)}</td><td>${canRetry ? `<button class="small-btn personality-decision-retry" data-name="${encodeURIComponent(row.raw_name)}" data-updated-at="${encodeURIComponent(row.updated_at)}" ${review.retrying.has(row.raw_name) ? "disabled" : ""}>Retry after correction</button>` : ""}</td></tr>`;
+  }).join("") || '<tr><td colspan="4">No decisions to review.</td></tr>';
+  document.getElementById("personality-decisions-prev").disabled = review.loading || review.page <= 1;
+  document.getElementById("personality-decisions-next").disabled = review.loading || !review.payload?.has_more;
+  document.getElementById("personality-decisions-page").textContent = `Page ${review.page}`;
+}
+async function loadDecisions() {
+  const request = ++review.request;
+  review.loading = true; review.error = ""; renderDecisions();
+  try {
+    const payload = await api(`/api/library/personalities/decisions?state=${encodeURIComponent(review.state)}&page=${review.page}`);
+    if (request === review.request) review.payload = payload;
+  } catch (error) {
+    if (request === review.request) { review.payload = null; review.error = `Review unavailable: ${error.message || error}`; }
+  } finally {
+    if (request === review.request) { review.loading = false; renderDecisions(); }
+  }
+}
+document.getElementById("personality-decisions-state").addEventListener("change", event => {
+  review.state = event.target.value; review.page = 1; loadDecisions();
+});
+document.getElementById("personality-decisions-prev").addEventListener("click", () => { if (review.page > 1) { review.page -= 1; loadDecisions(); } });
+document.getElementById("personality-decisions-next").addEventListener("click", () => { if (review.payload?.has_more) { review.page += 1; loadDecisions(); } });
+document.getElementById("personality-decisions-body").addEventListener("click", async event => {
+  const button = event.target.closest(".personality-decision-retry");
+  if (!button) return;
+  const raw_name = decodeURIComponent(button.dataset.name), updated_at = decodeURIComponent(button.dataset.updatedAt);
+  if (review.retrying.has(raw_name)) return;
+  review.retrying.add(raw_name); renderDecisions();
+  try {
+    await api("/api/library/personalities/decisions/retry", {method: "POST", body: JSON.stringify({raw_name, updated_at})});
+    await Promise.all([loadDecisions(), load()]);
+    window.ManzaraUI.toast("Retry queued for the next normalization run.");
+  } catch (error) { window.ManzaraUI.toast(error.message || "Could not request retry.", {tone: "error"}); }
+  finally { review.retrying.delete(raw_name); renderDecisions(); }
+});
+renderDecisions(); loadDecisions();

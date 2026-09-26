@@ -407,6 +407,17 @@ def build_structured_run_summary(
             )
         return summary
 
+    if task_id == "library.normalize_personalities" and artifacts:
+        data = artifacts if isinstance(artifacts, dict) else {}
+        if data.get("kind") == "library.personality_normalization_summary":
+            labels = {"succeeded": "Normalized", "not_person": "Not a person",
+                      "unusable": "Needs review", "failed": "Failed", "deferred": "Deferred",
+                      "skipped": "Skipped", "remaining": "Remaining"}
+            summary["highlights"].extend({"label": label, "value": str(int(data.get(key) or 0))}
+                                         for key, label in labels.items())
+            summary["message"] = f"Personality normalization {data.get('outcome') or status}."
+        return summary
+
     if panel_id == "library" and status == "completed":
         summary["message"] = "Library task completed."
         return summary

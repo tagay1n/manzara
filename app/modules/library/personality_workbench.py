@@ -93,7 +93,21 @@ def get_personalities(db: Any) -> dict[str, Any]:
             "is_new": False})
     items.sort(key=lambda item: (item["display_name"].casefold(), item["canonical_id"]))
     token = hashlib.sha256(json.dumps([(item["canonical_id"], item["display_name"], item["aliases"], item["document_count"]) for item in items], ensure_ascii=False).encode()).hexdigest()
-    return {"available": True, "items": items, "personality_count": len(items), "snapshot_token": token}
+    return {"available": True, "items": items, "personality_count": len(items), "snapshot_token": token,
+            "decision_counts": db.get_personality_decision_counts()}
+
+
+def get_personality_decisions(db: Any, *, state: str = "all", page: int = 1) -> dict[str, Any]:
+    return {"available": True, **db.list_personality_decisions(state=state, page=page)}
+
+
+def retry_personality_decision(db: Any, payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict) or set(payload) != {"raw_name", "updated_at"}:
+        raise ValueError("retry requires raw_name and updated_at")
+    if any(not isinstance(payload[field], str) or not payload[field].strip()
+           for field in ("raw_name", "updated_at")):
+        raise ValueError("retry fields must be nonblank strings")
+    return db.retry_personality_decision(raw_name=payload["raw_name"], updated_at=payload["updated_at"])
 
 
 def _names(db: Any, personality_key: str) -> list[str]:

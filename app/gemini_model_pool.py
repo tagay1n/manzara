@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable, Collection, Generic, Sequence, TypeVar
 
 from app.gemini_runtime import (
@@ -37,7 +38,8 @@ class GeminiModelPoolExhaustedError(GeminiModelPoolError):
 class GeminiModelPoolUnavailableError(GeminiModelPoolError):
     """At least one required model could not run because no key was available."""
 
-    def __init__(self, unavailable_models: Sequence[str]) -> None:
+    def __init__(self, unavailable_models: Sequence[str], *, retry_at: datetime | None = None) -> None:
+        self.retry_at = retry_at
         self.unavailable_models = tuple(unavailable_models)
         joined = ", ".join(self.unavailable_models)
         super().__init__(f"Gemini models unavailable: {joined}")
@@ -46,7 +48,9 @@ class GeminiModelPoolUnavailableError(GeminiModelPoolError):
 class GeminiModelPoolOperationalError(GeminiModelPoolError):
     """Gemini remained unavailable after its bounded server-error retry."""
 
-    def __init__(self, message: str, *, retryable: bool = False) -> None:
+    def __init__(self, message: str, *, retryable: bool = False, retry_at: datetime | None = None, model_name: str | None = None) -> None:
+        self.model_name = model_name
+        self.retry_at = retry_at
         self.retryable = bool(retryable)
         super().__init__(message)
 
@@ -131,6 +135,7 @@ def run_ordered_model_pool(
     record_failure: Callable[[str, str, str], None],
     run_id: int | None,
     already_attempted: Collection[str] = (),
+    yield_on_transient: bool = False,
 ) -> GeminiModelPoolResult[T]:
     """Try each model once while allowing key rotation and one 5xx retry."""
     ordered = tuple(dict.fromkeys(str(model).strip() for model in models if str(model).strip()))
@@ -139,6 +144,7 @@ def run_ordered_model_pool(
 
     failed = {str(model) for model in already_attempted}
     unavailable: list[str] = []
+    retry_times: list[datetime] = []
     paused: list[tuple[str, GeminiServerPauseError]] = []
     quota_attempts: dict[str, int] = {}
     max_quota_rotations = int(
@@ -157,6 +163,14 @@ def run_ordered_model_pool(
                 parse=parse,
                 run_id=run_id,
             )
+            if yield_on_transient and attempt.outcome in {"quota", "server_pause", "transport", "timeout"}:
+                raise GeminiModelPoolOperationalError(
+                    str(attempt.error), retryable=True,
+                    retry_at=getattr(attempt.error, "pause_until", None), model_name=model_name,
+                ) from attempt.error
+            if yield_on_transient and attempt.outcome == "runtime":
+                assert attempt.error is not None
+                raise attempt.error
             if attempt.outcome == "quota":
                 quota_attempts[model_name] = quota_attempts.get(model_name, 0) + 1
                 if quota_attempts[model_name] >= max_quota_rotations:
@@ -165,6 +179,8 @@ def run_ordered_model_pool(
                 # Rotate only through the bounded number of quota domains.
                 continue
             if attempt.outcome == "unavailable":
+                if yield_on_transient and getattr(attempt.error, "retry_at", None) is not None:
+                    retry_times.append(attempt.error.retry_at)
                 unavailable.append(model_name)
                 break
             if attempt.outcome == "server_pause":
@@ -253,7 +269,7 @@ def run_ordered_model_pool(
         raise GeminiModelPoolExhaustedError(
             "All configured Gemini models failed response validation"
         )
-    raise GeminiModelPoolUnavailableError(unavailable)
+    raise GeminiModelPoolUnavailableError(unavailable, retry_at=min(retry_times) if retry_times else None)
 
 
 __all__ = [

@@ -333,3 +333,17 @@ def test_document_cleanup_preparation_summary_uses_structured_artifact() -> None
         "Non-document": "1",
         "ISBN reviews": "1",
     }
+
+
+def test_personality_summary_separates_decisions_from_failures_and_deferrals():
+    summary = build_structured_run_summary(task_id="library.normalize_personalities", panel_id="library",
+        status="completed", exit_code=0, error_text=None, stop_mode=None,
+        started_at="2026-09-26T10:00:00+00:00", finished_at="2026-09-26T11:00:00+00:00", log_lines=[],
+        artifacts={"kind": "library.personality_normalization_summary", "outcome": "completed",
+                   "succeeded": 4, "not_person": 2, "unusable": 3, "failed": 1, "deferred": 5, "remaining": 0})
+    values = {entry["label"]: entry["value"] for entry in summary["highlights"]}
+    assert values["Normalized"] == "4"
+    assert values["Not a person"] == "2"
+    assert values["Needs review"] == "3"
+    assert values["Failed"] == "1"
+    assert values["Deferred"] == "5"

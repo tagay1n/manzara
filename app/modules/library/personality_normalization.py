@@ -15,7 +15,7 @@ import re
 import unicodedata
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 _PERSON_ROLES = ("author", "editor", "translator", "illustrator", "contributor")
@@ -95,7 +95,7 @@ class PersonalityResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
     outcome: Literal["normalized", "not_person", "unusable"]
-    reason: str | None
+    reason: str | None = Field(max_length=300)
     surname_full: str | None
     surname_initial: str | None
     name_full: str | None

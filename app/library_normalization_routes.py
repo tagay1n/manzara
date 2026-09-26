@@ -76,6 +76,20 @@ def register_library_normalization_routes(
         state = state_provider()
         return JSONResponse(operations_provider().get_personalities(state.db))
 
+    @app.get("/api/library/personalities/decisions")
+    def get_library_personality_decisions(state: str = q_text(default="all", max_length=40), page: int = q_page()) -> JSONResponse:
+        try:
+            return JSONResponse(operations_provider().get_personality_decisions(state_provider().db, state=state, page=page))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/library/personalities/decisions/retry")
+    def retry_library_personality_decision(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+        try:
+            return JSONResponse(operations_provider().retry_personality_decision(state_provider().db, payload))
+        except ValueError as exc:
+            raise HTTPException(status_code=409 if "conflict" in str(exc) else 400, detail=str(exc)) from exc
+
     @app.get("/api/library/personalities/documents")
     def get_library_personality_documents(
         personality_key: str = q_text(max_length=500), page: int = q_page()

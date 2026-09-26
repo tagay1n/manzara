@@ -6,6 +6,9 @@ from app.modules.library import personality_workbench
 
 
 class _Db:
+    def get_personality_decision_counts(self):
+        return {}
+
     def list_normalization_canonicals(self, entity_type):
         assert entity_type == "personality"
         return [
@@ -122,3 +125,40 @@ def test_personality_repository_applies_structured_correction_and_retains_old_na
     assert updated["father_name_full"] == "Мөхәммәтгариф"
     assert updated["identity_key"] == change_set["corrections"][0]["identity_key"]
     assert db.get_normalization_alias("personality", "Тукай Г.")["canonical_id"] == canonical_id
+
+
+def test_negative_decision_repository_review_and_explicit_retry(test_client):
+    from app.modules.library.runtime.run_normalize_personalities import (
+        PERSONALITY_NORMALIZATION_PROMPT_VERSION, SCHEMA_VERSION,
+    )
+    client, main_app = test_client
+    db = main_app.state.db
+    db.save_personality_checkpoint(raw_name="Example Press", source_fingerprint="source",
+        document_count=2, mention_count=3, source_roles=["author"],
+        prompt_version=PERSONALITY_NORMALIZATION_PROMPT_VERSION, schema_version=SCHEMA_VERSION,
+        state="not_person", failure_context="An organization", retryable=False, completed=True,
+        attempted_models={"first": {"kind": "decision", "outcome": "not_person", "reason": "An organization"}})
+    db.save_personality_checkpoint(raw_name="Broken name", source_fingerprint="source",
+        document_count=1, mention_count=1, source_roles=["editor"],
+        prompt_version=PERSONALITY_NORMALIZATION_PROMPT_VERSION, schema_version=SCHEMA_VERSION,
+        state="unusable", failure_context="Corrupted", retryable=False, completed=True)
+    checkpoint = db.get_personality_checkpoint("Example Press")
+    assert checkpoint["completed_at"]
+    assert checkpoint["canonical_id"] is None
+    projection = client.get("/api/library/personalities").json()
+    assert projection["decision_counts"]["not_person"] == 1
+    assert projection["decision_counts"]["unusable"] == 1
+    review = client.get("/api/library/personalities/decisions?state=not_person&page=1").json()
+    assert len(review["items"]) == 1
+    assert review["items"][0]["reason"] == "An organization"
+    retry = {"raw_name": "Example Press", "updated_at": checkpoint["updated_at"]}
+    assert client.post("/api/library/personalities/decisions/retry", json=retry).status_code == 200
+    revised = db.get_personality_checkpoint("Example Press")
+    assert revised["state"] == "retry_requested"
+    assert revised["retryable"] is True
+    assert revised["failure_context"] == "An organization"
+    assert revised["attempted_models"] == checkpoint["attempted_models"]
+    assert client.post("/api/library/personalities/decisions/retry", json=retry).status_code == 409
+    assert client.post("/api/library/personalities/decisions/retry", json={**retry, "unknown": True}).status_code == 400
+    assert client.get("/api/library/personalities/decisions?state=invalid").status_code == 400
+    assert client.get("/api/library/personalities/decisions?page=1.5").status_code == 422
