@@ -16,7 +16,7 @@ from app.gemini_model_pool import (
     GeminiModelResponseError,
     run_ordered_model_pool,
 )
-from app.gemini_runtime import GeminiRuntimeManager
+from app.gemini_runtime import GeminiRuntimeManager, record_gemini_generation_start
 from app.gemini_workers import current_gemini_worker_id, emit_gemini_worker_log
 from app.modules.library.normalization_rules import (
     _canonical_name_map,
@@ -119,12 +119,15 @@ def _gemini_suggest(
                 "rationale": str(parsed.get("rationale") or ""),
             }
 
+        def request_suggestion(model, api_key, _lease):
+            client = genai.Client(api_key=api_key)
+            record_gemini_generation_start()
+            return client.models.generate_content(model=model, contents=prompt)
+
         result = run_ordered_model_pool(
             manager=manager,
             models=load_required_gemini_model_pool(),
-            request=lambda model, api_key, _lease: genai.Client(api_key=api_key).models.generate_content(
-                model=model, contents=prompt
-            ),
+            request=request_suggestion,
             parse=parse_response,
             record_failure=lambda *_args: None,
             run_id=None,

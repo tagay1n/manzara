@@ -1,12 +1,198 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.repositories.core import utc_now
 
 
+def _ready_candidate(
+    rows: List[Dict[str, Any]],
+    models: Sequence[str],
+    now_ts: str,
+    busy_accounts: set[str],
+) -> tuple[Dict[str, Any] | None, str | None]:
+    waits = []
+    for model in models:
+        ready = []
+        for row in rows:
+            if row["model_name"] != model or row["exhausted"]:
+                continue
+            barriers = [
+                row.get(field)
+                for field in (
+                    "pause_until",
+                    "quota_until",
+                    "cooldown_until",
+                    "next_request_at",
+                )
+            ]
+            if row["lease_token"]:
+                barriers.append(row["lease_expires_at"])
+            blocked_until = max(
+                (ts for ts in barriers if ts and ts > now_ts), default=None
+            )
+            if blocked_until:
+                waits.append(blocked_until)
+            else:
+                ready.append(row)
+        if ready:
+            return min(
+                ready,
+                key=lambda row: (
+                    row["account_id"] in busy_accounts,
+                    row["last_acquired_at"] or "",
+                    row["quota_domain_id"],
+                    row["key_id"],
+                ),
+            ), None
+    return None, min(waits) if waits else None
+
+
 class GeminiRepository:
     """Machine-local SQLite operations for Gemini coordination."""
+
+    def claim_gemini_ready_request(
+        self,
+        *,
+        models: Sequence[str],
+        key_ids: Sequence[str],
+        now_ts: str,
+        cooldown_until: str,
+        expires_at: str,
+        lease_token: str,
+        task_id: Optional[str],
+        run_id: Optional[int],
+        worker_id: str,
+        reserve: bool = True,
+    ) -> Dict[str, Any]:
+        """Select and claim a ready project/model in one cross-process transaction."""
+        if not models or not key_ids:
+            return {"retry_at": None}
+        with self._runtime_connect(immediate=True) as conn:
+            cursor = conn.execute(
+                "SELECT last_model FROM gemini_scheduler_cursor WHERE cursor_id=1"
+            ).fetchone()
+            ordered = list(dict.fromkeys(models))
+            last = cursor["last_model"] if cursor else None
+            if last in ordered:
+                start = ordered.index(last) + 1
+                ordered = ordered[start:] + ordered[:start]
+            placeholders = ",".join("?" for _ in key_ids)
+            rows = conn.execute(
+                f"""SELECT k.*, s.model_name, s.exhausted, s.cooldown_until,
+                    m.pause_until, q.cooldown_until AS quota_until,
+                    p.lease_token, p.lease_expires_at, p.last_acquired_at,
+                    spacing.next_request_at
+                    FROM gemini_keys k JOIN gemini_key_model_state s USING(key_id)
+                    LEFT JOIN gemini_model_runtime m USING(model_name)
+                    LEFT JOIN gemini_quota_domain_model_state q
+                      ON q.quota_domain_id=k.quota_domain_id AND q.model_name=s.model_name
+                    LEFT JOIN gemini_project_leases p USING(quota_domain_id)
+                    LEFT JOIN gemini_project_model_spacing spacing
+                      ON spacing.quota_domain_id=k.quota_domain_id AND spacing.model_name=s.model_name
+                    WHERE k.active=1 AND k.key_id IN ({placeholders})""",
+                key_ids,
+            ).fetchall()
+            busy_accounts = {
+                r["account_id"]
+                for r in conn.execute(
+                    """SELECT DISTINCT k.account_id FROM gemini_project_leases p
+                        JOIN gemini_keys k USING(quota_domain_id)
+                        WHERE p.lease_token IS NOT NULL AND p.lease_expires_at > ?""",
+                    (now_ts,),
+                ).fetchall()
+            }
+            key, retry_at = _ready_candidate(rows, ordered, now_ts, busy_accounts)
+            if key is None:
+                return {"retry_at": retry_at}
+            if not reserve:
+                return {**key, "retry_at": None}
+            model = key["model_name"]
+            domain = key["quota_domain_id"]
+            conn.execute(
+                """INSERT INTO gemini_project_leases
+                    (quota_domain_id, lease_token, lease_expires_at, last_acquired_at,
+                     task_id, run_id, worker_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(quota_domain_id) DO UPDATE SET
+                    lease_token=excluded.lease_token, lease_expires_at=excluded.lease_expires_at,
+                    last_acquired_at=excluded.last_acquired_at, task_id=excluded.task_id,
+                    run_id=excluded.run_id, worker_id=excluded.worker_id""",
+                (domain, lease_token, expires_at, now_ts, task_id, run_id, worker_id),
+            )
+            conn.execute(
+                """INSERT INTO gemini_project_model_spacing VALUES (?, ?, ?)
+                    ON CONFLICT(quota_domain_id, model_name) DO UPDATE
+                    SET next_request_at=excluded.next_request_at""",
+                (domain, model, cooldown_until),
+            )
+            conn.execute(
+                """UPDATE gemini_key_model_state SET last_used_at=?, cooldown_until=?,
+                    attempts_total=attempts_total+1, attempts_cycle=attempts_cycle+1,
+                    updated_at=? WHERE key_id=? AND model_name=?""",
+                (now_ts, cooldown_until, now_ts, key["key_id"], model),
+            )
+            conn.execute(
+                """INSERT INTO gemini_scheduler_cursor VALUES (1, ?)
+                    ON CONFLICT(cursor_id) DO UPDATE SET last_model=excluded.last_model""",
+                (model,),
+            )
+            return {**key, "lease_token": lease_token, "retry_at": None}
+
+    def record_gemini_generation_start(
+        self, quota_domain_id: str, model_name: str, *, key_id: str, lease_token: str,
+        now_ts: str, next_request_at: str, expires_at: str,
+    ) -> bool:
+        """Advance spacing at generation after preparation, under the project lease."""
+        with self._runtime_connect(immediate=True) as conn:
+            renewed = conn.execute(
+                """UPDATE gemini_project_leases SET lease_expires_at=?
+                   WHERE quota_domain_id=? AND lease_token=? AND lease_expires_at > ?""",
+                (expires_at, quota_domain_id, lease_token, now_ts),
+            ).rowcount
+            if not renewed:
+                return False
+            conn.execute(
+                """UPDATE gemini_project_model_spacing SET next_request_at=?
+                   WHERE quota_domain_id=? AND model_name=?""",
+                (next_request_at, quota_domain_id, model_name),
+            )
+            conn.execute(
+                """UPDATE gemini_key_model_state SET cooldown_until=?
+                   WHERE key_id=? AND model_name=?""",
+                (next_request_at, key_id, model_name),
+            )
+            return True
+
+    def renew_gemini_project_lease(
+        self,
+        quota_domain_id: str,
+        lease_token: str,
+        *,
+        expires_at: str,
+        now_ts: str,
+    ) -> bool:
+        with self._runtime_connect(immediate=True) as conn:
+            return bool(
+                conn.execute(
+                    """UPDATE gemini_project_leases SET lease_expires_at=?
+                   WHERE quota_domain_id=? AND lease_token=?""",
+                    (expires_at, quota_domain_id, lease_token),
+                ).rowcount
+            )
+
+    def release_gemini_project_lease(
+        self, quota_domain_id: str, lease_token: str
+    ) -> bool:
+        with self._runtime_connect(immediate=True) as conn:
+            return bool(
+                conn.execute(
+                    """UPDATE gemini_project_leases SET lease_token=NULL, lease_expires_at=NULL,
+                    task_id=NULL, run_id=NULL, worker_id=NULL
+                    WHERE quota_domain_id=? AND lease_token=?""",
+                    (quota_domain_id, lease_token),
+                ).rowcount
+            )
 
     def upsert_gemini_keys(self, keys: List[Dict[str, Any]]) -> None:
         """Synchronize configured Gemini keys into runtime registry."""
@@ -33,7 +219,9 @@ class GeminiRepository:
                         (now, *key_ids),
                     )
                 else:
-                    conn.execute("UPDATE gemini_keys SET active=0, updated_at=?", (now,))
+                    conn.execute(
+                        "UPDATE gemini_keys SET active=0, updated_at=?", (now,)
+                    )
                 for item in normalized:
                     conn.execute(
                         """INSERT INTO gemini_keys (
@@ -54,52 +242,6 @@ class GeminiRepository:
                             now,
                         ),
                     )
-                    conn.execute(
-                        """INSERT INTO gemini_account_leases (
-                               account_id, created_at, updated_at
-                           ) VALUES (?, ?, ?)
-                           ON CONFLICT(account_id) DO NOTHING""",
-                        (item["account_id"], now, now),
-                    )
-
-    def try_claim_gemini_request_slot(
-        self,
-        *,
-        model_name: str,
-        task_id: Optional[str],
-        run_id: Optional[int],
-        now_ts: str,
-        window_start_ts: str,
-        max_requests: int,
-    ) -> Dict[str, Any]:
-        """Atomically reserve one slot in the shared sliding request window."""
-        with self._runtime_connect(immediate=True) as conn:
-            conn.execute(
-                "DELETE FROM gemini_request_slots WHERE requested_at <= ?",
-                (window_start_ts,),
-            )
-            row = conn.execute(
-                "SELECT COUNT(*) AS request_count, MIN(requested_at) AS oldest_request_at "
-                "FROM gemini_request_slots"
-            ).fetchone() or {}
-            request_count = int(row.get("request_count") or 0)
-            if request_count >= max_requests:
-                return {
-                    "claimed": False,
-                    "oldest_request_at": row.get("oldest_request_at"),
-                    "requests_in_window": request_count,
-                }
-            conn.execute(
-                """INSERT INTO gemini_request_slots (
-                       model_name, task_id, run_id, requested_at
-                   ) VALUES (?, ?, ?, ?)""",
-                (model_name, task_id, run_id, now_ts),
-            )
-            return {
-                "claimed": True,
-                "oldest_request_at": row.get("oldest_request_at"),
-                "requests_in_window": request_count + 1,
-            }
 
     def record_gemini_generic_quota_signal(
         self,
@@ -205,17 +347,6 @@ class GeminiRepository:
             "updated_at": now,
             "rolled": True,
         }
-
-    def list_gemini_account_leases(self) -> List[Dict[str, Any]]:
-        """List account leases in least-recently-used order."""
-        with self._runtime_connect() as conn:
-            rows = conn.execute(
-                """SELECT account_id, lease_token, task_id, run_id, worker_id,
-                          lease_expires_at, last_acquired_at, created_at, updated_at
-                   FROM gemini_account_leases
-                   ORDER BY last_acquired_at NULLS FIRST, account_id"""
-            ).fetchall()
-        return [dict(row) for row in rows]
 
     def get_gemini_quota_domain_model_state(
         self, quota_domain_id: str, model_name: str
@@ -323,13 +454,13 @@ class GeminiRepository:
         return int(cur.rowcount or 0)
 
     def get_gemini_snapshot_metadata(self) -> Dict[str, List[Dict[str, Any]]]:
-        """Read account leases and model runtime through one pool checkout."""
+        """Read project leases and model runtime through one pool checkout."""
         with self._runtime_connect() as conn:
             account_leases = conn.execute(
-                """SELECT account_id, lease_token, task_id, run_id, worker_id,
-                          lease_expires_at, last_acquired_at, created_at, updated_at
-                   FROM gemini_account_leases
-                   ORDER BY last_acquired_at NULLS FIRST, account_id"""
+                """SELECT DISTINCT k.account_id, p.*
+                   FROM gemini_project_leases p JOIN gemini_keys k USING(quota_domain_id)
+                   WHERE k.active=1
+                   ORDER BY p.lease_expires_at NULLS FIRST, p.last_acquired_at, k.account_id"""
             ).fetchall()
             model_runtime = conn.execute(
                 """SELECT model_name, pause_until, last_pause_reason, created_at, updated_at
@@ -348,71 +479,6 @@ class GeminiRepository:
                 dict(row) for row in quota_domain_model_states
             ],
         }
-
-    def try_claim_gemini_account(
-        self,
-        account_id: str,
-        *,
-        lease_token: str,
-        task_id: Optional[str],
-        run_id: Optional[int],
-        worker_id: str,
-        now_ts: str,
-        expires_at: str,
-    ) -> bool:
-        """Atomically claim an idle, expired, or orphaned account lease."""
-        with self._runtime_connect(immediate=True) as conn:
-            cur = conn.execute(
-                """
-                UPDATE gemini_account_leases
-                SET lease_token = ?, task_id = ?, run_id = ?, worker_id = ?,
-                    lease_expires_at = ?, last_acquired_at = ?, updated_at = ?
-                WHERE account_id = ?
-                  AND (
-                    lease_token IS NULL
-                    OR lease_expires_at IS NULL
-                    OR lease_expires_at <= ?
-                    OR (run_id IS NOT NULL AND NOT EXISTS (
-                        SELECT 1 FROM runs
-                        WHERE runs.run_id = gemini_account_leases.run_id
-                          AND runs.status IN (
-                            'starting', 'running', 'stopping_graceful', 'stopping_force'
-                          )
-                    ))
-                  )
-                """,
-                (
-                    lease_token, task_id, run_id, worker_id, expires_at,
-                    now_ts, now_ts, account_id, now_ts,
-                ),
-            )
-            return int(cur.rowcount or 0) > 0
-
-    def renew_gemini_account_lease(
-        self, account_id: str, lease_token: str, *, expires_at: str, now_ts: str
-    ) -> bool:
-        """Extend a lease only while its ownership token still matches."""
-        with self._runtime_connect() as conn:
-            cur = conn.execute(
-                """UPDATE gemini_account_leases
-                   SET lease_expires_at = ?, updated_at = ?
-                   WHERE account_id = ? AND lease_token = ?""",
-                (expires_at, now_ts, account_id, lease_token),
-            )
-            return int(cur.rowcount or 0) > 0
-
-    def release_gemini_account_lease(self, account_id: str, lease_token: str) -> bool:
-        """Release an account lease without disturbing a newer owner."""
-        now = utc_now()
-        with self._runtime_connect() as conn:
-            cur = conn.execute(
-                """UPDATE gemini_account_leases
-                   SET lease_token = NULL, task_id = NULL, run_id = NULL,
-                       worker_id = NULL, lease_expires_at = NULL, updated_at = ?
-                   WHERE account_id = ? AND lease_token = ?""",
-                (now, account_id, lease_token),
-            )
-            return int(cur.rowcount or 0) > 0
 
     def ensure_gemini_model_runtime(self, model_name: str) -> None:
         now = utc_now()
@@ -450,7 +516,6 @@ class GeminiRepository:
                 (model_name, pause_until, reason, now, now),
             ).fetchone()
         return dict(row) if row else {}
-
 
     def ensure_gemini_model_state(self, key_id: str, model_name: str) -> None:
         """Ensure one key+model runtime row exists."""
@@ -490,7 +555,6 @@ class GeminiRepository:
                         (str(key_id), model_name, now),
                     )
 
-
     def list_gemini_keys(self, *, active_only: bool = True) -> List[Dict[str, Any]]:
         """List Gemini key registry rows."""
         where = "WHERE active = 1" if active_only else ""
@@ -505,8 +569,9 @@ class GeminiRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
-
-    def list_gemini_model_states(self, *, model_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_gemini_model_states(
+        self, *, model_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """List Gemini key-model runtime rows joined with key metadata."""
         params: List[Any] = []
         where = "WHERE k.active = 1"
@@ -523,7 +588,8 @@ class GeminiRepository:
                     s.model_name,
                     s.exhausted,
                     s.exhausted_at,
-                    s.cooldown_until,
+                    CASE WHEN spacing.next_request_at > COALESCE(s.cooldown_until, '')
+                         THEN spacing.next_request_at ELSE s.cooldown_until END AS cooldown_until,
                     s.last_used_at,
                     s.last_success_at,
                     s.last_error_at,
@@ -536,6 +602,9 @@ class GeminiRepository:
                 FROM gemini_keys k
                 LEFT JOIN gemini_key_model_state s
                     ON s.key_id = k.key_id
+                LEFT JOIN gemini_project_model_spacing spacing
+                    ON spacing.quota_domain_id = k.quota_domain_id
+                       AND spacing.model_name = s.model_name
                 {where}
                 ORDER BY k.account_id ASC, k.key_id ASC, s.model_name ASC
                 """,
@@ -545,7 +614,6 @@ class GeminiRepository:
         for item in payload:
             item["exhausted"] = bool(item.get("exhausted", 0))
         return payload
-
 
     def ensure_gemini_runtime_control(self, cycle_label: str) -> Dict[str, Any]:
         """Ensure one global Gemini runtime control row exists."""
@@ -578,7 +646,6 @@ class GeminiRepository:
             "blackout_override_until": None,
             "updated_at": now,
         }
-
 
     def rollover_gemini_cycle(self, cycle_label: str) -> bool:
         """Reset exhausted/cycle counters when Gemini day cycle changes."""
@@ -631,7 +698,6 @@ class GeminiRepository:
                 conn.execute("DELETE FROM gemini_quota_domain_model_state")
                 return True
 
-
     def set_gemini_pause(self, pause_until: Optional[str], reason: Optional[str] = None) -> Dict[str, Any]:
         """Set or clear global Gemini pause timestamp."""
         now = utc_now()
@@ -661,7 +727,6 @@ class GeminiRepository:
             "blackout_override_until": None,
             "updated_at": now,
         }
-
 
     def set_gemini_blackout_override(
         self, override_until: Optional[str]
@@ -695,43 +760,6 @@ class GeminiRepository:
             "updated_at": now,
         }
 
-
-    def try_claim_gemini_key_use(
-        self,
-        key_id: str,
-        model_name: str,
-        *,
-        now_ts: str,
-        cooldown_until: str,
-    ) -> bool:
-        """Atomically reserve one key+model usage slot if ready and not exhausted."""
-        with self._lock:
-            with self._runtime_connect() as conn:
-                cur = conn.execute(
-                    """
-                    UPDATE gemini_key_model_state
-                    SET last_used_at = ?,
-                        cooldown_until = ?,
-                        attempts_total = attempts_total + 1,
-                        attempts_cycle = attempts_cycle + 1,
-                        updated_at = ?
-                    WHERE key_id = ?
-                      AND model_name = ?
-                      AND exhausted = 0
-                      AND (cooldown_until IS NULL OR cooldown_until <= ?)
-                    """,
-                    (
-                        now_ts,
-                        cooldown_until,
-                        now_ts,
-                        key_id,
-                        model_name,
-                        now_ts,
-                    ),
-                )
-                return int(cur.rowcount or 0) > 0
-
-
     def mark_gemini_success(
         self,
         key_id: str,
@@ -755,7 +783,6 @@ class GeminiRepository:
                     """,
                     (now_ts, now_ts, key_id, model_name),
                 )
-
 
     def mark_gemini_error(
         self,
@@ -791,7 +818,6 @@ class GeminiRepository:
                     ),
                 )
 
-
     def reset_gemini_key_exhaustion(self, key_id: str) -> int:
         """Clear one key and its quota-domain cooldowns."""
         now = utc_now()
@@ -813,7 +839,6 @@ class GeminiRepository:
                     (key_id,),
                 )
                 return int(cur.rowcount or 0) + int(quota_cur.rowcount or 0)
-
 
     def reset_all_gemini_exhaustion(self) -> int:
         """Clear daily exhaustion and temporary quota cooldowns."""

@@ -120,7 +120,7 @@ def test_runtime_limits_have_safe_shared_defaults(monkeypatch, tmp_path: Path) -
 
     limits = gemini_config.load_gemini_runtime_limits()
 
-    assert limits.max_requests_per_minute == 10
+    assert not hasattr(limits, "max_requests_per_minute")
     assert limits.max_quota_rotations_per_model == 3
     assert limits.generic_429_circuit_breaker_threshold == 3
     assert limits.generic_429_window_seconds == 60
@@ -136,7 +136,7 @@ def test_runtime_limits_are_strict_positive_integers(
             {
                 "gemini": {
                     "runtime": {
-                        "max_requests_per_minute": False,
+                        "generic_429_window_seconds": False,
                     }
                 }
             }
@@ -145,7 +145,7 @@ def test_runtime_limits_are_strict_positive_integers(
     )
     monkeypatch.setenv("MANZARA_CONFIG_PATH", str(config_path))
 
-    with pytest.raises(ValueError, match="max_requests_per_minute"):
+    with pytest.raises(ValueError, match="generic_429_window_seconds"):
         gemini_config.load_gemini_runtime_limits()
 
 
@@ -171,7 +171,7 @@ def test_runtime_limits_load_configured_values(monkeypatch, tmp_path: Path) -> N
 
     limits = gemini_config.load_gemini_runtime_limits()
 
-    assert limits.max_requests_per_minute == 12
+    assert not hasattr(limits, "max_requests_per_minute")
     assert limits.max_quota_rotations_per_model == 2
     assert limits.generic_429_circuit_breaker_threshold == 4
     assert limits.generic_429_window_seconds == 90

@@ -6,6 +6,8 @@ import json
 import hashlib
 from pathlib import Path
 
+from gemini_scheduler_fakes import ScheduledManagerFake
+
 import pytest
 
 from app.gemini_runtime import GeminiAllKeysExhaustedError
@@ -58,7 +60,7 @@ class _Repository:
         self.operational_deferrals.append((md5, error, retry_after_seconds))
 
 
-class _Manager:
+class _Manager(ScheduledManagerFake):
     def __init__(self, *_args, **_kwargs) -> None:
         pass
 

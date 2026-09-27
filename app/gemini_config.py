@@ -29,7 +29,6 @@ class GeminiKey:
 class GeminiRuntimeLimits:
     """Shared request and quota-circuit limits for every Gemini workflow."""
 
-    max_requests_per_minute: int = 10
     max_quota_rotations_per_model: int = 3
     generic_429_circuit_breaker_threshold: int = 3
     generic_429_window_seconds: int = 60
@@ -173,11 +172,6 @@ def load_gemini_runtime_limits() -> GeminiRuntimeLimits:
         raise ValueError("gemini.runtime must be a mapping")
     defaults = GeminiRuntimeLimits()
     return GeminiRuntimeLimits(
-        max_requests_per_minute=_positive_runtime_integer(
-            runtime,
-            "max_requests_per_minute",
-            defaults.max_requests_per_minute,
-        ),
         max_quota_rotations_per_model=_positive_runtime_integer(
             runtime,
             "max_quota_rotations_per_model",

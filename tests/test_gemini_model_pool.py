@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from gemini_scheduler_fakes import ScheduledManagerFake
+
 import pytest
 
 from app.gemini_model_pool import (
@@ -24,7 +26,7 @@ from app.gemini_runtime import (
 )
 
 
-class _Manager:
+class _Manager(ScheduledManagerFake):
     def __init__(self, actions: dict[str, list[object]]) -> None:
         self.actions = {key: list(value) for key, value in actions.items()}
         self.calls: list[str] = []

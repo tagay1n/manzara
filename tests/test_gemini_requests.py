@@ -87,3 +87,25 @@ def test_uploaded_file_is_deleted_when_generation_fails(monkeypatch, tmp_path) -
         )
 
     assert deleted == ["files/one"]
+
+
+def test_generation_spacing_is_recorded_after_upload_and_before_generation(monkeypatch, tmp_path):
+    events = []
+    uploaded = SimpleNamespace(name='files/one', state='ACTIVE')
+    class Files:
+        def upload(self, **kwargs):
+            events.append('upload')
+            return uploaded
+        def delete(self, **kwargs):
+            events.append('delete')
+    class Models:
+        def generate_content_stream(self, **kwargs):
+            events.append('generate')
+            return []
+    monkeypatch.setattr(gemini_requests.genai, 'Client', lambda **kwargs: SimpleNamespace(files=Files(), models=Models()))
+    monkeypatch.setattr(gemini_requests, 'record_gemini_generation_start', lambda: events.append('spacing'))
+    source = tmp_path / 'slice.pdf'
+    source.write_bytes(b'pdf')
+    gemini_requests.generate_structured_json(api_key='key', model_name='model', contents=['prompt'],
+        response_schema={'type': 'object'}, files={source: 'application/pdf'})
+    assert events == ['upload', 'spacing', 'generate', 'delete']

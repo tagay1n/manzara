@@ -17,6 +17,7 @@ from sqlalchemy import text
 from app.db import Database
 from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_runtime import (
+    record_gemini_generation_start,
     GeminiAllKeysExhaustedError,
     GeminiQuotaExceededError,
     GeminiRequestRejectedError,
@@ -135,7 +136,9 @@ _RESPONSE_SCHEMA = {
 
 
 def _gemini_call(api_key: str, model_name: str, prompt: str) -> dict[str, Any]:
-    response = genai.Client(api_key=api_key).models.generate_content(
+    client = genai.Client(api_key=api_key)
+    record_gemini_generation_start()
+    response = client.models.generate_content(
         model=model_name,
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -353,33 +356,37 @@ def _validate_collection_proposals_worker(
                     # every key for the model. Rotate once across the pool, then retry.
                     rotate_models.clear()
                     continue
-                model = available_models[counters["requests"] % len(available_models)]
-                batch = [dict(item) for item in pending[: sizer.size_for(model)]]
-                excerpts: dict[str, str] = {}
-                if excerpt_loader:
-                    for item in batch:
-                        if float(item.get("deterministic_score") or 0) < 0.85:
-                            excerpt = excerpt_loader(str(item["md5"]))
-                            if excerpt:
-                                excerpts[str(item["md5"])] = excerpt[:2000]
-                prompt = build_validation_prompt(proposal, batch, excerpts=excerpts)
+                model = available_models[0]
+                batch = []
+
+                def request_on_model(selected, key, _lease):
+                    nonlocal model, batch
+                    model = selected
+                    batch = [dict(item) for item in pending[:sizer.size_for(model)]]
+                    excerpts = {}
+                    if excerpt_loader:
+                        for item in batch:
+                            if float(item.get("deterministic_score") or 0) < 0.85:
+                                excerpt = excerpt_loader(str(item["md5"]))
+                                if excerpt:
+                                    excerpts[str(item["md5"])] = excerpt[:2000]
+                    prompt = build_validation_prompt(proposal, batch, excerpts=excerpts)
+                    log(
+                        "library collection validation: model attempt "
+                        f"proposal_id={proposal['proposal_id']} model={model} "
+                        f"batch={len(batch)} attempt={content_attempt + 1}"
+                    )
+                    return call_gemini(key, model, prompt)
+
                 parsed: dict[str, Any] | None = None
                 malformed_error: str | None = None
                 request_rejected = False
                 service_deferred = False
                 for content_attempt in range(2):
                     started = time.monotonic()
-                    log(
-                        "library collection validation: model attempt "
-                        f"proposal_id={proposal['proposal_id']} model={model} "
-                        f"batch={len(batch)} attempt={content_attempt + 1}"
-                    )
                     try:
-                        raw = manager.run_with_key(
-                            model_name=model,
-                            run_id=run_id,
-                            max_attempts=2,
-                            call=lambda key, _lease: call_gemini(key, model, prompt),
+                        model, raw = manager.run_with_available_model(
+                            models=available_models, run_id=run_id, call=request_on_model, max_attempts=2,
                         )
                         parsed = parse_validation_response(
                             raw, requested_md5s=[item["md5"] for item in batch]
@@ -407,8 +414,8 @@ def _validate_collection_proposals_worker(
                             "library collection validation: model exhausted "
                             f"proposal_id={proposal['proposal_id']} model={model} error={exc}"
                         )
-                        exhausted_models.add(model)
-                        counters["models_exhausted"] += 1
+                        exhausted_models.update(available_models)
+                        counters["models_exhausted"] += len(available_models)
                         with engine.begin() as conn:
                             _set_search_path(conn)
                             _record_attempt(

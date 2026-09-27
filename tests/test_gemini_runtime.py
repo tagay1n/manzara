@@ -230,46 +230,6 @@ def test_three_distinct_generic_429_domains_open_shared_model_circuit(
     assert any(event[0] == "gemini.model.quota_circuit_opened" for event in db.events)
 
 
-def test_global_request_gate_waits_before_reserving_another_physical_call(
-    monkeypatch,
-) -> None:
-    now = datetime(2026, 9, 13, 10, 0, tzinfo=timezone.utc)
-
-    class Db:
-        def __init__(self) -> None:
-            self.claims = 0
-            self.events = []
-
-        def try_claim_gemini_request_slot(self, **_kwargs):  # noqa: ANN003
-            self.claims += 1
-            if self.claims == 1:
-                return {
-                    "claimed": False,
-                    "oldest_request_at": "2026-09-13T09:59:30+00:00",
-                    "requests_in_window": 10,
-                }
-            return {
-                "claimed": True,
-                "oldest_request_at": None,
-                "requests_in_window": 10,
-            }
-
-        def insert_event(self, event_type, **kwargs):  # noqa: ANN001
-            self.events.append((event_type, kwargs))
-
-    db = Db()
-    manager = GeminiRuntimeManager(db, task_id="task", panel_id="library")
-    waits = []
-    monkeypatch.setattr("app.gemini_runtime._utc_now", lambda: now)
-    monkeypatch.setattr(manager, "_sleep_until", lambda wait_until: waits.append(wait_until))
-
-    manager._reserve_request_capacity(model_name="model", run_id=7)
-
-    assert db.claims == 2
-    assert waits == [datetime(2026, 9, 13, 10, 0, 30, tzinfo=timezone.utc)]
-    assert [event[0] for event in db.events] == ["gemini.rate_limit.waiting"]
-
-
 def test_explicit_daily_429_exhausts_the_whole_quota_domain_model() -> None:
     class Db:
         def __init__(self) -> None:
@@ -310,44 +270,6 @@ def test_explicit_daily_429_exhausts_the_whole_quota_domain_model() -> None:
         == "quota_domain_model_daily"
     )
     assert db.events[-1][1]["payload"]["rows_changed"] == 4
-
-
-def test_candidate_reports_all_accounts_cooling_down() -> None:
-    now = datetime(2026, 9, 13, 10, 0, tzinfo=timezone.utc)
-
-    class Db:
-        def list_gemini_model_states(self, *, model_name=None):  # noqa: ANN001
-            return [
-                {"key_id": "a:key", "model_name": model_name, "exhausted": False},
-                {"key_id": "b:key", "model_name": model_name, "exhausted": False},
-            ]
-
-        def list_gemini_quota_domain_model_states(self, *, model_name=None):  # noqa: ANN001
-            return [
-                {
-                    "quota_domain_id": "a:key",
-                    "model_name": model_name,
-                    "cooldown_until": "2026-09-13T10:04:00+00:00",
-                },
-                {
-                    "quota_domain_id": "b:key",
-                    "model_name": model_name,
-                    "cooldown_until": "2026-09-13T10:02:00+00:00",
-                },
-            ]
-
-    manager = GeminiRuntimeManager(Db(), task_id="task", panel_id="library")
-    keys = [
-        GeminiKey("a", "a:key", "secret-a", "a***"),
-        GeminiKey("b", "b:key", "secret-b", "b***"),
-    ]
-
-    decision = manager._pick_candidate(keys=keys, model_name="model", now_utc=now)
-
-    assert decision["type"] == "quota_cooldown"
-    assert decision["wait_until"] == datetime(
-        2026, 9, 13, 10, 2, tzinfo=timezone.utc
-    )
 
 
 def test_manual_blackout_override_disables_current_window(monkeypatch) -> None:
@@ -455,18 +377,18 @@ def test_snapshot_calculates_exhausted_key_capacity_for_configured_models(
     ] == ["gemini-a", "gemini-b"]
 
 
-def test_long_request_renews_and_releases_account_lease(monkeypatch) -> None:
+def test_long_request_renews_and_releases_project_lease(monkeypatch) -> None:
     class Db:
         def __init__(self) -> None:
             self.renewals = 0
             self.releases = 0
             self.quota_signal_clears = 0
 
-        def renew_gemini_account_lease(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+        def renew_gemini_project_lease(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
             self.renewals += 1
             return True
 
-        def release_gemini_account_lease(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+        def release_gemini_project_lease(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
             self.releases += 1
             return True
 
@@ -484,7 +406,7 @@ def test_long_request_renews_and_releases_account_lease(monkeypatch) -> None:
     manager = GeminiRuntimeManager(db, task_id="task", panel_id="library")
     lease = GeminiLease("account", "key", "secret", "masked", "model", "token")
     monkeypatch.setattr(manager, "acquire_key", lambda **_kwargs: lease)
-    monkeypatch.setattr("app.gemini_runtime._ACCOUNT_LEASE_HEARTBEAT_SECONDS", 0.01)
+    monkeypatch.setattr("app.gemini_runtime._PROJECT_LEASE_HEARTBEAT_SECONDS", 0.01)
 
     result = manager.run_with_key(
         model_name="model",

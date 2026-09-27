@@ -311,7 +311,6 @@ def run_personality_normalization(
 
         state = "failed"
         retry = False
-        wait_until = None
         try:
             result = run_ordered_model_pool(manager=manager, models=models, request=call_model,
                 parse=parse, record_failure=record_failure, run_id=run_id,
@@ -328,8 +327,7 @@ def run_personality_normalization(
             db.save_personality_checkpoint(**base, state=state, attempted_models=attempts,
                                            failure_context=str(exc), retryable=True)
             retry = exc.retry_at is not None
-            wait_until = exc.retry_at
-            if not retry:
+            if not retry and exc.all_models_unavailable:
                 # No usable pool or known retry time: preserve untouched work.
                 with queue.condition:
                     queue.outcome = "deferred"
@@ -337,7 +335,6 @@ def run_personality_normalization(
         except GeminiModelPoolOperationalError as exc:
             state = "deferred" if exc.retryable else "failed"
             retry = exc.retryable
-            wait_until = exc.retry_at
             if exc.model_name:
                 previous = attempts.get(exc.model_name)
                 attempts[exc.model_name] = {"kind": "transient", "error": str(exc)}
@@ -369,16 +366,6 @@ def run_personality_normalization(
                 emit_gemini_worker_log(f"library personalities: person success raw_name={candidate.raw_name} canonical_id={canonical['canonical_id']}", worker_id=worker_id)
         if retry and queue.turns[candidate.raw_name] == 1:
             emit_gemini_worker_log(f"library personalities: queue tail raw_name={candidate.raw_name} retry=1/1", worker_id=worker_id)
-        if wait_until is not None:
-            # Keep this turn active until the pause ends so another worker cannot
-            # consume its only retry while the model is still paused.
-            emit_gemini_worker_log(f"library personalities: waiting until={wait_until.isoformat()} before next person", worker_id=worker_id)
-            try:
-                manager._sleep_until(wait_until)
-            except GeminiStopRequestedError:
-                with queue.condition:
-                    queue.outcome = "stopped"
-                    queue.condition.notify_all()
         queue.finish(candidate, state, retry=retry)
         publish()
 

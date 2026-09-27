@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import random
 import errno
 import threading
 import time
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from app.db import Database
+from app.gemini_workers import emit_gemini_worker_log
 from app.gemini_config import (
     GeminiKey,
     load_configured_gemini_model_names,
@@ -23,13 +24,25 @@ from app.gemini_config import (
 
 _PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 _UTC = timezone.utc
-_KEY_COOLDOWN_SECONDS = 60
+_PROJECT_MODEL_SPACING_SECONDS = 60
 _MODEL_SERVER_PAUSE_SECONDS = 60
 _QUOTA_COOLDOWN_BASE_SECONDS = 60
 _QUOTA_COOLDOWN_MAX_SECONDS = 600
-_ACCOUNT_LEASE_TTL_SECONDS = 90
-_ACCOUNT_LEASE_HEARTBEAT_SECONDS = 30
+_PROJECT_LEASE_TTL_SECONDS = 90
+_PROJECT_LEASE_HEARTBEAT_SECONDS = 30
 _MAX_WAIT_SLICE_SECONDS = 10
+
+
+_GENERATION_START: ContextVar[Callable[[], None] | None] = ContextVar(
+    "gemini_generation_start", default=None,
+)
+
+
+def record_gemini_generation_start() -> None:
+    """Record the physical generation start in the current leased request."""
+    callback = _GENERATION_START.get()
+    if callback is not None:
+        callback()
 
 
 class GeminiRuntimeError(RuntimeError):
@@ -41,7 +54,11 @@ class GeminiQuotaExceededError(GeminiRuntimeError):
 
 
 class GeminiAllKeysExhaustedError(GeminiRuntimeError):
-    """Raised when no non-exhausted keys remain for model."""
+    """Raised when no non-exhausted keys remain for the eligible models."""
+
+    def __init__(self, message: str, *, all_models_unavailable: bool = True):
+        self.all_models_unavailable = all_models_unavailable
+        super().__init__(message)
 
 
 class GeminiQuotaCooldownError(GeminiAllKeysExhaustedError):
@@ -90,7 +107,7 @@ class GeminiLease:
     key_value: str
     masked_key: str
     model_name: str
-    account_lease_token: str = ""
+    project_lease_token: str = ""
     quota_domain_id: str = ""
 
 
@@ -282,7 +299,6 @@ class GeminiRuntimeManager:
         self.task_id = task_id
         self.panel_id = panel_id
         self.should_stop = should_stop or (lambda: False)
-        self._rand = random.SystemRandom()
         self._local_lock = threading.Lock()
         self.worker_id = worker_id
         self._configured_keys: Optional[List[GeminiKey]] = None
@@ -426,101 +442,6 @@ class GeminiRuntimeManager:
         )
         self._prepared_models.add(model_name)
 
-    def _pick_candidate(
-        self,
-        *,
-        keys: List[GeminiKey],
-        model_name: str,
-        now_utc: datetime,
-    ) -> Dict[str, Any]:
-        state_rows = self.db.list_gemini_model_states(model_name=model_name)
-        by_key_id: Dict[str, Dict[str, Any]] = {}
-        for row in state_rows:
-            key_id = str(row.get("key_id") or "")
-            row_model = str(row.get("model_name") or "")
-            if not key_id or row_model != model_name:
-                continue
-            by_key_id[key_id] = row
-
-        quota_rows_method = getattr(
-            self.db, "list_gemini_quota_domain_model_states", None
-        )
-        quota_rows = (
-            quota_rows_method(model_name=model_name)
-            if quota_rows_method is not None
-            else []
-        )
-        quota_by_domain = {
-            str(row.get("quota_domain_id") or ""): row for row in quota_rows
-        }
-        available_by_account: Dict[str, List[GeminiKey]] = {}
-        ready_by_account: Dict[str, List[GeminiKey]] = {}
-        earliest_cooldown: Optional[datetime] = None
-        earliest_quota_cooldown: Optional[datetime] = None
-        has_unexhausted_key = False
-
-        for key in keys:
-            row = by_key_id.get(key.key_id) or {}
-            if bool(row.get("exhausted", False)):
-                continue
-            has_unexhausted_key = True
-            quota_domain_id = key.quota_domain_id or key.key_id
-            quota_until = _parse_ts(
-                (quota_by_domain.get(quota_domain_id) or {}).get("cooldown_until")
-            )
-            if quota_until is not None and quota_until > now_utc:
-                if earliest_quota_cooldown is None or quota_until < earliest_quota_cooldown:
-                    earliest_quota_cooldown = quota_until
-                continue
-            available_by_account.setdefault(key.account_id, []).append(key)
-            cooldown_until = _parse_ts(row.get("cooldown_until"))
-            if cooldown_until is None or cooldown_until <= now_utc:
-                ready_by_account.setdefault(key.account_id, []).append(key)
-            else:
-                if earliest_cooldown is None or cooldown_until < earliest_cooldown:
-                    earliest_cooldown = cooldown_until
-
-        if not available_by_account:
-            if has_unexhausted_key and earliest_quota_cooldown is not None:
-                return {
-                    "type": "quota_cooldown",
-                    "wait_until": earliest_quota_cooldown,
-                }
-            raise GeminiAllKeysExhaustedError(
-                f"All Gemini keys exhausted for model '{model_name}'"
-            )
-
-        if not ready_by_account:
-            return {
-                "type": "wait",
-                "wait_until": earliest_cooldown,
-            }
-
-        leases = {
-            str(row.get("account_id") or ""): row
-            for row in self.db.list_gemini_account_leases()
-        }
-        account_choices = sorted(
-            ready_by_account.keys(),
-            key=lambda account: (
-                bool(
-                    (leases.get(account) or {}).get("lease_token")
-                    and (
-                        _parse_ts((leases.get(account) or {}).get("lease_expires_at"))
-                        or now_utc
-                    ) > now_utc
-                ),
-                str((leases.get(account) or {}).get("last_acquired_at") or ""),
-                account,
-            ),
-        )
-        account_id = account_choices[0]
-        key = self._rand.choice(ready_by_account[account_id])
-        return {
-            "type": "key",
-            "key": key,
-        }
-
     def _sleep_until(self, wait_until: Optional[datetime]) -> None:
         if wait_until is None:
             if self.should_stop():
@@ -540,141 +461,106 @@ class GeminiRuntimeManager:
                 return
             time.sleep(min(float(remaining), _MAX_WAIT_SLICE_SECONDS))
 
-    def _reserve_request_capacity(
-        self, *, model_name: str, run_id: Optional[int]
-    ) -> None:
-        """Reserve a global physical-request slot, waiting stop-safely if full."""
-        claim = getattr(self.db, "try_claim_gemini_request_slot", None)
-        if claim is None:
-            return
-        waiting_event_emitted = False
-        while True:
-            if self.should_stop():
-                raise GeminiStopRequestedError(
-                    "Gemini rate-limit wait interrupted by graceful stop"
-                )
-            now_utc = _utc_now()
-            decision = claim(
-                model_name=model_name,
-                task_id=self.task_id,
-                run_id=run_id,
-                now_ts=_iso_utc(now_utc),
-                window_start_ts=_iso_utc(now_utc - timedelta(seconds=60)),
-                max_requests=self._limits.max_requests_per_minute,
-            )
-            if bool(decision.get("claimed")):
-                return
-            oldest = _parse_ts(decision.get("oldest_request_at"))
-            wait_until = (
-                oldest + timedelta(seconds=60)
-                if oldest is not None
-                else now_utc + timedelta(seconds=1)
-            )
-            if not waiting_event_emitted:
-                self._emit(
-                    "gemini.rate_limit.waiting",
-                    {
-                        "model_name": model_name,
-                        "max_requests_per_minute": (
-                            self._limits.max_requests_per_minute
-                        ),
-                        "requests_in_window": int(
-                            decision.get("requests_in_window") or 0
-                        ),
-                        "wait_until": _iso_utc(wait_until),
-                    },
-                    run_id=run_id,
-                )
-                waiting_event_emitted = True
-            self._sleep_until(wait_until)
-
     def acquire_key(
         self, *, model_name: str, run_id: Optional[int] = None
     ) -> GeminiLease:
-        """Block until one key+model slot is available and reserve one-minute cooldown."""
+        return self.acquire_available_key(models=[model_name], run_id=run_id)
+
+    def acquire_available_key(
+        self,
+        *,
+        models: Sequence[str],
+        pool_models: Sequence[str] | None = None,
+        run_id: Optional[int] = None,
+    ) -> GeminiLease:
+        """Wait only when none of the eligible models has a ready project."""
+        models = tuple(dict.fromkeys(models))
+        if not models:
+            raise ValueError("Gemini model pool must not be empty")
+        last_wait = None
         while True:
             if self.should_stop():
                 raise GeminiStopRequestedError(
                     "Gemini request skipped after graceful stop"
                 )
-            now_utc = _utc_now()
+            now = _utc_now()
             keys = self._sync_key_registry()
             if not keys:
                 raise GeminiAllKeysExhaustedError("No Gemini keys configured")
-
-            control = self._ensure_cycle(now_utc)
-            control = self._clear_elapsed_pause_if_needed(control, now_utc)
-
-            wait_gate = self._wait_reason(control, now_utc)
-            if wait_gate is not None:
-                self._sleep_until(wait_gate.get("wait_until"))
+            control = self._clear_elapsed_pause_if_needed(self._ensure_cycle(now), now)
+            gate = self._wait_reason(control, now)
+            if gate is not None:
+                self._sleep_until(gate.get("wait_until"))
                 continue
-
-            self._ensure_model_rows(keys, model_name)
-            model_runtime = next(
-                (
-                    row for row in self.db.list_gemini_model_runtime()
-                    if str(row.get("model_name") or "") == model_name
+            for model in pool_models or models:
+                self._ensure_model_rows(keys, model)
+            cooldown = _iso_utc(now + timedelta(seconds=_PROJECT_MODEL_SPACING_SECONDS))
+            claim_args = dict(
+                key_ids=[key.key_id for key in keys],
+                now_ts=_iso_utc(now),
+                cooldown_until=cooldown,
+                expires_at=_iso_utc(
+                    now + timedelta(seconds=_PROJECT_LEASE_TTL_SECONDS)
                 ),
-                {},
+                lease_token=uuid.uuid4().hex,
+                task_id=self.task_id,
+                run_id=run_id,
+                worker_id=self.worker_id or threading.current_thread().name,
             )
-            model_pause_until = _parse_ts(model_runtime.get("pause_until"))
-            if model_pause_until is not None and model_pause_until > now_utc:
-                raise GeminiServerPauseError(
-                    f"Gemini model {model_name} paused until {_iso_utc(model_pause_until)}",
-                    model_name=model_name,
-                    pause_until=model_pause_until,
-                )
-            if model_pause_until is not None:
-                self.db.set_gemini_model_pause(model_name, None, None)
-            decision = self._pick_candidate(
-                keys=keys, model_name=model_name, now_utc=now_utc
-            )
-            if decision.get("type") == "quota_cooldown":
-                retry_at = decision.get("wait_until")
-                raise GeminiQuotaCooldownError(
-                    f"All Gemini quota domains are cooling down for model "
-                    f"'{model_name}' until {_iso_utc(retry_at)}",
-                    retry_at=retry_at,
-                )
-            if decision.get("type") == "wait":
-                self._sleep_until(decision.get("wait_until"))
+            decision = self.db.claim_gemini_ready_request(models=models, **claim_args)
+            if "key_id" not in decision:
+                retry_at = _parse_ts(decision.get("retry_at"))
+                full = decision
+                if pool_models and set(pool_models) != set(models):
+                    full = self.db.claim_gemini_ready_request(
+                        models=pool_models,
+                        reserve=False,
+                        **claim_args,
+                    )
+                if "key_id" in full or retry_at is None:
+                    error = (
+                        GeminiQuotaCooldownError(
+                            "Eligible Gemini models unavailable for this item",
+                            retry_at=retry_at,
+                        )
+                        if retry_at
+                        else GeminiAllKeysExhaustedError(
+                            "All eligible Gemini projects/models exhausted"
+                        )
+                    )
+                    error.all_models_unavailable = (
+                        "key_id" not in full and full.get("retry_at") is None
+                    )
+                    raise error
+                wait_until = _parse_ts(full.get("retry_at")) or retry_at
+                if last_wait != wait_until:
+                    self._emit(
+                        "gemini.scheduler.waiting",
+                        {"models": list(models), "wait_until": _iso_utc(wait_until),
+                         "worker_id": claim_args["worker_id"]},
+                        run_id=run_id,
+                    )
+                    emit_gemini_worker_log(
+                        f"gemini runtime: waiting models={','.join(models)} until={_iso_utc(wait_until)}",
+                        worker_id=claim_args["worker_id"],
+                    )
+                    last_wait = wait_until
+                # A peer may release its project before the lease expiry or clear
+                # a pause. Recheck SQLite without sleeping through that capacity.
+                self._sleep_until(min(wait_until, now + timedelta(seconds=1)))
                 continue
-
-            key = decision["key"]
-            self._reserve_request_capacity(model_name=model_name, run_id=run_id)
-            lease_token = uuid.uuid4().hex
-            lease_expires_at = now_utc + timedelta(seconds=_ACCOUNT_LEASE_TTL_SECONDS)
-            claim_account = getattr(self.db, "try_claim_gemini_account", None)
-            account_claimed = True if claim_account is None else claim_account(
-                key.account_id, lease_token=lease_token, task_id=self.task_id,
-                run_id=run_id, worker_id=(self.worker_id or threading.current_thread().name),
-                now_ts=_iso_utc(now_utc), expires_at=_iso_utc(lease_expires_at),
-            )
-            if not account_claimed:
-                self._sleep_until(None)
-                continue
-            cooldown_until = now_utc + timedelta(seconds=_KEY_COOLDOWN_SECONDS)
-            claimed = self.db.try_claim_gemini_key_use(
-                key.key_id,
-                model_name,
-                now_ts=_iso_utc(now_utc),
-                cooldown_until=_iso_utc(cooldown_until),
-            )
-            if not claimed:
-                release = getattr(self.db, "release_gemini_account_lease", None)
-                if release is not None:
-                    release(key.account_id, lease_token)
-                continue
-
+            key = next(key for key in keys if key.key_id == decision["key_id"])
+            model = decision["model_name"]
             self._emit(
                 "gemini.key.used",
                 {
                     "account_id": key.account_id,
                     "key_id": key.key_id,
                     "masked_key": key.masked_key,
-                    "model_name": model_name,
-                    "cooldown_until": _iso_utc(cooldown_until),
+                    "model_name": model,
+                    "quota_domain_id": decision["quota_domain_id"],
+                    "worker_id": claim_args["worker_id"],
+                    "cooldown_until": cooldown,
                 },
                 run_id=run_id,
             )
@@ -683,23 +569,61 @@ class GeminiRuntimeManager:
                 key_id=key.key_id,
                 key_value=key.key_value,
                 masked_key=key.masked_key,
-                model_name=model_name,
-                account_lease_token=lease_token,
-                quota_domain_id=key.quota_domain_id or key.key_id,
+                model_name=model,
+                quota_domain_id=decision["quota_domain_id"],
+                project_lease_token=decision["lease_token"],
             )
 
+    def run_with_available_model(
+        self,
+        *,
+        models: Sequence[str],
+        call: Callable[[str, str, GeminiLease], Any],
+        pool_models: Sequence[str] | None = None,
+        run_id: Optional[int] = None,
+        max_attempts: int = 1,
+    ) -> tuple[str, Any]:
+        """Execute on ready models within the retry budget; return the successful model."""
+        selected: list[str] = []
+
+        def invoke(key, lease):
+            selected.append(lease.model_name)
+            return call(lease.model_name, key, lease)
+
+        value = self._run_with_allocator(
+            acquire=lambda: self.acquire_available_key(
+                models=models, pool_models=pool_models, run_id=run_id
+            ),
+            call=invoke,
+            run_id=run_id,
+            max_attempts=max_attempts,
+            wait_on_pause=False,
+        )
+        return selected[-1], value
+
+    def _record_generation_start(self, lease: GeminiLease) -> None:
+        now = _utc_now()
+        if not self.db.record_gemini_generation_start(
+            lease.quota_domain_id or lease.key_id, lease.model_name,
+            key_id=lease.key_id, lease_token=lease.project_lease_token,
+            now_ts=_iso_utc(now),
+            next_request_at=_iso_utc(now + timedelta(seconds=_PROJECT_MODEL_SPACING_SECONDS)),
+            expires_at=_iso_utc(now + timedelta(seconds=_PROJECT_LEASE_TTL_SECONDS)),
+        ):
+            raise GeminiRuntimeError("Gemini project lease lost before generation; request cancelled")
+
     def _lease_heartbeat(self, lease: GeminiLease, stop: threading.Event) -> None:
-        renew = getattr(self.db, "renew_gemini_account_lease", None)
+        renew = getattr(self.db, "renew_gemini_project_lease", None)
         if renew is None:
             return
-        while not stop.wait(_ACCOUNT_LEASE_HEARTBEAT_SECONDS):
+        while not stop.wait(_PROJECT_LEASE_HEARTBEAT_SECONDS):
             now_utc = _utc_now()
             try:
                 renewed = renew(
-                    lease.account_id,
-                    lease.account_lease_token,
+                    lease.quota_domain_id or lease.key_id,
+                    lease.project_lease_token,
                     expires_at=_iso_utc(
-                        now_utc + timedelta(seconds=_ACCOUNT_LEASE_TTL_SECONDS)
+                        now_utc + timedelta(seconds=_PROJECT_LEASE_TTL_SECONDS)
                     ),
                     now_ts=_iso_utc(now_utc),
                 )
@@ -1013,12 +937,23 @@ class GeminiRuntimeManager:
         run_id: Optional[int] = None,
         max_attempts: int = 2,
     ) -> Any:
-        """Execute Gemini call with key selection/pause/exhaustion policy."""
+        return self._run_with_allocator(
+            acquire=lambda: self.acquire_key(model_name=model_name, run_id=run_id),
+            call=call,
+            run_id=run_id,
+            max_attempts=max_attempts,
+        )
+
+    def _run_with_allocator(
+        self, *, acquire, call, run_id, max_attempts, wait_on_pause=True
+    ):
+        """Execute with a held project lease, including heartbeat and cleanup."""
+
         attempts = max(1, int(max_attempts))
         last_error: Optional[Exception] = None
 
         for attempt in range(1, attempts + 1):
-            lease = self.acquire_key(model_name=model_name, run_id=run_id)
+            lease = acquire()
             heartbeat_stop = threading.Event()
             heartbeat = threading.Thread(
                 target=self._lease_heartbeat,
@@ -1027,6 +962,7 @@ class GeminiRuntimeManager:
                 name=f"gemini-lease-{lease.account_id}",
             )
             heartbeat.start()
+            generation_context = _GENERATION_START.set(lambda: self._record_generation_start(lease))
             try:
                 result = call(lease.key_value, lease)
             except GeminiResponseValidationError:
@@ -1039,7 +975,8 @@ class GeminiRuntimeManager:
                 except GeminiServerPauseError as pause_error:
                     last_error = pause_error
                     if attempt < attempts:
-                        self._sleep_until(pause_error.pause_until)
+                        if wait_on_pause:
+                            self._sleep_until(pause_error.pause_until)
                         continue
                     raise
                 except GeminiQuotaExceededError:
@@ -1082,11 +1019,14 @@ class GeminiRuntimeManager:
                 )
                 return result
             finally:
+                _GENERATION_START.reset(generation_context)
                 heartbeat_stop.set()
                 heartbeat.join(timeout=1.0)
-                release = getattr(self.db, "release_gemini_account_lease", None)
+                release = getattr(self.db, "release_gemini_project_lease", None)
                 if release is not None:
-                    release(lease.account_id, lease.account_lease_token)
+                    release(
+                        lease.quota_domain_id or lease.key_id, lease.project_lease_token
+                    )
 
         if last_error is not None:
             raise last_error

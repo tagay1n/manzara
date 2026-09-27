@@ -11,6 +11,8 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
+from app.gemini_runtime import record_gemini_generation_start
+
 
 def _state_name(file_state: Any) -> str:
     state = getattr(file_state, "state", None)
@@ -88,6 +90,7 @@ def generate_structured_json(
                 item = client.files.get(name=item.name)
                 uploaded[-1] = item
 
+        record_gemini_generation_start()
         response = client.models.generate_content_stream(
             model=model_name,
             contents=[*contents, *uploaded],

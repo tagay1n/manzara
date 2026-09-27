@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
-LOCAL_STATE_SCHEMA_VERSION = 3
+LOCAL_STATE_SCHEMA_VERSION = 4
 _FOR_UPDATE_RE = re.compile(r"\s+FOR\s+UPDATE\b", re.IGNORECASE)
 
 
@@ -63,7 +63,7 @@ class LocalStateStore:
         self.path.parent.chmod(0o700)
         with self.connect() as conn:
             version = int(conn.execute("PRAGMA user_version").scalar() or 0)
-            if version not in (0, 1, 2, LOCAL_STATE_SCHEMA_VERSION):
+            if version not in (0, 1, 2, 3, LOCAL_STATE_SCHEMA_VERSION):
                 raise RuntimeError(
                     f"Unsupported local runtime schema version {version}; "
                     f"expected {LOCAL_STATE_SCHEMA_VERSION}"
@@ -72,13 +72,26 @@ class LocalStateStore:
             if version == 1:
                 key_columns = {
                     str(row[1])
-                    for row in conn._connection.execute("PRAGMA table_info(gemini_keys)")
+                    for row in conn._connection.execute(
+                        "PRAGMA table_info(gemini_keys)"
+                    )
                 }
                 if "quota_domain_id" not in key_columns:
                     conn._connection.execute(
                         "ALTER TABLE gemini_keys ADD COLUMN quota_domain_id TEXT"
                     )
                 conn._connection.executescript(_MIGRATE_V1_TO_V2)
+            if 0 < version < 4:
+                conn.execute(
+                    """INSERT INTO gemini_project_model_spacing
+                        (quota_domain_id, model_name, next_request_at)
+                        SELECT k.quota_domain_id, s.model_name, MAX(s.cooldown_until)
+                        FROM gemini_key_model_state s JOIN gemini_keys k USING(key_id)
+                        WHERE s.cooldown_until IS NOT NULL
+                        GROUP BY k.quota_domain_id, s.model_name
+                        ON CONFLICT(quota_domain_id, model_name) DO UPDATE SET
+                        next_request_at=MAX(next_request_at, excluded.next_request_at)"""
+                )
             conn.execute(f"PRAGMA user_version = {LOCAL_STATE_SCHEMA_VERSION}")
             # IDs remain unique against retained run artifacts if the disposable
             # database is recreated on the same laptop.
@@ -377,11 +390,6 @@ CREATE TABLE IF NOT EXISTS gemini_runtime_control (
     control_id INTEGER PRIMARY KEY, cycle_label TEXT NOT NULL, pause_until TEXT,
     last_pause_reason TEXT, blackout_override_until TEXT, updated_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS gemini_account_leases (
-    account_id TEXT PRIMARY KEY, lease_token TEXT, task_id TEXT, run_id INTEGER,
-    worker_id TEXT, lease_expires_at TEXT, last_acquired_at TEXT,
-    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS gemini_quota_domain_model_state (
     quota_domain_id TEXT NOT NULL, model_name TEXT NOT NULL, cooldown_until TEXT,
     failure_count INTEGER NOT NULL DEFAULT 0, last_error_at TEXT,
@@ -394,12 +402,17 @@ CREATE TABLE IF NOT EXISTS gemini_model_runtime (
     model_name TEXT PRIMARY KEY, pause_until TEXT, last_pause_reason TEXT,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS gemini_request_slots (
-    slot_id INTEGER PRIMARY KEY AUTOINCREMENT, model_name TEXT NOT NULL,
-    task_id TEXT, run_id INTEGER, requested_at TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS gemini_scheduler_cursor (
+    cursor_id INTEGER PRIMARY KEY CHECK(cursor_id=1), last_model TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_gemini_request_slots_requested_at
-ON gemini_request_slots(requested_at);
+CREATE TABLE IF NOT EXISTS gemini_project_leases (
+    quota_domain_id TEXT PRIMARY KEY, lease_token TEXT, lease_expires_at TEXT,
+    last_acquired_at TEXT, task_id TEXT, run_id INTEGER, worker_id TEXT
+);
+CREATE TABLE IF NOT EXISTS gemini_project_model_spacing (
+    quota_domain_id TEXT NOT NULL, model_name TEXT NOT NULL, next_request_at TEXT NOT NULL,
+    PRIMARY KEY(quota_domain_id, model_name)
+);
 CREATE TABLE IF NOT EXISTS gemini_generic_quota_signals (
     model_name TEXT NOT NULL, quota_domain_id TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,

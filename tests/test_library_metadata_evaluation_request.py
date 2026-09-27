@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from gemini_scheduler_fakes import ScheduledManagerFake
+
 import json
 from app.modules.library.runtime.metadata import (
     evaluation_request as evaluation_request_module,
@@ -19,7 +21,7 @@ def test_request_advances_to_next_model_after_incomplete_response_and_logs_attem
     capsys,
     evaluation_document,
 ) -> None:
-    class _Manager:
+    class _Manager(ScheduledManagerFake):
         def run_with_key(self, *, model_name, call, run_id, max_attempts):  # noqa: ANN001
             assert max_attempts == 1
             return call("test-key", object())

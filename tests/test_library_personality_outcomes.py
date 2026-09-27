@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from gemini_scheduler_fakes import ScheduledManagerFake
+
 import pytest
 
 from app.gemini_model_pool import GeminiModelPoolOperationalError
@@ -41,7 +43,7 @@ class Db:
         self.progress.append(values["progress"])
 
 
-class Manager:
+class Manager(ScheduledManagerFake):
     def __init__(self, *args, **kwargs):
         pass
 
@@ -172,31 +174,22 @@ def test_legacy_successes_stay_closed_and_only_all_null_failures_reopen():
     assert runner._excluded_models(attempts) == set()
 
 
-def test_stop_during_service_pause_keeps_retry_checkpoint_and_does_not_start_next_person(monkeypatch):
-    from datetime import datetime, timezone
+def test_stop_at_next_scheduler_boundary_preserves_deferred_checkpoint(monkeypatch):
     from app.gemini_runtime import GeminiStopRequestedError
-
-    class StopManager(Manager):
-        def _sleep_until(self, when):
-            raise GeminiStopRequestedError("Stopped during pause")
-
-    monkeypatch.setattr(runner, "GeminiRuntimeManager", StopManager)
-    calls = []
+    monkeypatch.setattr(runner, "GeminiRuntimeManager", Manager)
     db = Db()
-
+    calls = []
     def pool(**kwargs):
         calls.append(1)
-        raise GeminiModelPoolOperationalError("503 high demand", retryable=True,
-                                             retry_at=datetime.now(timezone.utc))
-
+        if len(calls) == 1:
+            raise GeminiModelPoolOperationalError("503", retryable=True)
+        raise GeminiStopRequestedError("Stopped while waiting for capacity")
     monkeypatch.setattr(runner, "run_ordered_model_pool", pool)
     summary = runner.run_personality_normalization(db=db, models=["first"], run_id=1,
-        should_stop=lambda: False, candidates=[PersonalityCandidate(name, 1, 1, ("author",)) for name in ("A", "B")])
-    assert len(calls) == 1
+        should_stop=lambda: False, candidates=[PersonalityCandidate("A", 1, 1, ("author",))])
+    assert len(calls) == 2
     assert summary["outcome"] == "stopped"
-    assert summary["deferred"] == 1
     assert db.checkpoints["A"]["retryable"] is True
-    assert "B" not in db.checkpoints
 
 
 def test_unavailable_pool_does_not_cycle_untouched_people(monkeypatch):
@@ -265,52 +258,45 @@ def test_negative_decisions_reopen_for_a_relevant_contract_change():
     assert runner._eligible_candidates([candidate], [checkpoint])[0] == [candidate]
 
 
-def test_parallel_tail_waits_for_the_pause_and_all_first_pass_workers(monkeypatch):
+def test_parallel_tail_waits_for_all_first_pass_workers_without_sleeping(monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
-    from datetime import datetime, timezone
     import threading
-
-    pause_started = threading.Event()
-    release_pause = threading.Event()
-    other_done = threading.Event()
+    other_started = threading.Event()
+    release_other = threading.Event()
     retry_started = threading.Event()
     attempts = []
     db = Db()
-
-    class PauseManager(Manager):
+    class NoSleepManager(Manager):
         def _sleep_until(self, when):
-            pause_started.set()
-            assert release_pause.wait(3)
-
+            pytest.fail("The queue must not sleep for one model's pause")
     def pool(**kwargs):
         raw = kwargs["request"]("first", "fake-key", None)
         name = json.loads(raw)["name_full"]
         attempts.append(name)
         if name == "A" and attempts.count("A") == 1:
-            raise GeminiModelPoolOperationalError("503", retryable=True, retry_at=datetime.now(timezone.utc))
+            from datetime import datetime, timezone, timedelta
+            raise GeminiModelPoolOperationalError("503", retryable=True,
+                retry_at=datetime.now(timezone.utc) + timedelta(minutes=1))
         if name == "B":
-            assert pause_started.wait(3)
-            other_done.set()
+            other_started.set()
+            assert release_other.wait(3)
         if name == "A":
             retry_started.set()
         return SimpleNamespace(model_name="first", value=kwargs["parse"](raw))
-
-    monkeypatch.setattr(runner, "GeminiRuntimeManager", PauseManager)
+    monkeypatch.setattr(runner, "GeminiRuntimeManager", NoSleepManager)
     monkeypatch.setattr(runner, "run_ordered_model_pool", pool)
-
     def request(**kwargs):
         name = kwargs["contents"][0].split("<raw_name>")[1].split("</raw_name>")[0]
         return response(name_full=name)
-
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(runner.run_personality_normalization, db=db, models=["first"], run_id=1,
             should_stop=lambda: False, workers=2, request_json=request,
             candidates=[PersonalityCandidate(name, 1, 1, ("author",)) for name in ("A", "B")])
         try:
-            assert other_done.wait(3)
-            assert not retry_started.wait(0.2)
+            assert other_started.wait(3)
+            assert not retry_started.wait(0.1)
         finally:
-            release_pause.set()
+            release_other.set()
         assert future.result(timeout=3)["succeeded"] == 2
     assert attempts == ["A", "B", "A"]
 

@@ -66,21 +66,24 @@ reopen unrelated terminal failures.
 Untouched names precede names carrying checkpoints, before the candidate limit.
 Workers claim from one shared queue. Each eligible raw name gets one first-pass
 turn and at most one later turn. The retry phase starts only after the initial
-queue and all first-pass workers have finished, including stop-aware waits.
+queue and all first-pass workers have finished.
 
 Personality normalization opts into yielding immediately on HTTP 429, service
 5xx (including 503 and 504), transport errors and local request deadlines. These
 errors preserve retryable checkpoints and move the person to the tail without
 permanently excluding the model. HTTP 504 remains a service error with the shared
 60-second model pause; a local deadline is a transient timeout, not HTTP 504.
-Service pauses finish before another turn from that worker. Quota cooldowns,
-provider retry metadata, daily exhaustion, per-key limits and the global request
-limiter remain enforced by the shared runtime. No escalating overload pause is
+The worker continues with the next person on another ready configured model.
+Quota cooldowns, provider retry metadata, daily exhaustion, project leases and
+60-second project/model spacing remain enforced by the shared runtime. The shared
+round-robin scheduler diversifies accounts and projects; there is no global
+ten-request/minute cap. No escalating overload pause is
 introduced. Extraction and evaluation retain their existing fallback behavior.
 
-If all models are cooling down with a known retry time, wait until the earliest
-shared retry time before continuing. If the pool has no usable keys or known
-retry time, stop processing more names and preserve untouched work for resumption.
+If the whole pool has no ready capacity, wait stoppably until the earliest shared
+availability. A person whose remaining models are unavailable yields while
+other people can use ready models. If the entire pool is exhausted, stop
+processing more names and preserve untouched work for resumption.
 A second transient failure leaves the person durably deferred. Stop during a
 pause preserves the saved deferral and pending retry for a later run.
 
