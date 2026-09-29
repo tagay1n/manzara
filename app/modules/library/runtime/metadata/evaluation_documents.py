@@ -29,7 +29,7 @@ from app.modules.runtime_shared_utils import get_in_workdir
 from .evaluation_text import _build_content_excerpt
 from .evaluation_types import EvaluationTask
 
-EVAL_PDF_SLICE_SIZE = 3
+EVAL_PDF_SLICE_SIZE = 2
 
 
 def _ensure_local_zip(

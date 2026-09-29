@@ -21,4 +21,4 @@
 - Usable responses require a concise reason and, when applicable, normalized DDC and category path. Malformed or incomplete responses advance to the next model.
 - Validate the fully merged JSON-LD payload, not only the returned patch. Evaluation prompt-version changes reopen stale terminal checkpoints.
 - Publish processed/total counts, skips, terminal outcomes, and per-model attempts/successes. Log document MD5 and resolved model before each request.
-- DjVu evaluation uses rendered first/last three pages, never extracted text. Defer the document when the visual slice cannot be prepared.
+- DjVu evaluation uses rendered first/last two pages, never extracted text. Defer the document when the visual slice cannot be prepared.

@@ -6,6 +6,9 @@ import hashlib
 from types import SimpleNamespace
 from pathlib import Path
 
+import pymupdf
+import pytest
+
 from app.modules.library.runtime.metadata import (
     evaluation_documents as evaluation_documents_module,
 )
@@ -46,6 +49,45 @@ def test_evaluation_replaces_invalid_pdf_in_configured_shared_cache(
     assert len(downloads) == 1
 
 
+@pytest.mark.parametrize(
+    ("page_count", "expected_pages"),
+    [(7, [1, 2, 6, 7]), (3, [1, 2, 3])],
+)
+def test_pdf_evaluation_uses_two_pages_from_each_end_without_duplicates(
+    monkeypatch, tmp_path: Path, evaluation_document, page_count, expected_pages
+) -> None:
+    source = tmp_path / "source.pdf"
+    with pymupdf.open() as pdf:
+        for page_number in range(1, page_count + 1):
+            page = pdf.new_page()
+            page.insert_text((72, 72), f"page-{page_number}")
+        pdf.save(source)
+
+    doc = evaluation_document()
+    documents = evaluation_documents_module.EvaluationDocuments(
+        config={}, excerpt_chars=0, log=lambda _message: None
+    )
+    monkeypatch.setattr(documents, "_get_document_s3client", lambda: object())
+    monkeypatch.setattr(
+        evaluation_documents_module,
+        "_ensure_pdf_in_shared_cache",
+        lambda *_args: str(source),
+    )
+    monkeypatch.setattr(
+        evaluation_documents_module,
+        "get_in_workdir",
+        lambda *_args, **_kwargs: str(tmp_path / "slice.pdf"),
+    )
+
+    slice_path = documents.prepare_pdf_slice(doc)
+
+    assert slice_path is not None
+    with pymupdf.open(slice_path) as sliced:
+        assert [page.get_text().strip() for page in sliced] == [
+            f"page-{page_number}" for page_number in expected_pages
+        ]
+
+
 def test_djvu_evaluation_reuses_verified_cache_and_ignores_content(
     monkeypatch, tmp_path: Path, evaluation_document
 ) -> None:
@@ -76,9 +118,9 @@ def test_djvu_evaluation_reuses_verified_cache_and_ignores_content(
 
     def create_slice(source: Path, destination: Path, *, edge_pages: int) -> int:
         seen_sources.append(source)
-        assert edge_pages == 3
+        assert edge_pages == 2
         destination.write_bytes(b"pdf")
-        return 6
+        return 4
 
     monkeypatch.setattr(evaluation_documents_module, "create_djvu_slice", create_slice)
 
