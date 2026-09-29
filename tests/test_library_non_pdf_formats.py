@@ -11,7 +11,7 @@ from app.modules.library.non_pdf_extraction import (
     detect_document_format,
     prepare_extraction,
 )
-from app.modules.library.non_pdf_formats import _decode_text
+from app.modules.library.non_pdf_formats import _decode_text, inspect_document_format
 
 
 def test_detection_prefers_source_bytes_over_wrong_mime_and_extension(
@@ -90,13 +90,17 @@ def test_word_lock_file_is_classified_before_conversion(
 
 
 def test_ole_detection_does_not_treat_thumbnail_cache_as_word_document(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
     ole_header = bytes.fromhex("d0cf11e0a1b11ae1") + b"\x00" * 504
     thumbnail_cache = tmp_path / "Thumbs.db"
     thumbnail_cache.write_bytes(ole_header + "256_a43e39b83acfaad6".encode("utf-16-le"))
     word = tmp_path / "mislabelled"
     word.write_bytes(ole_header + "WordDocument".encode("utf-16-le"))
+    monkeypatch.setattr(
+        "app.modules.library.non_pdf_formats._root_ole_streams",
+        lambda path: ["WordDocument"] if path == word else [],
+    )
 
     assert (
         detect_document_format(
@@ -114,6 +118,27 @@ def test_ole_detection_does_not_treat_thumbnail_cache_as_word_document(
         )
         == "doc"
     )
+
+
+def test_ole_classification_uses_only_primary_streams(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "wrong.ppt"
+    source.write_bytes(bytes.fromhex("d0cf11e0a1b11ae1") + b"\0" * 504)
+    monkeypatch.setattr(
+        "app.modules.library.non_pdf_formats._root_ole_streams",
+        lambda _path: ["WordDocument"],
+    )
+    detected = inspect_document_format(
+        source, mime_type="application/vnd.ms-powerpoint", source_path="wrong.ppt"
+    )
+    assert detected.format == "doc"
+    assert detected.verified_mime_type == "application/msword"
+
+    monkeypatch.setattr(
+        "app.modules.library.non_pdf_formats._root_ole_streams",
+        lambda _path: ["WordDocument", "PowerPoint Document"],
+    )
+    assert inspect_document_format(source).verified_mime_type is None
+    assert detect_document_format(source) == "compound"
 
 
 def test_text_decoder_selects_cp866_for_dos_cyrillic() -> None:

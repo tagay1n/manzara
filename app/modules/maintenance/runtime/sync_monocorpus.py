@@ -22,11 +22,7 @@ from app.document_storage import (
 )
 from app.document_cleanup_paths import cleanup_target_path
 from app.modules.maintenance.document_cleanup_executor import execute_yandex_cleanup
-from app.document_sync_filter import (
-    BYTE_DETECTED_MIME_TYPES,
-    classify_document,
-    normalize_document_mime,
-)
+from app.document_sync_filter import classify_document, normalize_document_mime
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
 from app.run_artifact_channel import emit_run_artifact
 from app.runtime_config import load_runtime_config
@@ -55,8 +51,12 @@ def _effective_catalog_mime(
     current: Mapping[str, Any] | None, incoming_mime: str
 ) -> str:
     """Retain a byte-verified type for an unchanged MD5 during catalog sync."""
-    verified = str((current or {}).get("verified_detected_format") or "")
-    return BYTE_DETECTED_MIME_TYPES.get(verified, incoming_mime)
+    verified = str((current or {}).get("verified_source_mime") or "").strip()
+    return (
+        verified
+        if verified in {"application/msword", "application/vnd.ms-powerpoint"}
+        else incoming_mime
+    )
 
 
 def _is_restricted(path: str, settings: DocumentStorageSettings) -> bool:

@@ -244,6 +244,7 @@ def run_metadata_extraction(
     _candidates: list[Any] | None = None,
     _aggregate_progress: _AggregateProgressPublisher | None = None,
     _worker_id: int = 0,
+    replace_existing_md5s: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Process one fixed candidate snapshot and return a structured summary."""
     candidates = (
@@ -294,6 +295,7 @@ def run_metadata_extraction(
                         _candidates=indexed_partition[1],
                         _aggregate_progress=aggregate_progress,
                         _worker_id=indexed_partition[0],
+                        replace_existing_md5s=replace_existing_md5s,
                     ),
                     enumerate(partitions),
                 )
@@ -520,11 +522,13 @@ def run_metadata_extraction(
         except GeminiStopRequestedError:
             outcome = "stopped"
         else:
-            stored = repository.save_success(
-                candidate.md5,
-                schema_org=result.value,
-                model_name=result.model_name,
-            )
+            save_kwargs = {
+                "schema_org": result.value,
+                "model_name": result.model_name,
+            }
+            if candidate.md5 in replace_existing_md5s:
+                save_kwargs["replace_existing"] = True
+            stored = repository.save_success(candidate.md5, **save_kwargs)
             counters["succeeded" if stored else "already_complete"] += 1
             model_successes[result.model_name] += int(stored)
             processed += 1

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import unicodedata
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+import olefile
 
 _TEXT_SUFFIXES = {
     ".txt", ".md", ".markdown", ".csv", ".tsv", ".xml", ".tex",
@@ -18,7 +21,21 @@ _SUPPORTED_FORMATS = {
 }
 
 
+@dataclass(frozen=True)
+class DetectedDocumentFormat:
+    format: str
+    verified_mime_type: str | None = None
+
+
 def detect_document_format(path: Path, *, mime_type: str = "", source_path: str = "") -> str:
+    return inspect_document_format(
+        path, mime_type=mime_type, source_path=source_path
+    ).format
+
+
+def inspect_document_format(
+    path: Path, *, mime_type: str = "", source_path: str = ""
+) -> DetectedDocumentFormat:
     """Classify source bytes before considering unreliable catalog hints."""
     source = Path(path)
     with source.open("rb") as stream:
@@ -27,90 +44,84 @@ def detect_document_format(path: Path, *, mime_type: str = "", source_path: str 
     suffix = PurePosixPath(str(source_path or source.name)).suffix.lower()
     mime = str(mime_type or "").split(";", 1)[0].strip().lower()
     if header.startswith(b"%PDF-"):
-        return "pdf"
+        return DetectedDocumentFormat("pdf")
     if lowered.startswith(b"{\\rtf"):
-        return "rtf"
+        return DetectedDocumentFormat("rtf")
     if zipfile.is_zipfile(source):
         with zipfile.ZipFile(source) as archive:
             names = set(archive.namelist())
             if "word/document.xml" in names:
-                return "docx"
+                return DetectedDocumentFormat("docx")
             if "mimetype" in names:
                 value = archive.read("mimetype").decode("ascii", errors="ignore").strip()
                 if value == "application/epub+zip":
-                    return "epub"
+                    return DetectedDocumentFormat("epub")
                 if value == "application/vnd.oasis.opendocument.text":
-                    return "odt"
+                    return DetectedDocumentFormat("odt")
             if "META-INF/container.xml" in names:
-                return "epub"
+                return DetectedDocumentFormat("epub")
             if any(name.startswith("ppt/") for name in names):
-                return "pptx"
+                return DetectedDocumentFormat("pptx")
             if any(name.startswith("xl/") for name in names):
-                return "spreadsheet"
+                return DetectedDocumentFormat("spreadsheet")
     if header.startswith(bytes.fromhex("d0cf11e0a1b11ae1")):
-        ole_markers = _find_ole_document_markers(source)
-        if "powerpoint" in ole_markers:
-            return "powerpoint"
-        if "spreadsheet" in ole_markers:
-            return "spreadsheet"
-        if "doc" in ole_markers:
-            return "doc"
-        if suffix == ".xls" or "excel" in mime:
-            return "spreadsheet"
-        if suffix == ".doc" or mime in {"application/msword", "application/x-msword"}:
-            return "doc"
-        return "compound"
+        try:
+            roots = {name.casefold() for name in _root_ole_streams(source)}
+        except (OSError, ValueError, TypeError):
+            return DetectedDocumentFormat("compound")
+        families = {
+            family
+            for family, names in {
+                "doc": {"worddocument"},
+                "powerpoint": {"powerpoint document"},
+                "spreadsheet": {"workbook", "book"},
+            }.items()
+            if roots & names
+        }
+        if len(families) != 1:
+            return DetectedDocumentFormat("compound")
+        family = families.pop()
+        return DetectedDocumentFormat(
+            family,
+            {
+                "doc": "application/msword",
+                "powerpoint": "application/vnd.ms-powerpoint",
+            }.get(family),
+        )
     sample = lowered[:4096]
     if b"<fictionbook" in sample or suffix == ".fb2" or "fictionbook" in mime:
-        return "fb2"
+        return DetectedDocumentFormat("fb2")
     if (
         b"<!doctype html" in sample
         or b"<html" in sample
         or suffix in _HTML_SUFFIXES
         or mime == "text/html"
     ):
-        return "html"
+        return DetectedDocumentFormat("html")
     if suffix == ".epub" or mime == "application/epub+zip":
-        return "epub"
+        return DetectedDocumentFormat("epub")
     if suffix == ".pptx" or mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-        return "pptx"
+        return DetectedDocumentFormat("pptx")
     if suffix == ".docx" or "wordprocessingml" in mime:
-        return "docx"
+        return DetectedDocumentFormat("docx")
     if suffix == ".odt" or mime == "application/vnd.oasis.opendocument.text":
-        return "odt"
+        return DetectedDocumentFormat("odt")
     if suffix == ".rtf" or "rtf" in mime:
-        return "rtf"
+        return DetectedDocumentFormat("rtf")
     if suffix == ".doc" or mime in {"application/msword", "application/x-msword"}:
-        return "doc"
+        return DetectedDocumentFormat("doc")
     if suffix in {".md", ".markdown"} or mime == "text/markdown":
-        return "markdown"
+        return DetectedDocumentFormat("markdown")
     if suffix in _TEXT_SUFFIXES or mime.startswith("text/") or mime in {
         "application/xml", "application/json", "application/x-yaml"
     }:
-        return "text"
-    return suffix.lstrip(".") or mime or "unknown"
+        return DetectedDocumentFormat("text")
+    return DetectedDocumentFormat(suffix.lstrip(".") or mime or "unknown")
 
 
-def _find_ole_document_markers(path: Path) -> set[str]:
-    markers = {
-        "doc": "WordDocument".encode("utf-16-le"),
-        "powerpoint": "PowerPoint Document".encode("utf-16-le"),
-        "spreadsheet": "Workbook".encode("utf-16-le"),
-        "spreadsheet-book": "Book".encode("utf-16-le"),
-    }
-    found: set[str] = set()
-    overlap = max(len(marker) for marker in markers.values()) - 1
-    previous = b""
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            sample = previous + chunk
-            for kind, marker in markers.items():
-                if marker in sample:
-                    found.add("spreadsheet" if kind == "spreadsheet-book" else kind)
-            if {"doc", "powerpoint", "spreadsheet"}.issubset(found):
-                break
-            previous = sample[-overlap:]
-    return found
+def _root_ole_streams(path: Path) -> list[str]:
+    with olefile.OleFileIO(str(path)) as container:
+        return [parts[0] for parts in container.listdir() if len(parts) == 1]
 
 
 def _decode_text(payload: bytes) -> str:

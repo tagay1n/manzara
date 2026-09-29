@@ -20,11 +20,11 @@ from app.modules.maintenance.runtime.sync_monocorpus import (
 
 def test_catalog_sync_preserves_byte_verified_powerpoint_mime() -> None:
     assert _effective_catalog_mime(
-        {"verified_detected_format": "powerpoint"},
+        {"verified_source_mime": "application/vnd.ms-powerpoint"},
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ) == "application/vnd.ms-powerpoint"
     assert _effective_catalog_mime(
-        {"verified_detected_format": "pptx"}, "application/msword"
+        {"verified_source_mime": None}, "application/msword"
     ) == "application/msword"
 
 
@@ -47,7 +47,7 @@ def test_catalog_sync_keeps_verified_powerpoint_when_upstream_calls_it_zip() -> 
             md5: {
                 "md5": md5,
                 "mime_type": "application/vnd.ms-powerpoint",
-                "verified_detected_format": "powerpoint",
+                "verified_source_mime": "application/vnd.ms-powerpoint",
                 "ya_path": path,
                 "ya_public_url": "https://disk/slides.pptx",
                 "ya_public_key": "key:slides.pptx",

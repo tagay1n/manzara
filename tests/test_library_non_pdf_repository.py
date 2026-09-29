@@ -86,6 +86,16 @@ def test_powerpoint_recipe_requeues_only_matching_prior_format() -> None:
     assert repository.engine.params["powerpoint_version"] == "nonpdf.ppt.v1"
 
 
+def test_candidate_queue_can_target_internal_repair_set() -> None:
+    repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
+    repository.engine = _Engine()
+    repository.list_candidates(
+        extractor_version="nonpdf.v9", only_md5s=frozenset({"a" * 32})
+    )
+    assert "d.md5 = ANY(:only_md5s)" in repository.engine.sql
+    assert repository.engine.params["only_md5s"] == ["a" * 32]
+
+
 def test_byte_confirmed_powerpoint_mime_update_is_source_guarded() -> None:
     repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
     repository.engine = _Engine()
@@ -103,6 +113,7 @@ def test_byte_confirmed_powerpoint_mime_update_is_source_guarded() -> None:
         candidate,
         detected_format="powerpoint",
         extractor_version="nonpdf.ppt.v1",
+        verified_mime_type="application/vnd.ms-powerpoint",
     )
     assert "primary_storage_size IS NOT DISTINCT FROM :primary_storage_size" in repository.engine.sql
     assert "= LOWER(BTRIM(:catalog_mime_type))" in repository.engine.sql
@@ -156,6 +167,7 @@ def test_deferred_pptx_is_checkpointed_without_replacing_content(test_database_u
                 text("""CREATE TABLE library_non_pdf_extraction_state (
                 md5 TEXT PRIMARY KEY,extractor_version TEXT,status TEXT,
                 attempt_count INTEGER,last_run_id BIGINT,detected_format TEXT,
+                verified_source_mime TEXT,
                 error_text TEXT,generated_at TIMESTAMPTZ,created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ)""")
             )
             conn.execute(
@@ -209,6 +221,7 @@ def test_deferred_pptx_is_checkpointed_without_replacing_content(test_database_u
             candidate,
             detected_format="powerpoint",
             extractor_version="nonpdf.ppt.v1",
+            verified_mime_type="application/vnd.ms-powerpoint",
         )
         with repository.engine.connect() as conn:
             assert conn.execute(text("SELECT mime_type FROM document")).scalar() == (
@@ -228,6 +241,25 @@ def test_deferred_pptx_is_checkpointed_without_replacing_content(test_database_u
             extractor_version=EXTRACTOR_VERSION,
             powerpoint_version="nonpdf.ppt.v1",
         ) == []
+        checkpoint = repository.list_powerpoint_checkpoints(
+            extractor_version="nonpdf.ppt.v1"
+        )[0]
+        repository.backfill_verified_sources(
+            [(checkpoint, "doc", "application/msword")],
+            previous_version="nonpdf.ppt.v1",
+        )
+        with repository.engine.connect() as conn:
+            assert conn.execute(text("SELECT mime_type FROM document")).scalar() == (
+                "application/msword"
+            )
+            assert conn.execute(text("""SELECT detected_format, verified_source_mime
+                FROM library_non_pdf_extraction_state""")).one() == (
+                "doc", "application/msword"
+            )
+        assert len(repository.list_candidates(
+            extractor_version=EXTRACTOR_VERSION,
+            powerpoint_version="nonpdf.ppt.v1",
+        )) == 1
     finally:
         if repository is not None:
             repository.dispose()

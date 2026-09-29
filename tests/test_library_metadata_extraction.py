@@ -314,6 +314,16 @@ def test_candidate_query_keeps_invalid_state_across_contract_versions() -> None:
     assert "quality.status = 'invalid' AND quality.contract_version" not in sql
 
 
+def test_internal_metadata_refresh_targets_only_requested_ids() -> None:
+    repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
+    repository.engine = _Engine()
+    ids = frozenset({"a" * 32})
+    repository.list_candidates(only_md5s=ids, force_md5s=ids)
+    sql = repository.engine.statements[0]
+    assert "OR d.md5 = ANY(:force_md5s)" in sql
+    assert "AND d.md5 = ANY(:only_md5s)" in sql
+
+
 def test_pdf_slice_classifies_invalid_source_as_corrupt(tmp_path: Path) -> None:
     source = tmp_path / "broken.pdf"
     source.write_bytes(b"%PDF-1.7\nnot a document")
@@ -432,6 +442,39 @@ def test_success_write_preserves_existing_non_null_metadata_and_checkpoints_qual
     assert "INSERT INTO library_metadata_quality_state" in repository.engine.statements[1]
     assert not any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
     assert not any("UPDATE document" in sql for sql in repository.engine.statements)
+
+
+def test_explicit_metadata_refresh_replaces_valid_existing_payload() -> None:
+    repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
+    repository.engine = _WriteEngine(
+        _WriteResult(
+            rows=[{
+                "md5": "a" * 32,
+                "schema_org": {
+                    "@context": "https://schema.org",
+                    "@type": "Book",
+                    "name": "Existing",
+                    "description": "Useful existing metadata",
+                },
+            }]
+        ),
+        _WriteResult(rowcount=1),
+        _WriteResult(rowcount=1),
+        _WriteResult(rowcount=1),
+    )
+
+    assert repository.save_success(
+        "a" * 32,
+        schema_org={
+            "@context": "https://schema.org",
+            "@type": "Book",
+            "name": "Refreshed",
+            "datePublished": "2001",
+        },
+        model_name="model",
+        replace_existing=True,
+    )
+    assert any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
 
 
 def test_success_write_replaces_only_low_quality_existing_metadata() -> None:

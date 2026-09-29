@@ -15,6 +15,24 @@ from app.modules.library.non_pdf_formats import detect_document_format
 from app.modules.library.non_pdf_types import DeferredDocumentExtraction
 
 
+@pytest.fixture(autouse=True)
+def _synthetic_ole_streams(monkeypatch) -> None:
+    from app.modules.library.non_pdf_formats import _root_ole_streams
+
+    def streams(path: Path) -> list[str]:
+        if path.stat().st_size < 1024:
+            return (
+                ["PowerPoint Document"]
+                if "PowerPoint Document".encode("utf-16-le") in path.read_bytes()
+                else []
+            )
+        return _root_ole_streams(path)
+
+    monkeypatch.setattr(
+        "app.modules.library.non_pdf_formats._root_ole_streams", streams
+    )
+
+
 def _binary_powerpoint(path: Path) -> Path:
     path.write_bytes(
         bytes.fromhex("d0cf11e0a1b11ae1")

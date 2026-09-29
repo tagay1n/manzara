@@ -370,6 +370,7 @@ def run_extraction(
     limit: int | None = None,
     per_mime_limit: int | None = None,
     retry_known_failures: bool = False,
+    only_md5s: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     candidates = repository.list_candidates(
         extractor_version=EXTRACTOR_VERSION,
@@ -377,6 +378,7 @@ def run_extraction(
         limit=limit,
         per_mime_limit=per_mime_limit,
         retry_known_failures=retry_known_failures,
+        only_md5s=only_md5s,
     )
     total = len(candidates)
     counters: Counter[str] = Counter(
@@ -436,14 +438,16 @@ def run_extraction(
         (doc_workspace / "pptx-inspection.json").unlink(missing_ok=True)
         detected: str | None = None
 
-        def record_detection(detected_format: str) -> None:
+        def record_detection(inspection) -> None:
             nonlocal detected, item_version
+            detected_format = inspection.format
             detected = detected_format
             item_version = extractor_version_for_format(detected_format)
             repository.record_detected_source(
                 candidate,
                 detected_format=detected_format,
                 extractor_version=item_version,
+                verified_mime_type=inspection.verified_mime_type,
             )
 
         try:

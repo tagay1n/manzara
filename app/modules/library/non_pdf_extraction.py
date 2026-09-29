@@ -24,6 +24,8 @@ from app.modules.library.non_pdf_formats import (
     _SUPPORTED_FORMATS,
     _decode_text,
     detect_document_format,
+    DetectedDocumentFormat,
+    inspect_document_format,
 )
 from app.modules.library.non_pdf_pptx import pptx_to_html
 from app.modules.library.non_pdf_media import _collect_assets
@@ -50,15 +52,16 @@ def prepare_extraction(
     source_path: str,
     legacy_doc_converter: Callable[..., Path] | None = None,
     legacy_presentation_converter: Callable[..., Path] | None = None,
-    on_detected: Callable[[str], None] | None = None,
+    on_detected: Callable[[DetectedDocumentFormat], None] | None = None,
 ) -> PreparedExtraction:
     workspace.mkdir(parents=True, exist_ok=True)
     if source.stat().st_size <= 0:
         raise CorruptDocumentError("empty_source", "Source document is empty")
     try:
-        detected = detect_document_format(
+        inspection = inspect_document_format(
             source, mime_type=mime_type, source_path=source_path
         )
+        detected = inspection.format
     except (zipfile.BadZipFile, EOFError, zlib.error) as exc:
         raise CorruptDocumentError("document_container", str(exc)) from exc
     source_name = PurePosixPath(str(source_path or source.name)).name
@@ -88,6 +91,7 @@ def prepare_extraction(
         json.dumps(
             {
                 "detected_format": detected,
+                "verified_mime_type": inspection.verified_mime_type,
                 "catalog_mime_type": mime_type,
                 "source_path": source_path,
             },
@@ -98,7 +102,7 @@ def prepare_extraction(
         encoding="utf-8",
     )
     if on_detected is not None:
-        on_detected(detected)
+        on_detected(inspection)
     if detected not in _SUPPORTED_FORMATS:
         raise UnsupportedDocumentFormat(detected)
     if detected in {"markdown", "text"}:

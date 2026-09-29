@@ -9,7 +9,6 @@ from typing import Any, Mapping
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from app.document_sync_filter import BYTE_DETECTED_MIME_TYPES
 from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -42,6 +41,82 @@ class NonPdfExtractionRepository:
     def dispose(self) -> None:
         release_postgres_engine(self.engine)
 
+    def list_powerpoint_checkpoints(self, *, extractor_version: str) -> list[NonPdfCandidate]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT d.md5, d.mime_type, d.ya_path, d.document_url,
+                           d.primary_storage_size, d.content_url,
+                           state.detected_format AS prior_detected_format
+                    FROM document d
+                    JOIN library_non_pdf_extraction_state state ON state.md5=d.md5
+                    WHERE state.extractor_version=:extractor_version
+                      AND state.detected_format='powerpoint'
+                    ORDER BY d.md5
+                    """
+                ),
+                {"extractor_version": extractor_version},
+            ).mappings().all()
+        return [self._candidate(row) for row in rows]
+
+    def backfill_verified_sources(
+        self,
+        items: list[tuple[NonPdfCandidate, str, str]],
+        *,
+        previous_version: str,
+    ) -> None:
+        """Record independently verified OLE roots without republishing content."""
+        allowed = {
+            "doc": "application/msword",
+            "powerpoint": "application/vnd.ms-powerpoint",
+        }
+        with self.engine.begin() as conn:
+            for candidate, detected_format, verified_mime in items:
+                if allowed.get(detected_format) != verified_mime:
+                    raise ValueError(f"Unverified OLE MIME for {candidate.md5}")
+                state = conn.execute(
+                    text(
+                        """
+                        UPDATE library_non_pdf_extraction_state
+                        SET detected_format=:detected_format,
+                            verified_source_mime=:verified_mime,
+                            updated_at=CURRENT_TIMESTAMP
+                        WHERE md5=:md5 AND extractor_version=:previous_version
+                          AND detected_format='powerpoint'
+                        """
+                    ),
+                    {
+                        "md5": candidate.md5,
+                        "detected_format": detected_format,
+                        "verified_mime": verified_mime,
+                        "previous_version": previous_version,
+                    },
+                )
+                if int(state.rowcount or 0) != 1:
+                    raise RuntimeError(f"OLE checkpoint changed for {candidate.md5}")
+                document = conn.execute(
+                    text(
+                        """
+                        UPDATE document SET mime_type=:verified_mime
+                        WHERE md5=:md5
+                          AND document_url IS NOT DISTINCT FROM :document_url
+                          AND primary_storage_size IS NOT DISTINCT FROM :primary_storage_size
+                          AND LOWER(BTRIM(COALESCE(mime_type, '')))
+                              = LOWER(BTRIM(:previous_mime))
+                        """
+                    ),
+                    {
+                        "md5": candidate.md5,
+                        "document_url": candidate.document_url,
+                        "primary_storage_size": candidate.primary_storage_size,
+                        "previous_mime": candidate.mime_type,
+                        "verified_mime": verified_mime,
+                    },
+                )
+                if int(document.rowcount or 0) != 1:
+                    raise RuntimeError(f"OLE document changed for {candidate.md5}")
+
     def list_candidates(
         self,
         *,
@@ -50,6 +125,7 @@ class NonPdfExtractionRepository:
         limit: int | None = None,
         per_mime_limit: int | None = None,
         retry_known_failures: bool = False,
+        only_md5s: frozenset[str] | None = None,
     ) -> list[NonPdfCandidate]:
         sql = """
             WITH eligible AS (
@@ -117,6 +193,12 @@ class NonPdfExtractionRepository:
                 CASE WHEN d.content_url IS NULL THEN 0 ELSE 1 END,
                 d.mime_key, d.mime_rank, d.md5
         """
+        if only_md5s is not None:
+            sql = sql.replace(
+                "            ORDER BY\n",
+                "              AND d.md5 = ANY(:only_md5s)\n            ORDER BY\n",
+                1,
+            )
         normalized_per_mime = (
             None if per_mime_limit is None else max(0, int(per_mime_limit))
         )
@@ -127,6 +209,8 @@ class NonPdfExtractionRepository:
             "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
             "retry_known_failures": bool(retry_known_failures),
         }
+        if only_md5s is not None:
+            params["only_md5s"] = sorted(only_md5s)
         if limit is not None:
             sql += " LIMIT :limit"
             params["limit"] = max(0, int(limit))
@@ -152,14 +236,21 @@ class NonPdfExtractionRepository:
         *,
         detected_format: str,
         extractor_version: str,
+        verified_mime_type: str | None = None,
     ) -> None:
         """Checkpoint byte detection and correct a stale catalog MIME atomically."""
+        if verified_mime_type is not None and {
+            "doc": "application/msword",
+            "powerpoint": "application/vnd.ms-powerpoint",
+        }.get(detected_format) != verified_mime_type:
+            raise ValueError(f"Unverified OLE MIME for {candidate.md5}")
         with self.engine.begin() as conn:
             state = conn.execute(
                 text(
                     """
                     UPDATE library_non_pdf_extraction_state
                     SET detected_format=:detected_format,
+                        verified_source_mime=:verified_mime_type,
                         attempt_count=CASE
                             WHEN extractor_version IS DISTINCT FROM :extractor_version
                             THEN 1 ELSE attempt_count END,
@@ -172,11 +263,12 @@ class NonPdfExtractionRepository:
                     "md5": candidate.md5,
                     "detected_format": str(detected_format),
                     "extractor_version": str(extractor_version),
+                    "verified_mime_type": verified_mime_type,
                 },
             )
             if int(state.rowcount or 0) != 1:
                 raise RuntimeError(f"Extraction attempt changed for {candidate.md5}")
-            corrected_mime = BYTE_DETECTED_MIME_TYPES.get(detected_format)
+            corrected_mime = verified_mime_type
             if corrected_mime is None:
                 return
             updated = conn.execute(

@@ -110,7 +110,7 @@ def test_catalog_snapshot_includes_byte_detected_format() -> None:
     repository.list_documents()
 
     assert "library_non_pdf_extraction_state" in repository.engine.statements[0]
-    assert "verified_detected_format" in repository.engine.statements[0]
+    assert "verified_source_mime" in repository.engine.statements[0]
 
 
 def test_restricted_catalog_update_clears_persisted_public_links(

@@ -148,6 +148,8 @@ class MetadataExtractionRepository:
         *,
         limit: int | None = None,
         models: Sequence[str] | None = None,
+        only_md5s: frozenset[str] | None = None,
+        force_md5s: frozenset[str] = frozenset(),
     ) -> list[MetadataExtractionCandidate]:
         """Return only pending documents with a verified primary object."""
         sql = """
@@ -189,6 +191,7 @@ class MetadataExtractionRepository:
                         AND signal.value <> '{}'::jsonb
                   )
                   OR quality.status = 'invalid'
+                  OR d.md5 = ANY(:force_md5s)
               )
               AND d.document_url IS NOT NULL
               AND d.primary_storage_size IS NOT NULL
@@ -210,7 +213,14 @@ class MetadataExtractionRepository:
         """
         params: dict[str, Any] = {
             "contract_version": CONTRACT_VERSION,
+            "force_md5s": sorted(force_md5s),
         }
+        if only_md5s is not None:
+            sql = sql.replace(
+                "            ORDER BY d.md5 ASC",
+                "              AND d.md5 = ANY(:only_md5s)\n            ORDER BY d.md5 ASC",
+            )
+            params["only_md5s"] = sorted(only_md5s)
         with self.engine.connect() as conn:
             rows = conn.execute(text(sql), params).mappings().all()
         checkpoints = self._checkpoints().get_many(
@@ -220,7 +230,11 @@ class MetadataExtractionRepository:
         candidates: list[MetadataExtractionCandidate] = []
         seen: set[str] = set()
         for row in rows:
-            checkpoint = checkpoints.get(str(row.get("md5") or ""))
+            checkpoint = (
+                None
+                if str(row.get("md5") or "") in force_md5s
+                else checkpoints.get(str(row.get("md5") or ""))
+            )
             if checkpoint and checkpoint.get("contract_version") == PROMPT_VERSION:
                 if checkpoint.get("status") == "terminal":
                     previous = {
@@ -331,8 +345,9 @@ class MetadataExtractionRepository:
         *,
         schema_org: Mapping[str, Any],
         model_name: str,
+        replace_existing: bool = False,
     ) -> bool:
-        """Persist usable metadata without replacing an existing usable payload."""
+        """Persist usable metadata, allowing explicit replacement for source repairs."""
         language = str(schema_org.get("inLanguage") or "").strip() or None
         with self.engine.begin() as conn:
             rows = conn.execute(
@@ -362,6 +377,7 @@ class MetadataExtractionRepository:
             )
             if (
                 existing_schema_org is not None
+                and not replace_existing
                 and not quality_invalid
                 and metadata_quality_issue(existing_schema_org) is None
                 and not metadata_contract_issues(existing_schema_org)

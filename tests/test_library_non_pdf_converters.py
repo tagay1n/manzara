@@ -19,6 +19,20 @@ from app.modules.library.non_pdf_extraction import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _synthetic_ole_streams(monkeypatch) -> None:
+    from app.modules.library.non_pdf_formats import _root_ole_streams
+
+    def streams(path: Path) -> list[str]:
+        if path.stat().st_size < 1024 and path.read_bytes().startswith(
+            bytes.fromhex("d0cf11e0a1b11ae1")
+        ):
+            return ["WordDocument"]
+        return _root_ole_streams(path)
+
+    monkeypatch.setattr("app.modules.library.non_pdf_formats._root_ole_streams", streams)
+
+
 def test_legacy_doc_uses_google_fallback_for_invalid_libreoffice_output(
     tmp_path: Path,
     monkeypatch,
