@@ -5,6 +5,7 @@ from __future__ import annotations
 from gemini_scheduler_fakes import ScheduledManagerFake
 
 import json
+import pytest
 from app.modules.library.runtime.metadata import (
     evaluation_request as evaluation_request_module,
 )
@@ -112,3 +113,76 @@ def test_book_prompt_describes_optional_book_only_gap_fills() -> None:
     assert "persisted schema.org work type is `Book`" in prompt
     assert "Allowed keys: name, isbn, numberOfPages" in prompt
     assert "optional, evidence-based gap fills" in prompt
+
+
+def test_djvu_evaluation_requires_visual_slice_and_ignores_text(
+    monkeypatch, evaluation_document
+) -> None:
+    doc = evaluation_document()
+    doc.mime_type = "image/vnd.djvu"
+    doc.content_url = "https://example.test/content.zip"
+
+    class Documents:
+        def load_content_excerpt(self, _doc):  # noqa: ANN001
+            pytest.fail("DjVu must not use extracted text")
+
+        def prepare_pdf_slice(self, _doc):  # noqa: ANN001
+            return None
+
+    with pytest.raises(RuntimeError, match="visual slice"):
+        evaluation_request_module.evaluate_document(
+            doc,
+            config={},
+            documents=Documents(),
+            manager=object(),
+            models=["model"],
+            known_classifications=[],
+            dry_run=True,
+            run_id=None,
+            progress=None,
+            log=lambda _message: None,
+        )
+
+
+def test_djvu_evaluation_attaches_visual_pdf(monkeypatch, evaluation_document) -> None:
+    class _Manager(ScheduledManagerFake):
+        def run_with_key(self, *, model_name, call, run_id, max_attempts):  # noqa: ANN001
+            return call("test-key", object())
+
+    doc = evaluation_document()
+    doc.mime_type = "image/vnd.djvu"
+    doc.content_url = "https://example.test/content.zip"
+    requests: list[dict] = []
+
+    class Documents:
+        def prepare_pdf_slice(self, _doc):  # noqa: ANN001
+            return "/tmp/visual-slice.pdf"
+
+        def dump_prompt(self, _md5, _prompt):  # noqa: ANN001
+            return None
+
+    def request(**kwargs):  # noqa: ANN003
+        requests.append(kwargs)
+        return json.dumps({"applicable": False, "reason": "not a library document"})
+
+    monkeypatch.setattr(evaluation_request_module, "generate_structured_json", request)
+    monkeypatch.setattr(
+        evaluation_request_module, "get_evaluation_attempted_models", lambda _md5: set()
+    )
+    evaluation_request_module.evaluate_document(
+        doc,
+        config={},
+        documents=Documents(),
+        manager=_Manager(),
+        models=["model"],
+        known_classifications=[],
+        dry_run=True,
+        run_id=None,
+        progress=None,
+        log=lambda _message: None,
+    )
+
+    assert requests[0]["files"] == {
+        evaluation_request_module.Path("/tmp/visual-slice.pdf"): "application/pdf"
+    }
+    assert all("content_excerpt" not in part["text"] for part in requests[0]["contents"])

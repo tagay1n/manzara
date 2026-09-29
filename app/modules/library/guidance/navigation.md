@@ -46,7 +46,7 @@ Policy: `app/modules/library/guidance/documents.md`.
 
 | Change | Policy | Implementation | Focused tests |
 | --- | --- | --- | --- |
-| Metadata extraction | `app/modules/library/guidance/metadata.md` | `app/modules/library/metadata_extraction.py`, `app/modules/library/metadata_prompt.py` | `tests/test_library_metadata_extraction.py`, `tests/test_library_metadata_extraction_runtime.py` |
+| Metadata extraction and DjVu visual slicing | `app/modules/library/guidance/metadata.md` | `app/modules/library/metadata_extraction.py`, `app/modules/library/metadata_prompt.py`, `app/modules/library/djvu_slicing.py` | `tests/test_library_metadata_extraction.py`, `tests/test_library_metadata_extraction_runtime.py`, `tests/test_library_djvu_slicing.py` |
 | JSON-LD extraction contract | `app/modules/library/guidance/metadata.md` | `app/modules/library/metadata_contract.py` | `tests/test_library_metadata_contract.py` |
 | Applicability, classification, gap filling | `app/modules/library/guidance/metadata.md` | Focused lookup: `app/modules/library/guidance/evaluation-navigation.md` | Select the evaluation lookup's focused tests |
 | Collection detection | `app/modules/library/guidance/collections.md` | `app/modules/library/collection_detection.py` | `tests/test_library_collection_detection.py` |

@@ -11,6 +11,7 @@
 - Validate description scripts conservatively against the primary `inLanguage`: require clear two-to-one competing-script dominance before rejecting mixed text, treat `Ьь` as Yanalif letters, and preserve the valid Zamanalif tag `tt-Latn-x-zaman-alif`.
 - Enforce the versioned strict JSON-LD contract before every write and mark successful extraction as resolved in `library_metadata_quality_state`. Rows previously marked invalid retain their current payload and remain eligible for extraction. Canonical discovery facets (`genre`, Audience `audienceType`, classification paths, and role names) are English; `description` remains in the document language and script declared by `inLanguage`.
 - Treat deterministic PDF open, page-tree, and page-read failures as structural corruption. Persist a guarded `corrupted` move plan and exclude active plans from extraction retries; password protection and storage/service failures are not corruption.
+- Treat DjVu as visual-only for metadata extraction: use the MD5-verified shared source cache before primary Backblaze S3, then render unique first/last four pages into a PDF. Do not use `content_url` even when present. Missing DjVuLibre tools and rendering timeouts are operational failures.
 
 ## Evaluation
 
@@ -20,3 +21,4 @@
 - Usable responses require a concise reason and, when applicable, normalized DDC and category path. Malformed or incomplete responses advance to the next model.
 - Validate the fully merged JSON-LD payload, not only the returned patch. Evaluation prompt-version changes reopen stale terminal checkpoints.
 - Publish processed/total counts, skips, terminal outcomes, and per-model attempts/successes. Log document MD5 and resolved model before each request.
+- DjVu evaluation uses rendered first/last three pages, never extracted text. Defer the document when the visual slice cannot be prepared.

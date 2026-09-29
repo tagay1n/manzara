@@ -200,6 +200,96 @@ def test_metadata_extraction_reuses_shared_verified_pdf_cache(
     assert list(request.files) == [tmp_path / "run" / digest / "slice-for-meta.pdf"]
 
 
+def test_djvu_metadata_uses_cached_visual_source_even_with_content_url(
+    monkeypatch, tmp_path: Path
+) -> None:
+    content = b"shared-djvu"
+    digest = hashlib.md5(content).hexdigest()  # noqa: S324
+    cache_path = tmp_path / "source-documents"
+    cache_path.mkdir()
+    cached = cache_path / f"{digest}.djv"
+    cached.write_bytes(content)
+    candidate = MetadataExtractionCandidate(
+        md5=digest,
+        mime_type="image/vnd.djvu",
+        document_url=f"https://s3.example.test/public/{digest}.djvu",
+        content_url="https://example.test/content.zip",
+        upstream_metadata=None,
+        primary_storage_size=len(content),
+        attempts=(),
+    )
+    seen_sources: list[Path] = []
+
+    def create_slice(source: Path, destination: Path, *, edge_pages: int) -> int:
+        seen_sources.append(source)
+        assert edge_pages == 4
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"slice")
+        return 8
+
+    class NoRemoteAccess:
+        def __getattr__(self, name):  # noqa: ANN001
+            raise AssertionError(f"unexpected remote access: {name}")
+
+    monkeypatch.setattr(extraction, "create_djvu_slice", create_slice, raising=False)
+    monkeypatch.setattr(
+        extraction,
+        "load_text_slice",
+        lambda *_args, **_kwargs: pytest.fail("DjVu must not use extracted text"),
+    )
+    request = extraction.prepare_metadata_request(
+        candidate,
+        workspace=tmp_path / "run",
+        storage=_storage(cache_path),
+        primary_s3=NoRemoteAccess(),
+    )
+
+    assert seen_sources == [cached]
+    assert list(request.files.values()) == ["application/pdf"]
+    assert list(request.files) == [tmp_path / "run" / digest / "slice-for-meta.pdf"]
+
+
+def test_djvu_metadata_without_content_uses_primary_source_cache(
+    monkeypatch, tmp_path: Path
+) -> None:
+    digest = "a" * 32
+    candidate = MetadataExtractionCandidate(
+        md5=digest,
+        mime_type="image/vnd.djvu",
+        document_url=f"https://s3.example.test/public/{digest}.djvu",
+        content_url=None,
+        upstream_metadata=None,
+        primary_storage_size=123,
+        attempts=(),
+    )
+    source = tmp_path / "cached.djvu"
+    source.write_bytes(b"djvu")
+    downloads: list[dict] = []
+
+    def download(**kwargs):  # noqa: ANN003
+        downloads.append(kwargs)
+        return source
+
+    monkeypatch.setattr(extraction, "download_cached_primary_document", download)
+    monkeypatch.setattr(
+        extraction,
+        "create_djvu_slice",
+        lambda _source, _destination, *, edge_pages: 8,
+    )
+
+    request = extraction.prepare_metadata_request(
+        candidate,
+        workspace=tmp_path / "run",
+        storage=_storage(tmp_path / "cache"),
+        primary_s3=object(),
+    )
+
+    assert downloads[0]["extension"] == ".djvu"
+    assert downloads[0]["expected_md5"] == digest
+    assert downloads[0]["expected_size"] == 123
+    assert list(request.files.values()) == ["application/pdf"]
+
+
 def test_runtime_persists_success_and_emits_structured_progress(
     monkeypatch, tmp_path, capsys
 ) -> None:

@@ -35,7 +35,7 @@ def fetch_docs_for_metadata_extraction(limit: int, excluded_md5s: set[str]) -> l
         Metadata.md5.is_(None)
         & (
             Document.content_url.is_not(None)
-            | (Document.mime_type == "application/pdf")
+            | Document.mime_type.in_(("application/pdf", "image/vnd.djvu"))
         )
     )
     if excluded_md5s:
@@ -73,7 +73,7 @@ def fetch_docs_for_evaluation(
         & Document.language.in_(lang_codes)
         & (
             Document.content_url.is_not(None)
-            | (Document.mime_type == "application/pdf")
+            | Document.mime_type.in_(("application/pdf", "image/vnd.djvu"))
         )
     )
     if excluded_md5s:

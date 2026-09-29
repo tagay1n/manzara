@@ -26,6 +26,10 @@ from .evaluation_text import _drop_none_values, _format_response_for_log
 from .evaluation_types import Evaluation, EvaluationTask
 
 
+class DjvuVisualEvidenceError(RuntimeError):
+    """DjVu evaluation must wait for a usable visual slice."""
+
+
 def _persisted_work_type(schema_org: dict | str | None) -> Any:
     if isinstance(schema_org, dict):
         return schema_org.get("@type")
@@ -46,12 +50,15 @@ def evaluate_document(
     log,
 ) -> GeminiModelPoolResult[Evaluation]:
     flattened_meta = extract_flat_fields(doc.schema_org)
-    excerpt = documents.load_content_excerpt(doc)
+    is_djvu = doc.mime_type == "image/vnd.djvu"
+    excerpt = None if is_djvu else documents.load_content_excerpt(doc)
     upstream_metadata = sanitize_upstream_metadata(doc.upstream_metadata)
     files: dict[str, str] = {}
-    if excerpt is None and doc.mime_type == "application/pdf":
+    if excerpt is None and doc.mime_type in {"application/pdf", "image/vnd.djvu"}:
         if slice_path := documents.prepare_pdf_slice(doc):
             files[slice_path] = "application/pdf"
+    if is_djvu and not files:
+        raise DjvuVisualEvidenceError(f"DjVu visual slice unavailable: {doc.md5}")
     payload = _drop_none_values(
         {
             # "md5": doc.md5,

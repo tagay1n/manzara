@@ -19,6 +19,7 @@ def test_evaluation_selection_reopens_only_incomplete_or_inconsistent_rows() -> 
     assert "_checkpoints().get" in source
     assert "LibraryUpstreamMetadata" in source
     assert "model_pool" in inspect.signature(fetch_docs_for_evaluation).parameters
+    assert "image/vnd.djvu" in source
 
 
 def test_prompt_v4_reopens_prompt_v3_terminal_checkpoint() -> None:

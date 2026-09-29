@@ -15,6 +15,7 @@ from app.modules.library.runtime.metadata import (
 )
 from app.modules.library.runtime.metadata.evaluation_channel import Channel
 from app.modules.library.runtime.metadata.evaluation_progress import _EvaluationProgress
+from app.modules.library.runtime.metadata.evaluation_request import DjvuVisualEvidenceError
 from app.modules.library.runtime.metadata.evaluation_types import Evaluation
 from app.modules.library.runtime.metadata.evaluation_worker import (
     LibraryApplicabilityWorker,
@@ -81,6 +82,43 @@ def test_worker_defers_retryable_service_error_and_continues(
     assert db.progress[-1]["succeeded"] == 1
     assert db.progress[-1]["service_deferred"] == 1
     assert db.progress[-1]["remaining"] == 1
+
+
+def test_worker_defers_missing_djvu_visual_evidence(
+    monkeypatch, evaluation_document
+) -> None:
+    doc = evaluation_document()
+    doc.mime_type = "image/vnd.djvu"
+    tasks = Queue()
+    tasks.put(doc)
+    channel = Channel(dry_run=False)
+    worker = LibraryApplicabilityWorker(
+        tasks_queue=tasks,
+        config={},
+        channel=channel,
+        dry_run=False,
+        excerpt_chars=0,
+        gemini_manager=object(),
+        models=["model"],
+    )
+    monkeypatch.setattr(
+        evaluation_worker_module,
+        "evaluate_document",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            DjvuVisualEvidenceError("DjVu visual slice unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        evaluation_worker_module,
+        "mark_evaluation_terminal",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("missing visual evidence must not be terminal")
+        ),
+    )
+
+    worker()
+
+    assert channel.get_deferred_docs() == {doc.md5}
 
 
 def test_worker_marks_rejected_item_terminal_and_continues(

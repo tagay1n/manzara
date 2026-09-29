@@ -27,6 +27,7 @@ from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     PasswordProtectedDocumentError,
 )
+from app.modules.library.djvu_slicing import create_djvu_slice, select_edge_pages
 from app.modules.library.metadata_contract import (
     CONTRACT_VERSION,
     metadata_contract_issues,
@@ -195,6 +196,7 @@ class MetadataExtractionRepository:
               AND (
                   d.content_url IS NOT NULL
                   OR LOWER(COALESCE(d.mime_type, '')) = 'application/pdf'
+                  OR LOWER(COALESCE(d.mime_type, '')) = 'image/vnd.djvu'
               )
               AND NOT EXISTS (
                   SELECT 1
@@ -457,9 +459,7 @@ class MetadataExtractionRepository:
 
 def select_pdf_pages(page_count: int, *, edge_pages: int = PDF_EDGE_PAGES) -> list[int]:
     """Return unique first/last PDF page indexes in source order."""
-    count = max(0, int(page_count))
-    edge = max(1, int(edge_pages))
-    return sorted(set(range(min(edge, count))) | set(range(max(0, count - edge), count)))
+    return select_edge_pages(page_count, edge_pages=edge_pages)
 
 
 def _filename_hint(source_filename: str | None) -> dict[str, str] | None:
@@ -597,7 +597,8 @@ def prepare_metadata_request(
     primary_s3: Any,
 ) -> MetadataRequest:
     """Prepare one text or shared-cache-backed PDF request."""
-    if candidate.content_url:
+    is_djvu = candidate.mime_type == "image/vnd.djvu"
+    if candidate.content_url and not is_djvu:
         verify_primary_document_object(
             settings=storage,
             s3=primary_s3,
@@ -616,7 +617,7 @@ def prepare_metadata_request(
             {},
         )
 
-    if candidate.mime_type != "application/pdf":
+    if candidate.mime_type not in {"application/pdf", "image/vnd.djvu"}:
         raise ValueError(f"Unsupported metadata source MIME: {candidate.mime_type}")
     doc_dir = workspace / candidate.md5
     source = download_cached_primary_document(
@@ -625,10 +626,14 @@ def prepare_metadata_request(
         document_url=candidate.document_url,
         expected_md5=candidate.md5,
         expected_size=candidate.primary_storage_size,
-        extension=".pdf",
+        extension=".djvu" if is_djvu else ".pdf",
     )
     slice_path = doc_dir / "slice-for-meta.pdf"
-    page_count = create_pdf_slice(source, slice_path)
+    page_count = (
+        create_djvu_slice(source, slice_path, edge_pages=PDF_EDGE_PAGES)
+        if is_djvu
+        else create_pdf_slice(source, slice_path)
+    )
     return MetadataRequest(
         tuple(
             build_pdf_prompt(
@@ -637,7 +642,7 @@ def prepare_metadata_request(
                 source_filename=candidate.source_filename,
             )
         ),
-        {slice_path: candidate.mime_type},
+        {slice_path: "application/pdf"},
     )
 
 

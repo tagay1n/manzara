@@ -298,6 +298,7 @@ def test_candidate_query_requires_verified_primary_storage() -> None:
     assert "ya_public_url" not in sql
     assert "d.content_url IS NOT NULL" in sql
     assert "LOWER(COALESCE(d.mime_type, '')) = 'application/pdf'" in sql
+    assert "LOWER(COALESCE(d.mime_type, '')) = 'image/vnd.djvu'" in sql
     assert "cleanup.reason = 'corrupted'" in sql
     assert "cleanup.status IN ('planned', 'running', 'failed')" in sql
 

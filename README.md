@@ -34,6 +34,7 @@ See `docs/architecture.md` for the ownership map. Operational invariants live in
 - Docker Engine or Docker Desktop for PostgreSQL-backed tests
 - The local Monocorpus repository when running embedded Library/Maintenance workflows
 - External binaries required by enabled document converters
+- DjVuLibre `djvused` and `ddjvu` for visual DjVu metadata extraction and evaluation
 
 ```bash
 python3 -m venv .venv

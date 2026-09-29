@@ -14,10 +14,12 @@ import requests
 
 from app.document_storage import (
     DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
+    download_cached_primary_document,
     load_document_storage_settings,
     materialize_cached_document,
     resolve_document_download_url,
 )
+from app.modules.library.djvu_slicing import create_djvu_slice
 from app.modules.library.runtime.dirs import Dirs
 from app.modules.library.runtime.integrations.s3 import (
     create_document_session,
@@ -163,6 +165,8 @@ class EvaluationDocuments:
         self._content_s3client = None
 
     def load_content_excerpt(self, doc: EvaluationTask) -> str | None:
+        if doc.mime_type == "image/vnd.djvu":
+            return None
         if self.excerpt_chars <= 0:
             return None
         if not doc.content_url:
@@ -196,9 +200,24 @@ class EvaluationDocuments:
             self.log(f"Could not dump eval prompt for {md5}: {exc}")
 
     def prepare_pdf_slice(self, doc: EvaluationTask) -> str | None:
-        if doc.mime_type != "application/pdf":
+        if doc.mime_type not in {"application/pdf", "image/vnd.djvu"}:
             return None
         try:
+            if doc.mime_type == "image/vnd.djvu":
+                local_djvu = download_cached_primary_document(
+                    settings=load_document_storage_settings(self.config),
+                    s3=self._get_document_s3client(),
+                    document_url=doc.document_url,
+                    expected_md5=doc.md5,
+                    extension=".djvu",
+                )
+                slice_path = get_in_workdir(
+                    Dirs.DOC_SLICES, doc.md5, file="slice-for-eval.pdf"
+                )
+                create_djvu_slice(
+                    local_djvu, Path(slice_path), edge_pages=EVAL_PDF_SLICE_SIZE
+                )
+                return slice_path
             local_pdf = _ensure_pdf_in_shared_cache(
                 doc,
                 self.config,

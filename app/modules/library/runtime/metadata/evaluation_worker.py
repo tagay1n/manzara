@@ -21,7 +21,7 @@ from .evaluation_channel import Channel
 from .evaluation_documents import EvaluationDocuments
 from .evaluation_persistence import save_evaluation_result
 from .evaluation_progress import _EvaluationProgress
-from .evaluation_request import evaluate_document
+from .evaluation_request import DjvuVisualEvidenceError, evaluate_document
 
 
 class LibraryApplicabilityWorker:
@@ -155,6 +155,12 @@ class LibraryApplicabilityWorker:
                 self.stop_event.set()
                 self.tasks_queue.put(doc)
                 return
+            except DjvuVisualEvidenceError as exc:
+                self.log(f"DjVu visual evidence deferred md5={doc.md5} error={exc}")
+                self.channel.defer_document(doc.md5)
+                if self.progress is not None and not self.dry_run:
+                    self.progress.record_completed("service_deferred")
+                continue
             except Exception as e:  # noqa: BLE001
                 import traceback
 
