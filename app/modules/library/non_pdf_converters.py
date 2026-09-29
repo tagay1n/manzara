@@ -114,6 +114,53 @@ def _convert_to_docx(
     return matches[0]
 
 
+def _convert_to_pptx(source: Path, *, workspace: Path) -> Path:
+    """Let Impress open byte-detected binary PowerPoint under a reliable suffix."""
+    converted = workspace / "converted"
+    converted.mkdir(parents=True, exist_ok=True)
+    staged_source = workspace / "source.ppt"
+    shutil.copyfile(source, staged_source)
+    profile = workspace / "libreoffice-profile"
+    _run(
+        [
+            "soffice",
+            f"-env:UserInstallation={profile.resolve().as_uri()}",
+            "--headless", "--convert-to",
+            "pptx:Impress MS PowerPoint 2007 XML",
+            "--outdir", str(converted), str(staged_source),
+        ],
+        workspace=workspace,
+        label="libreoffice",
+        timeout_seconds=900,
+    )
+    matches = sorted(converted.glob("*.pptx"))
+    if len(matches) != 1:
+        raise ConverterCommandError(
+            f"LibreOffice produced {len(matches)} PPTX files"
+        )
+    return matches[0]
+
+
+def _validate_converted_pptx(path: Path) -> None:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if bad_member := archive.testzip():
+                raise ConverterCommandError(f"Corrupt PPTX ZIP member: {bad_member}")
+            names = set(archive.namelist())
+            if not {
+                "ppt/presentation.xml",
+                "ppt/_rels/presentation.xml.rels",
+            }.issubset(names) or not any(
+                name.startswith("ppt/slides/slide") and name.endswith(".xml")
+                for name in names
+            ):
+                raise ConverterCommandError("Converted PPTX lacks presentation slides")
+    except ConverterCommandError:
+        raise
+    except (OSError, zipfile.BadZipFile, EOFError, zlib.error) as exc:
+        raise ConverterCommandError(f"Converted PPTX is invalid: {exc}") from exc
+
+
 def _validate_converted_docx(path: Path) -> None:
     try:
         with zipfile.ZipFile(path) as archive:

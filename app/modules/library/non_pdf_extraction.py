@@ -12,10 +12,12 @@ from xml.etree import ElementTree
 from app.modules.library.corrupt_document import CorruptDocumentError
 from app.modules.library.non_pdf_converters import (
     _convert_to_docx,
+    _convert_to_pptx,
     _fb2_to_html,
     _normalize_docx_archive,
     _run,
     _validate_converted_docx,
+    _validate_converted_pptx,
     require_converter_binaries,
 )
 from app.modules.library.non_pdf_formats import (
@@ -35,6 +37,7 @@ from app.modules.library.non_pdf_types import (
     ConverterTimeoutError,
     ExtractedAsset,
     PreparedExtraction,
+    DeferredDocumentExtraction,
     UnsupportedDocumentFormat,
 )
 
@@ -46,6 +49,8 @@ def prepare_extraction(
     mime_type: str,
     source_path: str,
     legacy_doc_converter: Callable[..., Path] | None = None,
+    legacy_presentation_converter: Callable[..., Path] | None = None,
+    on_detected: Callable[[str], None] | None = None,
 ) -> PreparedExtraction:
     workspace.mkdir(parents=True, exist_ok=True)
     if source.stat().st_size <= 0:
@@ -92,6 +97,8 @@ def prepare_extraction(
         + "\n",
         encoding="utf-8",
     )
+    if on_detected is not None:
+        on_detected(detected)
     if detected not in _SUPPORTED_FORMATS:
         raise UnsupportedDocumentFormat(detected)
     if detected in {"markdown", "text"}:
@@ -130,6 +137,13 @@ def prepare_extraction(
         pandoc_format = "docx"
     elif detected == "pptx":
         pandoc_source = pptx_to_html(source, workspace=workspace)
+        pandoc_format = "html"
+    elif detected == "powerpoint":
+        pandoc_source, legacy_conversion = _prepare_legacy_powerpoint(
+            source,
+            workspace=workspace,
+            fallback=legacy_presentation_converter,
+        )
         pandoc_format = "html"
     elif detected == "fb2":
         try:
@@ -177,6 +191,43 @@ def prepare_extraction(
         assets,
         legacy_conversion=legacy_conversion,
     )
+
+
+def _prepare_legacy_powerpoint(
+    source: Path,
+    *,
+    workspace: Path,
+    fallback: Callable[..., Path] | None,
+) -> tuple[Path, str]:
+    try:
+        converted = _convert_to_pptx(source, workspace=workspace)
+        _validate_converted_pptx(converted)
+        try:
+            return pptx_to_html(
+                converted, workspace=workspace, strict_layout=True
+            ), "libreoffice"
+        except DeferredDocumentExtraction as exc:
+            if exc.reason != "pptx_no_text":
+                raise
+            if fallback is None:
+                raise
+        except CorruptDocumentError as exc:
+            raise ConverterCommandError(
+                f"Converted PowerPoint could not be parsed: {exc}"
+            ) from exc
+    except (ConverterCommandError, ConverterTimeoutError):
+        if fallback is None:
+            raise
+    converted = fallback(source, workspace=workspace)
+    _validate_converted_pptx(converted)
+    try:
+        return pptx_to_html(
+            converted, workspace=workspace, strict_layout=True
+        ), "google_drive"
+    except CorruptDocumentError as exc:
+        raise ConverterCommandError(
+            f"Google-converted PowerPoint could not be parsed: {exc}"
+        ) from exc
 
 
 __all__ = [

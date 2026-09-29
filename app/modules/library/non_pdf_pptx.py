@@ -91,6 +91,41 @@ def _visuals(root: ET.Element) -> tuple[bool, list[str]]:
     return images, sorted(visuals)
 
 
+def _ambiguous_layout(root: ET.Element) -> bool:
+    """Reject relationships that cannot be expressed by linear slide text."""
+    if any(node.tag in {"cxnSp", "custGeom"} for node in root.iter()):
+        return True
+    if any(
+        node.tag == "prstGeom" and node.get("prst") not in {"rect", "roundRect"}
+        for node in root.iter()
+    ):
+        return True
+    tree = root.find("cSld/spTree")
+    if tree is None:
+        return False
+    boxes = []
+    for shape in tree.iter("sp"):
+        body = shape.find("txBody")
+        if body is None or not any(_text(p).strip() for p in body.findall("p")):
+            continue
+        xfrm = shape.find("spPr/xfrm")
+        off = xfrm.find("off") if xfrm is not None else None
+        ext = xfrm.find("ext") if xfrm is not None else None
+        if off is None or ext is None:
+            continue
+        x, y = int(off.get("x", "0")), int(off.get("y", "0"))
+        width, height = int(ext.get("cx", "0")), int(ext.get("cy", "0"))
+        if width > 0 and height > 0:
+            boxes.append((x, y, x + width, y + height))
+    for index, first in enumerate(boxes):
+        for second in boxes[index + 1 :]:
+            horizontal_separation = first[2] <= second[0] or second[2] <= first[0]
+            vertical_overlap = first[1] < second[3] and second[1] < first[3]
+            if horizontal_separation and vertical_overlap:
+                return True
+    return False
+
+
 def _text(paragraph: ET.Element) -> str:
     return "".join(
         "\n" if node.tag == "br" else node.text or ""
@@ -237,13 +272,18 @@ def _slide_html(root: ET.Element) -> str:
     return "".join(output)
 
 
-def pptx_to_html(source: Path, *, workspace: Path) -> Path:
+def pptx_to_html(
+    source: Path, *, workspace: Path, strict_layout: bool = False
+) -> Path:
+    detected_format = "powerpoint" if strict_layout else "pptx"
     report = {
         "kind": "library.pptx_inspection",
+        "source_format": detected_format,
         "slide_count": 0,
         "visible_slide_count": 0,
         "image_slide_count": 0,
         "unsupported_visual_slide_count": 0,
+        "ambiguous_layout_slide_count": 0,
         "slides": [],
         "reasons": [],
         "inspection_complete": False,
@@ -257,21 +297,24 @@ def pptx_to_html(source: Path, *, workspace: Path) -> Path:
                     continue
                 report["visible_slide_count"] += 1
                 images, visuals = _visuals(root)
+                ambiguous_layout = strict_layout and _ambiguous_layout(root)
                 report["image_slide_count"] += int(images)
                 report["unsupported_visual_slide_count"] += int(bool(visuals))
+                report["ambiguous_layout_slide_count"] += int(ambiguous_layout)
                 report["slides"].append(
                     {
                         "slide": index,
                         "member": member,
                         "has_images": images,
                         "unsupported_visuals": visuals,
+                        "ambiguous_layout": ambiguous_layout,
                     }
                 )
                 fragments.append((index, _slide_html(root)))
     except DeferredDocumentExtraction as exc:
         report["reasons"].append(exc.reason)
         _write_report(workspace, report)
-        raise
+        raise DeferredDocumentExtraction(detected_format, exc.reason) from exc
     except (ET.ParseError, KeyError, ValueError, zipfile.BadZipFile, EOFError) as exc:
         raise CorruptDocumentError(
             "document_parse", f"Invalid PPTX package: {exc}"
@@ -281,6 +324,8 @@ def pptx_to_html(source: Path, *, workspace: Path) -> Path:
         report["reasons"].append("pptx_slide_images")
     if report["unsupported_visual_slide_count"]:
         report["reasons"].append("pptx_unsupported_visuals")
+    if report["ambiguous_layout_slide_count"]:
+        report["reasons"].append("pptx_ambiguous_layout")
     if not any(
         re.search(r"\w", unescape(re.sub("<[^>]+>", "", content)))
         for _, content in fragments
@@ -288,7 +333,7 @@ def pptx_to_html(source: Path, *, workspace: Path) -> Path:
         report["reasons"].append("pptx_no_text")
     _write_report(workspace, report)
     if report["reasons"]:
-        raise DeferredDocumentExtraction("pptx", report["reasons"][0])
+        raise DeferredDocumentExtraction(detected_format, report["reasons"][0])
     destination = workspace / "pptx-native.html"
     destination.write_text(
         "<html><body>"

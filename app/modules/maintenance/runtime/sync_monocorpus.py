@@ -22,7 +22,11 @@ from app.document_storage import (
 )
 from app.document_cleanup_paths import cleanup_target_path
 from app.modules.maintenance.document_cleanup_executor import execute_yandex_cleanup
-from app.document_sync_filter import classify_document, normalize_document_mime
+from app.document_sync_filter import (
+    BYTE_DETECTED_MIME_TYPES,
+    classify_document,
+    normalize_document_mime,
+)
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
 from app.run_artifact_channel import emit_run_artifact
 from app.runtime_config import load_runtime_config
@@ -45,6 +49,14 @@ def _resource_value(resource: Any, key: str, default: Any = None) -> Any:
 
 def _correct_mime(mime_type: str, source_path: str) -> str:
     return normalize_document_mime(source_path, mime_type)
+
+
+def _effective_catalog_mime(
+    current: Mapping[str, Any] | None, incoming_mime: str
+) -> str:
+    """Retain a byte-verified type for an unchanged MD5 during catalog sync."""
+    verified = str((current or {}).get("verified_detected_format") or "")
+    return BYTE_DETECTED_MIME_TYPES.get(verified, incoming_mime)
 
 
 def _is_restricted(path: str, settings: DocumentStorageSettings) -> bool:
@@ -489,6 +501,10 @@ def run_monocorpus_sync(
             counters["failed"] += int(cleanup_outcome == "failed")
             _publish_progress(db, run_id, counters, source_path)
             continue
+        current = existing.get(md5) if md5 else None
+        resource["mime_type"] = _effective_catalog_mime(
+            current, str(resource.get("mime_type") or "")
+        )
         decision = classify_document(source_path, str(resource.get("mime_type") or ""))
         if not decision.accepted:
             counters["filtered"] += 1
@@ -504,7 +520,6 @@ def run_monocorpus_sync(
             counters["failed"] += 1
             print(f"monocorpus sync: warning missing md5 path={source_path}", flush=True)
             continue
-        current = existing.get(md5)
         canonical_path = (
             str((current or {}).get("ya_path") or "")
             .strip()

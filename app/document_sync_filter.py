@@ -67,6 +67,7 @@ DOCUMENT_MIME_BY_SUFFIX = {
     ".txt": "text/plain",
 }
 DOCUMENT_MIME_TYPES = frozenset(DOCUMENT_MIME_BY_SUFFIX.values())
+BYTE_DETECTED_MIME_TYPES = {"powerpoint": "application/vnd.ms-powerpoint"}
 NON_DOCUMENT_SUFFIXES = frozenset({".eaf", ".lnk", ".musx"})
 NON_DOCUMENT_MIME_PREFIXES = ("audio/", "image/", "video/")
 
@@ -124,6 +125,7 @@ __all__ = [
     "DocumentFilterDecision",
     "DOCUMENT_MIME_BY_SUFFIX",
     "DOCUMENT_MIME_TYPES",
+    "BYTE_DETECTED_MIME_TYPES",
     "NON_DOCUMENT_MIME_TYPES",
     "NON_DOCUMENT_SUFFIXES",
     "classify_document",

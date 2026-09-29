@@ -55,12 +55,19 @@ from app.modules.library.non_pdf_extraction import (  # noqa: E402
 from app.modules.library.google_doc_conversion import (  # noqa: E402
     GoogleDriveDocxConverter,
 )
+from app.modules.library.google_presentation_conversion import (  # noqa: E402
+    GoogleDrivePptxConverter,
+)
 from app.modules.library.non_pdf_repository import (  # noqa: E402
     MAX_AUTOMATIC_ATTEMPTS,
     NonPdfExtractionRepository,
 )
 from app.run_artifact_channel import emit_run_artifact  # noqa: E402
 from app.modules.library.non_pdf_types import DeferredDocumentExtraction  # noqa: E402
+from app.modules.library.non_pdf_types import (  # noqa: E402
+    POWERPOINT_EXTRACTOR_VERSION,
+    extractor_version_for_format,
+)
 from app.runtime_config import load_runtime_config  # noqa: E402
 from app.settings import load_settings  # noqa: E402
 
@@ -111,12 +118,21 @@ def _record_pptx_inspection(
     if not path.exists():
         return
     report = json.loads(path.read_text(encoding="utf-8"))
-    counters["pptx_inspected"] += int(report["inspection_complete"])
-    counters["pptx_image_decks"] += int(bool(report["image_slide_count"]))
-    counters["pptx_unsupported_visual_decks"] += int(
-        bool(report["unsupported_visual_slide_count"])
-    )
-    counters["pptx_empty_decks"] += int("pptx_no_text" in report["reasons"])
+    if report.get("source_format") == "powerpoint":
+        counters["powerpoint_inspected"] += int(report["inspection_complete"])
+        counters["powerpoint_visual_decks"] += int(
+            bool(report["image_slide_count"] or report["unsupported_visual_slide_count"])
+        )
+        counters["powerpoint_ambiguous_decks"] += int(
+            bool(report.get("ambiguous_layout_slide_count"))
+        )
+    else:
+        counters["pptx_inspected"] += int(report["inspection_complete"])
+        counters["pptx_image_decks"] += int(bool(report["image_slide_count"]))
+        counters["pptx_unsupported_visual_decks"] += int(
+            bool(report["unsupported_visual_slide_count"])
+        )
+        counters["pptx_empty_decks"] += int("pptx_no_text" in report["reasons"])
     db.insert_event(
         event_type="task.artifact",
         task_id=TASK_ID,
@@ -233,6 +249,7 @@ def _upload_assets(
     md5: str,
     s3: Any,
     storage: DocumentStorageSettings,
+    extractor_version: str = EXTRACTOR_VERSION,
 ) -> tuple[dict[str, str], int, int]:
     urls: dict[str, str] = {}
     uploaded = reused = 0
@@ -243,7 +260,7 @@ def _upload_assets(
             bucket=storage.content_images_bucket,
             key=key,
             source_md5=md5,
-            extractor_version=EXTRACTOR_VERSION,
+            extractor_version=extractor_version,
         )
         if head is None:
             s3.upload_file(
@@ -257,7 +274,7 @@ def _upload_assets(
                     "CacheControl": "public, max-age=3600",
                     "Metadata": {
                         "source-md5": md5,
-                        "extractor-version": EXTRACTOR_VERSION,
+                        "extractor-version": extractor_version,
                         "asset-ordinal": str(asset.ordinal),
                     },
                 },
@@ -267,7 +284,7 @@ def _upload_assets(
                 bucket=storage.content_images_bucket,
                 key=key,
                 source_md5=md5,
-                extractor_version=EXTRACTOR_VERSION,
+                extractor_version=extractor_version,
             )
             if head is None:
                 raise RuntimeError(f"Embedded image verification failed: {key}")
@@ -356,6 +373,7 @@ def run_extraction(
 ) -> dict[str, Any]:
     candidates = repository.list_candidates(
         extractor_version=EXTRACTOR_VERSION,
+        powerpoint_version=POWERPOINT_EXTRACTOR_VERSION,
         limit=limit,
         per_mime_limit=per_mime_limit,
         retry_known_failures=retry_known_failures,
@@ -383,6 +401,12 @@ def run_extraction(
         pptx_image_decks=0,
         pptx_unsupported_visual_decks=0,
         pptx_empty_decks=0,
+        powerpoint_inspected=0,
+        powerpoint_extracted=0,
+        powerpoint_visual_decks=0,
+        powerpoint_ambiguous_decks=0,
+        powerpoint_google_converted=0,
+        powerpoint_libreoffice_converted=0,
     )
     formats: Counter[str] = Counter()
     mime_outcomes: defaultdict[str, Counter[str]] = defaultdict(Counter)
@@ -397,16 +421,31 @@ def run_extraction(
     )
     processed = 0
     google_doc_converter = GoogleDriveDocxConverter()
+    google_presentation_converter = GoogleDrivePptxConverter()
     for candidate in candidates:
         if should_stop():
             break
+        item_version = extractor_version_for_format(
+            candidate.prior_detected_format
+        )
         repository.start_attempt(
-            candidate.md5, extractor_version=EXTRACTOR_VERSION, run_id=run_id
+            candidate.md5, extractor_version=item_version, run_id=run_id
         )
         doc_workspace = workspace / candidate.md5
         doc_workspace.mkdir(parents=True, exist_ok=True)
         (doc_workspace / "pptx-inspection.json").unlink(missing_ok=True)
         detected: str | None = None
+
+        def record_detection(detected_format: str) -> None:
+            nonlocal detected, item_version
+            detected = detected_format
+            item_version = extractor_version_for_format(detected_format)
+            repository.record_detected_source(
+                candidate,
+                detected_format=detected_format,
+                extractor_version=item_version,
+            )
+
         try:
             extension = normalized_extension(candidate.source_path, candidate.mime_type)
             cached_before = (
@@ -427,11 +466,15 @@ def run_extraction(
                 mime_type=candidate.mime_type,
                 source_path=candidate.source_path,
                 legacy_doc_converter=google_doc_converter,
+                legacy_presentation_converter=google_presentation_converter,
+                on_detected=record_detection,
             )
             if prepared.legacy_conversion:
                 counters[f"{prepared.legacy_conversion}_converted"] += 1
             detected = prepared.detected_format
-            if detected == "pptx":
+            if detected == "powerpoint" and prepared.legacy_conversion:
+                counters[f"powerpoint_{prepared.legacy_conversion}_converted"] += 1
+            if detected in {"pptx", "powerpoint"}:
                 _record_pptx_inspection(
                     db,
                     workspace=doc_workspace,
@@ -446,7 +489,11 @@ def run_extraction(
             markdown = render_markdown(prepared, asset_urls=image_urls)
             validate_rendered_markdown(prepared, markdown, asset_urls=image_urls)
             uploaded_urls, uploaded_images, reused_images = _upload_assets(
-                prepared, md5=candidate.md5, s3=s3, storage=storage
+                prepared,
+                md5=candidate.md5,
+                s3=s3,
+                storage=storage,
+                extractor_version=item_version,
             )
             if uploaded_urls != image_urls:
                 raise RuntimeError(
@@ -466,6 +513,8 @@ def run_extraction(
                     "kind": "library.non_pdf_local_content",
                     "md5": candidate.md5,
                     "detected_format": detected,
+                    "extractor_version": item_version,
+                    "legacy_conversion": prepared.legacy_conversion,
                     "markdown_path": str(doc_workspace / "final.md"),
                     "unformatted_path": str(doc_workspace / "unformatted.md"),
                     "archive_path": str(archive_path),
@@ -478,7 +527,7 @@ def run_extraction(
                 bucket=storage.content_bucket,
                 key=key,
                 source_md5=candidate.md5,
-                extractor_version=EXTRACTOR_VERSION,
+                extractor_version=item_version,
             )
             if head is None:
                 s3.upload_file(
@@ -489,7 +538,7 @@ def run_extraction(
                         "ContentType": "application/zip",
                         "Metadata": {
                             "source-md5": candidate.md5,
-                            "extractor-version": EXTRACTOR_VERSION,
+                            "extractor-version": item_version,
                             "detected-format": detected,
                             "asset-count": str(len(prepared.assets)),
                         },
@@ -500,7 +549,7 @@ def run_extraction(
                     bucket=storage.content_bucket,
                     key=key,
                     source_md5=candidate.md5,
-                    extractor_version=EXTRACTOR_VERSION,
+                    extractor_version=item_version,
                 )
                 if head is None:
                     raise RuntimeError(f"Content archive verification failed: {key}")
@@ -512,7 +561,7 @@ def run_extraction(
                 raise RuntimeError(f"Content archive is not publicly readable: {key}")
             if repository.save_success(
                 candidate,
-                extractor_version=EXTRACTOR_VERSION,
+                extractor_version=item_version,
                 detected_format=detected,
                 run_id=run_id,
                 content_url=url,
@@ -529,6 +578,7 @@ def run_extraction(
                 )
                 counters["ready"] += 1
                 counters["pptx_extracted"] += int(detected == "pptx")
+                counters["powerpoint_extracted"] += int(detected == "powerpoint")
                 mime_outcomes[_mime_key(candidate.mime_type)]["ready"] += 1
                 print(
                     f"non-pdf extraction: ready md5={candidate.md5} "
@@ -566,7 +616,7 @@ def run_extraction(
             mime_outcomes[_mime_key(candidate.mime_type)]["corrupted"] += 1
             repository.mark_outcome(
                 candidate.md5,
-                extractor_version=EXTRACTOR_VERSION,
+                extractor_version=item_version,
                 detected_format=detected,
                 status="failed",
                 run_id=run_id,
@@ -584,7 +634,7 @@ def run_extraction(
             mime_outcomes[_mime_key(candidate.mime_type)]["deferred"] += 1
             repository.mark_outcome(
                 candidate.md5,
-                extractor_version=EXTRACTOR_VERSION,
+                extractor_version=item_version,
                 detected_format=detected,
                 status="deferred",
                 run_id=run_id,
@@ -608,7 +658,7 @@ def run_extraction(
             mime_outcomes[_mime_key(candidate.mime_type)]["unsupported"] += 1
             repository.mark_outcome(
                 candidate.md5,
-                extractor_version=EXTRACTOR_VERSION,
+                extractor_version=item_version,
                 detected_format=detected,
                 status="unsupported",
                 run_id=run_id,
@@ -624,7 +674,7 @@ def run_extraction(
             mime_outcomes[_mime_key(candidate.mime_type)][status] += 1
             repository.mark_outcome(
                 candidate.md5,
-                extractor_version=EXTRACTOR_VERSION,
+                extractor_version=item_version,
                 detected_format=detected,
                 status=status,
                 run_id=run_id,
@@ -647,6 +697,7 @@ def run_extraction(
         "kind": "library.non_pdf_extraction_summary",
         "workspace_path": str(workspace),
         "extractor_version": EXTRACTOR_VERSION,
+        "powerpoint_extractor_version": POWERPOINT_EXTRACTOR_VERSION,
         "per_mime_limit": per_mime_limit,
         "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
         "retry_known_failures": bool(retry_known_failures),

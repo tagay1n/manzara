@@ -24,7 +24,7 @@ Policy: `app/modules/library/guidance/documents.md`.
 
 | Change | Implementation | Focused tests |
 | --- | --- | --- |
-| Extraction preparation, local/Drive fallback orchestration | `app/modules/library/non_pdf_extraction.py` | `tests/test_library_non_pdf_formats.py`, `tests/test_library_non_pdf_converters.py` |
+| Extraction preparation, local/Drive fallback orchestration | `app/modules/library/non_pdf_extraction.py` | `tests/test_library_non_pdf_formats.py`, `tests/test_library_non_pdf_converters.py`, `tests/test_library_legacy_powerpoint.py` |
 | Extraction records, errors, recipe version | `app/modules/library/non_pdf_types.py` | `tests/test_library_non_pdf_contracts.py` |
 | Byte detection, legacy text decoding | `app/modules/library/non_pdf_formats.py` | `tests/test_library_non_pdf_formats.py` |
 | Native PPTX text/tables, slide visual inspection and deferral | `app/modules/library/non_pdf_pptx.py` | `tests/test_library_pptx.py`, `tests/test_library_non_pdf_runtime.py` |
@@ -35,6 +35,7 @@ Policy: `app/modules/library/guidance/documents.md`.
 | Publication, progress, corruption outcomes | `app/modules/library/runtime/run_extract_non_pdf.py` | `tests/test_library_non_pdf_runtime.py` |
 | Candidate selection, attempt checkpoints | `app/modules/library/non_pdf_repository.py` | `tests/test_library_non_pdf_repository.py` |
 | Google Drive DOCX fallback | `app/modules/library/google_doc_conversion.py` | `tests/test_library_non_pdf_converters.py` |
+| Google Slides PPTX fallback | `app/modules/library/google_presentation_conversion.py` | `tests/test_library_legacy_powerpoint.py` |
 
 | Other document work | Implementation | Focused tests |
 | --- | --- | --- |

@@ -23,8 +23,8 @@ from app.modules.library.non_pdf_pandoc import (
     _strip_presentational_spans,
 )
 from app.modules.library.non_pdf_types import (
-    EXTRACTOR_VERSION,
     PreparedExtraction,
+    extractor_version_for_format,
 )
 
 
@@ -234,7 +234,7 @@ def validate_rendered_markdown(
     if unmanaged_urls:
         errors.append(f"found {len(unmanaged_urls)} unmanaged HTML image URLs")
     report = {
-        "extractor_version": EXTRACTOR_VERSION,
+        "extractor_version": extractor_version_for_format(prepared.detected_format),
         "detected_format": prepared.detected_format,
         "asset_count": len(prepared.assets),
         "referenced_asset_count": sum(url in markdown for url in expected_urls),

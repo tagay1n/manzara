@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from app.document_sync_filter import BYTE_DETECTED_MIME_TYPES
 from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -24,6 +25,7 @@ class NonPdfCandidate:
     document_url: str
     primary_storage_size: int
     content_url: str | None
+    prior_detected_format: str | None = None
 
 
 class NonPdfExtractionRepository:
@@ -44,6 +46,7 @@ class NonPdfExtractionRepository:
         self,
         *,
         extractor_version: str,
+        powerpoint_version: str | None = None,
         limit: int | None = None,
         per_mime_limit: int | None = None,
         retry_known_failures: bool = False,
@@ -76,13 +79,16 @@ class NonPdfExtractionRepository:
                   )
             )
             SELECT d.md5, d.mime_type, d.ya_path, d.document_url,
-                   d.primary_storage_size, d.content_url
+                   d.primary_storage_size, d.content_url,
+                   state.detected_format AS prior_detected_format
             FROM eligible d
             LEFT JOIN library_non_pdf_extraction_state state ON state.md5 = d.md5
             WHERE (:per_mime_limit IS NULL OR d.mime_rank <= :per_mime_limit)
               AND (
                     state.md5 IS NULL
-                    OR state.extractor_version IS DISTINCT FROM :extractor_version
+                    OR state.extractor_version IS DISTINCT FROM
+                        CASE WHEN state.detected_format = 'powerpoint'
+                             THEN :powerpoint_version ELSE :extractor_version END
                     OR state.status = 'processing'
                     OR (
                         state.status = 'failed'
@@ -99,7 +105,9 @@ class NonPdfExtractionRepository:
             ORDER BY
                 CASE
                     WHEN state.md5 IS NULL THEN 0
-                    WHEN state.extractor_version IS DISTINCT FROM :extractor_version
+                    WHEN state.extractor_version IS DISTINCT FROM
+                        CASE WHEN state.detected_format = 'powerpoint'
+                             THEN :powerpoint_version ELSE :extractor_version END
                         THEN 1
                     WHEN state.status = 'processing' THEN 2
                     WHEN state.status = 'failed' THEN 3
@@ -114,6 +122,7 @@ class NonPdfExtractionRepository:
         )
         params: dict[str, Any] = {
             "extractor_version": str(extractor_version),
+            "powerpoint_version": str(powerpoint_version or extractor_version),
             "per_mime_limit": normalized_per_mime,
             "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
             "retry_known_failures": bool(retry_known_failures),
@@ -136,6 +145,63 @@ class NonPdfExtractionRepository:
             seen.add(candidate.md5)
             candidates.append(candidate)
         return candidates
+
+    def record_detected_source(
+        self,
+        candidate: NonPdfCandidate,
+        *,
+        detected_format: str,
+        extractor_version: str,
+    ) -> None:
+        """Checkpoint byte detection and correct a stale catalog MIME atomically."""
+        with self.engine.begin() as conn:
+            state = conn.execute(
+                text(
+                    """
+                    UPDATE library_non_pdf_extraction_state
+                    SET detected_format=:detected_format,
+                        attempt_count=CASE
+                            WHEN extractor_version IS DISTINCT FROM :extractor_version
+                            THEN 1 ELSE attempt_count END,
+                        extractor_version=:extractor_version,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE md5=:md5 AND status='processing'
+                    """
+                ),
+                {
+                    "md5": candidate.md5,
+                    "detected_format": str(detected_format),
+                    "extractor_version": str(extractor_version),
+                },
+            )
+            if int(state.rowcount or 0) != 1:
+                raise RuntimeError(f"Extraction attempt changed for {candidate.md5}")
+            corrected_mime = BYTE_DETECTED_MIME_TYPES.get(detected_format)
+            if corrected_mime is None:
+                return
+            updated = conn.execute(
+                text(
+                    """
+                    UPDATE document SET mime_type=:mime_type
+                    WHERE md5=:md5
+                      AND document_url IS NOT DISTINCT FROM :document_url
+                      AND primary_storage_size IS NOT DISTINCT FROM :primary_storage_size
+                      AND LOWER(BTRIM(COALESCE(mime_type, '')))
+                          = LOWER(BTRIM(:catalog_mime_type))
+                    """
+                ),
+                {
+                    "md5": candidate.md5,
+                    "document_url": candidate.document_url,
+                    "primary_storage_size": candidate.primary_storage_size,
+                    "catalog_mime_type": candidate.mime_type,
+                    "mime_type": corrected_mime,
+                },
+            )
+            if int(updated.rowcount or 0) != 1:
+                raise RuntimeError(
+                    f"Document source changed before MIME correction for {candidate.md5}"
+                )
 
     def start_attempt(self, md5: str, *, extractor_version: str, run_id: int) -> None:
         with self.engine.begin() as conn:
@@ -283,6 +349,9 @@ class NonPdfExtractionRepository:
             document_url=str(row.get("document_url") or "").strip(),
             primary_storage_size=int(row.get("primary_storage_size") or 0),
             content_url=str(row.get("content_url") or "").strip() or None,
+            prior_detected_format=(
+                str(row.get("prior_detected_format") or "").strip() or None
+            ),
         )
 
 

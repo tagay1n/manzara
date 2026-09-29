@@ -7,6 +7,13 @@ from pathlib import Path
 from typing import Any
 
 EXTRACTOR_VERSION = "nonpdf.v9"
+POWERPOINT_EXTRACTOR_VERSION = "nonpdf.ppt.v1"
+
+
+def extractor_version_for_format(detected_format: str | None) -> str:
+    if detected_format == "powerpoint":
+        return POWERPOINT_EXTRACTOR_VERSION
+    return EXTRACTOR_VERSION
 
 
 @dataclass(frozen=True)

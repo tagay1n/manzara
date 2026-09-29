@@ -6,6 +6,8 @@ from app.modules.library.non_pdf_repository import NonPdfExtractionRepository
 
 
 class _Rows:
+    rowcount = 1
+
     def __init__(self, rows) -> None:  # noqa: ANN001
         self.rows = rows
 
@@ -68,6 +70,43 @@ def test_candidate_queue_prioritizes_existing_content_and_versions_unsupported()
     assert repository.engine.params["per_mime_limit"] == 100
     assert repository.engine.params["max_automatic_attempts"] == 3
     assert repository.engine.params["retry_known_failures"] is False
+
+
+def test_powerpoint_recipe_requeues_only_matching_prior_format() -> None:
+    repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
+    repository.engine = _Engine()
+
+    repository.list_candidates(
+        extractor_version="nonpdf.v9",
+        powerpoint_version="nonpdf.ppt.v1",
+    )
+
+    assert "state.detected_format = 'powerpoint'" in repository.engine.sql
+    assert ":powerpoint_version" in repository.engine.sql
+    assert repository.engine.params["powerpoint_version"] == "nonpdf.ppt.v1"
+
+
+def test_byte_confirmed_powerpoint_mime_update_is_source_guarded() -> None:
+    repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
+    repository.engine = _Engine()
+    candidate = repository._candidate(
+        {
+            "md5": "a" * 32,
+            "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "ya_path": "/wrong.pptx",
+            "document_url": "https://example/source",
+            "primary_storage_size": 100,
+            "content_url": None,
+        }
+    )
+    repository.record_detected_source(
+        candidate,
+        detected_format="powerpoint",
+        extractor_version="nonpdf.ppt.v1",
+    )
+    assert "primary_storage_size IS NOT DISTINCT FROM :primary_storage_size" in repository.engine.sql
+    assert "= LOWER(BTRIM(:catalog_mime_type))" in repository.engine.sql
+    assert repository.engine.params["mime_type"] == "application/vnd.ms-powerpoint"
 
 
 def test_candidate_queue_can_explicitly_retry_known_failures() -> None:
@@ -162,6 +201,33 @@ def test_deferred_pptx_is_checkpointed_without_replacing_content(test_database_u
                 .scalar()
                 .startswith("pptx_slide_images")
             )
+
+        repository.start_attempt(
+            candidate.md5, extractor_version=EXTRACTOR_VERSION, run_id=72
+        )
+        repository.record_detected_source(
+            candidate,
+            detected_format="powerpoint",
+            extractor_version="nonpdf.ppt.v1",
+        )
+        with repository.engine.connect() as conn:
+            assert conn.execute(text("SELECT mime_type FROM document")).scalar() == (
+                "application/vnd.ms-powerpoint"
+            )
+            assert conn.execute(
+                text("SELECT extractor_version FROM library_non_pdf_extraction_state")
+            ).scalar() == "nonpdf.ppt.v1"
+        repository.mark_outcome(
+            candidate.md5,
+            extractor_version="nonpdf.ppt.v1",
+            detected_format="powerpoint",
+            status="unsupported",
+            run_id=72,
+        )
+        assert repository.list_candidates(
+            extractor_version=EXTRACTOR_VERSION,
+            powerpoint_version="nonpdf.ppt.v1",
+        ) == []
     finally:
         if repository is not None:
             repository.dispose()

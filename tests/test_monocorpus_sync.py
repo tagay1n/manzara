@@ -11,10 +11,66 @@ from app.modules.maintenance.runtime.sync_monocorpus import (
     _apply_cleanup,
     _cleanup_managed_storage,
     _delete_prefix,
+    _effective_catalog_mime,
     _publish_progress,
     _storage_target_changed,
     run_monocorpus_sync,
 )
+
+
+def test_catalog_sync_preserves_byte_verified_powerpoint_mime() -> None:
+    assert _effective_catalog_mime(
+        {"verified_detected_format": "powerpoint"},
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ) == "application/vnd.ms-powerpoint"
+    assert _effective_catalog_mime(
+        {"verified_detected_format": "pptx"}, "application/msword"
+    ) == "application/msword"
+
+
+def test_catalog_sync_keeps_verified_powerpoint_when_upstream_calls_it_zip() -> None:
+    content = b"verified powerpoint"
+    md5 = hashlib.md5(content).hexdigest()  # noqa: S324
+    path = "/documents/slides.pptx"
+
+    class ZipMimeYaDisk(_YaDisk):
+        def listdir(self, path, **kwargs):  # noqa: ANN001
+            for item in super().listdir(path, **kwargs):
+                if item["type"] == "file":
+                    item["mime_type"] = "application/zip"
+                yield item
+
+    yadisk = ZipMimeYaDisk({path: content})
+    repository = _Repository(
+        yadisk,
+        documents={
+            md5: {
+                "md5": md5,
+                "mime_type": "application/vnd.ms-powerpoint",
+                "verified_detected_format": "powerpoint",
+                "ya_path": path,
+                "ya_public_url": "https://disk/slides.pptx",
+                "ya_public_key": "key:slides.pptx",
+                "ya_resource_id": "resource:slides.pptx",
+                "full": True,
+                "sharing_restricted": False,
+            }
+        },
+    )
+
+    result = run_monocorpus_sync(
+        repository=repository,
+        db=_Db(),
+        yadisk=yadisk,
+        primary_s3=_S3(),
+        settings=_settings(),
+        run_id=4,
+        should_stop=lambda: False,
+    )
+
+    assert result["filtered"] == 0
+    assert result["unchanged"] == 1
+    assert repository.saved == []
 
 
 def test_storage_target_is_preserved_for_path_only_move() -> None:

@@ -173,11 +173,20 @@ class TaskLoggingMixin:
                 "pptx_image_decks",
                 "pptx_unsupported_visual_decks",
                 "pptx_empty_decks",
+                "powerpoint_inspected",
+                "powerpoint_extracted",
+                "powerpoint_visual_decks",
+                "powerpoint_ambiguous_decks",
+                "powerpoint_google_converted",
+                "powerpoint_libreoffice_converted",
             ):
                 payload[key] = int(artifacts.get(key) or 0)
             payload["stopped"] = bool(artifacts.get("stopped"))
             payload["extractor_version"] = str(
                 artifacts.get("extractor_version") or ""
+            )
+            payload["powerpoint_extractor_version"] = str(
+                artifacts.get("powerpoint_extractor_version") or ""
             )
             payload["formats"] = (
                 dict(artifacts.get("formats"))

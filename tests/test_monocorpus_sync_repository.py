@@ -42,6 +42,9 @@ class _Engine:
     def begin(self) -> _Connection:
         return _Connection(self.statements)
 
+    def connect(self) -> _Connection:
+        return _Connection(self.statements)
+
 
 def test_document_cleanup_explicitly_deletes_upstream_metadata_before_document() -> (
     None
@@ -98,6 +101,16 @@ def test_catalog_update_clears_storage_checkpoint_only_when_target_changes() -> 
     assert "ya_path IS DISTINCT FROM :ya_path" not in sql
     assert "THEN NULL ELSE document_url END" in sql
     assert "THEN NULL ELSE primary_storage_verified_at END" in sql
+
+
+def test_catalog_snapshot_includes_byte_detected_format() -> None:
+    repository = MonocorpusSyncRepository.__new__(MonocorpusSyncRepository)
+    repository.engine = _Engine()
+
+    repository.list_documents()
+
+    assert "library_non_pdf_extraction_state" in repository.engine.statements[0]
+    assert "verified_detected_format" in repository.engine.statements[0]
 
 
 def test_restricted_catalog_update_clears_persisted_public_links(

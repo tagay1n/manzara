@@ -14,7 +14,7 @@ _TEXT_SUFFIXES = {
 _HTML_SUFFIXES = {".html", ".htm"}
 
 _SUPPORTED_FORMATS = {
-    "doc", "docx", "rtf", "odt", "epub", "fb2", "html", "markdown", "text", "pptx"
+    "doc", "docx", "rtf", "odt", "epub", "fb2", "html", "markdown", "text", "pptx", "powerpoint"
 }
 
 
@@ -44,9 +44,7 @@ def detect_document_format(path: Path, *, mime_type: str = "", source_path: str 
             if "META-INF/container.xml" in names:
                 return "epub"
             if any(name.startswith("ppt/") for name in names):
-                if "ppt/presentation.xml" in names:
-                    return "pptx"
-                return "powerpoint"
+                return "pptx"
             if any(name.startswith("xl/") for name in names):
                 return "spreadsheet"
     if header.startswith(bytes.fromhex("d0cf11e0a1b11ae1")):
@@ -57,8 +55,6 @@ def detect_document_format(path: Path, *, mime_type: str = "", source_path: str 
             return "spreadsheet"
         if "doc" in ole_markers:
             return "doc"
-        if suffix in {".ppt", ".pps"} or "powerpoint" in mime:
-            return "powerpoint"
         if suffix == ".xls" or "excel" in mime:
             return "spreadsheet"
         if suffix == ".doc" or mime in {"application/msword", "application/x-msword"}:

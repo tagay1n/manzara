@@ -17,11 +17,14 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
             rows = conn.execute(
                 text(
                     """
-                    SELECT md5, mime_type, ya_path, ya_public_url, ya_public_key,
-                           ya_resource_id, language, "full", sharing_restricted,
-                           document_url, content_url
-                    FROM document
-                    WHERE md5 IS NOT NULL
+                    SELECT d.md5, d.mime_type, d.ya_path, d.ya_public_url, d.ya_public_key,
+                           d.ya_resource_id, d.language, d."full", d.sharing_restricted,
+                           d.document_url, d.content_url,
+                           state.detected_format AS verified_detected_format
+                    FROM document d
+                    LEFT JOIN library_non_pdf_extraction_state state
+                      ON state.md5 = d.md5
+                    WHERE d.md5 IS NOT NULL
                     """
                 )
             ).mappings()
