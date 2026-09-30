@@ -250,6 +250,7 @@ def test_metadata_response_preserves_multiple_distinct_valid_isbns() -> None:
                 "@context": "https://schema.org",
                 "@type": "Book",
                 "name": "Example",
+                "inLanguage": "en",
                 "isbn": [
                     "978-0-306-40615-7",
                     "978-1-86197-271-2",
@@ -361,6 +362,17 @@ def test_candidate_query_includes_existing_low_quality_metadata() -> None:
     assert "datePublished" in sql
 
 
+def test_candidate_query_includes_extracted_metadata_without_language() -> None:
+    repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
+    repository.engine = _Engine()
+
+    repository.list_candidates()
+
+    sql = repository.engine.statements[0]
+    assert "d.meta_extraction_method IS NOT NULL" in sql
+    assert "NULLIF(BTRIM(m.schema_org->>'inLanguage'), '') IS NULL" in sql
+
+
 def test_candidate_query_leaves_retry_filtering_to_local_state() -> None:
     repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
     repository.engine = _Engine()
@@ -469,12 +481,73 @@ def test_explicit_metadata_refresh_replaces_valid_existing_payload() -> None:
             "@context": "https://schema.org",
             "@type": "Book",
             "name": "Refreshed",
+            "inLanguage": "en",
             "datePublished": "2001",
         },
         model_name="model",
         replace_existing=True,
     )
     assert any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
+
+
+def test_extracted_metadata_without_language_is_replaced_after_valid_result() -> None:
+    repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
+    repository.engine = _WriteEngine(
+        _WriteResult(rows=[{
+            "md5": "a" * 32,
+            "meta_extraction_method": "old-model/prompt.v7",
+            "schema_org": {
+                "@context": "https://schema.org",
+                "@type": "Book",
+                "name": "Old title",
+                "datePublished": "1998",
+            },
+        }]),
+        _WriteResult(rowcount=1),
+        _WriteResult(rowcount=1),
+        _WriteResult(rowcount=1),
+    )
+
+    assert repository.save_success(
+        "a" * 32,
+        schema_org={
+            "@context": "https://schema.org",
+            "@type": "Book",
+            "name": "New title",
+            "inLanguage": "tt-Cyrl",
+        },
+        model_name="new-model",
+    )
+    assert any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
+
+
+def test_repaired_record_is_not_replaced_again_after_candidate_selection() -> None:
+    repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
+    repository.engine = _WriteEngine(
+        _WriteResult(rows=[{
+            "md5": "a" * 32,
+            "meta_extraction_method": "other-model/prompt.v7",
+            "schema_org": {
+                "@context": "https://schema.org",
+                "@type": "Book",
+                "name": "Already repaired",
+                "inLanguage": "tt-Cyrl",
+            },
+        }]),
+        _WriteResult(rowcount=1),
+    )
+
+    assert not repository.save_success(
+        "a" * 32,
+        schema_org={
+            "@context": "https://schema.org",
+            "@type": "Book",
+            "name": "Stale result",
+            "inLanguage": "tt-Cyrl",
+        },
+        model_name="new-model",
+    )
+    assert not any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
 
 
 def test_success_write_replaces_only_low_quality_existing_metadata() -> None:
@@ -502,6 +575,7 @@ def test_success_write_replaces_only_low_quality_existing_metadata() -> None:
             "@context": "https://schema.org",
             "@type": "Book",
             "name": "Recovered title",
+            "inLanguage": "en",
             "datePublished": "1998",
         },
         model_name="new-model",
@@ -541,13 +615,14 @@ def test_success_write_replaces_contract_invalid_existing_metadata() -> None:
             "@context": "https://schema.org",
             "@type": "Book",
             "name": "Recovered title",
+            "inLanguage": "en",
             "genre": ["History"],
         },
         model_name="new-model",
     )
 
 
-def test_success_write_rejects_low_quality_replacement() -> None:
+def test_success_write_rejects_replacement_without_language() -> None:
     repository = MetadataExtractionRepository.__new__(MetadataExtractionRepository)
     repository.engine = _WriteEngine(
         _WriteResult(
@@ -563,7 +638,7 @@ def test_success_write_rejects_low_quality_replacement() -> None:
         )
     )
 
-    with pytest.raises(ValueError, match="Refusing low-quality metadata write"):
+    with pytest.raises(ValueError, match="without inLanguage"):
         repository.save_success(
             "a" * 32,
             schema_org={"@context": "https://schema.org", "@type": "Book"},
@@ -578,16 +653,17 @@ def test_success_write_rejects_low_quality_replacement() -> None:
         '{"@context":"https://schema.org","@type":"Book","name":"Title only"}',
     ],
 )
-def test_parse_metadata_response_rejects_effectively_empty_or_poor_payloads(
+def test_parse_metadata_response_rejects_payload_without_language(
     payload: str,
 ) -> None:
-    with pytest.raises(GeminiModelResponseError, match="usable metadata"):
+    with pytest.raises(GeminiModelResponseError, match="inLanguage"):
         parse_metadata_response(payload)
 
 
 def test_parse_metadata_response_accepts_evidence_without_title() -> None:
     parsed = parse_metadata_response(
         '{"@context":"https://schema.org","@type":"Book",'
+        '"inLanguage":"en",'
         '"description":"Description without an identified title"}'
     )
 
@@ -598,11 +674,26 @@ def test_parse_metadata_response_accepts_evidence_without_title() -> None:
 def test_parse_metadata_response_accepts_title_with_independent_evidence() -> None:
     parsed = parse_metadata_response(
         '{"@context":"https://schema.org","@type":"Book",'
-        '"name":"Useful title","datePublished":"1998"}'
+        '"name":"Useful title","inLanguage":"en","datePublished":"1998"}'
     )
 
     assert parsed["name"] == "Useful title"
     assert parsed["datePublished"] == "1998"
+
+
+@pytest.mark.parametrize("language", [None, "", "  ", "not_a_language"])
+def test_parse_metadata_response_rejects_missing_or_invalid_language(language) -> None:
+    payload = {
+        "@context": "https://schema.org",
+        "@type": "Book",
+        "name": "Useful title",
+        "datePublished": "1998",
+    }
+    if language is not None:
+        payload["inLanguage"] = language
+
+    with pytest.raises(GeminiModelResponseError):
+        parse_metadata_response(json.dumps(payload))
 
 
 def test_parse_metadata_response_accepts_matching_yanalif_description() -> None:
@@ -619,7 +710,7 @@ def test_parse_metadata_response_accepts_matching_yanalif_description() -> None:
 def test_parse_metadata_response_sanitizes_before_contract_gate() -> None:
     parsed = parse_metadata_response(
         '{"@context":"https://schema.org","@type":"NewsArticle",'
-        '"name":"Daily bulletin","datePublished":"2001",'
+        '"name":"Daily bulletin","inLanguage":"en","datePublished":"2001",'
         '"numberOfPages":8}'
     )
 

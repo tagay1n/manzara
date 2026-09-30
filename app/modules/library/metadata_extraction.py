@@ -13,6 +13,7 @@ from typing import Any, Mapping, Sequence
 
 import pymupdf
 import requests
+from pydantic import Field
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -64,6 +65,12 @@ _SUPPORTING_METADATA_FIELDS = (
     "suggestedMinAge",
     "isBasedOn",
 )
+
+
+class ExtractedMetadata(Book):
+    """Gemini extraction result, which must identify the document language."""
+
+    inLanguage: str = Field(min_length=1)
 
 
 def _has_value(value: Any) -> bool:
@@ -192,6 +199,10 @@ class MetadataExtractionRepository:
                         AND signal.value <> '{}'::jsonb
                   )
                   OR quality.status = 'invalid'
+                  OR (
+                      d.meta_extraction_method IS NOT NULL
+                      AND NULLIF(BTRIM(m.schema_org->>'inLanguage'), '') IS NULL
+                  )
                   OR d.md5 = ANY(:force_md5s)
               )
               AND d.document_url IS NOT NULL
@@ -354,7 +365,7 @@ class MetadataExtractionRepository:
             rows = conn.execute(
                 text(
                     """
-                    SELECT d.md5, m.schema_org,
+                    SELECT d.md5, d.meta_extraction_method, m.schema_org,
                            quality.status AS quality_status,
                            quality.contract_version AS quality_contract_version
                     FROM document d
@@ -372,6 +383,11 @@ class MetadataExtractionRepository:
                     f"Document MD5 {md5} matched {len(rows)} rows; refusing metadata write"
                 )
             existing_schema_org = rows[0].get("schema_org")
+            needs_language_repair = (
+                rows[0].get("meta_extraction_method") is not None
+                and isinstance(existing_schema_org, Mapping)
+                and not _has_value(existing_schema_org.get("inLanguage"))
+            )
             quality_invalid = (
                 rows[0].get("quality_status") == "invalid"
                 and rows[0].get("quality_contract_version") == CONTRACT_VERSION
@@ -379,6 +395,7 @@ class MetadataExtractionRepository:
             if (
                 existing_schema_org is not None
                 and not replace_existing
+                and not needs_language_repair
                 and not quality_invalid
                 and metadata_quality_issue(existing_schema_org) is None
                 and not metadata_contract_issues(existing_schema_org)
@@ -406,6 +423,8 @@ class MetadataExtractionRepository:
                 self._checkpoints().clear("library.metadata_extract", str(md5))
                 self._checkpoints().clear("library.metadata_evaluate", str(md5))
                 return False
+            if language is None:
+                raise ValueError("Refusing metadata write without inLanguage")
             if issue := metadata_quality_issue(schema_org):
                 raise ValueError(f"Refusing low-quality metadata write: {issue}")
             if issues := metadata_contract_issues(schema_org):
@@ -672,7 +691,7 @@ def parse_metadata_response(raw_response: Any) -> dict[str, Any]:
         if not isinstance(decoded, dict):
             raise ValueError("metadata response must be a JSON object")
         normalized = normalize_base_schema_org(decoded)
-        metadata = Book.model_validate(normalized)
+        metadata = ExtractedMetadata.model_validate(normalized)
     except Exception as exc:
         raise GeminiModelResponseError(f"Invalid metadata JSON: {exc}") from exc
     schema_org = json.loads(
@@ -695,6 +714,7 @@ def parse_metadata_response(raw_response: Any) -> dict[str, Any]:
 
 
 __all__ = [
+    "ExtractedMetadata",
     "MetadataExtractionCandidate",
     "MetadataExtractionRepository",
     "MetadataRequest",

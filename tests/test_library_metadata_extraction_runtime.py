@@ -434,6 +434,7 @@ def test_parallel_runtime_emits_only_aggregate_monotonic_progress(
                 "@context": "https://schema.org",
                 "@type": "Book",
                 "name": "Kitap",
+                "inLanguage": "tt-Cyrl",
                 "datePublished": "2001",
             }
         ),
@@ -545,6 +546,7 @@ def test_runtime_defers_document_with_exhausted_remaining_model_and_continues(
                 "@context": "https://schema.org",
                 "@type": "Book",
                 "name": "Recovered",
+                "inLanguage": "en",
                 "datePublished": "2001",
             }
         ),
@@ -569,14 +571,21 @@ def test_runtime_tries_next_model_after_low_quality_metadata(
         lambda *_args, **_kwargs: MetadataRequest(({"text": "prompt"},), {}),
     )
 
-    def request_json(*, model_name, **_kwargs):  # noqa: ANN001
+    def request_json(*, model_name, response_schema, **_kwargs):  # noqa: ANN001
+        assert "inLanguage" in response_schema.model_json_schema()["required"]
         if model_name == "first":
-            return json.dumps({"@context": "https://schema.org", "@type": "Book"})
+            return json.dumps({
+                "@context": "https://schema.org",
+                "@type": "Book",
+                "name": "Recovered",
+                "datePublished": "2001",
+            })
         return json.dumps(
             {
                 "@context": "https://schema.org",
                 "@type": "Book",
                 "name": "Recovered",
+                "inLanguage": "en",
                 "datePublished": "2001",
             }
         )
@@ -679,6 +688,7 @@ def test_runtime_defers_one_document_after_repeated_service_error_and_continues(
                 "@context": "https://schema.org",
                 "@type": "Book",
                 "name": "Recovered",
+                "inLanguage": "en",
                 "datePublished": "2001",
             }
         ),

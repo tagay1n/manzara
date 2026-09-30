@@ -50,11 +50,11 @@ from app.modules.library.corrupt_document import (
 )
 from app.modules.library.document_cleanup_repository import DocumentCleanupRepository
 from app.modules.library.metadata_extraction import (
+    ExtractedMetadata,
     MetadataExtractionRepository,
     parse_metadata_response,
     prepare_metadata_request,
 )
-from app.modules.library.runtime.metadata.schema import Book
 from app.run_artifact_channel import emit_run_artifact
 from app.runtime_config import load_runtime_config
 from app.settings import load_settings
@@ -449,7 +449,7 @@ def run_metadata_extraction(
                 api_key=api_key,
                 model_name=model_name,
                 contents=request.contents,
-                response_schema=Book,
+                response_schema=ExtractedMetadata,
                 files=request.files,
                 timeout_seconds=360,
             )
