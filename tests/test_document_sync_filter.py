@@ -100,6 +100,13 @@ def test_excel_workbooks_are_kept_by_mime_or_suffix() -> None:
     assert xlsx.accepted is True
 
 
+def test_mobi_source_is_kept_when_catalog_mime_is_octet_stream() -> None:
+    decision = classify_document("disk:/books/story.mobi", "application/octet-stream")
+
+    assert decision.accepted is True
+    assert decision.mime_type == "application/x-mobipocket-ebook"
+
+
 def test_known_document_suffix_recovers_missing_mime() -> None:
     decision = classify_document("disk:/documents/book.djvu", "")
 

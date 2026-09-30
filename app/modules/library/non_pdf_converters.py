@@ -11,6 +11,7 @@ import zipfile
 import zlib
 from html import escape
 from pathlib import Path
+from typing import Mapping
 from xml.etree import ElementTree
 
 from app.modules.library.non_pdf_types import (
@@ -33,6 +34,7 @@ def _run(
     workspace: Path,
     label: str,
     stdin: str | None = None,
+    env: Mapping[str, str] | None = None,
     timeout_seconds: int = 300,
 ) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
@@ -42,6 +44,7 @@ def _run(
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        env=env,
     )
     timed_out = False
     try:

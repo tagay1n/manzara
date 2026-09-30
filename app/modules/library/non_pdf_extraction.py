@@ -10,6 +10,11 @@ from typing import Callable
 from xml.etree import ElementTree
 
 from app.modules.library.corrupt_document import CorruptDocumentError
+from app.modules.library.non_pdf_book_converters import (
+    _convert_mobi_to_epub,
+    _convert_odt_to_html,
+    _validate_converted_epub,
+)
 from app.modules.library.non_pdf_converters import (
     _convert_to_docx,
     _convert_to_pptx,
@@ -27,6 +32,7 @@ from app.modules.library.non_pdf_formats import (
     detect_document_format,
     DetectedDocumentFormat,
     inspect_document_format,
+    validate_source_archive,
 )
 from app.modules.library.non_pdf_pptx import pptx_to_html
 from app.modules.library.non_pdf_spreadsheet import select_spreadsheet_blocks
@@ -72,25 +78,7 @@ def prepare_extraction(
             "temporary_source",
             "Word owner/lock file is not a document",
         )
-    if detected in {"docx", "odt", "epub", "pptx"} or (
-        detected == "spreadsheet" and zipfile.is_zipfile(source)
-    ):
-        if not zipfile.is_zipfile(source):
-            raise CorruptDocumentError(
-                "document_container",
-                f"Detected {detected} document is not a valid ZIP container",
-            )
-        try:
-            with zipfile.ZipFile(source) as archive:
-                if bad_member := archive.testzip():
-                    raise CorruptDocumentError(
-                        "document_container",
-                        f"Corrupt ZIP member: {bad_member}",
-                    )
-        except CorruptDocumentError:
-            raise
-        except (zipfile.BadZipFile, EOFError, zlib.error) as exc:
-            raise CorruptDocumentError("document_container", str(exc)) from exc
+    validate_source_archive(source, detected)
     (workspace / "detection.json").write_text(
         json.dumps(
             {
@@ -162,6 +150,15 @@ def prepare_extraction(
     elif detected == "spreadsheet":
         pandoc_source = _convert_spreadsheet_to_html(source, workspace=workspace)
         pandoc_format = "html"
+    elif detected == "odt":
+        pandoc_source = _convert_odt_to_html(source, workspace=workspace)
+        pandoc_format = "html"
+        legacy_conversion = "libreoffice"
+    elif detected == "mobi":
+        pandoc_source = _convert_mobi_to_epub(source, workspace=workspace)
+        _validate_converted_epub(pandoc_source)
+        pandoc_format = "epub"
+        legacy_conversion = "calibre"
     ast_path = workspace / "raw-ast.json"
     media_dir = workspace / "media"
     try:
@@ -175,6 +172,7 @@ def prepare_extraction(
                 "json",
                 "--extract-media",
                 str(media_dir),
+                *([f"--resource-path={pandoc_source.parent}"] if detected == "odt" else []),
                 "-o",
                 str(ast_path),
             ],
@@ -182,7 +180,7 @@ def prepare_extraction(
             label="pandoc-read",
         )
     except ConverterCommandError as exc:
-        if detected in {"doc", "rtf", "spreadsheet"}:
+        if detected in {"doc", "rtf", "spreadsheet", "odt", "mobi"}:
             raise ConverterCommandError(
                 f"Converted {detected} document failed Pandoc parsing: {exc}"
             ) from exc
@@ -194,7 +192,9 @@ def prepare_extraction(
     # Only body blocks are rendered into the published Markdown. Avoid uploading
     # images that occur solely in Pandoc metadata and can never be referenced.
     assets = _collect_assets(
-        {"blocks": ast.get("blocks", [])}, workspace=workspace
+        {"blocks": ast.get("blocks", [])},
+        workspace=workspace,
+        source_base=pandoc_source.parent if detected == "odt" else None,
     )
     return PreparedExtraction(
         detected,

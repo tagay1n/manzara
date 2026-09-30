@@ -67,6 +67,8 @@ from app.modules.library.non_pdf_types import DeferredDocumentExtraction  # noqa
 from app.modules.library.non_pdf_types import (  # noqa: E402
     POWERPOINT_EXTRACTOR_VERSION,
     SPREADSHEET_EXTRACTOR_VERSION,
+    ODT_EXTRACTOR_VERSION,
+    MOBI_EXTRACTOR_VERSION,
     extractor_version_for_format,
 )
 from app.runtime_config import load_runtime_config  # noqa: E402
@@ -377,6 +379,8 @@ def run_extraction(
         extractor_version=EXTRACTOR_VERSION,
         powerpoint_version=POWERPOINT_EXTRACTOR_VERSION,
         spreadsheet_version=SPREADSHEET_EXTRACTOR_VERSION,
+        odt_version=ODT_EXTRACTOR_VERSION,
+        mobi_version=MOBI_EXTRACTOR_VERSION,
         limit=limit,
         per_mime_limit=per_mime_limit,
         retry_known_failures=retry_known_failures,
@@ -705,6 +709,8 @@ def run_extraction(
         "extractor_version": EXTRACTOR_VERSION,
         "powerpoint_extractor_version": POWERPOINT_EXTRACTOR_VERSION,
         "spreadsheet_extractor_version": SPREADSHEET_EXTRACTOR_VERSION,
+        "odt_extractor_version": ODT_EXTRACTOR_VERSION,
+        "mobi_extractor_version": MOBI_EXTRACTOR_VERSION,
         "per_mime_limit": per_mime_limit,
         "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
         "retry_known_failures": bool(retry_known_failures),

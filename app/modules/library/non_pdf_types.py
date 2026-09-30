@@ -9,6 +9,8 @@ from typing import Any
 EXTRACTOR_VERSION = "nonpdf.v9"
 POWERPOINT_EXTRACTOR_VERSION = "nonpdf.ppt.v1"
 SPREADSHEET_EXTRACTOR_VERSION = "nonpdf.sheet.v1"
+ODT_EXTRACTOR_VERSION = "nonpdf.odt.v1"
+MOBI_EXTRACTOR_VERSION = "nonpdf.mobi.v1"
 
 
 def extractor_version_for_format(detected_format: str | None) -> str:
@@ -16,6 +18,10 @@ def extractor_version_for_format(detected_format: str | None) -> str:
         return POWERPOINT_EXTRACTOR_VERSION
     if detected_format == "spreadsheet":
         return SPREADSHEET_EXTRACTOR_VERSION
+    if detected_format == "odt":
+        return ODT_EXTRACTOR_VERSION
+    if detected_format == "mobi":
+        return MOBI_EXTRACTOR_VERSION
     return EXTRACTOR_VERSION
 
 

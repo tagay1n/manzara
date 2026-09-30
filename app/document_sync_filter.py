@@ -62,6 +62,7 @@ DOCUMENT_MIME_BY_SUFFIX = {
     ".fb2": "application/x-fictionbook+xml",
     ".htm": "text/html",
     ".html": "text/html",
+    ".mobi": "application/x-mobipocket-ebook",
     ".odt": "application/vnd.oasis.opendocument.text",
     ".pdf": "application/pdf",
     ".ppt": "application/vnd.ms-powerpoint",

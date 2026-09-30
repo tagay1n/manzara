@@ -34,6 +34,7 @@ _MIME_EXTENSIONS = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
     "application/x-fictionbook+xml": ".fb2",
+    "application/x-mobipocket-ebook": ".mobi",
     "image/vnd.djvu": ".djvu",
     "text/html": ".html",
     "text/plain": ".txt",

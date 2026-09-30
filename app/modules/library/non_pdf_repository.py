@@ -123,6 +123,8 @@ class NonPdfExtractionRepository:
         extractor_version: str,
         powerpoint_version: str | None = None,
         spreadsheet_version: str | None = None,
+        odt_version: str | None = None,
+        mobi_version: str | None = None,
         limit: int | None = None,
         per_mime_limit: int | None = None,
         retry_known_failures: bool = False,
@@ -167,6 +169,8 @@ class NonPdfExtractionRepository:
                         CASE state.detected_format
                             WHEN 'powerpoint' THEN :powerpoint_version
                             WHEN 'spreadsheet' THEN :spreadsheet_version
+                            WHEN 'odt' THEN :odt_version
+                            WHEN 'mobi' THEN :mobi_version
                             ELSE :extractor_version END
                     OR state.status = 'processing'
                     OR (
@@ -188,6 +192,8 @@ class NonPdfExtractionRepository:
                         CASE state.detected_format
                             WHEN 'powerpoint' THEN :powerpoint_version
                             WHEN 'spreadsheet' THEN :spreadsheet_version
+                            WHEN 'odt' THEN :odt_version
+                            WHEN 'mobi' THEN :mobi_version
                             ELSE :extractor_version END
                         THEN 1
                     WHEN state.status = 'processing' THEN 2
@@ -211,6 +217,8 @@ class NonPdfExtractionRepository:
             "extractor_version": str(extractor_version),
             "powerpoint_version": str(powerpoint_version or extractor_version),
             "spreadsheet_version": str(spreadsheet_version or extractor_version),
+            "odt_version": str(odt_version or extractor_version),
+            "mobi_version": str(mobi_version or extractor_version),
             "per_mime_limit": normalized_per_mime,
             "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
             "retry_known_failures": bool(retry_known_failures),

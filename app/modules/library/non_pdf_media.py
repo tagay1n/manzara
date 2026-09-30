@@ -55,7 +55,9 @@ def _rewrite_source_markdown_images(
     return _HTML_IMAGE_SRC_PATTERN.sub(replace_html_src, content)
 
 
-def _collect_assets(ast: Mapping[str, Any], *, workspace: Path) -> tuple[ExtractedAsset, ...]:
+def _collect_assets(
+    ast: Mapping[str, Any], *, workspace: Path, source_base: Path | None = None
+) -> tuple[ExtractedAsset, ...]:
     refs: list[str] = []
     for node in _walk(ast):
         if node.get("t") != "Image":
@@ -71,7 +73,7 @@ def _collect_assets(ast: Mapping[str, Any], *, workspace: Path) -> tuple[Extract
     for ref in refs:
         raw_path = Path(ref.removeprefix("file://"))
         if not raw_path.is_absolute():
-            raw_path = workspace / raw_path
+            raw_path = (source_base or workspace) / raw_path
         if not raw_path.is_file():
             dropped.append({"source_ref": ref, "reason": "embedded media is missing"})
             continue

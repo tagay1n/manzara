@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import unicodedata
 import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import olefile
+
+from app.modules.library.corrupt_document import CorruptDocumentError
 
 _TEXT_SUFFIXES = {
     ".txt", ".md", ".markdown", ".csv", ".tsv", ".xml", ".tex",
@@ -17,7 +20,7 @@ _TEXT_SUFFIXES = {
 _HTML_SUFFIXES = {".html", ".htm"}
 
 _SUPPORTED_FORMATS = {
-    "doc", "docx", "rtf", "odt", "epub", "fb2", "html", "markdown", "text", "pptx", "powerpoint", "spreadsheet"
+    "doc", "docx", "rtf", "odt", "epub", "fb2", "html", "markdown", "text", "pptx", "powerpoint", "spreadsheet", "mobi"
 }
 
 
@@ -47,6 +50,8 @@ def inspect_document_format(
         return DetectedDocumentFormat("pdf")
     if lowered.startswith(b"{\\rtf"):
         return DetectedDocumentFormat("rtf")
+    if header[60:68] == b"BOOKMOBI":
+        return DetectedDocumentFormat("mobi")
     if zipfile.is_zipfile(source):
         with zipfile.ZipFile(source) as archive:
             names = set(archive.namelist())
@@ -127,6 +132,29 @@ def inspect_document_format(
 def _root_ole_streams(path: Path) -> list[str]:
     with olefile.OleFileIO(str(path)) as container:
         return [parts[0] for parts in container.listdir() if len(parts) == 1]
+
+
+def validate_source_archive(source: Path, detected: str) -> None:
+    """Reject broken source ZIP containers before any converter runs."""
+    if detected not in {"docx", "odt", "epub", "pptx"} and not (
+        detected == "spreadsheet" and zipfile.is_zipfile(source)
+    ):
+        return
+    if not zipfile.is_zipfile(source):
+        raise CorruptDocumentError(
+            "document_container",
+            f"Detected {detected} document is not a valid ZIP container",
+        )
+    try:
+        with zipfile.ZipFile(source) as archive:
+            if bad_member := archive.testzip():
+                raise CorruptDocumentError(
+                    "document_container", f"Corrupt ZIP member: {bad_member}"
+                )
+    except CorruptDocumentError:
+        raise
+    except (zipfile.BadZipFile, EOFError, zlib.error) as exc:
+        raise CorruptDocumentError("document_container", str(exc)) from exc
 
 
 def _decode_text(payload: bytes) -> str:

@@ -100,6 +100,22 @@ def test_spreadsheet_recipe_requeues_only_matching_prior_format() -> None:
     assert repository.engine.params["spreadsheet_version"] == "nonpdf.sheet.v1"
 
 
+def test_odt_and_mobi_recipes_requeue_only_matching_prior_formats() -> None:
+    repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
+    repository.engine = _Engine()
+
+    repository.list_candidates(
+        extractor_version="nonpdf.v9",
+        odt_version="nonpdf.odt.v1",
+        mobi_version="nonpdf.mobi.v1",
+    )
+
+    assert "WHEN 'odt' THEN :odt_version" in repository.engine.sql
+    assert "WHEN 'mobi' THEN :mobi_version" in repository.engine.sql
+    assert repository.engine.params["odt_version"] == "nonpdf.odt.v1"
+    assert repository.engine.params["mobi_version"] == "nonpdf.mobi.v1"
+
+
 def test_candidate_queue_can_target_internal_repair_set() -> None:
     repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
     repository.engine = _Engine()
