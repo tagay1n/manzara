@@ -45,6 +45,7 @@ from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 TEXT_SLICE_CHARS = 20_000
 PDF_EDGE_PAGES = 4
+DJVU_EDGE_PAGES = 3
 PROMPT_VERSION = "prompt.v7"
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SUPPORTING_METADATA_FIELDS = (
@@ -646,7 +647,7 @@ def prepare_metadata_request(
     )
     slice_path = doc_dir / "slice-for-meta.pdf"
     page_count = (
-        create_djvu_slice(source, slice_path, edge_pages=PDF_EDGE_PAGES)
+        create_djvu_slice(source, slice_path, edge_pages=DJVU_EDGE_PAGES)
         if is_djvu
         else create_pdf_slice(source, slice_path)
     )

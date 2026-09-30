@@ -10,8 +10,9 @@ import pymupdf
 
 from app.modules.library.corrupt_document import CorruptDocumentError
 
-DJVU_RENDER_SIZE = "3000x3000"
+DJVU_RENDER_SIZES = ("3000x3000", "2400x2400", "1800x1800")
 DJVU_COMMAND_TIMEOUT_SECONDS = 120
+MAX_DJVU_PDF_BYTES = 49_000_000
 
 
 class DjvuToolError(RuntimeError):
@@ -58,6 +59,23 @@ def create_djvu_slice(
         raise CorruptDocumentError("djvu_page_tree", "DjVu has no usable pages")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=destination.parent) as temporary:
+        rendered_path = Path(temporary) / "slice.pdf"
+        for render_size in DJVU_RENDER_SIZES:
+            _render_pages(source, rendered_path, pages, render_size)
+            if rendered_path.stat().st_size <= MAX_DJVU_PDF_BYTES:
+                rendered_path.replace(destination)
+                return len(pages)
+            rendered_path.unlink()
+    raise DjvuToolError(
+        f"DjVu PDF slice exceeds {MAX_DJVU_PDF_BYTES} bytes "
+        f"at the smallest render size: {source}"
+    )
+
+
+def _render_pages(
+    source: Path, destination: Path, pages: list[int], render_size: str
+) -> None:
     with TemporaryDirectory(dir=destination.parent) as temporary, pymupdf.open() as sliced:
         for page_index in pages:
             image_path = Path(temporary) / f"page-{page_index + 1}.tiff"
@@ -65,7 +83,7 @@ def create_djvu_slice(
                 [
                     "ddjvu",
                     "-format=tiff",
-                    f"-size={DJVU_RENDER_SIZE}",
+                    f"-size={render_size}",
                     f"-page={page_index + 1}",
                     str(source),
                     str(image_path),
@@ -83,4 +101,3 @@ def create_djvu_slice(
             except (pymupdf.FileDataError, RuntimeError) as exc:
                 raise CorruptDocumentError("djvu_page_read", str(exc)) from exc
         sliced.save(destination, deflate=True)
-    return len(pages)

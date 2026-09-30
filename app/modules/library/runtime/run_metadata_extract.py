@@ -35,6 +35,7 @@ from app.document_storage import load_document_storage_settings, prune_document_
 from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_model_pool import (
     GeminiModelPoolExhaustedError,
+    GeminiModelPoolItemRejectedError,
     GeminiModelPoolOperationalError,
     GeminiModelPoolUnavailableError,
     run_ordered_model_pool,
@@ -492,6 +493,16 @@ def run_metadata_extraction(
             counters["terminal"] += 1
             processed += 1
             log(f"library metadata: terminal md5={candidate.md5} reason={exc}")
+        except GeminiModelPoolItemRejectedError as exc:
+            repository.mark_terminal(
+                candidate.md5,
+                models=models,
+                run_id=run_id,
+                reason=str(exc),
+            )
+            counters["terminal"] += 1
+            processed += 1
+            log(f"library metadata: item rejected md5={candidate.md5} error={exc}")
         except GeminiModelPoolUnavailableError as exc:
             counters["quota_deferred"] += 1
             processed += 1

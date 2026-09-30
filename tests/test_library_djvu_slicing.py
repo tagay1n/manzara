@@ -58,3 +58,53 @@ def test_missing_djvu_binary_is_operational_failure(monkeypatch) -> None:
     monkeypatch.setattr(djvu_slicing.subprocess, "run", missing)
     with pytest.raises(djvu_slicing.DjvuToolError, match="Missing DjVuLibre"):
         djvu_slicing._run_djvu_command(["djvused", "source.djvu", "-e", "n"])
+
+
+def test_oversized_djvu_slice_rerenders_at_smaller_size(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        djvu_slicing,
+        "_run_djvu_command",
+        lambda command: subprocess.CompletedProcess(command, 0, "10\n", ""),
+    )
+    sizes: list[str] = []
+
+    def render(_source, destination, _pages, render_size):  # noqa: ANN001
+        sizes.append(render_size)
+        with destination.open("wb") as output:
+            output.truncate(51_000_000 if len(sizes) == 1 else 42_000_000)
+
+    monkeypatch.setattr(djvu_slicing, "_render_pages", render, raising=False)
+
+    assert djvu_slicing.create_djvu_slice(
+        tmp_path / "source.djvu", tmp_path / "slice.pdf", edge_pages=3
+    ) == 6
+    assert sizes == ["3000x3000", "2400x2400"]
+
+
+def test_djvu_slice_still_oversized_is_operational_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        djvu_slicing,
+        "_run_djvu_command",
+        lambda command: subprocess.CompletedProcess(command, 0, "10\n", ""),
+    )
+    sizes: list[str] = []
+
+    def render(_source, destination, _pages, render_size):  # noqa: ANN001
+        sizes.append(render_size)
+        with destination.open("wb") as output:
+            output.truncate(djvu_slicing.MAX_DJVU_PDF_BYTES + 1)
+
+    monkeypatch.setattr(djvu_slicing, "_render_pages", render)
+    destination = tmp_path / "slice.pdf"
+
+    with pytest.raises(djvu_slicing.DjvuToolError, match="exceeds"):
+        djvu_slicing.create_djvu_slice(
+            tmp_path / "source.djvu", destination, edge_pages=3
+        )
+
+    assert sizes == list(djvu_slicing.DJVU_RENDER_SIZES)
+    assert not destination.exists()

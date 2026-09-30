@@ -12,6 +12,10 @@ import pytest
 
 from app.gemini_runtime import GeminiAllKeysExhaustedError
 from app.gemini_runtime import GeminiServerPauseError
+from app.gemini_model_pool import (
+    GeminiModelPoolItemRejectedError,
+    GeminiModelPoolResult,
+)
 from app.document_storage import DocumentStorageSettings, S3ConnectionSettings
 from app.modules.library import metadata_extraction as extraction
 from app.modules.library.metadata_extraction import (
@@ -222,10 +226,10 @@ def test_djvu_metadata_uses_cached_visual_source_even_with_content_url(
 
     def create_slice(source: Path, destination: Path, *, edge_pages: int) -> int:
         seen_sources.append(source)
-        assert edge_pages == 4
+        assert edge_pages == 3
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"slice")
-        return 8
+        return 6
 
     class NoRemoteAccess:
         def __getattr__(self, name):  # noqa: ANN001
@@ -288,6 +292,62 @@ def test_djvu_metadata_without_content_uses_primary_source_cache(
     assert downloads[0]["expected_md5"] == digest
     assert downloads[0]["expected_size"] == 123
     assert list(request.files.values()) == ["application/pdf"]
+
+
+def test_rejected_item_does_not_fail_remaining_metadata_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    first = _candidate()
+    second = MetadataExtractionCandidate(
+        md5="b" * 32,
+        mime_type="application/pdf",
+        document_url="https://s3.example/public/b.pdf",
+        content_url=None,
+        upstream_metadata=None,
+        primary_storage_size=12,
+        attempts=(),
+    )
+    repository = _Repository(first)
+    monkeypatch.setattr(repository, "list_candidates", lambda **_kwargs: [first, second])
+    monkeypatch.setattr(runtime, "GeminiRuntimeManager", _Manager)
+    monkeypatch.setattr(
+        runtime,
+        "prepare_metadata_request",
+        lambda *_args, **_kwargs: MetadataRequest(({"text": "prompt"},), {}),
+    )
+    calls = iter(
+        [
+            GeminiModelPoolItemRejectedError("400 INVALID_ARGUMENT"),
+            GeminiModelPoolResult(
+                "first", {"@type": "Book", "name": "Book"}, ()
+            ),
+        ]
+    )
+
+    def run_pool(**_kwargs):  # noqa: ANN003
+        result = next(calls)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(runtime, "run_ordered_model_pool", run_pool)
+
+    summary = runtime.run_metadata_extraction(
+        repository=repository,
+        db=_Db(),
+        storage=_storage(tmp_path / "cache"),
+        primary_s3=object(),
+        models=["first"],
+        workspace=tmp_path,
+        run_id=100,
+        should_stop=lambda: False,
+    )
+
+    assert summary["outcome"] == "completed"
+    assert summary["terminal"] == 1
+    assert summary["succeeded"] == 1
+    assert repository.terminal == [first.md5]
+    assert repository.saved[0][0] == second.md5
 
 
 def test_runtime_persists_success_and_emits_structured_progress(
