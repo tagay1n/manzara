@@ -28,6 +28,7 @@ Policy: `app/modules/library/guidance/documents.md`.
 | Extraction records, errors, recipe version | `app/modules/library/non_pdf_types.py` | `tests/test_library_non_pdf_contracts.py` |
 | Byte detection, legacy text decoding | `app/modules/library/non_pdf_formats.py` | `tests/test_library_non_pdf_formats.py` |
 | Native PPTX text/tables, slide visual inspection and deferral | `app/modules/library/non_pdf_pptx.py` | `tests/test_library_pptx.py`, `tests/test_library_non_pdf_runtime.py` |
+| Spreadsheet sheet/table selection and formula/image cleanup | `app/modules/library/non_pdf_spreadsheet.py` | `tests/test_library_spreadsheets.py` |
 | Process timeouts, LibreOffice, DOCX ZIP, FB2 | `app/modules/library/non_pdf_converters.py` | `tests/test_library_non_pdf_converters.py`, `tests/test_library_non_pdf_media.py` |
 | Embedded images, conversion, URL rewriting | `app/modules/library/non_pdf_media.py` | `tests/test_library_non_pdf_media.py` |
 | Pandoc AST, figures, captions, tables | `app/modules/library/non_pdf_pandoc.py` | `tests/test_library_non_pdf_rendering.py` |

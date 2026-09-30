@@ -18,11 +18,20 @@ from app.document_storage import (
     find_valid_cache_file,
     load_document_storage_settings,
     materialize_cached_document,
+    normalized_extension,
     prune_document_cache,
     remove_cached_document,
     resolve_document_download_url,
 )
 from app.modules.runtime_shared_utils import encrypt
+
+
+def test_excel_mime_supplies_extension_when_source_has_none() -> None:
+    assert normalized_extension("disk:/document", "application/vnd.ms-excel") == ".xls"
+    assert normalized_extension(
+        "disk:/document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ) == ".xlsx"
 
 
 def test_load_document_storage_settings_uses_explicit_sources_and_buckets(

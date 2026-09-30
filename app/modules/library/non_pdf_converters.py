@@ -141,6 +141,37 @@ def _convert_to_pptx(source: Path, *, workspace: Path) -> Path:
     return matches[0]
 
 
+def _convert_spreadsheet_to_html(source: Path, *, workspace: Path) -> Path:
+    """Export a byte-detected Excel workbook directly to HTML tables."""
+    converted = workspace / "converted"
+    converted.mkdir(parents=True, exist_ok=True)
+    suffix = ".xlsx" if zipfile.is_zipfile(source) else ".xls"
+    staged_source = workspace / f"source{suffix}"
+    shutil.copyfile(source, staged_source)
+    profile = workspace / "libreoffice-profile"
+    _run(
+        [
+            "soffice",
+            f"-env:UserInstallation={profile.resolve().as_uri()}",
+            "--headless",
+            "--convert-to",
+            "html",
+            "--outdir",
+            str(converted),
+            str(staged_source),
+        ],
+        workspace=workspace,
+        label="libreoffice",
+        timeout_seconds=900,
+    )
+    matches = sorted(converted.glob("*.html"))
+    if len(matches) != 1 or matches[0].stat().st_size == 0:
+        raise ConverterCommandError(
+            f"LibreOffice produced {len(matches)} nonempty HTML files"
+        )
+    return matches[0]
+
+
 def _validate_converted_pptx(path: Path) -> None:
     try:
         with zipfile.ZipFile(path) as archive:

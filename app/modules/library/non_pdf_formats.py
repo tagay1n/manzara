@@ -17,7 +17,7 @@ _TEXT_SUFFIXES = {
 _HTML_SUFFIXES = {".html", ".htm"}
 
 _SUPPORTED_FORMATS = {
-    "doc", "docx", "rtf", "odt", "epub", "fb2", "html", "markdown", "text", "pptx", "powerpoint"
+    "doc", "docx", "rtf", "odt", "epub", "fb2", "html", "markdown", "text", "pptx", "powerpoint", "spreadsheet"
 }
 
 
@@ -62,7 +62,10 @@ def inspect_document_format(
                 return DetectedDocumentFormat("epub")
             if any(name.startswith("ppt/") for name in names):
                 return DetectedDocumentFormat("pptx")
-            if any(name.startswith("xl/") for name in names):
+            if "xl/workbook.xml" in names and any(
+                name.startswith("xl/worksheets/") and name.endswith(".xml")
+                for name in names
+            ):
                 return DetectedDocumentFormat("spreadsheet")
     if header.startswith(bytes.fromhex("d0cf11e0a1b11ae1")):
         try:
@@ -98,6 +101,8 @@ def inspect_document_format(
         or mime == "text/html"
     ):
         return DetectedDocumentFormat("html")
+    if suffix == ".xlsx" or mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+        raise zipfile.BadZipFile("XLSX source lacks a ZIP workbook container")
     if suffix == ".epub" or mime == "application/epub+zip":
         return DetectedDocumentFormat("epub")
     if suffix == ".pptx" or mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation":

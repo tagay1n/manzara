@@ -52,6 +52,33 @@ def test_cleanup_reasons_share_document_sync_format_policy() -> None:
     ) == ["non_document"]
 
 
+def test_pascal_catalog_document_is_planned_as_non_document() -> None:
+    repository = _PlanningRepository()
+    repository.list_documents_for_planning = lambda: [
+        {
+            "md5": "a" * 32,
+            "mime_type": "text/pascal",
+            "ya_path": "/books/examples/graphics.PAS",
+            "ya_resource_id": "pascal-resource",
+            "language": None,
+            "full": True,
+            "schema_org": None,
+        }
+    ]
+
+    summary = prepare_document_cleanup(
+        repository=repository,
+        filtered_out_path="/filtered",
+        source_root_path="/books",
+    )
+
+    assert summary["planned_non_document"] == 1
+    assert repository.plans[0]["reason"] == "non_document"
+    assert repository.plans[0]["target_path"] == (
+        "/filtered/non_document/examples/graphics.PAS"
+    )
+
+
 def test_cleanup_target_preserves_hierarchy_below_source_root() -> None:
     assert cleanup_target_path(
         "/neurotatarlar/kitaplar/filtered_out",

@@ -29,6 +29,8 @@ _MIME_EXTENSIONS = {
     "application/pdf": ".pdf",
     "application/rtf": ".rtf",
     "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
     "application/x-fictionbook+xml": ".fb2",

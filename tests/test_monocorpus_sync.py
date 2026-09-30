@@ -505,6 +505,66 @@ def test_filtered_resource_is_not_published_or_saved() -> None:
     assert yadisk.published == []
 
 
+def test_new_pascal_source_is_skipped_on_every_sync_without_cleanup_plan() -> None:
+    source = "/documents/examples/graphics.pas"
+    content = b"program graphics; begin end."
+
+    class PascalYaDisk(_YaDisk):
+        def listdir(self, path, **kwargs):  # noqa: ANN001
+            for item in super().listdir(path, **kwargs):
+                if item["type"] == "file":
+                    item["mime_type"] = "text/pascal"
+                yield item
+
+    yadisk = PascalYaDisk({source: content})
+
+    repository = _Repository(yadisk)
+    for run_id in (6, 7):
+        result = run_monocorpus_sync(
+            repository=repository,
+            db=_Db(),
+            yadisk=yadisk,
+            primary_s3=_S3(),
+            settings=_settings(),
+            run_id=run_id,
+            should_stop=lambda: False,
+        )
+        assert result["filtered"] == 1
+
+    assert repository.saved == []
+    assert yadisk.published == []
+    assert source in yadisk.files
+    assert repository.timeline == []
+
+
+def test_pascal_sync_skips_cataloged_source_and_duplicate_without_plans() -> None:
+    content = b"program same; begin end."
+    md5 = hashlib.md5(content).hexdigest()  # noqa: S324
+    canonical = "/documents/examples/first.pas"
+    duplicate = "/documents/examples/second.pas"
+    yadisk = _YaDisk({canonical: content, duplicate: content})
+
+    repository = _Repository(
+        yadisk,
+        documents={md5: {"md5": md5, "mime_type": "text/pascal", "ya_path": canonical}},
+    )
+    result = run_monocorpus_sync(
+        repository=repository,
+        db=_Db(),
+        yadisk=yadisk,
+        primary_s3=_S3(),
+        settings=_settings(),
+        run_id=8,
+        should_stop=lambda: False,
+    )
+
+    assert result["filtered"] == 2
+    assert repository.saved == []
+    assert repository.timeline == []
+    assert canonical in yadisk.files
+    assert duplicate in yadisk.files
+
+
 def test_zero_byte_resource_is_planned_and_moved_during_same_sync() -> None:
     empty_md5 = hashlib.md5(b"").hexdigest()  # noqa: S324
     source = "/documents/nested/Пустой.pdf"

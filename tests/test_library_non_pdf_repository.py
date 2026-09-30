@@ -81,9 +81,23 @@ def test_powerpoint_recipe_requeues_only_matching_prior_format() -> None:
         powerpoint_version="nonpdf.ppt.v1",
     )
 
-    assert "state.detected_format = 'powerpoint'" in repository.engine.sql
+    assert "WHEN 'powerpoint' THEN :powerpoint_version" in repository.engine.sql
     assert ":powerpoint_version" in repository.engine.sql
     assert repository.engine.params["powerpoint_version"] == "nonpdf.ppt.v1"
+
+
+def test_spreadsheet_recipe_requeues_only_matching_prior_format() -> None:
+    repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
+    repository.engine = _Engine()
+
+    repository.list_candidates(
+        extractor_version="nonpdf.v9",
+        powerpoint_version="nonpdf.ppt.v1",
+        spreadsheet_version="nonpdf.sheet.v1",
+    )
+
+    assert "WHEN 'spreadsheet' THEN :spreadsheet_version" in repository.engine.sql
+    assert repository.engine.params["spreadsheet_version"] == "nonpdf.sheet.v1"
 
 
 def test_candidate_queue_can_target_internal_repair_set() -> None:

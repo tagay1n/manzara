@@ -13,6 +13,7 @@ from app.modules.library.corrupt_document import CorruptDocumentError
 from app.modules.library.non_pdf_converters import (
     _convert_to_docx,
     _convert_to_pptx,
+    _convert_spreadsheet_to_html,
     _fb2_to_html,
     _normalize_docx_archive,
     _run,
@@ -28,6 +29,7 @@ from app.modules.library.non_pdf_formats import (
     inspect_document_format,
 )
 from app.modules.library.non_pdf_pptx import pptx_to_html
+from app.modules.library.non_pdf_spreadsheet import select_spreadsheet_blocks
 from app.modules.library.non_pdf_media import _collect_assets
 from app.modules.library.non_pdf_rendering import (
     render_markdown,
@@ -70,7 +72,9 @@ def prepare_extraction(
             "temporary_source",
             "Word owner/lock file is not a document",
         )
-    if detected in {"docx", "odt", "epub", "pptx"}:
+    if detected in {"docx", "odt", "epub", "pptx"} or (
+        detected == "spreadsheet" and zipfile.is_zipfile(source)
+    ):
         if not zipfile.is_zipfile(source):
             raise CorruptDocumentError(
                 "document_container",
@@ -155,6 +159,9 @@ def prepare_extraction(
         except (ElementTree.ParseError, ValueError) as exc:
             raise CorruptDocumentError("document_parse", str(exc)) from exc
         pandoc_format = "html"
+    elif detected == "spreadsheet":
+        pandoc_source = _convert_spreadsheet_to_html(source, workspace=workspace)
+        pandoc_format = "html"
     ast_path = workspace / "raw-ast.json"
     media_dir = workspace / "media"
     try:
@@ -175,13 +182,15 @@ def prepare_extraction(
             label="pandoc-read",
         )
     except ConverterCommandError as exc:
-        if detected in {"doc", "rtf"}:
+        if detected in {"doc", "rtf", "spreadsheet"}:
             raise ConverterCommandError(
-                f"Converted legacy document failed Pandoc parsing: {exc}"
+                f"Converted {detected} document failed Pandoc parsing: {exc}"
             ) from exc
         raise CorruptDocumentError("document_parse", str(exc)) from exc
     del result
     ast = json.loads(ast_path.read_text(encoding="utf-8"))
+    if detected == "spreadsheet":
+        select_spreadsheet_blocks(ast)
     # Only body blocks are rendered into the published Markdown. Avoid uploading
     # images that occur solely in Pandoc metadata and can never be referenced.
     assets = _collect_assets(
@@ -235,13 +244,7 @@ def _prepare_legacy_powerpoint(
 
 
 __all__ = [
-    "EXTRACTOR_VERSION",
-    "ExtractedAsset",
-    "PreparedExtraction",
-    "UnsupportedDocumentFormat",
-    "detect_document_format",
-    "prepare_extraction",
-    "render_markdown",
-    "require_converter_binaries",
-    "validate_rendered_markdown",
+    "EXTRACTOR_VERSION", "ExtractedAsset", "PreparedExtraction",
+    "UnsupportedDocumentFormat", "detect_document_format", "prepare_extraction",
+    "render_markdown", "require_converter_binaries", "validate_rendered_markdown",
 ]

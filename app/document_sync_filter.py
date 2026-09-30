@@ -13,7 +13,6 @@ NON_DOCUMENT_MIME_TYPES = frozenset(
         "application/octet",
         "application/rar",
         "application/vnd.android.package-archive",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.rar",
         "application/x-7z-compressed",
         "application/x-bittorrent",
@@ -42,6 +41,8 @@ NON_DOCUMENT_MIME_TYPES = frozenset(
         "text/css",
         "text/javascript",
         "text/x-algol68",
+        "text/pascal",
+        "text/x-pascal",
         "text/x-python",
         "text/x-python-script",
         "video/3gpp",
@@ -56,6 +57,8 @@ DOCUMENT_MIME_BY_SUFFIX = {
     ".doc": "application/msword",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".epub": "application/epub+zip",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".fb2": "application/x-fictionbook+xml",
     ".htm": "text/html",
     ".html": "text/html",
@@ -68,7 +71,7 @@ DOCUMENT_MIME_BY_SUFFIX = {
 }
 DOCUMENT_MIME_TYPES = frozenset(DOCUMENT_MIME_BY_SUFFIX.values())
 BYTE_DETECTED_MIME_TYPES = {"powerpoint": "application/vnd.ms-powerpoint"}
-NON_DOCUMENT_SUFFIXES = frozenset({".eaf", ".lnk", ".musx"})
+NON_DOCUMENT_SUFFIXES = frozenset({".eaf", ".lnk", ".musx", ".pas"})
 NON_DOCUMENT_MIME_PREFIXES = ("audio/", "image/", "video/")
 
 

@@ -12,3 +12,4 @@
 - Update URL, size, ETag, and verification timestamp only on the unchanged pending row after confirmation and restricted-object cleanup. Never insert from the upload task.
 - Reject null/duplicate MD5 identities before remote work. Do not alter the database constraint without owner approval.
 - During catalog traversal, persist and execute a resource-scoped `corrupted` move for every zero-byte file before publication or catalog insertion. Resource scope keeps distinct empty paths independent despite their shared MD5.
+- Pascal source files (`.pas` or `text/pascal`) follow the ordinary non-document sync filter on every run. Existing catalog rows remain available to Library cleanup preparation; sync does not create cleanup plans for uncataloged Pascal files.

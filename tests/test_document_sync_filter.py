@@ -10,6 +10,16 @@ def test_non_document_mime_is_filtered() -> None:
     assert decision.reason == "non_document_mime"
 
 
+def test_pascal_source_is_non_document_by_mime_or_suffix() -> None:
+    by_mime = classify_document("disk:/documents/code.bin", "text/pascal")
+    by_suffix = classify_document("disk:/documents/code.PAS", "text/plain")
+
+    assert by_mime.accepted is False
+    assert by_mime.reason == "non_document_mime"
+    assert by_suffix.accepted is False
+    assert by_suffix.reason == "non_document_suffix"
+
+
 def test_octet_stream_pdf_is_normalized_and_kept() -> None:
     decision = classify_document(
         "disk:/documents/book.pdf", "application/octet-stream"
@@ -76,6 +86,18 @@ def test_word_documents_are_normalized_from_octet_stream_and_kept() -> None:
     assert doc.mime_type == "application/msword"
     assert docx.accepted is True
     assert docx.mime_type.endswith("wordprocessingml.document")
+
+
+def test_excel_workbooks_are_kept_by_mime_or_suffix() -> None:
+    xls = classify_document("disk:/documents/data.xls", "application/octet-stream")
+    xlsx = classify_document(
+        "disk:/documents/data.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    assert xls.accepted is True
+    assert xls.mime_type == "application/vnd.ms-excel"
+    assert xlsx.accepted is True
 
 
 def test_known_document_suffix_recovers_missing_mime() -> None:

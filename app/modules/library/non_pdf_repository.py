@@ -122,6 +122,7 @@ class NonPdfExtractionRepository:
         *,
         extractor_version: str,
         powerpoint_version: str | None = None,
+        spreadsheet_version: str | None = None,
         limit: int | None = None,
         per_mime_limit: int | None = None,
         retry_known_failures: bool = False,
@@ -163,8 +164,10 @@ class NonPdfExtractionRepository:
               AND (
                     state.md5 IS NULL
                     OR state.extractor_version IS DISTINCT FROM
-                        CASE WHEN state.detected_format = 'powerpoint'
-                             THEN :powerpoint_version ELSE :extractor_version END
+                        CASE state.detected_format
+                            WHEN 'powerpoint' THEN :powerpoint_version
+                            WHEN 'spreadsheet' THEN :spreadsheet_version
+                            ELSE :extractor_version END
                     OR state.status = 'processing'
                     OR (
                         state.status = 'failed'
@@ -182,8 +185,10 @@ class NonPdfExtractionRepository:
                 CASE
                     WHEN state.md5 IS NULL THEN 0
                     WHEN state.extractor_version IS DISTINCT FROM
-                        CASE WHEN state.detected_format = 'powerpoint'
-                             THEN :powerpoint_version ELSE :extractor_version END
+                        CASE state.detected_format
+                            WHEN 'powerpoint' THEN :powerpoint_version
+                            WHEN 'spreadsheet' THEN :spreadsheet_version
+                            ELSE :extractor_version END
                         THEN 1
                     WHEN state.status = 'processing' THEN 2
                     WHEN state.status = 'failed' THEN 3
@@ -205,6 +210,7 @@ class NonPdfExtractionRepository:
         params: dict[str, Any] = {
             "extractor_version": str(extractor_version),
             "powerpoint_version": str(powerpoint_version or extractor_version),
+            "spreadsheet_version": str(spreadsheet_version or extractor_version),
             "per_mime_limit": normalized_per_mime,
             "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
             "retry_known_failures": bool(retry_known_failures),
