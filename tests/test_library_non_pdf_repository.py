@@ -72,6 +72,17 @@ def test_candidate_queue_prioritizes_existing_content_and_versions_unsupported()
     assert repository.engine.params["retry_known_failures"] is False
 
 
+def test_html_recipe_requeues_only_prior_html_checkpoints() -> None:
+    repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
+    repository.engine = _Engine()
+    repository.list_candidates(
+        extractor_version="nonpdf.v9", html_version="nonpdf.html.v1",
+        only_md5s=frozenset({"a" * 32}),
+    )
+    assert repository.engine.sql.count("WHEN 'html' THEN :html_version") == 2
+    assert repository.engine.params["html_version"] == "nonpdf.html.v1"
+
+
 def test_powerpoint_recipe_requeues_only_matching_prior_format() -> None:
     repository = NonPdfExtractionRepository.__new__(NonPdfExtractionRepository)
     repository.engine = _Engine()

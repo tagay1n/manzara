@@ -98,3 +98,34 @@ def test_unsupported_embedded_media_is_dropped_without_failing_document(
     drops = json.loads((tmp_path / "dropped-media.json").read_text())
     assert drops[0]["source_ref"] == str(media)
     assert "unsupported image encoding" in drops[0]["reason"]
+
+
+def test_empty_embedded_image_is_dropped_before_upload(tmp_path: Path) -> None:
+    empty_gif = tmp_path / "empty.gif"
+    empty_gif.touch()
+    ast = {
+        "pandoc-api-version": [1, 23, 1],
+        "meta": {},
+        "blocks": [
+            {"t": "Para", "c": [{"t": "Str", "c": "Readable text"}]},
+            {
+                "t": "Para",
+                "c": [
+                    {
+                        "t": "Image",
+                        "c": [["", [], []], [], [str(empty_gif), ""]],
+                    }
+                ],
+            },
+        ],
+    }
+
+    assets = _collect_assets(ast, workspace=tmp_path)
+    prepared = PreparedExtraction("html", tmp_path, ast, None, assets)
+    markdown = render_markdown(prepared, asset_urls={})
+
+    assert assets == ()
+    assert "Readable text" in markdown
+    assert str(empty_gif) not in markdown
+    drops = json.loads((tmp_path / "dropped-media.json").read_text())
+    assert drops == [{"source_ref": str(empty_gif), "reason": "embedded media is empty"}]

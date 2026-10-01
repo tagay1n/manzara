@@ -27,10 +27,12 @@ Policy: `app/modules/library/guidance/documents.md`.
 | Extraction preparation, local/Drive fallback orchestration | `app/modules/library/non_pdf_extraction.py` | `tests/test_library_non_pdf_formats.py`, `tests/test_library_non_pdf_converters.py`, `tests/test_library_legacy_powerpoint.py`, `tests/test_library_book_formats.py` |
 | Extraction records, errors, recipe version | `app/modules/library/non_pdf_types.py` | `tests/test_library_non_pdf_contracts.py` |
 | Byte detection, legacy text decoding | `app/modules/library/non_pdf_formats.py` | `tests/test_library_non_pdf_formats.py` |
+| Legacy HTML charset and layout-table normalization | `app/modules/library/non_pdf_html_source.py` | `tests/test_library_non_pdf_formats.py` |
 | Native PPTX text/tables, slide visual inspection and deferral | `app/modules/library/non_pdf_pptx.py` | `tests/test_library_pptx.py`, `tests/test_library_non_pdf_runtime.py` |
 | Spreadsheet sheet/table selection and formula/image cleanup | `app/modules/library/non_pdf_spreadsheet.py` | `tests/test_library_spreadsheets.py` |
 | Process timeouts, LibreOffice, DOCX ZIP, FB2 | `app/modules/library/non_pdf_converters.py` | `tests/test_library_non_pdf_converters.py`, `tests/test_library_non_pdf_media.py` |
 | ODT HTML and MOBI EPUB conversion | `app/modules/library/non_pdf_book_converters.py` | `tests/test_library_book_formats.py` |
+| Oversized DOCX streaming HTML fallback | `app/modules/library/non_pdf_large_docx.py` | `tests/test_library_large_docx.py` |
 | Embedded images, conversion, URL rewriting | `app/modules/library/non_pdf_media.py` | `tests/test_library_non_pdf_media.py` |
 | Pandoc AST, figures, captions, tables | `app/modules/library/non_pdf_pandoc.py` | `tests/test_library_non_pdf_rendering.py` |
 | Final Markdown, publication validation report | `app/modules/library/non_pdf_rendering.py` | `tests/test_library_non_pdf_rendering.py` |

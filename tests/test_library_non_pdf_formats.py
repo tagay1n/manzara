@@ -10,8 +10,63 @@ from app.modules.library.corrupt_document import CorruptDocumentError
 from app.modules.library.non_pdf_extraction import (
     detect_document_format,
     prepare_extraction,
+    render_markdown,
 )
 from app.modules.library.non_pdf_formats import _decode_text, inspect_document_format
+from app.modules.library.non_pdf_types import extractor_version_for_format
+
+
+def test_windows_1251_layout_html_preserves_body_text(tmp_path: Path) -> None:
+    paragraphs = [f"Абзац {index}: татарча текст." for index in range(110)]
+    html = (
+        '<?xml version="1.0" encoding="Windows-1251"?>\n'
+        '<html><head><meta charset="windows-1251"></head><body>'
+        '<table><tr><td>'
+        + "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)
+        + '</td></tr></table></body></html>'
+    )
+    source = tmp_path / "legacy.htm"
+    source.write_bytes(html.encode("cp1251"))
+
+    prepared = prepare_extraction(
+        source, workspace=tmp_path / "work", mime_type="text/html", source_path="legacy.htm"
+    )
+    markdown = render_markdown(prepared, asset_urls={})
+
+    assert all(paragraph in markdown for paragraph in paragraphs)
+    assert "<table>" not in markdown
+
+
+def test_semantic_html_table_remains_rich_table(tmp_path: Path) -> None:
+    source = tmp_path / "table.html"
+    source.write_text(
+        "<html><body>"
+        + "".join(f"<p>Outside paragraph {index}</p>" for index in range(110))
+        + "<table><tr><th>Head</th></tr><tr><td>Value</td></tr></table></body></html>"
+    )
+    prepared = prepare_extraction(
+        source, workspace=tmp_path / "work", mime_type="text/html", source_path="table.html"
+    )
+    markdown = render_markdown(prepared, asset_urls={})
+    assert "<table>" in markdown
+    assert "Value" in markdown
+
+
+def test_html_recipe_has_own_version() -> None:
+    assert extractor_version_for_format("html") == "nonpdf.html.v1"
+
+
+def test_html_with_incorrect_utf8_declaration_uses_decodable_source(tmp_path: Path) -> None:
+    source = tmp_path / "misdeclared.html"
+    source.write_bytes(
+        '<html><head><meta charset="utf8"></head><body><p>Татарча текст</p></body></html>'.encode(
+            "cp1251"
+        )
+    )
+    prepared = prepare_extraction(
+        source, workspace=tmp_path / "work", mime_type="text/html", source_path=source.name
+    )
+    assert "Татарча текст" in render_markdown(prepared, asset_urls={})
 
 
 def test_detection_prefers_source_bytes_over_wrong_mime_and_extension(

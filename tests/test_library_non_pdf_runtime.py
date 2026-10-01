@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import zipfile
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,11 +11,26 @@ import pytest
 from app.modules.library.corrupt_document import CorruptDocumentError
 from app.modules.library.non_pdf_repository import NonPdfCandidate
 from app.modules.library.runtime.run_extract_non_pdf import (
+    _parse_args,
     _delete_stale_assets,
     _failure_status,
     _write_content_archive,
     run_extraction,
 )
+
+
+def test_cli_can_limit_retry_to_exact_source_md5s(monkeypatch) -> None:
+    first, second = "a" * 32, "b" * 32
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["extract", "--retry-known-failures", "--only-md5", first, "--only-md5", second],
+    )
+
+    args = _parse_args()
+
+    assert args.retry_known_failures is True
+    assert args.only_md5 == [first, second]
 
 
 def test_content_archive_contains_exact_md5_markdown_member(tmp_path: Path) -> None:

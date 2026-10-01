@@ -186,6 +186,44 @@ def test_images_mixed_with_text_are_split_into_html_figures(tmp_path: Path) -> N
     assert "{.underline}" not in markdown
 
 
+def test_images_nested_in_headings_and_inline_content_render_as_html(tmp_path: Path) -> None:
+    def image() -> dict:
+        return {
+            "t": "Image",
+            "c": [["", [], []], [{"t": "Str", "c": "Diagram"}], ["local.bin", ""]],
+        }
+    ast = {
+        "pandoc-api-version": [1, 23, 1],
+        "meta": {},
+        "blocks": [
+            {
+                "t": "Header",
+                "c": [1, ["", [], []], [image(), {"t": "Space"}, {"t": "Str", "c": "Title"}]],
+            },
+            {
+                "t": "Para",
+                "c": [
+                    {"t": "Str", "c": "Before"},
+                    {"t": "Space"},
+                    {"t": "Strong", "c": [image()]},
+                    {"t": "Space"},
+                    {"t": "Str", "c": "after"},
+                ],
+            },
+        ],
+    }
+    prepared = PreparedExtraction(
+        "docx", tmp_path, ast, None,
+        (ExtractedAsset("local.bin", tmp_path / "local.bin", 1),),
+    )
+    urls = {"local.bin": "https://public.example/1.png"}
+    markdown = render_markdown(prepared, asset_urls=urls)
+    assert all(word in markdown for word in ("Title", "Before", "after"))
+    assert markdown.count('<img alt="Diagram" src="https://public.example/1.png"') == 2
+    assert "![" not in markdown
+    assert validate_rendered_markdown(prepared, markdown, asset_urls=urls)["passed"]
+
+
 def test_epub_local_document_links_become_plain_text(tmp_path: Path) -> None:
     ast = {
         "pandoc-api-version": [1, 23, 1],

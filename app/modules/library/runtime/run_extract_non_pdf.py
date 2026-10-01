@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from collections import Counter, defaultdict
 import json
 import os
@@ -69,6 +70,7 @@ from app.modules.library.non_pdf_types import (  # noqa: E402
     SPREADSHEET_EXTRACTOR_VERSION,
     ODT_EXTRACTOR_VERSION,
     MOBI_EXTRACTOR_VERSION,
+    HTML_EXTRACTOR_VERSION,
     extractor_version_for_format,
 )
 from app.runtime_config import load_runtime_config  # noqa: E402
@@ -84,11 +86,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--per-mime-limit", type=int, default=None)
     parser.add_argument(
+        "--only-md5", action="append", type=_md5_arg, default=[], metavar="MD5",
+        help="Restrict this run to the specified source MD5; repeat for a cohort",
+    )
+    parser.add_argument(
         "--retry-known-failures",
         action="store_true",
         help="Explicitly retry deferred and exhausted failures",
     )
     return parser.parse_args()
+
+
+def _md5_arg(value: str) -> str:
+    if re.fullmatch(r"[0-9a-fA-F]{32}", value) is None:
+        raise argparse.ArgumentTypeError("source MD5 must be 32 hexadecimal digits")
+    return value.lower()
 
 
 _DEFERRED_FAILURE_MARKERS = (
@@ -381,6 +393,7 @@ def run_extraction(
         spreadsheet_version=SPREADSHEET_EXTRACTOR_VERSION,
         odt_version=ODT_EXTRACTOR_VERSION,
         mobi_version=MOBI_EXTRACTOR_VERSION,
+        html_version=HTML_EXTRACTOR_VERSION,
         limit=limit,
         per_mime_limit=per_mime_limit,
         retry_known_failures=retry_known_failures,
@@ -711,6 +724,7 @@ def run_extraction(
         "spreadsheet_extractor_version": SPREADSHEET_EXTRACTOR_VERSION,
         "odt_extractor_version": ODT_EXTRACTOR_VERSION,
         "mobi_extractor_version": MOBI_EXTRACTOR_VERSION,
+        "html_extractor_version": HTML_EXTRACTOR_VERSION,
         "per_mime_limit": per_mime_limit,
         "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
         "retry_known_failures": bool(retry_known_failures),
@@ -784,6 +798,7 @@ def main() -> int:
             limit=args.limit,
             per_mime_limit=args.per_mime_limit,
             retry_known_failures=args.retry_known_failures,
+            only_md5s=frozenset(args.only_md5) if args.only_md5 else None,
         )
         emit_run_artifact(summary)
         return 0

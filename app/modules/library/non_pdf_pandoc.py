@@ -114,6 +114,17 @@ def _is_image_only_paragraph(block: Mapping[str, Any]) -> bool:
     return bool(_images(content)) and not _has_non_image_inline_content(content)
 
 
+def _image_html(image: Mapping[str, Any]) -> str:
+    content = image.get("c") if isinstance(image.get("c"), list) else []
+    alt = _inline_text(content[1] if len(content) > 1 else [])
+    target = content[-1] if content else ["", ""]
+    url = str(target[0] if isinstance(target, list) and target else "")
+    return (
+        f'<img alt="{escape(alt, quote=True)}" src="{escape(url, quote=True)}" '
+        'style="max-width: 800px; width: 50%; height: auto;">'
+    )
+
+
 def _figure_html(value: Any, *, caption_override: str | None = None) -> str:
     images = _images(value)
     if not images:
@@ -127,14 +138,7 @@ def _figure_html(value: Any, *, caption_override: str | None = None) -> str:
         caption = ""
     parts = ['<figure style="text-align: center; margin: 1em 0;">']
     for image in images:
-        content = image.get("c") if isinstance(image.get("c"), list) else []
-        alt = _inline_text(content[1] if len(content) > 1 else [])
-        target = content[-1] if content else ["", ""]
-        url = str(target[0] if isinstance(target, list) and target else "")
-        parts.append(
-            f'<img alt="{escape(alt, quote=True)}" src="{escape(url, quote=True)}" '
-            'style="max-width: 800px; width: 50%; height: auto;">'
-        )
+        parts.append(_image_html(image))
     if caption:
         parts.append(f"<figcaption>{escape(caption)}</figcaption>")
     parts.append("</figure>")
@@ -255,6 +259,13 @@ def _normalize_blocks(
                 continue
         normalized.append(_normalize_block(block, ast=ast, workspace=workspace))
         index += 1
+    # Images inside headings and nested inline containers cannot become block
+    # figures. Keep their surrounding text and render the image as raw HTML.
+    for node in _walk(normalized):
+        if node.get("t") == "Image":
+            html = _image_html(node)
+            node.clear()
+            node.update({"t": "RawInline", "c": ["html", html]})
     return normalized
 
 

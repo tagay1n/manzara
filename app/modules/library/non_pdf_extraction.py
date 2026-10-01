@@ -15,6 +15,8 @@ from app.modules.library.non_pdf_book_converters import (
     _convert_odt_to_html,
     _validate_converted_epub,
 )
+from app.modules.library.non_pdf_large_docx import maybe_convert_large_docx_to_html
+from app.modules.library.non_pdf_html_source import prepare_html_source
 from app.modules.library.non_pdf_converters import (
     _convert_to_docx,
     _convert_to_pptx,
@@ -66,9 +68,7 @@ def prepare_extraction(
     if source.stat().st_size <= 0:
         raise CorruptDocumentError("empty_source", "Source document is empty")
     try:
-        inspection = inspect_document_format(
-            source, mime_type=mime_type, source_path=source_path
-        )
+        inspection = inspect_document_format(source, mime_type=mime_type, source_path=source_path)
         detected = inspection.format
     except (zipfile.BadZipFile, EOFError, zlib.error) as exc:
         raise CorruptDocumentError("document_container", str(exc)) from exc
@@ -106,10 +106,12 @@ def prepare_extraction(
             text_value += "\n"
         return PreparedExtraction(detected, workspace, None, text_value, ())
 
-    pandoc_source = Path(source)
+    pandoc_source = source
     pandoc_format = detected
     legacy_conversion: str | None = None
-    if detected in {"doc", "rtf"}:
+    if detected == "html":
+        pandoc_source = prepare_html_source(source, workspace=workspace)
+    elif detected in {"doc", "rtf"}:
         try:
             pandoc_source = _convert_to_docx(
                 source, workspace=workspace, detected_format=detected
@@ -159,10 +161,19 @@ def prepare_extraction(
         _validate_converted_epub(pandoc_source)
         pandoc_format = "epub"
         legacy_conversion = "calibre"
+    if detected in {"doc", "docx"}:
+        large_html = maybe_convert_large_docx_to_html(pandoc_source, workspace=workspace)
+        if large_html is not None:
+            pandoc_source, pandoc_format = large_html, "html"
+    resource_base = (
+        pandoc_source.parent
+        if pandoc_format == "html" and detected in {"doc", "docx", "odt", "html"}
+        else None
+    )
     ast_path = workspace / "raw-ast.json"
     media_dir = workspace / "media"
     try:
-        result = _run(
+        _run(
             [
                 "pandoc",
                 str(pandoc_source),
@@ -172,7 +183,7 @@ def prepare_extraction(
                 "json",
                 "--extract-media",
                 str(media_dir),
-                *([f"--resource-path={pandoc_source.parent}"] if detected == "odt" else []),
+                *([f"--resource-path={resource_base}"] if resource_base else []),
                 "-o",
                 str(ast_path),
             ],
@@ -185,7 +196,6 @@ def prepare_extraction(
                 f"Converted {detected} document failed Pandoc parsing: {exc}"
             ) from exc
         raise CorruptDocumentError("document_parse", str(exc)) from exc
-    del result
     ast = json.loads(ast_path.read_text(encoding="utf-8"))
     if detected == "spreadsheet":
         select_spreadsheet_blocks(ast)
@@ -194,15 +204,10 @@ def prepare_extraction(
     assets = _collect_assets(
         {"blocks": ast.get("blocks", [])},
         workspace=workspace,
-        source_base=pandoc_source.parent if detected == "odt" else None,
+        source_base=resource_base,
     )
     return PreparedExtraction(
-        detected,
-        workspace,
-        ast,
-        None,
-        assets,
-        legacy_conversion=legacy_conversion,
+        detected, workspace, ast, None, assets, legacy_conversion=legacy_conversion
     )
 
 
@@ -216,9 +221,7 @@ def _prepare_legacy_powerpoint(
         converted = _convert_to_pptx(source, workspace=workspace)
         _validate_converted_pptx(converted)
         try:
-            return pptx_to_html(
-                converted, workspace=workspace, strict_layout=True
-            ), "libreoffice"
+            return pptx_to_html(converted, workspace=workspace, strict_layout=True), "libreoffice"
         except DeferredDocumentExtraction as exc:
             if exc.reason != "pptx_no_text":
                 raise
@@ -234,17 +237,14 @@ def _prepare_legacy_powerpoint(
     converted = fallback(source, workspace=workspace)
     _validate_converted_pptx(converted)
     try:
-        return pptx_to_html(
-            converted, workspace=workspace, strict_layout=True
-        ), "google_drive"
+        return pptx_to_html(converted, workspace=workspace, strict_layout=True), "google_drive"
     except CorruptDocumentError as exc:
         raise ConverterCommandError(
             f"Google-converted PowerPoint could not be parsed: {exc}"
         ) from exc
 
-
 __all__ = [
-    "EXTRACTOR_VERSION", "ExtractedAsset", "PreparedExtraction",
-    "UnsupportedDocumentFormat", "detect_document_format", "prepare_extraction",
-    "render_markdown", "require_converter_binaries", "validate_rendered_markdown",
+    "EXTRACTOR_VERSION", "ExtractedAsset", "PreparedExtraction", "UnsupportedDocumentFormat",
+    "detect_document_format", "prepare_extraction", "render_markdown", "require_converter_binaries",
+    "validate_rendered_markdown",
 ]

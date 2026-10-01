@@ -77,6 +77,9 @@ def _collect_assets(
         if not raw_path.is_file():
             dropped.append({"source_ref": ref, "reason": "embedded media is missing"})
             continue
+        if raw_path.stat().st_size == 0:
+            dropped.append({"source_ref": ref, "reason": "embedded media is empty"})
+            continue
         ordinal = len(assets) + 1
         try:
             browser_path = _browser_image(

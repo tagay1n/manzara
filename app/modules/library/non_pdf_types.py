@@ -11,9 +11,12 @@ POWERPOINT_EXTRACTOR_VERSION = "nonpdf.ppt.v1"
 SPREADSHEET_EXTRACTOR_VERSION = "nonpdf.sheet.v1"
 ODT_EXTRACTOR_VERSION = "nonpdf.odt.v1"
 MOBI_EXTRACTOR_VERSION = "nonpdf.mobi.v1"
+HTML_EXTRACTOR_VERSION = "nonpdf.html.v1"
 
 
 def extractor_version_for_format(detected_format: str | None) -> str:
+    if detected_format == "html":
+        return HTML_EXTRACTOR_VERSION
     if detected_format == "powerpoint":
         return POWERPOINT_EXTRACTOR_VERSION
     if detected_format == "spreadsheet":
