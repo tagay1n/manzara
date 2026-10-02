@@ -13,6 +13,7 @@ Start with the matching row; use symbol search within its owners before reading 
 | Document eligibility | `app/document_sync_filter.py` | `tests/test_document_sync_filter.py` |
 | Shared Gemini runtime | `app/gemini_*.py`; read `docs/gemini-runtime.md` | `tests/test_gemini_*.py` |
 | Library flow | `app/modules/library/AGENTS.md`; implementation/test lookup in `app/modules/library/guidance/navigation.md` | Select the focused tests from the Library lookup |
+| Publisher merge research and review | `app/modules/library/publisher_merge_contract.py`, `app/modules/library/publisher_codex.py`, `app/repositories/publisher_merges.py`; read `app/modules/library/guidance/publisher-merges.md` | `tests/test_publisher_merges.py`, `tests/frontend/test_publisher_merges.mjs` |
 | Static Library publishing export | `app/modules/library/site_export*.py`, `app/modules/library/runtime/run_site_export.py` | `tests/test_library_site_export.py` |
 | Maintenance flow | `app/modules/maintenance/`; read its routing `AGENTS.md` | Maintenance/storage-specific tests |
 | PostgreSQL backup/recovery | `.github/workflows/nightly-postgres-backup.yml`, `scripts/backup_postgres_to_b2.py` | `tests/test_postgres_logical_backup.py` |

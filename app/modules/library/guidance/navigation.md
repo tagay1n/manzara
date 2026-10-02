@@ -18,6 +18,17 @@ Public API: `app/modules/library/normalization.py`. HTTP wiring: `app/library_no
 | AI suggestions, refresh workers | `app/modules/library/normalization_suggestions.py` | `tests/test_gemini_workers.py`, `tests/test_gemini_config.py` |
 | Canonical personality extraction, structured response, workbench | `app/modules/library/personality_normalization.py`, `app/modules/library/personality_normalization_prompt.py`, `app/modules/library/personality_workbench.py`, `app/modules/library/runtime/run_normalize_personalities.py` | `tests/test_library_personality_normalization.py`, `tests/test_library_personality_outcomes.py`, `tests/test_library_personality_workbench.py`, `tests/frontend/test_personality_decisions.mjs` |
 
+## Publisher clustering analysis and review
+
+Policy: `app/modules/library/guidance/publisher-merges.md`.
+
+| Change | Implementation | Focused tests |
+| --- | --- | --- |
+| Complete inventory, identity prompt, validation | `app/modules/library/publisher_merge_contract.py`, `app/modules/library/publisher_workbench.py` | `tests/test_publisher_merges.py`, `tests/test_library_publishers_workbench.py` |
+| Subscription subprocess, account observations, recovery | `app/modules/library/publisher_codex.py`, `app/modules/library/runtime/run_suggest_publisher_merges.py` | `tests/test_publisher_merges.py` |
+| Durable drafts, separation decisions, transactional apply | `app/modules/library/publisher_merge_review.py`, `app/repositories/publisher_merges.py`, `app/repositories/normalization.py`, `app/library_normalization_routes.py` | `tests/test_publisher_merges.py`, `tests/test_api_library_normalization.py` |
+| Compact review interface | `static/library-publishers.js`, `static/library-publishers.html` | `tests/frontend/test_publisher_merges.mjs`, `tests/frontend/test_library_pages.mjs` |
+
 ## Documents and conversion
 
 Policy: `app/modules/library/guidance/documents.md`.

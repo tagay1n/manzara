@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 
@@ -405,6 +405,36 @@ def build_structured_run_summary(
                 if data.get("stopped")
                 else f"Static Library export completed: {published:,} documents."
             )
+        return summary
+
+    if task_id == "library.suggest_publisher_merges" and artifacts:
+        data = artifacts if isinstance(artifacts, dict) else {}
+        if data.get("kind") == "library.publisher_merge_summary":
+            summary["highlights"].extend(
+                {"label": label, "value": str(data.get(key, "Unavailable"))}
+                for key, label in (("cluster_count", "Clusters"), ("singleton_count", "Singleton publishers"), ("unresolved_count", "Unresolved entries"), ("covered_entries", "Entries accounted for"), ("publishers_involved", "Publishers"),
+                                   ("scope", "Scope"), ("model", "Model"), ("duration_seconds", "Duration seconds")))
+            usage = data.get("reported_token_usage")
+            summary["highlights"].append({"label": "Reported token usage", "value":
+                ", ".join(f"{key}: {value}" for key, value in usage.items()) if isinstance(usage, dict) and usage else "Unavailable"})
+            quota = data.get("quota_observations") or {}
+            for window in quota.get("windows", []):
+                percent = window.get("after_percent")
+                delta = window.get("delta_percentage_points")
+                reset = window.get("resets_at")
+                try:
+                    reset_text = datetime.fromtimestamp(reset, timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
+                except (ValueError, TypeError, OverflowError, OSError):
+                    reset_text = "unavailable"
+                value = f"{percent}%" if percent is not None else "Reading unavailable"
+                value += f"; +{delta} percentage points" if delta is not None else "; delta unavailable/reset"
+                value += f"; resets {reset_text} (reported precision; concurrent activity can contribute)"
+                summary["highlights"].append({"label": f"Account usage observed · {window.get('bucket')} · {window.get('label')}", "value": value})
+            if not quota.get("available"):
+                summary["highlights"].append({"label": "Account usage observed during this run", "value": "Unavailable"})
+            summary["message"] = ("No unresolved publishers; no analysis needed." if data.get("no_analysis_needed")
+                                  else "Publisher clustering ready for review." if not data.get("stopped")
+                                  else "Publisher analysis stopped.")
         return summary
 
     if task_id == "library.normalize_personalities" and artifacts:

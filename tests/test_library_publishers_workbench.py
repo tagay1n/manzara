@@ -6,6 +6,11 @@ from app.modules.library import publisher_workbench
 
 
 class _Db:
+    def list_publisher_source_documents(self):
+        return [{'md5': str(i), 'schema_org': {'publisher': name}} for name, indices in
+                [('Tat Books', range(3)), ('Tatar Books', range(4)), ('New House', range(5, 7))]
+                for i in indices]
+
     def list_normalization_canonicals(self, entity_type):
         assert entity_type == "publisher"
         return [
@@ -23,18 +28,6 @@ class _Db:
 
 
 def test_publisher_projection_combines_canonicals_and_unresolved_raw_names(monkeypatch) -> None:
-    monkeypatch.setattr(
-        publisher_workbench,
-        "_query_aggregated_mentions",
-        lambda _entity_type, **_kwargs: (
-            [
-                {"raw_name": "Tat Books", "docs_count": 3},
-                {"raw_name": "New House", "docs_count": 2},
-                {"raw_name": "Tatar Books", "docs_count": 4},
-            ],
-            "test",
-        ),
-    )
 
     payload = publisher_workbench.get_publishers(_Db())
 
@@ -46,7 +39,7 @@ def test_publisher_projection_combines_canonicals_and_unresolved_raw_names(monke
     ]
     canonical = payload["items"][-1]
     assert canonical["aliases"] == ["Tat Books", "Tatar Books"]
-    assert canonical["document_count"] == 7
+    assert canonical["document_count"] == 4
     assert canonical["is_new"] is False
     assert payload["items"][0]["raw_name"] == "New House"
     assert payload["items"][0]["is_new"] is True

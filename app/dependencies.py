@@ -73,6 +73,7 @@ from app.modules.library.normalization_suggestions import (
     list_suggestions,
     refresh_suggestions,
 )
+from app.modules.library.publisher_merge_review import save_draft, discard_draft, review_action
 from app.modules.library.publisher_workbench import (
     apply_publishers,
     get_publishers,
@@ -155,6 +156,10 @@ class NormalizationOperationsService:
     get_publishers: Callable[..., Any]
     list_publisher_documents: Callable[..., Any]
     apply_publishers: Callable[..., Any]
+    get_publisher_review: Callable[..., Any]
+    save_publisher_draft: Callable[..., Any]
+    discard_publisher_draft: Callable[..., Any]
+    publisher_review_action: Callable[..., Any]
     get_review_queue: Callable[..., Any]
     list_canonicals: Callable[..., Any]
     create_canonical: Callable[..., Any]
@@ -251,6 +256,10 @@ def build_normalization_operations() -> NormalizationOperations:
         get_publishers=get_publishers,
         list_publisher_documents=list_publisher_documents,
         apply_publishers=apply_publishers,
+        get_publisher_review=lambda db: db.get_publisher_review(),
+        save_publisher_draft=save_draft,
+        discard_publisher_draft=discard_draft,
+        publisher_review_action=review_action,
         get_review_queue=get_review_queue,
         list_canonicals=list_canonicals,
         create_canonical=create_canonical,

@@ -1307,3 +1307,13 @@ textarea:focus,
 .personality-name-row .publisher-documents-toggle { margin-top:0; }
 .personality-name-row { column-gap:.55rem; }
 .personality-name-row .personality-row-action { border-left:1px solid var(--line); padding-left:.55rem; }
+
+.publisher-suggestions { margin: 0 0 1rem; padding: .75rem 0 1rem; border-bottom: 1px solid var(--border, #303944); }
+.publisher-suggestions h2 { font-size: 1rem; margin: 0 0 .35rem; }
+.publisher-suggestions p { max-width: 75ch; overflow-wrap: anywhere; }
+.publisher-suggestions ul { padding-left: 1.25rem; overflow-wrap: anywhere; }
+.publisher-suggestions li { margin: .35rem 0; }
+.publisher-suggestions .publisher-header-actions { margin-top: .65rem; }
+.publisher-suggestions input { max-width: 100%; }
+.publisher-suggestions details { margin-top: .5rem; }
+.publisher-suggestions button:focus-visible { outline: 2px solid var(--accent, #3ea6ff); outline-offset: 3px; }

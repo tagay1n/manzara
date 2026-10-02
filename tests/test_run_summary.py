@@ -347,3 +347,21 @@ def test_personality_summary_separates_decisions_from_failures_and_deferrals():
     assert values["Needs review"] == "3"
     assert values["Failed"] == "1"
     assert values["Deferred"] == "5"
+
+
+def test_publisher_summary_reports_observed_quota_and_missing_tokens():
+    summary = build_structured_run_summary(
+        task_id='library.suggest_publisher_merges', panel_id='library', status='completed',
+        log_lines=[], error_text=None, exit_code=0, stop_mode=None, started_at=None, finished_at=None,
+        artifacts={'kind': 'library.publisher_merge_summary', 'proposal_count': 2,
+                   'cluster_count':1,'singleton_count':2,'unresolved_count':1,'covered_entries':4, 'publishers_involved': 4, 'scope': 'new', 'model': 'configured',
+                   'reported_token_usage': None, 'quota_observations': {'available': True,
+                   'windows': [{'bucket': 'codex', 'label': 'Five-hour', 'after_percent': 15,
+                                'resets_at': 2000000000, 'delta_percentage_points': 3}]}},
+    )
+    assert any('account usage observed' in item['label'].lower() for item in summary['highlights'])
+    assert any('3 percentage points' in item['value'] for item in summary['highlights'])
+
+    values={item['label']:item['value'] for item in summary['highlights']}
+    assert values['Clusters']=='1' and values['Unresolved entries']=='1'
+    assert values['Entries accounted for']=='4'

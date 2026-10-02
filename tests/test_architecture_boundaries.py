@@ -239,3 +239,14 @@ def test_legacy_hidden_monocorpus_workspace_is_not_referenced():
     ]
     for path in checked:
         assert legacy_path not in path.read_text(encoding="utf-8"), path
+
+
+def test_publisher_codex_rules_stay_in_library_and_use_durable_review():
+    for path in (ROOT / 'app' / 'repositories').glob('*.py'):
+        tree = ast.parse(path.read_text())
+        assert not any(isinstance(node, ast.ImportFrom) and (node.module or '').startswith('app.modules.') for node in ast.walk(tree)), path
+    library = ROOT / 'app' / 'modules' / 'library'
+    adapter = (library / 'publisher_codex.py').read_text()
+    assert 'gemini' not in adapter.lower()
+    assert 'publisher_merge_analyses' not in (ROOT / 'app' / 'local_state.py').read_text()
+    assert 'publisher_review_draft' not in (ROOT / 'app' / 'local_state.py').read_text()

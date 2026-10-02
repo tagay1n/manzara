@@ -144,7 +144,10 @@ function createPublishersResolver({
   applyCalls = [],
   documentCalls = [],
 } = {}) {
+  let review = {revision: 0, draft: {renames: [], keeps: [], merges: []}, proposals: []};
   return (path, options = {}) => {
+    if (path === "/api/library/publishers/merge-suggestions") return review;
+    if (path === "/api/library/publishers/draft") { const payload = JSON.parse(options.body); review = {...review, revision: review.revision + 1, draft: payload.changes}; return review; }
     if (path === "/api/library/publishers") {
       return {
         available: true,
@@ -156,7 +159,7 @@ function createPublishersResolver({
       };
     }
     if (path === "/api/library/publishers/change-set/apply") {
-      applyCalls.push(JSON.parse(options.body || "{}")); return { ok: true };
+      applyCalls.push(JSON.parse(options.body || "{}")); review = {...review, revision: review.revision + 1, draft: {renames: [], keeps: [], merges: []}}; return { ok: true };
     }
     if (path.startsWith("/api/library/publishers/documents?")) {
       documentCalls.push(path);
@@ -524,7 +527,8 @@ test("library publishers page stages a new publisher and applies one batch", asy
   harness.elements.get("publisher-apply").dispatch("click");
   await harness.flush();
   assert.equal(applyCalls.length, 1);
-  assert.deepEqual(applyCalls[0].keeps, ["Таткнигоиздат"]);
+  assert.deepEqual(applyCalls[0], {use_draft: true, revision: 1});
+  assert.deepEqual(JSON.parse(harness.apiCalls.find(call => call.path.endsWith("/draft")).options.body).changes.keeps, ["Таткнигоиздат"]);
 });
 
 test("library publishers page keeps merge controls in the header and enables drafts after a merge", async () => {
@@ -551,6 +555,7 @@ test("library publishers page keeps merge controls in the header and enables dra
   harness.elements.get("publisher-merge-name").value = "Tatar Book Publisher";
   harness.elements.get("publisher-merge-form").dispatch("submit", { preventDefault() {} });
 
+  await harness.flush();
   assert.equal(harness.elements.get("publisher-merge-dialog").open, false);
   assert.equal(apply.disabled, false);
   assert.equal(discard.disabled, false);
@@ -566,13 +571,14 @@ test("library publishers page shows progress while applying staged changes", asy
     selectors: [".classification-tabs", ".publisher-row-select"],
     apiResolver(path, options) {
       if (path === "/api/library/publishers/change-set/apply") {
-        return new Promise((resolve) => { finishApply = resolve; });
+        return new Promise((resolve) => { finishApply = value => { normalApi(path, options); resolve(value); }; });
       }
       return normalApi(path, options);
     },
   });
   await harness.flush();
   harness.elements.get("publisher-table-body").dispatch("click", { target: { closest: (selector) => selector === ".publisher-keep" ? { dataset: { key: encodeURIComponent("raw:Таткнигоиздат") } } : null } });
+  await harness.flush();
   harness.elements.get("publisher-apply").dispatch("click");
   await harness.flush();
 

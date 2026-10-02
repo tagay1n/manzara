@@ -132,6 +132,29 @@ def register_library_normalization_routes(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(payload)
 
+    @app.get("/api/library/publishers/merge-suggestions")
+    def publisher_review() -> JSONResponse:
+        return JSONResponse(operations_provider().get_publisher_review(state_provider().db))
+
+    def publisher_intent(operation, *args):
+        try:
+            return JSONResponse(operation(state_provider().db, *args))
+        except ValueError as exc:
+            detail = str(exc)
+            raise HTTPException(status_code=409 if any(word in detail.lower() for word in ('refresh', 'conflict', 'stale')) else 400, detail=detail) from exc
+
+    @app.put("/api/library/publishers/draft")
+    def publisher_draft(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+        return publisher_intent(operations_provider().save_publisher_draft, payload)
+
+    @app.post("/api/library/publishers/draft/discard")
+    def publisher_discard(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+        return publisher_intent(operations_provider().discard_publisher_draft, payload)
+
+    @app.post("/api/library/publishers/merge-suggestions/{proposal_id}/review")
+    def publisher_proposal_review(proposal_id: int, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+        return publisher_intent(operations_provider().publisher_review_action, proposal_id, payload)
+
     @app.post("/api/library/publishers/change-set/apply")
     def apply_library_publisher_changes(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
         """Atomically apply the current publisher page draft."""
@@ -140,7 +163,7 @@ def register_library_normalization_routes(
             return JSONResponse(operations_provider().apply_publishers(state.db, payload))
         except ValueError as exc:
             detail = str(exc)
-            status_code = 409 if "already linked" in detail.lower() or "missing or inactive" in detail.lower() else 400
+            status_code = 409 if "already linked" in detail.lower() or "missing or inactive" in detail.lower() or "refresh" in detail.lower() else 400
             raise HTTPException(status_code=status_code, detail=detail) from exc
 
     @app.get("/api/library/normalization/{entity_type}")

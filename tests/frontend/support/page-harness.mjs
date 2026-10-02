@@ -179,6 +179,7 @@ export const PERSONALITIES_PAGE_IDS = [
 ];
 
 export const PUBLISHERS_PAGE_IDS = [
+  "publisher-suggestions-title", "publisher-suggestions-body", "publisher-suggestions-status", "publisher-suggestions-next", "publisher-suggestions-previous",
   "global-status",
   "last-event",
   "publisher-apply",

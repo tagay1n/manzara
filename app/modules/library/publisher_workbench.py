@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any
 
 from app.db import Database
 from app.modules.library.normalization_queries import (
     _mentions_cte_sql,
-    _query_aggregated_mentions,
 )
 from app.modules.library.stats import create_runtime_engine, dispose_runtime_engine
 from sqlalchemy import text
@@ -101,31 +98,13 @@ def validate_change_set(payload: Any) -> dict[str, Any]:
 
 def get_publishers(db: Database) -> dict[str, Any]:
     """Project active publishers and unresolved exact raw metadata names."""
-    rows, config_source = _query_aggregated_mentions("publisher", limit=20000)
-    canonicals = db.list_normalization_canonicals("publisher")
-    aliases = db.list_normalization_aliases("publisher")
-    active = {int(item["canonical_id"]): item for item in canonicals if item.get("status") == "active"}
-    aliases_by_canonical: dict[int, set[str]] = {key: set() for key in active}
-    linked_names: dict[str, int] = {}
-    for alias in aliases:
-        canonical_id = alias.get("canonical_id")
-        if alias.get("decision_status") == "linked" and canonical_id is not None and int(canonical_id) in active:
-            raw_name = str(alias.get("raw_name") or "").strip()
-            if raw_name:
-                aliases_by_canonical[int(canonical_id)].add(raw_name)
-                linked_names[raw_name] = int(canonical_id)
-    counts: dict[str, int] = {str(row.get("raw_name") or "").strip(): int(row.get("docs_count") or 0) for row in rows}
-    items: list[dict[str, Any]] = []
-    for canonical_id, canonical in active.items():
-        display_name = str(canonical.get("display_name") or "").strip()
-        names = aliases_by_canonical[canonical_id] | ({display_name} if display_name else set())
-        items.append({"key": f"canonical:{canonical_id}", "canonical_id": canonical_id, "raw_name": None, "display_name": display_name, "aliases": sorted(names, key=str.casefold), "document_count": sum(counts.get(name, 0) for name in names), "is_new": False})
-    for raw_name, count in counts.items():
-        if raw_name and raw_name not in linked_names:
-            items.append({"key": f"raw:{raw_name}", "canonical_id": None, "raw_name": raw_name, "display_name": raw_name, "aliases": [], "document_count": count, "is_new": True})
-    items.sort(key=lambda item: (not bool(item["is_new"]), str(item["display_name"]).casefold(), str(item["key"])))
-    token_source = [(item["key"], item["display_name"], item["aliases"], item["document_count"]) for item in items]
-    return {"available": True, "config_source": config_source, "items": items, "new_count": sum(1 for item in items if item["is_new"]), "publisher_count": sum(1 for item in items if not item["is_new"]), "snapshot_token": hashlib.sha256(json.dumps(token_source, ensure_ascii=False, sort_keys=True).encode()).hexdigest()}
+    from app.modules.library.publisher_merge_contract import build_inventory, inventory_fingerprint
+    items = build_inventory(db)
+    items.sort(key=lambda item: (not item['is_new'], item['display_name'].casefold(), item['key']))
+    return {"available": True, "items": items,
+            "new_count": sum(item['is_new'] for item in items),
+            "publisher_count": sum(not item['is_new'] for item in items),
+            "snapshot_token": inventory_fingerprint(items)}
 
 
 def _publisher_names(db: Database, publisher_key: str) -> list[str]:
@@ -211,4 +190,8 @@ def list_publisher_documents(
 
 
 def apply_publishers(db: Database, payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict) and payload.get('use_draft') is True:
+        if set(payload) != {'use_draft', 'revision'} or type(payload['revision']) is not int or payload['revision'] < 0:
+            raise ValueError('server draft apply requires an integral revision')
+        return db.apply_publisher_change_set(payload)
     return db.apply_publisher_change_set(validate_change_set(payload))

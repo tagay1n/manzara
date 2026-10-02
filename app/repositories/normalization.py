@@ -743,6 +743,11 @@ class NormalizationRepository:
 
         with self._lock:
             with self._connect() as conn:
+                draft = None
+                if change_set.get("use_draft"):
+                    draft = self._prepare_publisher_draft_apply(conn, change_set["revision"])
+                    change_set = draft["changes"]
+                identity_mapping = {}
                 before = {
                     "canonicals": [dict(row) for row in conn.execute("SELECT * FROM normalization_canonicals WHERE entity_type='publisher' ORDER BY canonical_id FOR UPDATE").fetchall()],
                     "aliases": [dict(row) for row in conn.execute("SELECT * FROM normalization_aliases WHERE entity_type='publisher' ORDER BY alias_id FOR UPDATE").fetchall()],
@@ -776,6 +781,7 @@ class NormalizationRepository:
                     )
                     canonical_id = int(cur.lastrowid)
                     alias(conn, raw_name, canonical_id, "keep")
+                    identity_mapping[f"raw:{raw_name}"] = f"canonical:{canonical_id}"
                     touched.add(canonical_id)
 
                 for merge in change_set["merges"]:
@@ -816,13 +822,20 @@ class NormalizationRepository:
                     for raw_name in merge["raw_names"]:
                         alias(conn, raw_name, target_id, "merge")
                     alias(conn, final_name, target_id, "merge")
+                    for source_id in merge["canonical_ids"]:
+                        identity_mapping[f"canonical:{source_id}"] = f"canonical:{target_id}"
+                    for raw_name in merge["raw_names"]:
+                        identity_mapping[f"raw:{raw_name}"] = f"canonical:{target_id}"
                     touched.add(target_id)
 
+                self._reconcile_publisher_separations(conn, identity_mapping)
+                if draft is not None:
+                    self._finish_publisher_draft_apply(conn, draft)
                 after = {
                     "canonicals": [dict(row) for row in conn.execute("SELECT * FROM normalization_canonicals WHERE entity_type='publisher' ORDER BY canonical_id").fetchall()],
                     "aliases": [dict(row) for row in conn.execute("SELECT * FROM normalization_aliases WHERE entity_type='publisher' ORDER BY alias_id").fetchall()],
                 }
-                event_payload = {"change_set": change_set, "before": before, "after": after, "touched_canonical_ids": sorted(touched)}
+                event_payload = {"change_set": change_set, "before": before, "after": after, "touched_canonical_ids": sorted(touched), "proposal_ids": draft["proposal_ids"] if draft is not None else []}
                 cur = conn.execute(
                     """INSERT INTO normalization_events (entity_type, action, payload_json, reverted, created_at)
                        VALUES ('publisher', 'apply_publisher_change_set', ?, 0, ?)""",

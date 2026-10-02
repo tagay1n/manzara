@@ -6,6 +6,19 @@ database_pool_size: 4
 # Optional; defaults to ~/.manzara/state/runtime.sqlite3.
 local_state_path: ~/.manzara/state/runtime.sqlite3
 
+# Subscription-only publisher identity research (requires codex login with ChatGPT).
+codex:
+  # Use an absolute path if Codex is outside the task service PATH.
+  executable: codex
+  publisher_merges:
+    model: gpt-6.1-sol
+    reasoning_effort: medium
+    scope: auto
+    web_search: true
+    timeout_seconds: 3600
+    # Optional verified capacity if the exact model is absent from local CLI metadata.
+    # context_window_tokens: 272000
+
 # AI models and quota accounts
 gemini:
   metadata_extraction_operational_retry_cooldown_seconds: 21600

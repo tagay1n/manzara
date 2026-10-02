@@ -99,7 +99,9 @@ function renderSummaryArtifacts(summary) {
   if (!artifacts || typeof artifacts !== "object") return "";
   const text = JSON.stringify(artifacts, null, 2);
   if (!text) return "";
+  const review = artifacts.kind === "library.publisher_merge_summary" ? '<p><a href="/library/publishers">Review publisher merges</a></p>' : "";
   return `
+    ${review}
     <details class="run-artifacts-box" open>
       <summary>Run artifacts</summary>
       <pre>${escapeHtml(text)}</pre>

@@ -21,6 +21,16 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
     return [
         {
+            "task_id": "library.suggest_publisher_merges",
+            "panel_id": "library",
+            "title": "Cluster publishers",
+            "task_type": "metadata",
+            "icon_idle": "Sparkles",
+            "icon_running": "Square",
+            "cwd": str(root),
+            "command": {"mode": "shell", "value": py_bootstrap + '"$PY_BIN" -m app.modules.library.runtime.run_suggest_publisher_merges'},
+        },
+        {
             "task_id": LIBRARY_NORMALIZE_PERSONALITIES_TASK_ID,
             "gemini_workers_default": 1,
             "panel_id": "library",
