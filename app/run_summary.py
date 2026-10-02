@@ -410,28 +410,62 @@ def build_structured_run_summary(
     if task_id == "library.suggest_publisher_merges" and artifacts:
         data = artifacts if isinstance(artifacts, dict) else {}
         if data.get("kind") == "library.publisher_merge_summary":
-            summary["highlights"].extend(
-                {"label": label, "value": str(data.get(key, "Unavailable"))}
-                for key, label in (("cluster_count", "Clusters"), ("singleton_count", "Singleton publishers"), ("unresolved_count", "Unresolved entries"), ("covered_entries", "Entries accounted for"), ("publishers_involved", "Publishers"),
-                                   ("scope", "Scope"), ("model", "Model"), ("duration_seconds", "Duration seconds")))
+            for key, label in (("cluster_count", "Clusters"), ("singleton_count", "Singleton publishers"), ("unresolved_count", "Unresolved entries"), ("covered_entries", "Entries accounted for"), ("publishers_involved", "Publishers"), ("scope", "Scope")):
+                summary["highlights"].append(
+                    {"label": label, "value": str(data.get(key, "Unavailable"))}
+                )
+            model = str(data.get("model") or "Unavailable")
+            reasoning = str(data.get("reasoning_effort") or "").strip()
+            summary["highlights"].append(
+                {"label": "Model", "value": f"{model}-{reasoning}" if reasoning else model}
+            )
+            duration = data.get("duration_seconds")
+            try:
+                duration_value = max(0, int(float(duration)))
+                duration_text = f"{duration_value // 60}:{duration_value % 60:02d}"
+            except (ValueError, TypeError, OverflowError):
+                duration_text = "Unavailable"
+            summary["highlights"].append({"label": "Duration", "value": duration_text})
             usage = data.get("reported_token_usage")
-            summary["highlights"].append({"label": "Reported token usage", "value":
-                ", ".join(f"{key}: {value}" for key, value in usage.items()) if isinstance(usage, dict) and usage else "Unavailable"})
+            usage = usage if isinstance(usage, dict) else {}
+            token_labels = {
+                "input_tokens": "Input tokens",
+                "output_tokens": "Output tokens",
+                "cached_input_tokens": "Cached input tokens",
+                "reasoning_output_tokens": "Reasoning output tokens",
+            }
+            for key, label in token_labels.items():
+                summary["highlights"].append(
+                    {"label": label, "value": str(usage.get(key, "Unavailable"))}
+                )
+            for key, value in usage.items():
+                if key not in token_labels:
+                    label = key.replace("_", " ").capitalize()
+                    summary["highlights"].append({"label": label, "value": str(value)})
             quota = data.get("quota_observations") or {}
             for window in quota.get("windows", []):
-                percent = window.get("after_percent")
-                delta = window.get("delta_percentage_points")
-                reset = window.get("resets_at")
-                try:
-                    reset_text = datetime.fromtimestamp(reset, timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
-                except (ValueError, TypeError, OverflowError, OSError):
-                    reset_text = "unavailable"
-                value = f"{percent}%" if percent is not None else "Reading unavailable"
-                value += f"; +{delta} percentage points" if delta is not None else "; delta unavailable/reset"
-                value += f"; resets {reset_text} (reported precision; concurrent activity can contribute)"
-                summary["highlights"].append({"label": f"Account usage observed · {window.get('bucket')} · {window.get('label')}", "value": value})
+                before, after = window.get("before_percent"), window.get("after_percent")
+                label = str(window.get("label") or "Limit").replace("Five-hour", "5-hour")
+                bucket = str(window.get("bucket") or "").replace("_", " ").strip()
+                if bucket == "base model inference":
+                    label += " (base model)"
+                elif bucket:
+                    label += f" ({bucket})"
+                if before is not None and after is not None:
+                    remaining_before = 100 - before
+                    remaining_after = 100 - after
+                    consumed = window.get("delta_percentage_points")
+                    value = f"{remaining_before:g}% → {remaining_after:g}% remaining"
+                    if consumed is not None:
+                        value += f" ({consumed:g}% used)"
+                else:
+                    value = "Unavailable"
+                summary["highlights"].append({"label": f"{label} limit", "value": value})
             if not quota.get("available"):
-                summary["highlights"].append({"label": "Account usage observed during this run", "value": "Unavailable"})
+                summary["highlights"].extend(
+                    {"label": f"{label} limit", "value": "Unavailable"}
+                    for label in ("5-hour", "Weekly")
+                )
             summary["message"] = ("No unresolved publishers; no analysis needed." if data.get("no_analysis_needed")
                                   else "Publisher clustering ready for review." if not data.get("stopped")
                                   else "Publisher analysis stopped.")
