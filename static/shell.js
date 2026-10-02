@@ -17,7 +17,7 @@
     { title: "Personalities", href: "/library/personalities", match: /^\/library\/personalities/ },
     { title: "Publishers", href: "/library/publishers", match: /^\/library\/publishers/ },
     { title: "Collections", href: "/library/collections", match: /^\/library\/collections/ },
-    { title: "Document cleanup", href: "/library/document-cleanup", match: /^\/library\/document-cleanup/ },
+    { title: "ISBN conflicts", href: "/library/isbn-conflicts", match: /^\/library\/isbn-conflicts/ },
   ];
 
   function navMarkup(activePage) {

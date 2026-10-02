@@ -626,7 +626,7 @@ test("document cleanup page bootstraps from its snapshot cursor and pending ISBN
   const harness = createHarness({
     source: LIBRARY_DOCUMENT_CLEANUP_SOURCE,
     ids: DOCUMENT_CLEANUP_PAGE_IDS,
-    locationPathname: "/library/document-cleanup",
+    locationPathname: "/library/isbn-conflicts",
     apiResolver(path) {
       if (path === "/api/library/document-cleanup") {
         return {
@@ -708,7 +708,7 @@ test("document cleanup caches candidates sequentially and continues after failur
   const harness = createHarness({
     source: LIBRARY_DOCUMENT_CLEANUP_SOURCE,
     ids: DOCUMENT_CLEANUP_PAGE_IDS,
-    locationPathname: "/library/document-cleanup",
+    locationPathname: "/library/isbn-conflicts",
     apiResolver(path) {
       if (path === "/api/library/document-cleanup") return { event_cursor: 73, stats: {} };
       if (path === "/api/library/document-cleanup/isbn-reviews?status=pending&limit=500") {
@@ -793,7 +793,7 @@ test("document cleanup resolves immediately and offers undo in recent reviews", 
       "cleanup-recent-list",
     ],
     confirmResult: false,
-    locationPathname: "/library/document-cleanup",
+    locationPathname: "/library/isbn-conflicts",
     apiResolver(path, options = {}) {
       if (path === "/api/library/document-cleanup") {
         return { event_cursor: 73, stats: { pending_reviews: resolved ? 0 : 1 } };
@@ -878,7 +878,7 @@ test("document cleanup refreshes a review resolved by another request", async ()
       "cleanup-recent-count",
       "cleanup-recent-list",
     ],
-    locationPathname: "/library/document-cleanup",
+    locationPathname: "/library/isbn-conflicts",
     apiResolver(path, options = {}) {
       if (path === "/api/library/document-cleanup") {
         return { event_cursor: 73, stats: { pending_reviews: stale ? 1 : 0 } };

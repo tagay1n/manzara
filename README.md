@@ -22,7 +22,7 @@ See `docs/architecture.md` for the ownership map. Operational invariants live in
 - `/library`
 - `/library/classifications` and `/library/classifications/{classification_id}`
 - `/library/personalities`, `/library/publishers`, and `/library/collections`
-- `/library/document-cleanup`
+- `/library/isbn-conflicts`
 - `/library/normalization/{personality|publisher}`
 
 `/` and `/dashboard` redirect to `/tasks`.
