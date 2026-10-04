@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence
 
 from app.repositories.core import utc_now
+from app.gemini_pacing import GeminiPacingPolicy
+from app.repositories.gemini_pacing import GeminiPacingRepository
 
 
 def _ready_candidate(
@@ -48,7 +50,7 @@ def _ready_candidate(
     return None, min(waits) if waits else None
 
 
-class GeminiRepository:
+class GeminiRepository(GeminiPacingRepository):
     """Machine-local SQLite operations for Gemini coordination."""
 
     def claim_gemini_ready_request(
@@ -64,6 +66,7 @@ class GeminiRepository:
         run_id: Optional[int],
         worker_id: str,
         reserve: bool = True,
+        pacing_policy: GeminiPacingPolicy | None = None,
     ) -> Dict[str, Any]:
         """Select and claim a ready project/model in one cross-process transaction."""
         if not models or not key_ids:
@@ -105,8 +108,16 @@ class GeminiRepository:
             key, retry_at = _ready_candidate(rows, ordered, now_ts, busy_accounts)
             if key is None:
                 return {"retry_at": retry_at}
+            pacing = {}
+            if pacing_policy is not None:
+                pacing = self._claim_pacing(
+                    conn, pacing_policy, now_ts=now_ts, expires_at=expires_at,
+                    lease_token=lease_token, task_id=task_id, run_id=run_id, reserve=reserve,
+                )
+                if "retry_at" in pacing:
+                    return pacing
             if not reserve:
-                return {**key, "retry_at": None}
+                return {**key, **pacing, "retry_at": None}
             model = key["model_name"]
             domain = key["quota_domain_id"]
             conn.execute(
@@ -137,12 +148,13 @@ class GeminiRepository:
                     ON CONFLICT(cursor_id) DO UPDATE SET last_model=excluded.last_model""",
                 (model,),
             )
-            return {**key, "lease_token": lease_token, "retry_at": None}
+            return {**key, **pacing, "lease_token": lease_token, "retry_at": None}
 
     def record_gemini_generation_start(
         self, quota_domain_id: str, model_name: str, *, key_id: str, lease_token: str,
         now_ts: str, next_request_at: str, expires_at: str,
-    ) -> bool:
+        pacing_policy: GeminiPacingPolicy | None = None, pacing_epoch: int = 0,
+    ) -> bool | str:
         """Advance spacing at generation after preparation, under the project lease."""
         with self._runtime_connect(immediate=True) as conn:
             renewed = conn.execute(
@@ -152,6 +164,13 @@ class GeminiRepository:
             ).rowcount
             if not renewed:
                 return False
+            if pacing_policy is not None:
+                wait_until = self._start_paced_generation(
+                    conn, pacing_policy, lease_token=lease_token, epoch=pacing_epoch, now_ts=now_ts,
+                    expires_at=expires_at,
+                )
+                if wait_until:
+                    return wait_until
             conn.execute(
                 """UPDATE gemini_project_model_spacing SET next_request_at=?
                    WHERE quota_domain_id=? AND model_name=?""",
@@ -173,18 +192,36 @@ class GeminiRepository:
         now_ts: str,
     ) -> bool:
         with self._runtime_connect(immediate=True) as conn:
-            return bool(
+            renewed = bool(
                 conn.execute(
                     """UPDATE gemini_project_leases SET lease_expires_at=?
                    WHERE quota_domain_id=? AND lease_token=?""",
                     (expires_at, quota_domain_id, lease_token),
                 ).rowcount
             )
+            if renewed:
+                conn.execute(
+                    """UPDATE gemini_task_pacing SET
+                        admission_expires_at=CASE WHEN admission_token=? THEN ? ELSE admission_expires_at END,
+                        probe_expires_at=CASE WHEN probe_token=? THEN ? ELSE probe_expires_at END
+                        WHERE admission_token=? OR probe_token=?""",
+                    (lease_token, expires_at, lease_token, expires_at, lease_token, lease_token),
+                )
+            return renewed
 
     def release_gemini_project_lease(
         self, quota_domain_id: str, lease_token: str
     ) -> bool:
         with self._runtime_connect(immediate=True) as conn:
+            conn.execute(
+                """UPDATE gemini_task_pacing SET
+                    admission_token=CASE WHEN admission_token=? THEN NULL ELSE admission_token END,
+                    admission_expires_at=CASE WHEN admission_token=? THEN NULL ELSE admission_expires_at END,
+                    probe_token=CASE WHEN probe_token=? THEN NULL ELSE probe_token END,
+                    probe_expires_at=CASE WHEN probe_token=? THEN NULL ELSE probe_expires_at END
+                    WHERE admission_token=? OR probe_token=?""",
+                (lease_token,) * 6,
+            )
             return bool(
                 conn.execute(
                     """UPDATE gemini_project_leases SET lease_token=NULL, lease_expires_at=NULL,

@@ -37,6 +37,7 @@ def test_local_state_is_private_wal_database_with_runtime_tables(tmp_path: Path)
         "gemini_project_leases",
         "gemini_project_model_spacing",
         "gemini_generic_quota_signals",
+        "gemini_task_pacing",
         "ai_item_checkpoints",
     } <= tables
 
@@ -235,3 +236,22 @@ def test_generic_quota_signals_count_distinct_domains_and_clear_on_success(
         assert db.clear_gemini_generic_quota_signals("model") == 2
     finally:
         db.close()
+
+
+def test_v4_pacing_upgrade_preserves_existing_quota_evidence(tmp_path):
+    path = tmp_path / "runtime.sqlite3"
+    store = LocalStateStore(path)
+    store.initialize()
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE IF EXISTS gemini_task_pacing")
+        connection.execute("PRAGMA user_version = 4")
+        connection.execute(
+            "INSERT INTO gemini_quota_domain_model_state "
+            "(quota_domain_id,model_name,failure_count,created_at,updated_at) "
+            "VALUES ('project','model',3,'now','now')"
+        )
+    store.initialize()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("SELECT failure_count FROM gemini_quota_domain_model_state").fetchone()[0] == 3
+        assert connection.execute("SELECT COUNT(*) FROM gemini_task_pacing").fetchone()[0] == 0

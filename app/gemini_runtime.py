@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 
 from app.db import Database
 from app.gemini_workers import emit_gemini_worker_log
+from app.gemini_pacing import GeminiPacingPolicy, PacingOutcome
+from app.repositories.gemini_pacing import GeminiPacingAdmissionLost
 from app.gemini_config import (
     GeminiKey,
     load_configured_gemini_model_names,
@@ -109,6 +111,8 @@ class GeminiLease:
     model_name: str
     project_lease_token: str = ""
     quota_domain_id: str = ""
+    pacing_epoch: int = 0
+    pacing_probe: bool = False
 
 
 @dataclass(frozen=True)
@@ -294,6 +298,7 @@ class GeminiRuntimeManager:
         panel_id: Optional[str],
         should_stop: Optional[Callable[[], bool]] = None,
         worker_id: Optional[str] = None,
+        pacing_policy: GeminiPacingPolicy | None = None,
     ):
         self.db = db
         self.task_id = task_id
@@ -301,6 +306,7 @@ class GeminiRuntimeManager:
         self.should_stop = should_stop or (lambda: False)
         self._local_lock = threading.Lock()
         self.worker_id = worker_id
+        self.pacing_policy = pacing_policy
         self._configured_keys: Optional[List[GeminiKey]] = None
         self._prepared_models: set[str] = set()
         self._limits = load_gemini_runtime_limits()
@@ -473,7 +479,7 @@ class GeminiRuntimeManager:
         pool_models: Sequence[str] | None = None,
         run_id: Optional[int] = None,
     ) -> GeminiLease:
-        """Wait only when none of the eligible models has a ready project."""
+        """Wait for ready project capacity and any opt-in run pacing gate."""
         models = tuple(dict.fromkeys(models))
         if not models:
             raise ValueError("Gemini model pool must not be empty")
@@ -507,7 +513,13 @@ class GeminiRuntimeManager:
                 run_id=run_id,
                 worker_id=self.worker_id or threading.current_thread().name,
             )
+            if self.pacing_policy is not None:
+                claim_args["pacing_policy"] = self.pacing_policy
             decision = self.db.claim_gemini_ready_request(models=models, **claim_args)
+            if decision.get("wait_reason") == "pacing":
+                wait_until = _parse_ts(decision["retry_at"])
+                self._sleep_until(min(wait_until, now + timedelta(seconds=1)))
+                continue
             if "key_id" not in decision:
                 retry_at = _parse_ts(decision.get("retry_at"))
                 full = decision
@@ -551,6 +563,8 @@ class GeminiRuntimeManager:
                 continue
             key = next(key for key in keys if key.key_id == decision["key_id"])
             model = decision["model_name"]
+            if "pacing_event" in decision:
+                self._emit_pacing(decision["pacing_event"], run_id=run_id)
             self._emit(
                 "gemini.key.used",
                 {
@@ -572,6 +586,8 @@ class GeminiRuntimeManager:
                 model_name=model,
                 quota_domain_id=decision["quota_domain_id"],
                 project_lease_token=decision["lease_token"],
+                pacing_epoch=decision.get("pacing_epoch", 0),
+                pacing_probe=decision.get("pacing_probe", False),
             )
 
     def run_with_available_model(
@@ -602,15 +618,62 @@ class GeminiRuntimeManager:
         return selected[-1], value
 
     def _record_generation_start(self, lease: GeminiLease) -> None:
-        now = _utc_now()
-        if not self.db.record_gemini_generation_start(
-            lease.quota_domain_id or lease.key_id, lease.model_name,
-            key_id=lease.key_id, lease_token=lease.project_lease_token,
-            now_ts=_iso_utc(now),
-            next_request_at=_iso_utc(now + timedelta(seconds=_PROJECT_MODEL_SPACING_SECONDS)),
-            expires_at=_iso_utc(now + timedelta(seconds=_PROJECT_LEASE_TTL_SECONDS)),
-        ):
-            raise GeminiRuntimeError("Gemini project lease lost before generation; request cancelled")
+        while True:
+            if self.should_stop():
+                raise GeminiStopRequestedError("Gemini generation interrupted by graceful stop")
+            now = _utc_now()
+            pacing = {}
+            if self.pacing_policy is not None:
+                pacing = {"pacing_policy": self.pacing_policy, "pacing_epoch": lease.pacing_epoch}
+            decision = self.db.record_gemini_generation_start(
+                lease.quota_domain_id or lease.key_id, lease.model_name,
+                key_id=lease.key_id, lease_token=lease.project_lease_token,
+                now_ts=_iso_utc(now),
+                next_request_at=_iso_utc(now + timedelta(seconds=_PROJECT_MODEL_SPACING_SECONDS)),
+                expires_at=_iso_utc(now + timedelta(seconds=_PROJECT_LEASE_TTL_SECONDS)),
+                **pacing,
+            )
+            if decision is False:
+                raise GeminiRuntimeError("Gemini project lease lost before generation; request cancelled")
+            if isinstance(decision, str):
+                self._sleep_until(min(_parse_ts(decision), now + timedelta(seconds=1)))
+                continue
+            return
+
+    def _emit_pacing(self, snapshot: dict, *, run_id: int | None) -> None:
+        state = snapshot["state"]
+        payload = {
+            "scope_id": self.pacing_policy.scope_id,
+            "mode": state["mode"], "interval_seconds": snapshot["interval_seconds"],
+            "wait_until": state["cooldown_until"] or state["next_start_at"],
+            "reason": snapshot["reason"], "probe": snapshot.get("probe", state["mode"] == "probe"),
+        }
+        self._emit("gemini.pacing.changed", payload, run_id=run_id)
+        emit_gemini_worker_log(
+            f"gemini pacing: reason={payload['reason']} mode={payload['mode']} "
+            f"interval={payload['interval_seconds']}s until={payload['wait_until'] or 'ready'}",
+            worker_id=self.worker_id,
+        )
+
+    def _record_pacing_outcome(self, lease: GeminiLease, outcome: PacingOutcome, *, run_id: int | None) -> None:
+        if self.pacing_policy is None:
+            return
+        result = self.db.record_gemini_pacing_outcome(
+            self.pacing_policy, quota_domain_id=lease.quota_domain_id or lease.key_id,
+            lease_token=lease.project_lease_token, epoch=lease.pacing_epoch,
+            probe=lease.pacing_probe, outcome=outcome, now_ts=_iso_utc(_utc_now()),
+        )
+        if result is not None and (result["changed"] or result["probe"]):
+            self._emit_pacing(result, run_id=run_id)
+
+    @staticmethod
+    def _pacing_error_outcome(error: Exception) -> PacingOutcome:
+        status = _extract_status_code(error)
+        if status == 429:
+            return "neutral" if _classify_quota_error(error).daily else "quota"
+        if status in {500, 501, 502, 503, 504} or _is_timeout_error(error) or _is_transport_error(error):
+            return "transient"
+        return "neutral"
 
     def _lease_heartbeat(self, lease: GeminiLease, stop: threading.Event) -> None:
         renew = getattr(self.db, "renew_gemini_project_lease", None)
@@ -952,8 +1015,10 @@ class GeminiRuntimeManager:
         attempts = max(1, int(max_attempts))
         last_error: Optional[Exception] = None
 
-        for attempt in range(1, attempts + 1):
+        attempt = 0
+        while attempt < attempts:
             lease = acquire()
+            attempt += 1
             heartbeat_stop = threading.Event()
             heartbeat = threading.Thread(
                 target=self._lease_heartbeat,
@@ -965,9 +1030,18 @@ class GeminiRuntimeManager:
             generation_context = _GENERATION_START.set(lambda: self._record_generation_start(lease))
             try:
                 result = call(lease.key_value, lease)
+            except GeminiPacingAdmissionLost:
+                # Nothing was sent. Release preparation capacity and reacquire
+                # after the task gate, without consuming the physical retry budget.
+                attempt -= 1
+                continue
             except GeminiResponseValidationError:
+                self._record_pacing_outcome(lease, "success", run_id=run_id)
+                raise
+            except GeminiStopRequestedError:
                 raise
             except Exception as error:  # noqa: BLE001
+                self._record_pacing_outcome(lease, self._pacing_error_outcome(error), run_id=run_id)
                 try:
                     self._handle_error(lease=lease, error=error, run_id=run_id)
                 except GeminiRequestRejectedError:
@@ -987,6 +1061,7 @@ class GeminiRuntimeManager:
                         continue
                     raise
             else:
+                self._record_pacing_outcome(lease, "success", run_id=run_id)
                 now_utc = _utc_now()
                 clear_signals = getattr(
                     self.db, "clear_gemini_generic_quota_signals", None

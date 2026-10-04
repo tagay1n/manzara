@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
-LOCAL_STATE_SCHEMA_VERSION = 4
+LOCAL_STATE_SCHEMA_VERSION = 5
 _FOR_UPDATE_RE = re.compile(r"\s+FOR\s+UPDATE\b", re.IGNORECASE)
 
 
@@ -63,7 +63,7 @@ class LocalStateStore:
         self.path.parent.chmod(0o700)
         with self.connect() as conn:
             version = int(conn.execute("PRAGMA user_version").scalar() or 0)
-            if version not in (0, 1, 2, 3, LOCAL_STATE_SCHEMA_VERSION):
+            if version not in (0, 1, 2, 3, 4, LOCAL_STATE_SCHEMA_VERSION):
                 raise RuntimeError(
                     f"Unsupported local runtime schema version {version}; "
                     f"expected {LOCAL_STATE_SCHEMA_VERSION}"
@@ -420,6 +420,12 @@ CREATE TABLE IF NOT EXISTS gemini_generic_quota_signals (
 );
 CREATE INDEX IF NOT EXISTS idx_gemini_generic_quota_signals_seen
 ON gemini_generic_quota_signals(model_name, last_seen_at);
+CREATE TABLE IF NOT EXISTS gemini_task_pacing (
+    scope_id TEXT PRIMARY KEY, task_id TEXT, run_id INTEGER,
+    state_json TEXT NOT NULL, admission_token TEXT, admission_expires_at TEXT,
+    probe_token TEXT, probe_expires_at TEXT, updated_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS ai_item_checkpoints (
     flow_id TEXT NOT NULL, item_id TEXT NOT NULL, contract_version TEXT NOT NULL,
     status TEXT NOT NULL, attempts_json TEXT NOT NULL DEFAULT '[]',

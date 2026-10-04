@@ -73,15 +73,23 @@ Personality normalization opts into yielding immediately on HTTP 429, service
 errors preserve retryable checkpoints and move the person to the tail without
 permanently excluding the model. HTTP 504 remains a service error with the shared
 60-second model pause; a local deadline is a transient timeout, not HTTP 504.
-The worker continues with the next person on another ready configured model.
+The worker continues with the next person on another ready configured model,
+subject to the run's adaptive pacing gate.
 Quota cooldowns, provider retry metadata, daily exhaustion, project leases and
 60-second project/model spacing remain enforced by the shared runtime. The shared
 round-robin scheduler diversifies accounts and projects; there is no global
-ten-request/minute cap. No escalating overload pause is
-introduced. Extraction and evaluation retain their existing fallback behavior.
+ten-request/minute cap. Personality normalization alone adds five-second spacing
+between generation starts across all workers and models. Generic 429s slow that
+pace, and three without an intervening successful response pause the queue.
+Cooldowns reopen with one exclusive probe; failed probes lengthen the pause, and
+five successful responses at a time gradually restore the pace. Each new run
+starts at five seconds without clearing existing provider cooldowns. See
+`gemini-runtime.md` for the controller's intervals and recovery rules.
+Extraction and evaluation retain their existing fallback behavior and pacing.
 
-If the whole pool has no ready capacity, wait stoppably until the earliest shared
-availability. A person whose remaining models are unavailable yields while
+If the whole pool has no ready capacity or the pacing gate is closed, wait
+stoppably until the earliest applicable availability. A person whose remaining
+models are unavailable yields while
 other people can use ready models. If the entire pool is exhausted, stop
 processing more names and preserve untouched work for resumption.
 A second transient failure leaves the person durably deferred. Stop during a

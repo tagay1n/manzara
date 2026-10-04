@@ -13,6 +13,7 @@ from pathlib import Path
 import signal
 import sys
 import threading
+import uuid
 from typing import Any, Callable, Sequence
 
 
@@ -35,6 +36,7 @@ from app.gemini_model_pool import (
     run_ordered_model_pool,
 )
 from app.gemini_requests import generate_structured_json
+from app.gemini_pacing import GeminiPacingPolicy
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
 from app.gemini_workers import current_gemini_worker_id, emit_gemini_worker_log, resolve_gemini_workers
 from app.modules.library.personality_normalization import (
@@ -266,6 +268,8 @@ def run_personality_normalization(
         eligible = eligible[:max(0, int(limit))]
     queue = _WorkQueue(eligible, should_stop)
     progress_lock = threading.Lock()
+    # Every worker shares this run scope; a new run starts with fresh pacing.
+    pacing_policy = GeminiPacingPolicy(f"{TASK_ID}:{run_id if run_id is not None else uuid.uuid4().hex}")
 
     def publish(*, force: bool = False) -> None:
         if run_id is not None:
@@ -371,7 +375,8 @@ def run_personality_normalization(
 
     def work() -> None:
         worker_id = current_gemini_worker_id("personalities")
-        manager = GeminiRuntimeManager(db, task_id=TASK_ID, panel_id=PANEL_ID, should_stop=should_stop, worker_id=worker_id)
+        manager = GeminiRuntimeManager(db, task_id=TASK_ID, panel_id=PANEL_ID,
+            should_stop=should_stop, worker_id=worker_id, pacing_policy=pacing_policy)
         while (candidate := queue.claim()) is not None:
             try:
                 process(candidate, manager, worker_id)

@@ -33,7 +33,7 @@ Dependencies point inward: flow modules may use shared core; shared core must no
 | SSE transport, snapshot cursors | `app/stream_routes.py`, `app/core_read_routes.py` | `tests/test_api_core.py`, `tests/test_api_task_runtime.py` |
 | Run logs, artifacts, summaries | `app/run_log_store.py`, `app/run_artifact_channel.py`, `app/run_summary.py`; read `app/task_runtime/AGENTS.md` | `tests/test_run_log_store.py`, `tests/test_run_artifact_channel.py`, `tests/test_run_summary.py` |
 | SQLite schema and runtime repositories | `app/local_state.py`, `app/repositories/runs.py`, `app/repositories/conveyor.py`, `app/repositories/gemini.py` | `tests/test_local_state.py`, repository concern's focused tests |
-| Gemini config / model fallback / quota leases / transport | `app/gemini_config.py` / `app/gemini_model_pool.py` / `app/gemini_runtime.py` / `app/gemini_requests.py` | Corresponding `tests/test_gemini_*.py` file |
+| Gemini config / model fallback / quota leases / adaptive pacing / transport | `app/gemini_config.py` / `app/gemini_model_pool.py` / `app/gemini_runtime.py` / `app/gemini_pacing.py`, `app/repositories/gemini_pacing.py` / `app/gemini_requests.py` | Corresponding `tests/test_gemini_*.py` file; pacing transitions and integration in `tests/test_gemini_pacing.py` |
 | Frontend HTTP and shared shell | `static/core.js`, `static/shell.js`; read `static/AGENTS.md` | `tests/frontend/test_core.mjs`, `tests/frontend/test_shell.mjs`, `tests/frontend/test_shell_state.mjs` |
 
 Commands and environment requirements: `docs/verification.md`. Update navigation when moving an owner or changing its focused-test coverage; avoid recording line numbers or test counts.

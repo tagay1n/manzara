@@ -323,3 +323,23 @@ def test_reason_length_is_bounded():
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         PersonalityResponse.model_validate_json(response("unusable", "x" * 301))
+
+
+def test_personalities_enable_one_pacing_scope_for_all_workers_and_reset_each_run(monkeypatch):
+    from app.gemini_pacing import GeminiPacingPolicy
+    policies = []
+
+    class PacedManager(Manager):
+        def __init__(self, *args, **kwargs):
+            policy = kwargs["pacing_policy"]
+            assert isinstance(policy, GeminiPacingPolicy)
+            policies.append(policy)
+    monkeypatch.setattr(runner, "GeminiRuntimeManager", PacedManager)
+    names = [PersonalityCandidate("A", 1, 1, ("author",)), PersonalityCandidate("B", 1, 1, ("author",))]
+    for run_id in (1, 2):
+        runner.run_personality_normalization(db=Db(), models=["first"], run_id=run_id,
+            should_stop=lambda: False, candidates=names, workers=2,
+            request_json=lambda **kwargs: response(name_full="Person"))
+    assert policies[0].scope_id == policies[1].scope_id
+    assert policies[2].scope_id == policies[3].scope_id
+    assert policies[0].scope_id != policies[2].scope_id

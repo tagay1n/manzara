@@ -17,13 +17,38 @@ yield_on_transient=True)`: it yields the item immediately on 429, service 5xx,
 transport failures and local deadlines. The shared runtime first records its
 normal key/quota/model state. These transient outcomes do not exclude a model as
 a content failure. The personality queue handles one later turn after the first
-pass, with durable deferral. A worker immediately proceeds to the next person
-using another ready model rather than sleeping for the failed model. The
-scheduler waits stoppably for earliest availability only when the entire pool
-has no ready capacity. An item blocked by its content exclusions yields while
+pass, with durable deferral. A worker proceeds to the next person using another
+ready model, subject to the personalities-only pacing gate below. The scheduler
+waits stoppably when the pool has no ready capacity or the run pacing gate is
+closed. An item blocked by its content exclusions yields while
 other items can run; total daily exhaustion ends the queue without consuming
 untouched work. Other workflows retain bounded same-item retry and checkpoint
 policies while using the same ready-model scheduler.
+
+Personality normalization also opts into a run-scoped `GeminiPacingPolicy`.
+All its workers and models share five-second spacing between generation starts;
+response time counts toward that interval. Other tasks do not enable this gate.
+Each generic 429 increases spacing through 5, 10, 20, 40 and 60 seconds. Three
+quota failures without a successful response pause the queue for 60 seconds.
+The next eligible request is an exclusive probe; other workers wait for its
+outcome. A generic 429, service failure, transport failure or timeout during a
+probe escalates the cooldown through 120, 240, 480 and 600 seconds (capped).
+A successful probe resumes at the slowed interval, with a ten-second minimum.
+Five consecutive successful responses reduce spacing by one level; reaching
+five seconds resets cooldown escalation. A generic 429 during recovery pauses
+the queue immediately. Content validation failures count as provider availability
+for pacing without changing their item failure semantics. Daily quota exhaustion
+and ordinary service/transport failures retain their shared runtime handling.
+
+Admission and probe ownership use renewable SQLite leases. Preparation reserves
+admission; the transport advances spacing at the actual generation start.
+Epochs prevent responses from before a cooldown from reopening the queue.
+`gemini.pacing.changed` events and worker log lines describe interval, cooldown
+and probe transitions. Local schema version 5 adds this state without clearing
+existing runs, quota evidence or checkpoints. Workers recovering within the same
+run retain pacing state; each new run starts fresh at five seconds while existing
+shared provider cooldowns still apply. Gracefully stop the personality task and
+restart the application before starting a new run with the new controller.
 
 Local schema version 4 adds the cursor, project leases and project/model spacing
 without changing PostgreSQL checkpoints or clearing quota evidence. Existing
