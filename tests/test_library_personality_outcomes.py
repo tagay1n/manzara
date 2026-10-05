@@ -63,6 +63,7 @@ def test_negative_decision_persists_without_canonical_or_model_fallback_and_resu
 
     def request(**kwargs):
         assert kwargs["response_schema"] is PersonalityResponse
+        assert kwargs["timeout_seconds"] == 60
         calls.append(kwargs["model_name"])
         return response(outcome, "Source identifies an institution" if outcome == "not_person" else "Corrupted source")
 

@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal
 
-PacingOutcome = Literal["success", "quota", "transient", "neutral"]
+PacingOutcome = Literal["success", "quota", "service", "transient", "neutral"]
 
 
 @dataclass(frozen=True)
@@ -67,8 +67,9 @@ def advance_pacing(
             if level == 0:
                 updated = replace(updated, mode="normal", cooldown_level=0, cooldown_until=None)
     else:
-        updated = replace(state, success_streak=0)
-        if state.mode == "probe" and outcome == "transient":
+        # Model availability does not invalidate evidence of quota recovery.
+        updated = state if outcome == "service" else replace(state, success_streak=0)
+        if state.mode == "probe" and outcome in {"service", "transient"}:
             updated = _pause(policy, updated, now, escalate=True)
     if updated.last_start_at:
         next_start = datetime.fromisoformat(updated.last_start_at) + timedelta(

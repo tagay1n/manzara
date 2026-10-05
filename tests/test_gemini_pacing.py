@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.gemini_pacing import GeminiPacingPolicy
+from app.gemini_pacing import GeminiPacingPolicy, GeminiPacingState, advance_pacing
 from test_gemini_scheduler import setup_repo
 
 BASE = datetime(2026, 10, 4, 12, tzinfo=timezone.utc)
@@ -141,13 +141,45 @@ def test_normal_non_quota_errors_do_not_trigger_adaptive_cooldown(tmp_path, outc
     assert "key_id" in claim(repo, 15)
 
 
-def test_transient_probe_failure_extends_pause(tmp_path):
+@pytest.mark.parametrize("outcome", ["transient", "service"])
+def test_transient_probe_failure_extends_pause(tmp_path, outcome):
     repo = setup_repo(tmp_path)
     trip(repo)
     item = claim(repo, 91)
     start(repo, item, 91)
-    result = finish(repo, item, "transient", 92)
+    result = finish(repo, item, outcome, 92)
     assert result["state"]["cooldown_until"] == ts(212)
+
+
+@pytest.mark.parametrize("mode", ["normal", "recovery"])
+def test_service_failures_preserve_progress_until_five_successes(mode):
+    policy = GeminiPacingPolicy("run")
+    state = GeminiPacingState(mode=mode, level=3)
+    for _ in range(4):
+        state = advance_pacing(policy, state, "success", BASE)
+        after_service = advance_pacing(policy, state, "service", BASE)
+        assert after_service == state
+        state = after_service
+    state = advance_pacing(policy, state, "success", BASE)
+    assert state.level == 2
+    assert state.success_streak == 0
+
+
+@pytest.mark.parametrize("outcome", ["quota", "transient", "neutral"])
+def test_other_failures_still_reset_recovery_progress(outcome):
+    policy = GeminiPacingPolicy("run")
+    state = GeminiPacingState(mode="recovery", level=3, success_streak=4)
+    assert advance_pacing(policy, state, outcome, BASE).success_streak == 0
+
+
+@pytest.mark.parametrize("status", [500, 501, 502, 503, 504])
+def test_runtime_classifies_model_service_errors_separately(status):
+    from app.gemini_runtime import GeminiRuntimeManager
+
+    class ServiceError(Exception):
+        code = status
+
+    assert GeminiRuntimeManager._pacing_error_outcome(ServiceError("unavailable")) == "service"
 
 
 def test_stale_inflight_success_cannot_reopen_cooldown(tmp_path):

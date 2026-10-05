@@ -85,6 +85,10 @@ Cooldowns reopen with one exclusive probe; failed probes lengthen the pause, and
 five successful responses at a time gradually restore the pace. Each new run
 starts at five seconds without clearing existing provider cooldowns. See
 `gemini-runtime.md` for the controller's intervals and recovery rules.
+Ordinary model service 5xx responses preserve recovery progress; failed probes
+still extend the cooldown. Quota, transport, timeout and neutral outcomes reset
+the success counter. Personality requests use a 60-second HTTP I/O timeout,
+which does not impose a hard deadline on the total streamed response duration.
 Extraction and evaluation retain their existing fallback behavior and pacing.
 
 If the whole pool has no ready capacity or the pacing gate is closed, wait

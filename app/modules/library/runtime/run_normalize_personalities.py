@@ -294,7 +294,7 @@ def run_personality_normalization(
             emit_gemini_worker_log(f"library personalities: model attempt raw_name={candidate.raw_name} model={model_name}", worker_id=worker_id)
             raw = request_json(api_key=api_key, model_name=model_name,
                                contents=[build_personality_normalization_prompt(model_input, document_languages=candidate.document_languages)],
-                               response_schema=PersonalityResponse)
+                               response_schema=PersonalityResponse, timeout_seconds=60)
             emit_gemini_worker_log(f"library personalities: model response raw_name={candidate.raw_name} model={model_name}\n"
                                   + format_personality_response_for_log(raw), worker_id=worker_id)
             return raw

@@ -34,11 +34,17 @@ The next eligible request is an exclusive probe; other workers wait for its
 outcome. A generic 429, service failure, transport failure or timeout during a
 probe escalates the cooldown through 120, 240, 480 and 600 seconds (capped).
 A successful probe resumes at the slowed interval, with a ten-second minimum.
-Five consecutive successful responses reduce spacing by one level; reaching
-five seconds resets cooldown escalation. A generic 429 during recovery pauses
+Five successful responses reduce spacing by one level. Ordinary model service
+5xx failures preserve that progress while retaining the shared model pause;
+quota, transport, timeout and neutral outcomes reset it. Failed service probes
+still escalate cooldowns. Reaching five seconds resets cooldown escalation.
+A generic 429 during recovery pauses
 the queue immediately. Content validation failures count as provider availability
 for pacing without changing their item failure semantics. Daily quota exhaustion
 and ordinary service/transport failures retain their shared runtime handling.
+Personality normalization sets the shared transport's HTTP I/O timeout to 60
+seconds; other callers retain their existing timeout. This is an I/O timeout,
+not a hard deadline for the total duration of a streamed response.
 
 Admission and probe ownership use renewable SQLite leases. Preparation reserves
 admission; the transport advances spacing at the actual generation start.

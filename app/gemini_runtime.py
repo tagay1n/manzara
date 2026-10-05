@@ -671,7 +671,9 @@ class GeminiRuntimeManager:
         status = _extract_status_code(error)
         if status == 429:
             return "neutral" if _classify_quota_error(error).daily else "quota"
-        if status in {500, 501, 502, 503, 504} or _is_timeout_error(error) or _is_transport_error(error):
+        if status in {500, 501, 502, 503, 504}:
+            return "service"
+        if _is_timeout_error(error) or _is_transport_error(error):
             return "transient"
         return "neutral"
 
