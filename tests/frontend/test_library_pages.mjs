@@ -484,10 +484,7 @@ test("library publishers page renders API error state", async () => {
     harness.elements.get("publisher-status").textContent,
     /Publishers unavailable/,
   );
-  assert.match(
-    harness.elements.get("publisher-table-status").textContent,
-    /publishers unavailable/,
-  );
+  assert.match(harness.elements.get("publisher-table-body").innerHTML, /Could not load publishers/);
 });
 
 test("library publishers page shows loading progress in the table instead of the header", () => {
@@ -521,7 +518,7 @@ test("library publishers page stages a new publisher and applies one batch", asy
 
   assert.match(harness.elements.get("publisher-table-body").innerHTML, /Tatar Book Publisher/);
   assert.doesNotMatch(harness.elements.get("publisher-table-body").innerHTML, /Suggested match|Evidence/);
-  harness.elements.get("publisher-table-body").dispatch("click", { target: { closest: (selector) => selector === ".publisher-keep" ? { dataset: { key: encodeURIComponent("raw:Таткнигоиздат") } } : null } });
+  harness.elements.get("publisher-detail-body").dispatch("click", { target: { closest: (selector) => selector === ".publisher-keep" ? { dataset: { key: encodeURIComponent("raw:Таткнигоиздат") } } : null } });
   await harness.flush();
   assert.equal(harness.elements.get("publisher-apply").disabled, false);
   harness.elements.get("publisher-apply").dispatch("click");
@@ -531,7 +528,7 @@ test("library publishers page stages a new publisher and applies one batch", asy
   assert.deepEqual(JSON.parse(harness.apiCalls.find(call => call.path.endsWith("/draft")).options.body).changes.keeps, ["Таткнигоиздат"]);
 });
 
-test("library publishers page keeps merge controls in the header and enables drafts after a merge", async () => {
+test("library publishers page shows selection controls and enables drafts after a merge", async () => {
   const harness = createHarness({
     source: LIBRARY_PUBLISHERS_SOURCE,
     locationPathname: "/library/publishers",
@@ -577,7 +574,7 @@ test("library publishers page shows progress while applying staged changes", asy
     },
   });
   await harness.flush();
-  harness.elements.get("publisher-table-body").dispatch("click", { target: { closest: (selector) => selector === ".publisher-keep" ? { dataset: { key: encodeURIComponent("raw:Таткнигоиздат") } } : null } });
+  harness.elements.get("publisher-detail-body").dispatch("click", { target: { closest: (selector) => selector === ".publisher-keep" ? { dataset: { key: encodeURIComponent("raw:Таткнигоиздат") } } : null } });
   await harness.flush();
   harness.elements.get("publisher-apply").dispatch("click");
   await harness.flush();
@@ -604,15 +601,19 @@ test("library publishers page shows a paginated list of document links", async (
   await harness.flush();
 
   harness.elements.get("publisher-table-body").dispatch("click", {
+    target: { closest: (selector) => selector === ".publisher-name" ? { dataset: { key: encodeURIComponent("canonical:1") } } : null },
+  });
+  await harness.flush();
+  harness.elements.get("publisher-detail-body").dispatch("click", {
     target: { closest: (selector) => selector === ".publisher-documents-toggle" ? { dataset: { key: encodeURIComponent("canonical:1") } } : null },
   });
   await harness.flush();
 
-  const table = harness.elements.get("publisher-table-body").innerHTML;
+  const table = harness.elements.get("publisher-detail-body").innerHTML;
   assert.match(table, /tatar-book\.pdf/);
   assert.match(table, /\/api\/library\/documents\/a{32}\/open/);
   assert.match(table, /Next 10/);
-  harness.elements.get("publisher-table-body").dispatch("click", {
+  harness.elements.get("publisher-detail-body").dispatch("click", {
     target: { closest: (selector) => selector === ".publisher-documents-next" ? { dataset: { key: encodeURIComponent("canonical:1"), page: "2" } } : null },
   });
   await harness.flush();

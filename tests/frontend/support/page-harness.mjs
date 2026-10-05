@@ -178,33 +178,9 @@ export const PERSONALITIES_PAGE_IDS = [
   "tab-badge-scripts",
 ];
 
-export const PUBLISHERS_PAGE_IDS = [
-  "publisher-suggestions-title", "publisher-suggestions-body", "publisher-suggestions-status", "publisher-suggestions-next", "publisher-suggestions-previous",
-  "global-status",
-  "last-event",
-  "publisher-apply",
-  "publisher-count",
-  "publisher-filter-input",
-  "publisher-filter-clear",
-  "publisher-discard",
-  "publisher-merge",
-  "publisher-merge-choices",
-  "publisher-merge-close",
-  "publisher-merge-confirm",
-  "publisher-merge-dialog",
-  "publisher-merge-form",
-  "publisher-merge-name",
-  "publisher-merge-filter-input",
-  "publisher-merge-filter-clear",
-  "publisher-merge-selected",
-  "publisher-select-page",
-  "publisher-sort-name",
-  "publisher-sort-documents",
-  "publisher-status",
-  "publisher-table-body",
-  "publisher-table-status",
-  "stop-all-btn",
-];
+export const PUBLISHERS_PAGE_IDS = [...readFileSync(
+  new URL("../../../static/library-publishers.html", import.meta.url), "utf-8",
+).matchAll(/id="([^"]+)"/g)].map(match => match[1]);
 
 export const COLLECTIONS_PAGE_IDS = [
   "global-status",

@@ -33,16 +33,17 @@ test('publisher suggestions escape model content and reject unsafe links', async
 
 test('review controls use native buttons and labeled editable names', () => {
   assert.match(source, /aria-label="Canonical publisher name"/);
-  assert.match(html, /id="publisher-suggestions-next"[^>]*>Next/);
+  assert.match(html, /id="publisher-suggestions-list"/);
+  assert.match(source, /<button class="publisher-proposal-open/);
 });
 
 
 test('conflicts identify shared names and open the related proposal for review', async () => {
   const harness = setup(true); await harness.flush();
   const body = harness.elements.get('publisher-suggestions-body');
-  assert.match(body.innerHTML, /Conflict requires review/);
+  assert.match(body.innerHTML, /<strong>Conflict<\/strong>/);
   assert.match(body.innerHTML, /&lt;script&gt;One/);
-  assert.match(body.innerHTML, /Review proposal #2/);
+  assert.match(body.innerHTML, /data-proposal-id="2"[^>]*>Three/);
   body.dispatch('click', {target:{closest(selector) {
     return selector === '.publisher-conflict-open' ? {dataset:{proposalId:'2'}} : null;
   }}});
@@ -54,23 +55,24 @@ test('conflicts identify shared names and open the related proposal for review',
 test('saved member edits refresh conflict markers without reloading the page', async () => {
   const harness = setup(true); await harness.flush();
   const body = harness.elements.get('publisher-suggestions-body');
-  assert.match(body.innerHTML, /Conflict requires review/);
+  assert.match(body.innerHTML, /<strong>Conflict<\/strong>/);
   body.dispatch('click', {target:{closest(selector) {
     return selector === '.publisher-suggestion-remove' ? {dataset:{key:'raw%3AOne'}} : null;
   }}});
   await harness.flush();
-  assert.doesNotMatch(body.innerHTML, /Conflict requires review/);
+  assert.doesNotMatch(body.innerHTML, /<strong>Conflict<\/strong>/);
 });
 
 
 test('cluster review presents a proposed publisher with variants and coverage', async () => {
   const harness=setup(); await harness.flush();
   const body=harness.elements.get('publisher-suggestions-body').innerHTML;
-  assert.match(body,/Proposed publisher/);
-  assert.match(body,/Proposed aliases/);
+  assert.match(body,/id="publisher-suggestion-name"/);
+  assert.doesNotMatch(body,/Proposed publisher/);
+  assert.match(body,/Aliases \(2\)/);
   assert.match(body,/Second spelling/);
   assert.match(body,/&lt;img&gt;alias/);
-  assert.match(harness.elements.get('publisher-clustering-coverage').textContent,/3 of 3/);
+  assert.match(harness.elements.get('publisher-clustering-coverage').textContent,/3 \/ 3/);
 });
 
 
@@ -81,8 +83,8 @@ test('category filters expose singleton publishers separately from clusters', as
   const filter=harness.elements.get('publisher-cluster-filter');
   filter.value='singleton'; filter.dispatch('change',{target:filter});
   await harness.flush();
-  assert.match(body.innerHTML,/Singleton publisher/);
+  assert.match(body.innerHTML,/value="Solo"/);
   assert.match(body.innerHTML,/Standalone candidate/);
-  assert.match(body.innerHTML,/Keep publisher/);
+  assert.match(body.innerHTML,/data-action="stage"[^>]*>Keep/);
   assert.doesNotMatch(body.innerHTML,/Stage merge/);
 });

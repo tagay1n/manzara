@@ -135,3 +135,12 @@ Official interfaces verified for installed CLI 0.159.3:
 [configuration](https://learn.chatgpt.com/docs/config-file/config-reference), and
 [account telemetry](https://learn.chatgpt.com/docs/app-server).
 No exact version requirement is imposed.
+
+The Publishers workbench opens on Directory, with compact paginated rows and a
+publisher detail panel. Review uses a proposal list and detail pane, with category
+and Pending/Skipped filters. Evidence, aliases, and analysis coverage are collapsed;
+uncertainty and conflicts remain visible. A shared changes bar applies the durable
+draft or discards unapplied changes and review edits. Switching views saves pending
+edits first; a save failure retains the edits and blocks that navigation. New raw
+names must be kept and applied before renaming, as required by the existing backend
+contract. Keep separate remains an immediate persisted decision.
