@@ -21,6 +21,16 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
     py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
     return [
         {
+            "task_id": "library.catalog_preview_requests",
+            "panel_id": "library",
+            "title": "Process admin preview requests",
+            "task_type": "preview",
+            "icon_idle": "Images",
+            "icon_running": "Square",
+            "cwd": str(root),
+            "command": {"mode": "shell", "value": py_bootstrap + '"$PY_BIN" -m app.modules.library.runtime.run_catalog_previews'},
+        },
+        {
             "task_id": "library.suggest_publisher_merges",
             "panel_id": "library",
             "title": "Cluster publishers",

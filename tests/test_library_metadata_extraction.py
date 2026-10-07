@@ -452,7 +452,7 @@ def test_success_write_preserves_existing_non_null_metadata_and_checkpoints_qual
     assert stored is False
     assert len(repository.engine.statements) == 2
     assert "INSERT INTO library_metadata_quality_state" in repository.engine.statements[1]
-    assert not any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
+    assert not any("catalog_upsert('metadata'" in sql for sql in repository.engine.statements)
     assert not any("UPDATE document" in sql for sql in repository.engine.statements)
 
 
@@ -487,7 +487,7 @@ def test_explicit_metadata_refresh_replaces_valid_existing_payload() -> None:
         model_name="model",
         replace_existing=True,
     )
-    assert any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
+    assert any("catalog_upsert('metadata'" in sql for sql in repository.engine.statements)
 
 
 def test_extracted_metadata_without_language_is_replaced_after_valid_result() -> None:
@@ -518,7 +518,7 @@ def test_extracted_metadata_without_language_is_replaced_after_valid_result() ->
         },
         model_name="new-model",
     )
-    assert any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
+    assert any("catalog_upsert('metadata'" in sql for sql in repository.engine.statements)
 
 
 def test_repaired_record_is_not_replaced_again_after_candidate_selection() -> None:
@@ -547,7 +547,7 @@ def test_repaired_record_is_not_replaced_again_after_candidate_selection() -> No
         },
         model_name="new-model",
     )
-    assert not any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
+    assert not any("catalog_upsert('metadata'" in sql for sql in repository.engine.statements)
 
 
 def test_success_write_replaces_only_low_quality_existing_metadata() -> None:
@@ -582,7 +582,7 @@ def test_success_write_replaces_only_low_quality_existing_metadata() -> None:
     )
 
     assert stored is True
-    assert any("INSERT INTO metadata" in sql for sql in repository.engine.statements)
+    assert any("catalog_upsert('metadata'" in sql for sql in repository.engine.statements)
     assert any("UPDATE document" in sql for sql in repository.engine.statements)
 
 

@@ -8,6 +8,7 @@ Start with the matching row; use symbol search within its owners before reading 
 | --- | --- | --- |
 | Application assembly and routes | `app/factory.py`, `app/app_setup.py`, focused `app/*_routes.py` | `tests/test_api_*.py`, `tests/test_wiring_contracts.py` |
 | Database repositories (durable PostgreSQL and local runtime) | `app/repositories/`, `app/local_state.py`; `app/db.py` is the facade | `tests/test_db.py`, `tests/test_local_state.py`, repository-specific tests |
+| Shared normalized Library catalog and separate admin backend | `app/catalog/`, `app/catalog_admin.py`, `app/catalog_routes.py`; coordinated task cutover in `docs/catalog-model.md` and frozen Alembic SQL | `tests/test_catalog_contract.py`, `tests/test_catalog_repository.py`, `tests/test_catalog_api.py`, `tests/test_catalog_migration.py`, `tests/test_catalog_cutover.py` |
 | Task runtime | `app/tasks.py`, `app/task_runtime/`, run artifact modules | task-runtime API tests, `tests/test_run_*.py` |
 | Editable conveyor | `app/conveyor.py`, `app/repositories/conveyor.py`, `static/conveyor.js` | `tests/test_conveyor.py`, frontend tasks-page tests |
 | Document eligibility | `app/document_sync_filter.py` | `tests/test_document_sync_filter.py` |

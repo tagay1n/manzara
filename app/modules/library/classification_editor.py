@@ -203,8 +203,11 @@ def apply_classification_change_set(payload: Mapping[str, Any]) -> dict[str, Any
     engine, source = create_runtime_engine()
     try:
         with engine.begin() as conn:
+            conn.execute(text("SELECT set_config('manzara.catalog_actor','owner',true)"))
             conn.execute(text("LOCK TABLE classification IN SHARE ROW EXCLUSIVE MODE"))
             conn.execute(text("LOCK TABLE metadata IN SHARE ROW EXCLUSIVE MODE"))
+            if conn.execute(text("SELECT to_regclass('catalog_classifications')")).scalar() is not None:
+                conn.execute(text("SET CONSTRAINTS catalog_classifications_node_id_key DEFERRED"))
             rows = _all_rows(conn, lock=True)
             plan = _prepare_change_set(rows, payload)
             if not requested_hash or requested_hash != plan["change_set_hash"]:

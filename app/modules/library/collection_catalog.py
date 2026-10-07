@@ -37,6 +37,7 @@ def _set_search_path(conn: Any) -> None:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
         schema = "monocorpus"
     conn.execute(text(f'SET search_path TO "{schema}", public'))
+    conn.execute(text("SELECT set_config('manzara.catalog_actor','owner',true)"))
 
 
 def _collection(
@@ -152,11 +153,11 @@ def list_collections(
                 conn.execute(
                     text(
                         f"""
-                    SELECT c.*, COUNT(i.md5) AS item_count
+                    SELECT c.*, COALESCE(i.item_count,0) AS item_count
                     FROM library_collections c
-                    LEFT JOIN library_collection_items i ON i.collection_id = c.collection_id
+                    LEFT JOIN (SELECT collection_id,COUNT(*) AS item_count
+                        FROM library_collection_items GROUP BY collection_id) i ON i.collection_id = c.collection_id
                     WHERE :search = '%%' OR LOWER(c.title) LIKE :search
-                    GROUP BY c.collection_id
                     ORDER BY {order}
                     LIMIT :limit OFFSET :offset
                     """
@@ -487,7 +488,7 @@ def decide_collection_proposal(
                     )
                     conn.execute(
                         text(
-                            """INSERT INTO library_collection_items (collection_id,md5,item_title,created_at,updated_at) VALUES (:collection_id,:md5,:title,:now,:now) ON CONFLICT (md5) DO NOTHING"""
+                            """SELECT catalog_upsert('library_collection_items', jsonb_build_object('collection_id', :collection_id, 'md5', :md5, 'item_title', :title, 'created_at', :now, 'updated_at', :now), ARRAY['md5']::text[], ARRAY[]::text[], ARRAY[]::text[])"""
                         ),
                         {
                             "collection_id": collection_id,

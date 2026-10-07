@@ -77,6 +77,30 @@ def _storage() -> ExportStorage:
     )
 
 
+def test_normalized_export_uses_reviewed_mentions_instead_of_global_spellings():
+    work = {"@context": "https://schema.org", "@type": "Book", "name": "Title", "inLanguage": "en",
+            "author": [{"@type": "Person", "name": "Same name"}]}
+    candidates = [_candidate(md5=digest * 32, schema_org=work, catalog_contributions=[{
+        "role": "author", "role_name": None, "raw_name": "Same name", "display_name": "Same name",
+        "entity_id": identity, "approval": "confirmed", "resolution": "confirmed", "status": "active"}],
+        catalog_preview={"private": False, "source_page_count": 1, "pages": [{"role": "first", "page_number": 1,
+            "small_key": f"catalog/{identity}/token/first-small.webp", "large_key": f"catalog/{identity}/token/first-large.webp"}]})
+        for digest, identity in [("a", 1), ("b", 2)]]
+    aliases = [{"entity_type": "personality", "raw_name": "Same name", "canonical_id": identity,
+        "display_name": "Same name", "decision_status": "linked", "canonical_status": "active"} for identity in [1, 2]]
+    result = build_library_export(candidates, aliases=aliases, storage=_storage())
+    assert [row["relations"]["contributors"][0]["entity_id"] for row in result.documents] == ["personality:1", "personality:2"]
+    assert len(result.entities) == 2
+    assert result.documents[0]["preview"]["pages"][0]["small_url"] == "https://objects.example/previews/catalog/1/token/first-small.webp"
+
+
+def test_normalized_export_excludes_unselected_file_and_unconfirmed_entity_pages():
+    work = {"@context": "https://schema.org", "@type": "Book", "name": "Title", "inLanguage": "en"}
+    result = build_library_export([_candidate(schema_org=work, catalog_selected=False)], aliases=[], storage=_storage())
+    assert result.documents == []
+    assert result.exclusions == {"not_selected": 1}
+
+
 def test_library_catalog_registers_site_export_task(tmp_path: Path) -> None:
     task = {
         item["task_id"]: item for item in library_task_definitions(app_root=tmp_path)

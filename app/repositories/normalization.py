@@ -43,13 +43,12 @@ class NormalizationRepository:
                     c.identity_key,
                     c.created_at,
                     c.updated_at,
-                    COUNT(a.alias_id) AS linked_aliases
+                    COALESCE(a.linked_aliases,0) AS linked_aliases
                 FROM normalization_canonicals c
-                LEFT JOIN normalization_aliases a
+                LEFT JOIN (SELECT canonical_id,COUNT(*) AS linked_aliases
+                    FROM normalization_aliases WHERE decision_status='linked' GROUP BY canonical_id) a
                     ON a.canonical_id = c.canonical_id
-                   AND a.decision_status = 'linked'
                 {where}
-                GROUP BY c.canonical_id
                 ORDER BY linked_aliases DESC, c.display_name ASC
                 """,
                 params,
@@ -57,13 +56,25 @@ class NormalizationRepository:
         return [dict(row) for row in rows]
 
     def list_personality_source_documents(self) -> List[Dict[str, Any]]:
-        """Return the eligible JSON-LD source snapshot for personality extraction."""
+        """Project just the included people and language hints needed by the task."""
+        roles = ('author', 'editor', 'translator', 'illustrator', 'contributor')
+        people = ",".join(
+            f"""'{role}', COALESCE(jsonb_agg(jsonb_build_object(
+                '@type','Person','name',n.raw_name)
+                ORDER BY c.position,c.nested_position)
+                FILTER (WHERE c.role='{role}' AND n.kind='person'),'[]'::jsonb)"""
+            for role in roles
+        )
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT md5, schema_org
-                   FROM metadata
-                   WHERE lib IS TRUE AND schema_org IS NOT NULL
-                   ORDER BY md5"""
+                f"""SELECT d.md5,jsonb_build_object(
+                        'inLanguage',array_to_string(p.languages,','),{people}) AS schema_org
+                    FROM catalog_documents d JOIN catalog_publications p USING(publication_id)
+                    LEFT JOIN catalog_contributions c ON c.publication_id=p.publication_id
+                        AND c.role IN ('author','editor','translator','illustrator','contributor')
+                    LEFT JOIN catalog_names n USING(name_id)
+                    WHERE p.inclusion='included' AND p.has_metadata AND p.metadata_present
+                    GROUP BY d.md5,p.languages ORDER BY d.md5"""
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -96,10 +107,10 @@ class NormalizationRepository:
                         entity_type, display_name, normalized_name, status,
                         merged_into_id, notes, created_at, updated_at
                     ) VALUES (?, ?, ?, 'active', NULL, ?, ?, ?)
-                    """,
+                     RETURNING canonical_id""",
                     (entity_type, display_name, normalized_name, notes, now, now),
                 )
-                canonical_id = int(cur.lastrowid)
+                canonical_id = int(cur.scalar())
         canonical = self.get_normalization_canonical(canonical_id)
         if not canonical:
             raise RuntimeError("Failed to create canonical")
@@ -128,6 +139,7 @@ class NormalizationRepository:
 
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 conn.execute(
                     f"""
                     UPDATE normalization_canonicals
@@ -143,6 +155,7 @@ class NormalizationRepository:
         """Delete canonical entity row."""
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 conn.execute(
                     "DELETE FROM normalization_canonicals WHERE canonical_id = ?",
                     (canonical_id,),
@@ -170,21 +183,9 @@ class NormalizationRepository:
         now = utc_now()
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 conn.execute(
-                    """
-                    INSERT INTO normalization_canonicals (
-                        canonical_id, entity_type, display_name, normalized_name,
-                        status, merged_into_id, notes, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(canonical_id) DO UPDATE SET
-                        entity_type=excluded.entity_type,
-                        display_name=excluded.display_name,
-                        normalized_name=excluded.normalized_name,
-                        status=excluded.status,
-                        merged_into_id=excluded.merged_into_id,
-                        notes=excluded.notes,
-                        updated_at=excluded.updated_at
-                    """,
+                    """SELECT catalog_upsert('normalization_canonicals', jsonb_build_object('canonical_id', ?, 'entity_type', ?, 'display_name', ?, 'normalized_name', ?, 'status', ?, 'merged_into_id', ?, 'notes', ?, 'created_at', ?, 'updated_at', ?), ARRAY['canonical_id']::text[], ARRAY['entity_type','display_name','normalized_name','status','merged_into_id','notes','updated_at']::text[], ARRAY[]::text[])""",
                     (
                         snapshot.get("canonical_id"),
                         snapshot.get("entity_type") or "",
@@ -380,35 +381,14 @@ class NormalizationRepository:
                             notes, surname_full, surname_initials, name_full, name_initials,
                             father_name_full, father_name_initials, title, sex, identity_key,
                             created_at, updated_at
-                        ) VALUES ('personality', ?, ?, 'active', NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        ) VALUES ('personality', ?, ?, 'active', NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING canonical_id""",
                         (display_name, identity_key, *values, identity_key, now, now),
                     )
-                    canonical_id = int(cur.lastrowid)
+                    canonical_id = int(cur.scalar())
                 else:
                     canonical_id = int(canonical["canonical_id"])
                 conn.execute(
-                    """INSERT INTO normalization_aliases (
-                        entity_type, raw_name, normalized_name, script_label, docs_count,
-                        mentions_count, marker_count, decision_status, canonical_id, confidence,
-                        source, reason, surname_full, surname_initials, name_full, name_initials,
-                        father_name_full, father_name_initials, title, sex, source_roles,
-                        successful_model, prompt_version, schema_version, created_at, updated_at
-                    ) VALUES ('personality', ?, ?, 'other', ?, ?, 0, 'linked', ?, 1.0,
-                        'gemini_personality_normalizer', 'structured_success', ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?::jsonb, ?, ?, ?, ?, ?)
-                    ON CONFLICT(entity_type, raw_name) DO UPDATE SET
-                        normalized_name=excluded.normalized_name, docs_count=excluded.docs_count,
-                        mentions_count=excluded.mentions_count, decision_status='linked',
-                        canonical_id=excluded.canonical_id, confidence=1.0, source=excluded.source,
-                        reason=excluded.reason, surname_full=excluded.surname_full,
-                        surname_initials=excluded.surname_initials, name_full=excluded.name_full,
-                        name_initials=excluded.name_initials, father_name_full=excluded.father_name_full,
-                        father_name_initials=excluded.father_name_initials, title=excluded.title,
-                        sex=excluded.sex, source_roles=excluded.source_roles,
-                        successful_model=excluded.successful_model,
-                        prompt_version=excluded.prompt_version, schema_version=excluded.schema_version,
-                        updated_at=excluded.updated_at
-                    """,
+                    """SELECT catalog_upsert('normalization_aliases', jsonb_build_object('entity_type', 'personality', 'raw_name', ?, 'normalized_name', ?, 'script_label', 'other', 'docs_count', ?, 'mentions_count', ?, 'marker_count', 0, 'decision_status', 'linked', 'canonical_id', ?, 'confidence', 1.0, 'source', 'gemini_personality_normalizer', 'reason', 'structured_success', 'surname_full', ?, 'surname_initials', ?, 'name_full', ?, 'name_initials', ?, 'father_name_full', ?, 'father_name_initials', ?, 'title', ?, 'sex', ?, 'source_roles', ?::jsonb, 'successful_model', ?, 'prompt_version', ?, 'schema_version', ?, 'created_at', ?, 'updated_at', ?), ARRAY['entity_type','raw_name']::text[], ARRAY['normalized_name','docs_count','mentions_count','decision_status','canonical_id','confidence','source','reason','surname_full','surname_initials','name_full','name_initials','father_name_full','father_name_initials','title','sex','source_roles','successful_model','prompt_version','schema_version','updated_at']::text[], ARRAY[]::text[])""",
                     (raw_name, identity_key, int(document_count), int(mention_count), canonical_id,
                      *values, json.dumps(sorted(set(source_roles)), ensure_ascii=False), model,
                      prompt_version, schema_version, now, now),
@@ -451,6 +431,7 @@ class NormalizationRepository:
         now = utc_now()
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 existing = conn.execute(
                     f"""
                     SELECT raw_name, canonical_id FROM normalization_aliases
@@ -470,10 +451,10 @@ class NormalizationRepository:
                         entity_type, display_name, normalized_name, status,
                         merged_into_id, notes, created_at, updated_at
                     ) VALUES (?, ?, ?, 'active', NULL, '', ?, ?)
-                    """,
+                     RETURNING canonical_id""",
                     (entity_type, display_name, normalized_name, now, now),
                 )
-                canonical_id = int(cur.lastrowid)
+                canonical_id = int(cur.scalar())
                 before_aliases = conn.execute(
                     f"SELECT * FROM normalization_aliases WHERE entity_type = ? AND raw_name IN ({placeholders})",
                     (entity_type, *names),
@@ -481,23 +462,7 @@ class NormalizationRepository:
 
                 for item in alias_snapshots:
                     conn.execute(
-                        """
-                        INSERT INTO normalization_aliases (
-                            entity_type, raw_name, normalized_name, script_label,
-                            docs_count, mentions_count, marker_count, decision_status,
-                            canonical_id, confidence, source, reason, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'linked', ?, 1.0,
-                                  'manual_group', 'group_create', ?, ?)
-                        ON CONFLICT(entity_type, raw_name) DO UPDATE SET
-                            normalized_name=excluded.normalized_name,
-                            script_label=excluded.script_label,
-                            docs_count=excluded.docs_count,
-                            mentions_count=excluded.mentions_count,
-                            marker_count=excluded.marker_count,
-                            decision_status='linked', canonical_id=excluded.canonical_id,
-                            confidence=1.0, source='manual_group', reason='group_create',
-                            updated_at=excluded.updated_at
-                        """,
+                        """SELECT catalog_upsert('normalization_aliases', jsonb_build_object('entity_type', ?, 'raw_name', ?, 'normalized_name', ?, 'script_label', ?, 'docs_count', ?, 'mentions_count', ?, 'marker_count', ?, 'decision_status', 'linked', 'canonical_id', ?, 'confidence', 1.0, 'source', 'manual_group', 'reason', 'group_create', 'created_at', ?, 'updated_at', ?), ARRAY['entity_type','raw_name']::text[], ARRAY['normalized_name','script_label','docs_count','mentions_count','marker_count','decision_status','canonical_id','confidence','source','reason','updated_at']::text[], ARRAY[]::text[])""",
                         (
                             entity_type,
                             item["raw_name"],
@@ -569,6 +534,7 @@ class NormalizationRepository:
         now = utc_now()
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 canonical = conn.execute(
                     "SELECT * FROM normalization_canonicals WHERE canonical_id=? FOR UPDATE",
                     (int(canonical_id),),
@@ -593,23 +559,7 @@ class NormalizationRepository:
                     )
                 for item in alias_snapshots:
                     conn.execute(
-                        """
-                        INSERT INTO normalization_aliases (
-                            entity_type, raw_name, normalized_name, script_label,
-                            docs_count, mentions_count, marker_count, decision_status,
-                            canonical_id, confidence, source, reason, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'linked', ?, 1.0,
-                                  'manual_bulk', 'bulk_link', ?, ?)
-                        ON CONFLICT(entity_type, raw_name) DO UPDATE SET
-                            normalized_name=excluded.normalized_name,
-                            script_label=excluded.script_label,
-                            docs_count=excluded.docs_count,
-                            mentions_count=excluded.mentions_count,
-                            marker_count=excluded.marker_count,
-                            decision_status='linked', canonical_id=excluded.canonical_id,
-                            confidence=1.0, source='manual_bulk', reason='bulk_link',
-                            updated_at=excluded.updated_at
-                        """,
+                        """SELECT catalog_upsert('normalization_aliases', jsonb_build_object('entity_type', ?, 'raw_name', ?, 'normalized_name', ?, 'script_label', ?, 'docs_count', ?, 'mentions_count', ?, 'marker_count', ?, 'decision_status', 'linked', 'canonical_id', ?, 'confidence', 1.0, 'source', 'manual_bulk', 'reason', 'bulk_link', 'created_at', ?, 'updated_at', ?), ARRAY['entity_type','raw_name']::text[], ARRAY['normalized_name','script_label','docs_count','mentions_count','marker_count','decision_status','canonical_id','confidence','source','reason','updated_at']::text[], ARRAY[]::text[])""",
                         (
                             entity_type,
                             item["raw_name"],
@@ -665,6 +615,7 @@ class NormalizationRepository:
         now = utc_now()
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 before = conn.execute(
                     "SELECT * FROM normalization_canonicals WHERE canonical_id=? FOR UPDATE",
                     (int(canonical_id),),
@@ -716,18 +667,7 @@ class NormalizationRepository:
             ):
                 raise ValueError("Publisher alias is already linked to another canonical")
             conn.execute(
-                """
-                INSERT INTO normalization_aliases (
-                    entity_type, raw_name, normalized_name, script_label,
-                    docs_count, mentions_count, marker_count, decision_status,
-                    canonical_id, confidence, source, reason, created_at, updated_at
-                ) VALUES ('publisher', ?, ?, 'other', 0, 0, 0, 'linked', ?, 1.0,
-                          'publisher_batch', ?, ?, ?)
-                ON CONFLICT(entity_type, raw_name) DO UPDATE SET
-                    decision_status='linked', canonical_id=excluded.canonical_id,
-                    confidence=1.0, source='publisher_batch', reason=excluded.reason,
-                    updated_at=excluded.updated_at
-                """,
+                """SELECT catalog_upsert('normalization_aliases', jsonb_build_object('entity_type', 'publisher', 'raw_name', ?, 'normalized_name', ?, 'script_label', 'other', 'docs_count', 0, 'mentions_count', 0, 'marker_count', 0, 'decision_status', 'linked', 'canonical_id', ?, 'confidence', 1.0, 'source', 'publisher_batch', 'reason', ?, 'created_at', ?, 'updated_at', ?), ARRAY['entity_type','raw_name']::text[], ARRAY['decision_status','canonical_id','confidence','source','reason','updated_at']::text[], ARRAY[]::text[])""",
                 (name, name.casefold(), canonical_id, reason, now, now),
             )
 
@@ -743,6 +683,7 @@ class NormalizationRepository:
 
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 draft = None
                 if change_set.get("use_draft"):
                     draft = self._prepare_publisher_draft_apply(conn, change_set["revision"])
@@ -776,10 +717,10 @@ class NormalizationRepository:
                     cur = conn.execute(
                         """INSERT INTO normalization_canonicals
                            (entity_type, display_name, normalized_name, status, merged_into_id, notes, created_at, updated_at)
-                           VALUES ('publisher', ?, ?, 'active', NULL, '', ?, ?)""",
+                           VALUES ('publisher', ?, ?, 'active', NULL, '', ?, ?) RETURNING canonical_id""",
                         (raw_name, raw_name.casefold(), now, now),
                     )
-                    canonical_id = int(cur.lastrowid)
+                    canonical_id = int(cur.scalar())
                     alias(conn, raw_name, canonical_id, "keep")
                     identity_mapping[f"raw:{raw_name}"] = f"canonical:{canonical_id}"
                     touched.add(canonical_id)
@@ -791,10 +732,10 @@ class NormalizationRepository:
                         cur = conn.execute(
                             """INSERT INTO normalization_canonicals
                                (entity_type, display_name, normalized_name, status, merged_into_id, notes, created_at, updated_at)
-                               VALUES ('publisher', ?, ?, 'active', NULL, '', ?, ?)""",
+                               VALUES ('publisher', ?, ?, 'active', NULL, '', ?, ?) RETURNING canonical_id""",
                             (merge["display_name"], str(merge["display_name"]).casefold(), now, now),
                         )
-                        target_id = int(cur.lastrowid)
+                        target_id = int(cur.scalar())
                     for raw_name in merge["raw_names"]:
                         existing = conn.execute(
                             "SELECT * FROM normalization_aliases WHERE entity_type='publisher' AND raw_name=? FOR UPDATE",
@@ -849,6 +790,7 @@ class NormalizationRepository:
         now = utc_now()
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 def canonical(canonical_id: int) -> Dict[str, Any]:
                     row = conn.execute("SELECT * FROM normalization_canonicals WHERE canonical_id=? AND entity_type='personality' FOR UPDATE", (canonical_id,)).fetchone()
                     if not row or row["status"] != "active":
@@ -856,15 +798,7 @@ class NormalizationRepository:
                     return dict(row)
 
                 def retain_alias(name: str, canonical_id: int, reason: str) -> None:
-                    conn.execute("""INSERT INTO normalization_aliases (
-                        entity_type, raw_name, normalized_name, script_label, docs_count, mentions_count,
-                        marker_count, decision_status, canonical_id, confidence, source, reason,
-                        source_roles, successful_model, created_at, updated_at
-                    ) VALUES ('personality', ?, ?, 'other', 0, 0, 0, 'linked', ?, 1.0,
-                        'personality_workbench', ?, '[]'::jsonb, 'manual', ?, ?)
-                    ON CONFLICT(entity_type, raw_name) DO UPDATE SET canonical_id=excluded.canonical_id,
-                        decision_status='linked', source=excluded.source, reason=excluded.reason,
-                        successful_model=COALESCE(normalization_aliases.successful_model, excluded.successful_model), updated_at=excluded.updated_at""",
+                    conn.execute("""SELECT catalog_upsert('normalization_aliases', jsonb_build_object('entity_type', 'personality', 'raw_name', ?, 'normalized_name', ?, 'script_label', 'other', 'docs_count', 0, 'mentions_count', 0, 'marker_count', 0, 'decision_status', 'linked', 'canonical_id', ?, 'confidence', 1.0, 'source', 'personality_workbench', 'reason', ?, 'source_roles', '[]'::jsonb, 'successful_model', 'manual', 'created_at', ?, 'updated_at', ?), ARRAY['entity_type','raw_name']::text[], ARRAY['canonical_id','decision_status','source','reason','successful_model','updated_at']::text[], ARRAY['successful_model']::text[])""",
                         (name, name.casefold(), canonical_id, reason, now, now))
 
                 touched: set[int] = set()
@@ -1006,26 +940,7 @@ class NormalizationRepository:
         with self._lock:
             with self._connect() as conn:
                 conn.execute(
-                    """
-                    INSERT INTO normalization_aliases (
-                        entity_type, raw_name, normalized_name, script_label,
-                        docs_count, mentions_count, marker_count,
-                        decision_status, canonical_id, confidence, source, reason,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(entity_type, raw_name) DO UPDATE SET
-                        normalized_name=excluded.normalized_name,
-                        script_label=excluded.script_label,
-                        docs_count=excluded.docs_count,
-                        mentions_count=excluded.mentions_count,
-                        marker_count=excluded.marker_count,
-                        decision_status=excluded.decision_status,
-                        canonical_id=excluded.canonical_id,
-                        confidence=excluded.confidence,
-                        source=excluded.source,
-                        reason=excluded.reason,
-                        updated_at=excluded.updated_at
-                    """,
+                    """SELECT catalog_upsert('normalization_aliases', jsonb_build_object('entity_type', ?, 'raw_name', ?, 'normalized_name', ?, 'script_label', ?, 'docs_count', ?, 'mentions_count', ?, 'marker_count', ?, 'decision_status', ?, 'canonical_id', ?, 'confidence', ?, 'source', ?, 'reason', ?, 'created_at', ?, 'updated_at', ?), ARRAY['entity_type','raw_name']::text[], ARRAY['normalized_name','script_label','docs_count','mentions_count','marker_count','decision_status','canonical_id','confidence','source','reason','updated_at']::text[], ARRAY[]::text[])""",
                     (
                         entity_type,
                         raw_name,
@@ -1060,28 +975,9 @@ class NormalizationRepository:
         now = utc_now()
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 conn.execute(
-                    """
-                    INSERT INTO normalization_aliases (
-                        alias_id, entity_type, raw_name, normalized_name, script_label,
-                        docs_count, mentions_count, marker_count,
-                        decision_status, canonical_id, confidence, source, reason,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(entity_type, raw_name) DO UPDATE SET
-                        alias_id=excluded.alias_id,
-                        normalized_name=excluded.normalized_name,
-                        script_label=excluded.script_label,
-                        docs_count=excluded.docs_count,
-                        mentions_count=excluded.mentions_count,
-                        marker_count=excluded.marker_count,
-                        decision_status=excluded.decision_status,
-                        canonical_id=excluded.canonical_id,
-                        confidence=excluded.confidence,
-                        source=excluded.source,
-                        reason=excluded.reason,
-                        updated_at=excluded.updated_at
-                    """,
+                    """SELECT catalog_upsert('normalization_aliases', jsonb_build_object('alias_id', ?, 'entity_type', ?, 'raw_name', ?, 'normalized_name', ?, 'script_label', ?, 'docs_count', ?, 'mentions_count', ?, 'marker_count', ?, 'decision_status', ?, 'canonical_id', ?, 'confidence', ?, 'source', ?, 'reason', ?, 'created_at', ?, 'updated_at', ?), ARRAY['entity_type','raw_name']::text[], ARRAY['alias_id','normalized_name','script_label','docs_count','mentions_count','marker_count','decision_status','canonical_id','confidence','source','reason','updated_at']::text[], ARRAY[]::text[])""",
                     (
                         snapshot.get("alias_id"),
                         entity_type,
@@ -1106,6 +1002,7 @@ class NormalizationRepository:
         """Delete one alias row."""
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 conn.execute(
                     """
                     DELETE FROM normalization_aliases
@@ -1125,6 +1022,7 @@ class NormalizationRepository:
         """Move linked aliases from source canonical to target canonical."""
         with self._lock:
             with self._connect() as conn:
+                conn.execute("SELECT set_config('manzara.catalog_actor','owner',true)")
                 rows = conn.execute(
                     """
                     SELECT * FROM normalization_aliases

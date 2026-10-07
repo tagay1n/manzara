@@ -23,6 +23,7 @@ class LibrarySiteExportRepository:
         self._engine: Engine = acquire_postgres_engine(
             str(database_url), schema=normalized
         )
+        self.schema = normalized
 
     def dispose(self) -> None:
         release_postgres_engine(self._engine)
@@ -107,7 +108,48 @@ class LibrarySiteExportRepository:
                         """
                     )
                 ).mappings().all()
+                candidates = [dict(row) for row in candidates]
+                if conn.execute(text("SELECT to_regclass(:table)"), {"table": f'"{self.schema}".catalog_imports'}).scalar():
+                    if conn.execute(text(f'SELECT EXISTS(SELECT 1 FROM "{self.schema}".catalog_imports WHERE state=\'active\')')).scalar():
+                        aliases = self._attach_catalog_snapshot(conn, candidates)
         return [dict(row) for row in candidates], [dict(row) for row in aliases]
+
+    def _attach_catalog_snapshot(self, conn, candidates):
+        """Resolve exact mentions and immutable preview assets in the same snapshot."""
+        # The schema was validated at construction, and all values remain bound.
+        prefix = f'"{self.schema}".'
+        credits = conn.execute(text(f'''SELECT d.md5,c.role,c.role_name,c.resolution,c.entity_id,n.raw_name,
+            e.display_name,e.approval,e.status FROM {prefix}catalog_contributions c
+            JOIN {prefix}catalog_documents d USING(publication_id)
+            JOIN {prefix}catalog_publications p USING(publication_id)
+            JOIN {prefix}catalog_names n USING(name_id) LEFT JOIN {prefix}catalog_entities e USING(entity_id)
+            WHERE p.inclusion='included' ORDER BY d.md5,c.role,c.position,c.nested_position''')).mappings()
+        by_document = {}
+        for credit in credits:
+            by_document.setdefault(credit["md5"], []).append(dict(credit))
+        selected = dict(conn.execute(text(f"SELECT md5,selected FROM {prefix}catalog_documents")).tuples().all())
+        previews = conn.execute(text(f'''SELECT DISTINCT ON(md5) request_id,md5,private,source_page_count
+            FROM {prefix}catalog_preview_requests WHERE status='ready' ORDER BY md5,request_id DESC''')).mappings()
+        preview_rows = {row["md5"]: {**dict(row), "pages": []} for row in previews}
+        by_request = {row["request_id"]: row for row in preview_rows.values()}
+        for page in conn.execute(text(f'SELECT * FROM {prefix}catalog_preview_pages ORDER BY page_number')).mappings():
+            if page["request_id"] in by_request:
+                by_request[page["request_id"]]["pages"].append(dict(page))
+        for row in candidates:
+            row["catalog_contributions"] = by_document.get(row["md5"], [])
+            row["catalog_selected"] = selected[row["md5"]]
+            row["catalog_preview"] = preview_rows.get(row["md5"])
+        return conn.execute(text(f'''WITH roles AS (
+            SELECT entity_id,CASE role WHEN 'publisher' THEN 'publisher' ELSE 'personality' END AS entity_type
+            FROM {prefix}catalog_entity_roles
+            UNION SELECT entity_id,CASE role WHEN 'publisher' THEN 'publisher' ELSE 'personality' END
+            FROM {prefix}catalog_contributions WHERE entity_id IS NOT NULL
+        ) SELECT e.entity_id AS canonical_id,e.kind AS entity_kind,e.display_name,r.entity_type,
+            coalesce(n.raw_name,e.display_name) AS raw_name,'linked' AS decision_status,'active' AS canonical_status
+            FROM {prefix}catalog_entities e JOIN roles r USING(entity_id)
+            LEFT JOIN {prefix}catalog_aliases a USING(entity_id) LEFT JOIN {prefix}catalog_names n USING(name_id)
+            WHERE e.status='active' AND e.approval='confirmed'
+            ORDER BY r.entity_type,e.entity_id,n.raw_name''')).mappings().all()
 
 
 __all__ = ["LibrarySiteExportRepository"]

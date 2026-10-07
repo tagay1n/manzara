@@ -18,6 +18,13 @@ that prompt length caused upstream quota or service errors.
 
 ## Outcomes and durable checkpoints
 
+After catalog retirement, candidate reads use the normalized publication,
+document, name, and credit relations directly. They retain each observed raw name,
+source role, mention count, and document language hint. Canonical display changes
+leave the task's source names and checkpoint fingerprints intact. The read builds
+only the relationship projection needed for extraction, avoiding full metadata
+reconstruction for every included document.
+
 Gemini requests and local validation use `PersonalityResponse`, prompt
 `personality-outcomes-v9` and schema `person-outcomes-v2`. Every field is required:
 

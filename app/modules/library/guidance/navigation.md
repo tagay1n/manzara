@@ -17,6 +17,7 @@ Public API: `app/modules/library/normalization.py`. HTTP wiring: `app/library_no
 | Coverage, merge recommendations | `app/modules/library/normalization_quality.py` | `tests/test_api_library_normalization.py` |
 | AI suggestions, refresh workers | `app/modules/library/normalization_suggestions.py` | `tests/test_gemini_workers.py`, `tests/test_gemini_config.py` |
 | Canonical personality extraction, structured response, workbench | `app/modules/library/personality_normalization.py`, `app/modules/library/personality_normalization_prompt.py`, `app/modules/library/personality_workbench.py`, `app/modules/library/runtime/run_normalize_personalities.py` | `tests/test_library_personality_normalization.py`, `tests/test_library_personality_outcomes.py`, `tests/test_library_personality_workbench.py`, `tests/frontend/test_personality_decisions.mjs` |
+| Personality source reads and persistence after catalog retirement | `app/repositories/normalization.py`, `docs/personality-normalization.md` | `tests/test_catalog_cutover.py` |
 
 ## Publisher clustering analysis and review
 
@@ -32,6 +33,11 @@ Policy: `app/modules/library/guidance/publisher-merges.md`.
 ## Documents and conversion
 
 Policy: `app/modules/library/guidance/documents.md`.
+
+Durable admin preview requests: `app/modules/library/catalog_preview_worker.py`,
+`app/modules/library/runtime/run_catalog_previews.py`; focused verification:
+`tests/test_catalog_preview_worker.py`, `tests/test_catalog_repository.py`.
+Shared catalog ownership and transition status: `docs/catalog-model.md`.
 
 | Change | Implementation | Focused tests |
 | --- | --- | --- |

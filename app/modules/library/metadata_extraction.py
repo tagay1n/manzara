@@ -433,15 +433,7 @@ class MetadataExtractionRepository:
 
             stored = conn.execute(
                 text(
-                    """
-                    INSERT INTO metadata (md5, schema_org)
-                    VALUES (:md5, CAST(:schema_org AS JSONB))
-                    ON CONFLICT (md5) DO UPDATE SET
-                        schema_org = EXCLUDED.schema_org,
-                        lib = NULL,
-                        lib_eval_method = NULL,
-                        classification_id = NULL
-                    """
+                    """SELECT catalog_upsert('metadata', jsonb_build_object('md5', :md5, 'schema_org', CAST(:schema_org AS JSONB), 'lib', NULL, 'lib_eval_method', NULL, 'classification_id', NULL), ARRAY['md5']::text[], ARRAY['schema_org','lib','lib_eval_method','classification_id']::text[], ARRAY[]::text[])"""
                 ),
                 {
                     "md5": str(md5),

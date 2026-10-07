@@ -7,6 +7,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_shared_catalog_does_not_import_flow_internals():
+    for path in (ROOT / "app" / "catalog").glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                assert not (node.module or "").startswith("app.modules"), path
+            elif isinstance(node, ast.Import):
+                assert not any(alias.name.startswith("app.modules") for alias in node.names), path
+
+
 def _assert_acyclic(dependencies):
     def visit(module, ancestors):
         assert module not in ancestors, (

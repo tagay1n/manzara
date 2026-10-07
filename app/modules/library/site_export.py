@@ -146,6 +146,8 @@ def _exclusion_reason(row: Mapping[str, Any], storage: ExportStorage) -> str | N
     digest = str(row.get("md5") or "").strip().lower()
     if not _MD5_RE.fullmatch(digest):
         return "invalid_md5"
+    if row.get("catalog_selected") is False:
+        return "not_selected"
     if row.get("has_active_corruption") is True:
         return "active_corruption"
     if row.get("full") is not True:
@@ -266,6 +268,15 @@ def _publisher_relation(
 
 
 def _preview(row: Mapping[str, Any], storage: ExportStorage) -> dict[str, Any] | None:
+    if "catalog_preview" in row:
+        preview = row["catalog_preview"]
+        if not preview or preview["private"] or not storage.public_preview_bucket:
+            return None
+        pages = [{"role": page["role"], "page_number": page["page_number"],
+                  "small_url": object_url(storage.endpoint_url, storage.public_preview_bucket, page["small_key"]),
+                  "large_url": object_url(storage.endpoint_url, storage.public_preview_bucket, page["large_key"])}
+                 for page in preview["pages"]]
+        return {"source_page_count": preview["source_page_count"], "pages": pages} if pages else None
     if (
         row.get("preview_recipe_version") != PREVIEW_RECIPE_VERSION
         or row.get("preview_status") != "ready"
@@ -322,6 +333,20 @@ def _build_document(
     title = str(work.get("name") or "").strip()
     contributors = _contributor_relations(work, alias_index)
     publisher_id, _publisher_source = _publisher_relation(work, alias_index)
+    if "catalog_contributions" in row:
+        contributors = []
+        publisher_id = None
+        for credit in row["catalog_contributions"]:
+            approved = (credit["approval"] == "confirmed" and credit["resolution"] == "confirmed"
+                        and credit["status"] == "active" and credit["entity_id"] is not None)
+            entity_type = "publisher" if credit["role"] == "publisher" else "personality"
+            entity_id = f"{entity_type}:{credit['entity_id']}" if approved else None
+            if credit["role"] == "publisher":
+                publisher_id = entity_id
+            else:
+                contributors.append({"entity_id": entity_id, "property": credit["role"],
+                    "role_name": credit["role_name"], "source_name": credit["raw_name"],
+                    "display_name": credit["display_name"] or credit["raw_name"]})
     used_entities = {
         str(item["entity_id"])
         for item in contributors
@@ -446,11 +471,12 @@ def build_library_export(
             item["document_ids"].append(document_id)
 
     documents.sort(key=lambda item: str(item["id"]))
-    by_entity_id = {
-        str(row.get("entity_id")): row
-        for row in alias_index.values()
-        if row.get("entity_id")
-    }
+    by_entity_id = {}
+    for row in alias_rows:
+        if row.get("decision_status") == "linked" and row.get("canonical_status") == "active":
+            entity_id = f"{row['entity_type']}:{row['canonical_id']}"
+            by_entity_id[entity_id] = row
+            alias_names.setdefault(entity_id, set()).add(row["raw_name"])
     entities: list[dict[str, Any]] = []
     for entity_id in sorted(used_entity_ids):
         source = by_entity_id[entity_id]
@@ -460,7 +486,7 @@ def build_library_export(
         entities.append(
             {
                 "id": entity_id,
-                "kind": "person" if entity_type == "personality" else "organization",
+                "kind": source.get("entity_kind") or ("person" if entity_type == "personality" else "organization"),
                 "name": name,
                 "path": _entity_path(entity_type, name, canonical_id),
                 "aliases": sorted(alias_names.get(entity_id, set()), key=str.casefold),
