@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any
-
-APP_ROOT = Path(__file__).resolve().parent.parent
-STATIC_DIR = APP_ROOT / "static"
 
 SSE_POLL_INTERVAL_SECONDS = 1.0
 SSE_HEARTBEAT_EVERY_EMPTY_POLLS = 15

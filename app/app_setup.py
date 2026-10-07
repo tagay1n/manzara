@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Iterable
 
 from fastapi import FastAPI
@@ -24,7 +23,6 @@ from app.library_document_routes import register_library_document_routes
 from app.library_entities_routes import register_library_entities_routes
 from app.library_normalization_routes import register_library_normalization_routes
 from app.library_preview_routes import register_library_preview_routes
-from app.page_routes import register_page_routes
 from app.stream_routes import register_stream_routes
 
 
@@ -32,7 +30,6 @@ def register_app_routes(
     app: FastAPI,
     *,
     state_provider: StateProvider,
-    static_dir: Path,
     normalization_entity_types: Iterable[str],
     title_max_length: int,
     sse_poll_interval_seconds: float,
@@ -43,11 +40,6 @@ def register_app_routes(
     entities_operations_provider: EntitiesOperationsProvider,
 ) -> StreamRouteHandlers:
     """Register all application routes and return stream route handlers."""
-    register_page_routes(
-        app,
-        static_dir=static_dir,
-        normalization_entity_types=normalization_entity_types,
-    )
     register_control_routes(
         app,
         state_provider=state_provider,

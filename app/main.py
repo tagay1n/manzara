@@ -1,4 +1,4 @@
-"""Manzara MVP API and dashboard UI server."""
+"""Manzara backend API server."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from app.constants import (
     SLUG_SEPARATOR_PATTERN,
     SSE_HEARTBEAT_EVERY_EMPTY_POLLS,
     SSE_POLL_INTERVAL_SECONDS,
-    STATIC_DIR,
     TITLE_MAX_LENGTH,
 )
 from app.conveyor import ConveyorService
@@ -116,7 +115,6 @@ async def _lifespan(_app: FastAPI):
 
 
 _factory_result = create_manzara_app(
-    static_dir=STATIC_DIR,
     lifespan=_lifespan,
     state_provider=lambda: state,
     normalization_entity_types=NORMALIZATION_ENTITY_TYPES,
