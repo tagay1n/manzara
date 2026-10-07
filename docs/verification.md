@@ -1,24 +1,17 @@
 # Verification
 
-Do not record test counts, migration heads, or line-number evidence here; those values become stale. Derive them from the repository when needed.
+Create, modify, or run tests only when the owner explicitly requests that work, as required by root [AGENTS.md](../AGENTS.md). Implementation/refactoring and committing do not imply test authorization. No automatic TDD or full-suite requirement applies.
 
-## Automated checks
+## Default inspection
 
-The backend suite uses one session-scoped PostgreSQL 18 Testcontainer. Docker
-must be installed, running, and accessible to the current user. Test database
-provisioning never reads application database URLs or configuration files.
+Review changed code and contracts, inspect relevant paths/configuration, and use `git diff --check`. For documentation, verify local links and owner paths against retained code. Do not start the backend or apply migrations merely to validate docs. Report the limits of inspection; do not claim runtime readiness from static checks.
 
-```bash
-PYTHONPATH=. .venv/bin/python -m pytest -q
-node --test tests/frontend/*.mjs
-PYTHONPATH=. .venv/bin/python -m ruff check app tests
-PYTHONPATH=. .venv/bin/alembic heads
-```
+## Coverage available on request
 
-Architecture constraints live in `tests/test_architecture_boundaries.py`. Add an executable assertion there when a policy can be checked reliably.
+This checkout retains `tests/test_api_assembly.py`, a database-free regression for API assembly after frontend removal. It uses `app.factory`, avoiding production configuration and startup migrations. Pytest is not listed in `requirements.txt`; a requested run needs an environment with it installed.
 
-## Manual checks
+The former frontend/catalog/worker/architecture suites, shared fixtures, and Testcontainers setup are absent. No PostgreSQL test fixture currently exists. API assembly coverage does not establish catalog reads/writes, review protections, privacy, checkpoint recovery, or safe-stop behavior.
 
-- Exercise credential-backed Gemini workflows with masked logs and verify file cleanup.
-- Exercise document storage against configured services and verify source/checkpoint identities.
-- Verify cosmetic changes at desktop and narrow widths, including keyboard focus and reduced motion.
+If the owner requests database tests, use an isolated PostgreSQL instance matching the migrated catalog with explicit test-only configuration. Never fall back to the owner's database or local config. Keep test scope within the request.
+
+Credential-backed Gemini/storage/converter smoke testing also requires an explicit request, configured services, and reviewed cohorts. Backup restore drills remain deliberate operations under the recovery procedure.

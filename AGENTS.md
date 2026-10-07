@@ -1,38 +1,30 @@
-# AGENTS.md
+# Repository rules
 
-Last updated: 2026-09-16
 Owner: tans1q
 
-## Owner communication preference
+## Communication and routing
 
-- Communicate with the owner only in English unless the owner explicitly requests another language.
-- Never use Russian in any owner-facing content unless the owner explicitly asks for Russian in that request. This prohibition includes answers, recaps, summaries, captions, status updates, generated UI copy, image text, and automatic or compacted-conversation summaries.
+- Use English with the owner unless another language is explicitly requested. Never use Russian in owner-facing replies, UI copy, artifacts, or summaries without an explicit request.
+- Manzara is a monorepo for Tatar-language content operations. Flows live in `app/modules/<flow>/`; shared backend code lives in `app/`. Flows may import shared core; shared core must not import flow internals. Cross-flow imports go through shared core.
+- The web frontend is removed; a rich operations CLI is not implemented. PostgreSQL catalog migration is complete according to the owner, but backend adaptation is unfinished. Do not assume operational readiness.
+- Read [docs/architecture.md](docs/architecture.md) to locate owners, then only matching guidance. Before editing, read the nearest `AGENTS.md`. For `app/gemini_*.py`, also read [docs/gemini-runtime.md](docs/gemini-runtime.md).
 
-## Scope and routing
+## Invariants
 
-Manzara is the monorepo for Tatar-language content operations. Flow code belongs in `app/modules/<flow>/`; shared backend and frontend infrastructure belongs in `app/` and `static/`. Dependencies point inward: flows may import shared core, while shared core must not import flow internals.
+- Durable domain data and safety-critical workflow checkpoints use PostgreSQL (`MANZARA_DATABASE_URL`, schema `MANZARA_DB_SCHEMA`, default `monocorpus`). Definitions, runs, events, conveyor, Gemini coordination, and AI retry exclusions use only local SQLite (`~/.manzara/state/runtime.sqlite3` or `MANZARA_LOCAL_STATE_PATH`). Never fall back between stores or dual-write.
+- The backend owns domain decisions and persisted truth. Clients own rendering, transport, interaction, and transient state.
+- Artifacts live under `~/.manzara` or `MANZARA_ARTIFACTS_ROOT`; never create repository-root runtime artifact directories.
+- Keep secrets out of git and logs. Local configuration is gitignored; keep `config.example.yaml` masked and structurally current, and never load it at runtime.
+- Keep `requirements.txt` as the single dependency file.
+- Prefer forward changes over compatibility branches. Ask the owner before choosing a persisted-data migration or compatibility policy.
 
-Read `docs/architecture.md` for the ownership and focused-test index. Before changing a path, read its nearest `AGENTS.md`. For shared Gemini files (`app/gemini_*.py`) also read `docs/gemini-runtime.md`.
+## Engineering
 
-## Global invariants
-
-- PostgreSQL stores durable domain data and safety-critical workflow checkpoints (`MANZARA_DATABASE_URL`), using `monocorpus` by default (`MANZARA_DB_SCHEMA`). Disposable runtime state (definitions, runs, events, conveyor, Gemini leases/cooldowns, and AI retry exclusions) lives only in local SQLite at `~/.manzara/state/runtime.sqlite3`, or `MANZARA_LOCAL_STATE_PATH` when explicitly configured. Never fall back between stores or dual-write them.
-- The backend owns business and persisted data truth. Frontend state is rendering, transport, interaction, and transient UI state only.
-- Task artifacts live under `~/.manzara`, or `MANZARA_ARTIFACTS_ROOT` when explicitly configured. Never add repository-root runtime artifact directories.
-- Keep secrets out of git and logs. `config.yaml` is local-only; keep masked `config.example.yaml` structurally current and never load it at runtime.
-- Keep one dependency file, `requirements.txt`, unless the owner explicitly requests another.
-- Prefer clean forward changes over compatibility branches. Persisted database compatibility is the exception: ask the owner before choosing a migration or compatibility policy.
-- Preserve module ownership. Cross-flow imports are allowed only through shared core modules.
-
-## Engineering standards
-
-- Backend and meaningful frontend behavior changes are TDD-first: add or adjust a focused failing test, implement, refactor, then run focused tests. Run the full suite before commit. Cosmetic-only work may use documented manual verification.
-- Validate external control payloads strictly. Boolean-like values use explicit allowlists; integer fields must be integral and never silently truncated.
-- Prefer declarative registries and shared contracts over conditional routing. Keep functions small, nesting shallow, and side effects at module boundaries.
-- Keep shared run/workflow states in one state-machine definition. Preserve backward-compatible API and SSE schema evolution.
-- Every task must stop gracefully at a safe boundary, restart from persisted checkpoints, surface actionable failures, and retain its dedicated structured artifact log.
-- Structured artifacts come from explicit persisted `task.artifact` events, never log parsing. Log reads use bounded cursor pagination.
-
-## Change discipline
-
-Convert requirements into small deliverable slices, avoid unjustified infrastructure, and verify runtime/dependency assumptions. If guidance conflicts, the nearest applicable `AGENTS.md` wins; update stale documentation in the same change.
+- Create, modify, or run tests only when the owner explicitly requests that test work. Ordinary implementation, fixes, refactoring, documentation, and commits do not authorize tests or require TDD/full-suite runs. Use code review and appropriate non-test inspection by default; report validation limits. See [docs/verification.md](docs/verification.md).
+- Validate external control payloads strictly: explicit boolean allowlists; integral integers without truncation.
+- Prefer declarative registries and shared contracts; small functions, shallow nesting, side effects at boundaries.
+- Define shared workflow states once. Preserve backward-compatible API and SSE schemas.
+- Tasks stop at safe boundaries, resume from persisted checkpoints, surface actionable failures, and keep dedicated structured artifact logs.
+- Structured artifacts require persisted `task.artifact` events, never log parsing. Log reads use bounded cursor pagination.
+- Deliver small slices, verify runtime/dependency assumptions, and update stale guidance in the same change. Nearest instructions win.
+- Document current contracts, operations, and unresolved work once. Use code for implementation detail and git history for completed handoffs; avoid duplicated setup, frozen test counts, benchmark snapshots, and nonexistent path references.

@@ -1,44 +1,18 @@
-# TODO
+# Active work
 
-## General
+## Current priorities
 
-- [ ] Rename the database schema.
-- [ ] Move `gec-annotations-filter`.
-- [ ] Add upstream metadata to the database.
-- [ ] Add a notification panel.
-- [ ] Revisit task hierarchy and concurrency.
-- [ ] Investigate and fix the intermittent `test_task_completion_not_blocked_by_open_stdout_fd` timeout.
-- [ ] Normalize metadata so it is English-only.
-- [ ] Remove buckets containing `upstream_meta` and `schema.org`; keep those values locally only.
+- Adapt backend reads, writes, and workers to the migrated PostgreSQL catalog. Audit legacy SQL/ORM assumptions before treating workflows as ready. See [catalog model](docs/catalog-model.md).
+- Implement a rich operations CLI after its scope is defined. Preserve backend-owned decisions, safe stop/resume, bounded logs, and structured artifacts.
 
-## Non-PDF extraction roadmap
+## Older requests needing owner reprioritization
 
-The most troublesome supported formats are:
+These came from the previous backlog; their current necessity is unconfirmed.
 
-| Format | Main problems | Priority |
-| --- | --- | --- |
-| Legacy DOC / RTF | LibreOffice timeouts, mixed inline images, and image-only scans requiring OCR | Highest |
-| FB2 | Duplicated section titles and custom XML/image handling | High |
-| EPUB | Nested images, broken internal XHTML links, and leaked source attributes | High |
-| Markdown / text | External URL ownership and CP866 mistaken for UTF-16 | Medium |
-| DOCX / ODT | Generally extracted cleanly | Lower |
+- Rename the database schema; move `gec-annotations-filter`.
+- Revisit task hierarchy and concurrency.
+- Review which metadata facets should be English; descriptions currently follow document language.
+- Review remote `upstream_meta` / Schema.org buckets and retention before deleting anything.
+- Improve OCR handling for image-only DOC/RTF and DjVu; sample FB2/EPUB regressions.
 
-Largest unsupported groups observed:
-
-- PowerPoint/PPTX: 20
-- Executables: 13; probably not documents
-- DjVu: 10; important for books and likely the best next format
-- PDFs hidden behind incorrect MIME types: 6
-- Spreadsheets: 4
-- Compound or unknown OLE files: 3
-- MOBI, MDB, ODP, SCR, and WMF: one each
-
-Suggested order:
-
-1. Add OCR handling for image-only DOC/RTF files.
-2. Add DjVu extraction/OCR.
-3. Retain stronger regression sampling for FB2 and EPUB.
-4. Add PowerPoint and spreadsheet extraction later.
-5. Continue treating MIME as a hint and trusting byte signatures.
-
-FB2 and EPUB caused the most structural-content bugs; legacy DOC/RTF caused the most operational and completeness problems.
+Removed completed converter requests and historical cohort counts. Upstream metadata already has a database owner; a notification panel belongs to the retired web design.

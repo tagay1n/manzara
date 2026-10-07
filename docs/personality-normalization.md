@@ -1,114 +1,35 @@
 # Personality normalization contract
 
-Initial fields accept one alphabetic character or the explicit Latin
-transliteration units `Kh`, `Sh`, `Ts`, and `Ju`. Case is normalized to an uppercase
-first letter and lowercase remaining letters, with one trailing dot. The input
-may omit that dot. Internal dots, multiple initials and other multi-letter strings
-are rejected. Full names and script are preserved; initials are never expanded.
+Owners: `app/modules/library/personality_normalization.py`, `personality_normalization_prompt.py`, `personality_workbench.py`, `runtime/run_normalize_personalities.py`, and `app/repositories/normalization.py`.
 
-The Gemini prompt includes exactly five complementary examples: male and female
-Tatar patronymics, Arabic-script conversion, compact Cyrillic initials and
-historical Latin spelling. Nine other examples remain disabled. All examples use
-the outcome contract, including the disabled institution example. For `Example
-Name` with no language hints, the initial five-example prompt was 3,491 characters
-versus 4,218 before reduction. The completed outcome prompt is 3,922 characters,
-including its added outcome rules and fields, excluding the separate response
-schema. These are character measurements, not token counts, and do not establish
-that prompt length caused upstream quota or service errors.
+## Identity and outcomes
 
-## Outcomes and durable checkpoints
+Initials accept one alphabetic character or Latin units `Kh`, `Sh`, `Ts`, `Ju`, normalized to an uppercase first letter and one trailing dot. Reject internal dots, multiple initials, and other multi-letter strings. Preserve full names/script; never expand initials.
 
-After catalog retirement, candidate reads use the normalized publication,
-document, name, and credit relations directly. They retain each observed raw name,
-source role, mention count, and document language hint. Canonical display changes
-leave the task's source names and checkpoint fingerprints intact. The read builds
-only the relationship projection needed for extraction, avoiding full metadata
-reconstruction for every included document.
+The strict response requires every field:
 
-Gemini requests and local validation use `PersonalityResponse`, prompt
-`personality-outcomes-v9` and schema `person-outcomes-v2`. Every field is required:
+- `normalized`: usable components, null reason; derive canonical name/key locally and persist canonical plus source alias atomically.
+- `not_person`: organization, website, or other non-person.
+- `unusable`: potentially personal but unsafe ambiguous/corrupted input.
 
-- `normalized` requires usable name components and a null reason. The application
-  derives the canonical name and identity key locally and saves the canonical and
-  source alias atomically.
-- `not_person` identifies an organization, website or other non-person entity.
-- `unusable` identifies potentially personal but unsafe ambiguous/corrupted input.
+Negative decisions require a nonblank reason of at most 300 characters and null identity components/title/sex. Rare names or initials alone are not grounds for rejection. Valid negatives stop fallback; malformed/contradictory responses use bounded content-failure fallback.
 
-Negative decisions require a nonblank reason of at most 300 characters and null
-identity components, title and sex. Unfamiliar names, rare spellings and initials
-alone are not grounds for an unusable decision. Valid negative decisions stop
-model fallback; malformed JSON or contradictory components still use bounded
-content-failure fallback.
+## Checkpoints and review
 
-No database migration is required. PostgreSQL checkpoints retain the exact raw
-name, source fingerprint, source roles/counts and contract versions. Negative
-states are `not_person` and `unusable`, with their reason in `failure_context`,
-completion time, and model decision/language hints in `attempted_models`. They
-create no canonical record and never rewrite source metadata. Unchanged negative
-decisions are skipped on reruns; relevant input or contract changes reopen them.
+Candidate reads use normalized publications/documents/names/credits, retaining raw names, roles/counts, language hints, and source fingerprints. Canonical display changes must not alter source identity. This adapted read does not establish readiness of every remaining normalization operation.
 
-Compatible v8 successes remain completed. The existing v7 preprocessing
-compatibility rule remains in effect. Unchanged unrelated terminal failures stay
-excluded. Legacy all-null failures under `person-components-v1` and failures from
-the former single-letter initials rule receive targeted recovery. Only affected
-model exclusions are released. Original evidence is kept as `recovered_response`
-and under `previous_failure` if the recovered model fails again. Current contract
-failures do not qualify repeatedly for legacy all-null recovery.
+PostgreSQL checkpoints retain input fingerprints, contract versions, decisions, failure/recovery evidence, timestamps, and model hints. Negative decisions create no canonical and never rewrite source metadata. Unchanged negatives are skipped; changed inputs/contracts or explicit retry reopen eligible work.
 
-An item-level HTTP 400 rejection closes all pending recoveries for that person,
-including models not reached. Original errors remain under `recovery_blocked`,
-with the rejection recorded in `recovery_blocked_by`.
+Review retry requires the reviewed `updated_at`, rejects stale commands, and marks `retry_requested` without deleting evidence. Correct source metadata before retrying a negative decision.
 
-The personalities workbench shows separate counts and a PostgreSQL-backed,
-40-row paginated review of Not a person, Needs review, Failed, Deferred and Retry
-requested. Correct the source metadata before using Retry after correction on a
-negative decision. The retry endpoint requires the reviewed `updated_at` value,
-rejects stale requests, and changes the checkpoint to `retry_requested` without
-deleting its evidence. The next normalization run retries it. Explicit retry and
-changed inputs release old content exclusions; automatic scheduling does not
-reopen unrelated terminal failures.
+Preserve the targeted legacy recovery rules implemented in code: compatible successes stay completed, unrelated terminal failures stay excluded, and only affected model exclusions are released. Keep `recovered_response` / `previous_failure` evidence. An item HTTP 400 closes all pending recoveries and records blocking evidence. Do not broaden recovery into an automatic retry of every failure.
 
-## Shared queue and retry bounds
+## Queue and reporting
 
-Untouched names precede names carrying checkpoints, before the candidate limit.
-Workers claim from one shared queue. Each eligible raw name gets one first-pass
-turn and at most one later turn. The retry phase starts only after the initial
-queue and all first-pass workers have finished.
+Untouched names precede checkpointed names before applying the candidate limit. Workers share one queue; each name gets one first-pass turn and at most one later turn, after all first-pass workers finish.
 
-Personality normalization opts into yielding immediately on HTTP 429, service
-5xx (including 503 and 504), transport errors and local request deadlines. These
-errors preserve retryable checkpoints and move the person to the tail without
-permanently excluding the model. HTTP 504 remains a service error with the shared
-60-second model pause; a local deadline is a transient timeout, not HTTP 504.
-The worker continues with the next person on another ready configured model,
-subject to the run's adaptive pacing gate.
-Quota cooldowns, provider retry metadata, daily exhaustion, project leases and
-60-second project/model spacing remain enforced by the shared runtime. The shared
-round-robin scheduler diversifies accounts and projects; there is no global
-ten-request/minute cap. Personality normalization alone adds five-second spacing
-between generation starts across all workers and models. Generic 429s slow that
-pace, and three without an intervening successful response pause the queue.
-Cooldowns reopen with one exclusive probe; failed probes lengthen the pause, and
-five successful responses at a time gradually restore the pace. Each new run
-starts at five seconds without clearing existing provider cooldowns. See
-`gemini-runtime.md` for the controller's intervals and recovery rules.
-Ordinary model service 5xx responses preserve recovery progress; failed probes
-still extend the cooldown. Quota, transport, timeout and neutral outcomes reset
-the success counter. Personality requests use a 60-second HTTP I/O timeout,
-which does not impose a hard deadline on the total streamed response duration.
-Extraction and evaluation retain their existing fallback behavior and pacing.
+Yield on 429, service 5xx, transport failures, and local deadlines without content-excluding the model. Record shared provider state first. Wait stoppably when no capacity is ready; total daily exhaustion preserves untouched work. A second transient failure leaves durable deferral; stopping preserves pending retry state.
 
-If the whole pool has no ready capacity or the pacing gate is closed, wait
-stoppably until the earliest applicable availability. A person whose remaining
-models are unavailable yields while
-other people can use ready models. If the entire pool is exhausted, stop
-processing more names and preserve untouched work for resumption.
-A second transient failure leaves the person durably deferred. Stop during a
-pause preserves the saved deferral and pending retry for a later run.
+Personality-only pacing and the 60-second HTTP I/O timeout are defined in [Gemini runtime](gemini-runtime.md). An I/O timeout is not a total streaming deadline.
 
-Progress and summaries count unique people, with `not_person`, `unusable` and
-`retry_pending` separate from successes, failures and final deferrals. Physical
-requests remain in `model_attempts`; moving a person to the tail does not count
-as another processed person. Queue moves, decisions, reasons and waits are
-worker-attributed in the dedicated task log. Final counters are explicit structured
-artifacts, never inferred from log parsing.
+Count unique people separately from physical `model_attempts`; distinguish negative outcomes, failures, final deferrals, and pending retries. Emit worker-attributed logs and explicit summary artifacts.

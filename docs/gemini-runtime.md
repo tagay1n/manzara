@@ -10,7 +10,7 @@ Read this only when changing `app/gemini_*.py` or a Gemini-consuming workflow.
 - Daily exhaustion clears at reset rollover. Block new requests from one hour before through one hour after Pacific reset; owner overrides apply only to the active window and emit an audit event.
 - A `400` rejects only the item. A `5xx` starts the shared 60-second model pause.
 - Transport and `5xx` failures share a bounded retry budget. Authentication/configuration errors are task-fatal. Uploaded Gemini files use shared best-effort cleanup.
-- Parallel workflows emit every physical stdout line through the shared worker logger using `[worker=<flow>-<one-based-id>]`; pool-level messages use `worker=coordinator`. Keep multiline responses attributed line by line so the task viewer can color and group them without parsing business content.
+- Parallel workflows attribute every physical stdout line using `[worker=<flow>-<one-based-id>]`; pool-level messages use `worker=coordinator`. Keep multiline responses attributed without parsing business content.
 
 Personality normalization opts into `run_ordered_model_pool(...,
 yield_on_transient=True)`: it yields the item immediately on 429, service 5xx,
@@ -50,14 +50,7 @@ Admission and probe ownership use renewable SQLite leases. Preparation reserves
 admission; the transport advances spacing at the actual generation start.
 Epochs prevent responses from before a cooldown from reopening the queue.
 `gemini.pacing.changed` events and worker log lines describe interval, cooldown
-and probe transitions. Local schema version 5 adds this state without clearing
-existing runs, quota evidence or checkpoints. Workers recovering within the same
+and probe transitions. Workers recovering within the same
 run retain pacing state; each new run starts fresh at five seconds while existing
-shared provider cooldowns still apply. Gracefully stop the personality task and
-restart the application before starting a new run with the new controller.
-
-Local schema version 4 adds the cursor, project leases and project/model spacing
-without changing PostgreSQL checkpoints or clearing quota evidence. Existing
-key cooldowns also remain eligibility barriers during the transition. Stop all
-Gemini workers gracefully before upgrading, then resume from their checkpoints;
-old account-lease workers must not overlap new project-lease workers.
+shared provider cooldowns still apply. Stop workers gracefully before changing
+coordination contracts; incompatible lease implementations must not overlap.

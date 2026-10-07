@@ -2,9 +2,11 @@
 
 These rules apply to `app/modules/library/`.
 
+The PostgreSQL catalog is migrated, but backend adaptation is unfinished. Guidance below preserves workflow requirements; legacy table/field names in remaining code need verification against the catalog. See `docs/catalog-model.md` from the repo root. The former web review pages are removed.
+
 Read only the guidance matching the files or behavior being changed:
 
-Use `guidance/navigation.md` to locate the implementation and focused tests before reading code. It is a lookup table, not additional policy.
+Use `guidance/navigation.md` to locate implementation owners before reading code. It is a lookup table, not additional policy.
 
 | Area | Guidance |
 | --- | --- |

@@ -1,174 +1,54 @@
-# manzara
+# Manzara
 
-Manzara is a cloud-console operations dashboard for Tatar-language content workflows.
+Manzara runs Tatar-language content workflows through a FastAPI backend, Library and Maintenance workers, and operational scripts.
 
-The name means a panorama or landscape opening before the viewer (`Манзара`). The UI is independently implemented for this repository and takes visual direction from [builderz-labs/mission-control](https://github.com/builderz-labs/mission-control).
+## Current status
 
-## Architecture
+- The web frontend has been removed. The API and SSE transport remain; there are no browser pages.
+- A rich operations CLI has not been implemented. Existing task scripts are individual entry points.
+- The owner reports that the PostgreSQL catalog was migrated but the backend is not fully adapted and is broken. Existing adapters do not establish end-to-end readiness. See [catalog model](docs/catalog-model.md) and [active work](TODO.md).
 
-- FastAPI backend with durable PostgreSQL data and disposable local SQLite runtime state
-- Alembic-managed PostgreSQL schema and a versioned local SQLite schema
-- Modular Library and Maintenance flows in one monorepo
-- Server-sent events for live task state, progress, artifacts, and logs
-- Backblaze B2 primary document storage with Yandex Disk as the upstream document source
+## Setup and configuration
 
-See `docs/architecture.md` for the ownership map. Operational invariants live in the nearest `AGENTS.md` and its routed module guidance.
-
-## Pages
-
-- `/tasks` and `/tasks/{task-slug-or-id}`
-- `/database`
-- `/gemini`
-- `/library`
-- `/library/classifications` and `/library/classifications/{classification_id}`
-- `/library/personalities`, `/library/publishers`, and `/library/collections`
-- `/library/isbn-conflicts`
-- `/library/normalization/{personality|publisher}`
-
-`/` and `/dashboard` redirect to `/tasks`.
-
-## Requirements and setup
-
-- Python 3.10+
-- PostgreSQL for application runtime
-- Docker Engine or Docker Desktop for PostgreSQL-backed tests
-- The local Monocorpus repository when running embedded Library/Maintenance workflows
-- External binaries required by enabled document converters
-- DjVuLibre `djvused` and `ddjvu` for visual DjVu metadata extraction and evaluation
+Use Python 3.10+ and PostgreSQL. Enabled workflows also require their configured services and converter binaries; inspect the matching module guidance before running them.
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Manzara intentionally keeps one Python dependency file: `requirements.txt`.
+Copy the masked structure of `config.example.yaml` to a gitignored `config.local.yaml` or `config.yaml`. Runtime configuration resolves `MANZARA_CONFIG_PATH`, then `config.local.yaml`, then `config.yaml`; never load the example at runtime.
 
-## Configuration
+| Setting | Purpose / default |
+| --- | --- |
+| `MANZARA_DATABASE_URL` | Durable PostgreSQL URL; may also come from local YAML |
+| `MANZARA_DB_SCHEMA` | Domain schema; `monocorpus` |
+| `MANZARA_CONFIG_PATH` | Explicit configuration path |
+| `MANZARA_DB_POOL_SIZE` | Per-process PostgreSQL pool bound; server default 4 |
+| `MANZARA_ARTIFACTS_ROOT` | Artifact root; `~/.manzara` |
+| `MANZARA_LOCAL_STATE_PATH` | Disposable SQLite runtime; `~/.manzara/state/runtime.sqlite3` |
 
-Copy the masked structure from `config.example.yaml` into a local, gitignored `config.yaml` or `config.local.yaml`. Embedded runtimes resolve configuration in this order:
+Gemini models and account/project-grouped keys come from local configuration, with no model default. See [Gemini contract](docs/gemini-runtime.md).
 
-1. `MANZARA_CONFIG_PATH`
-2. `./config.local.yaml`
-3. `./config.yaml`
+## Backend entry point
 
-Common environment variables:
-
-- `MANZARA_DATABASE_URL` — PostgreSQL URL
-- `MANZARA_DB_SCHEMA` — defaults to `monocorpus`
-- `MANZARA_CONFIG_PATH` — explicit YAML path
-- `MANZARA_ARTIFACTS_ROOT` — defaults to `~/.manzara`
-- `MANZARA_LOCAL_STATE_PATH` — defaults to `~/.manzara/state/runtime.sqlite3`
-- `MONOCORPUS_REPO_PATH` — defaults to `/home/tans1q/projects/monocorpus`
-- `MANZARA_LOGICAL_BACKUP_S3_BUCKET`, `MANZARA_LOGICAL_BACKUP_S3_ENDPOINT`, and
-  `MANZARA_LOGICAL_BACKUP_S3_REGION` — GitHub Actions logical-backup destination
-
-See `docs/postgres-backup-recovery.md` for nightly Aiven logical backups,
-Backblaze retention, validation, and restore drills.
-For the filtered Aiven free-tier migration, see `docs/aiven-cutover.md`.
-
-Gemini configuration contains one ordered `gemini.model_pool` and account-grouped keys. Models have no code default. See `docs/gemini-runtime.md` for runtime behavior.
-
-## Nightly Google catalog export
-
-The `Nightly Google Sheets & Drive Export` GitHub Actions workflow exports the
-PostgreSQL document catalog to the established Google Drive folder and Google Sheets
-worksheet every day at 03:07 Europe/Moscow (00:07 UTC). It can also be started
-manually with the workflow's **Run workflow** action.
-
-Before creating export files or uploading to either Google destination, the workflow
-validates every document in the same remote PostgreSQL snapshot used for export.
-Documents in the designated restricted folder (including subfolders) must have
-`sharing_restricted = true`, an encrypted `enc:` link in `document_url` when a link
-is present, and a null or blank `ya_public_url`. Violations of those restricted-document rules fail the
-workflow and report document MD5s and failed rules without printing links. Missing
-values on unrestricted documents do not block the export. Encryption is checked by
-its storage marker; links are not decrypted.
-The CLI enables this gate with `--validate-sharing`.
-
-Configure these repository Actions secrets before the first run:
-
-- `MANZARA_DATABASE_URL` — the complete cloud PostgreSQL URL beginning with
-  `postgres://` or `postgresql://`, including required TLS options.
-- `GOOGLE_OAUTH_TOKEN_JSON_BASE64` — a base64-encoded `personal_token.json` with a
-  refresh token authorized for the Google Drive and Sheets scopes.
-
-For a token stored in Manzara's default credentials directory, set the Google secret
-with:
+The following is the retained server entry point, not confirmation that catalog-dependent operations work:
 
 ```bash
-base64 -w 0 ~/.manzara/private/credentials/google-drive/personal_token.json \
-  | gh secret set GOOGLE_OAUTH_TOKEN_JSON_BASE64
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload --timeout-graceful-shutdown 10
 ```
 
-Set `MANZARA_DATABASE_URL` through the GitHub repository settings or interactively
-with `gh secret set MANZARA_DATABASE_URL`, then manually run the workflow once and
-verify both the new timestamped Drive ZIP and the refreshed `tt` worksheet.
+Startup initializes local SQLite, applies PostgreSQL Alembic migrations, seeds task definitions, and recovers runtime state. Starting the server can therefore change the database schema; use offline checks while investigating the current mismatch.
 
-## Run
+API routes live in `app/*_routes.py`; inspect `/docs` on a configured running backend for its generated API reference. Task logs live at `~/.manzara/logs/task-runs/<task_id>/run-<run_id>.log`.
 
-```bash
-.venv/bin/uvicorn app.main:app \
-  --host 127.0.0.1 \
-  --port 8080 \
-  --reload \
-  --timeout-graceful-shutdown 10
-```
+## Read only what the task needs
 
-Startup initializes the required local SQLite store, applies pending PostgreSQL
-Alembic migrations, then seeds local panel and task definitions.
+- [AGENTS.md](AGENTS.md): repository rules.
+- [Architecture](docs/architecture.md): implementation owners.
+- [Catalog model](docs/catalog-model.md): PostgreSQL contract and adaptation gap.
+- [Verification](docs/verification.md): checks available in this checkout.
+- [Operations](docs/operations.md): storage and scheduled exports.
+- [Backup and recovery](docs/postgres-backup-recovery.md): backup configuration and restore procedure.
 
-Task artifact logs are written to:
-
-```text
-~/.manzara/logs/task-runs/<task_id>/run-<run_id>.log
-```
-
-The shared verified document cache is stored under
-`~/.manzara/cache/source-documents`. Local storage is grouped by retention
-under `cache/`, `workspaces/`, `logs/`, `state/`, `durable/`, and `private/`; the generated
-`~/.manzara/STORAGE_LAYOUT.txt` explains what can be removed safely. The browser
-uses local SQLite-backed API/SSE state; artifact files are for durable inspection.
-The `state/` subtree is disposable, machine-local, and must only be removed while
-all Manzara processes are stopped. It is never reconstructed from PostgreSQL.
-
-## Database migrations
-
-```bash
-PYTHONPATH=. .venv/bin/alembic current
-PYTHONPATH=. .venv/bin/alembic heads
-PYTHONPATH=. .venv/bin/alembic upgrade head
-```
-
-The direct SQLite-to-PostgreSQL migration reference is retained in `docs/postgres-cutover.md` for historical operations only.
-
-## Tests
-
-PostgreSQL-backed tests start one fresh PostgreSQL 18 container per pytest
-session through Testcontainers. The generated container URL is the only test
-database URL; runtime environment variables and local configuration files are
-never used for test database provisioning. Docker must be installed, running,
-and accessible to the current user. Database-free focused tests do not start a
-container.
-
-```bash
-PYTHONPATH=. .venv/bin/python -m pytest -q
-node --test tests/frontend/*.mjs
-PYTHONPATH=. .venv/bin/python -m ruff check app tests
-```
-
-Use focused files while iterating. Credential-backed Gemini, Backblaze, Yandex Disk, and converter workflows still require deliberate smoke testing against configured services. The stable verification checklist is in `docs/verification.md`.
-
-## API entry points
-
-- `GET /api/health`
-- `GET /api/system/state`
-- `GET /api/tasks`
-- `GET /api/tasks/{task_id_or_slug}`
-- `POST /api/tasks/{task_id}/toggle`
-- `GET /api/runs/{run_id}/logs`
-- `GET /api/events/stream`
-- `GET /api/database/state`
-- `GET /api/gemini/state`
-- `GET /api/library`
-
-Feature-specific endpoints are defined in the focused `app/*_routes.py` modules.
+Module guidance is routed by the nearest `AGENTS.md`. Keep docs focused on current contracts, unresolved work, and repeatable operations; completed-task narratives belong in git history.
