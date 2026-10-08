@@ -2,7 +2,7 @@
 
 ## Status and adaptation gap
 
-Alembic revision `20261008_0062` is applied in the owner's PostgreSQL catalog. Deployed relations, constraints, derived keys, audit revisions, and sampled read envelopes were inspected. The CLI personality task and cleanup planner/review commands use catalog-native reads/writes; other workflows remain disabled pending adaptation. Credential-backed execution has not established task readiness. The local, untracked `catalog-migration-buffer.sql` records completed data migration and physical-table retirement; it is a read-only status query, not a tracked schema definition.
+Alembic revision `20261008_0062` is applied in the owner's PostgreSQL catalog. Deployed relations, constraints, derived keys, audit revisions, and sampled read envelopes were inspected. The CLI personality task and cleanup planner/review commands use catalog-native reads/writes; other workflows remain disabled pending adaptation. Credential-backed execution has not established task readiness. The active Alembic history is a single baseline at that same revision. `alembic/sql/baseline_0062.sql` freezes the current schema; bootstrap and historical upgrade policy live in [operations](operations.md).
 
 The retired physical relations are `document`, `metadata`, `classification`, `normalization_canonicals`, `normalization_aliases`, `library_collections`, and `library_collection_items`. Their names are adapter views over normalized catalog relations. Views store no duplicate domain rows. Legacy upserts use the strict `catalog_upsert` command because views lack unique indexes.
 
@@ -28,21 +28,21 @@ Human confirmation is separate from entity active/merged status and AI success. 
 
 Editable metadata lives in columns/relations; Schema.org is generated transport. JSONB holds evidence, snapshots, proposals, manifests, and audit revisions. Retained durable workflow tables own their checkpoints. Sparse import evidence and the verified external backup preserve provenance without duplicating every source payload.
 
-## Operational ownership: revision 0062
+## Operational ownership
 
-Owner-approved revision `20261008_0062` retires five physical PostgreSQL relations: `library_collection_document_features`, `library_metadata_quality_state`, `library_collection_validation_attempts`, `library_book_previews`, and `publisher_merge_proposals`. Feature/quality caches and validation attempts move to local SQLite. Catalog preview requests/pages and catalog publisher proposals already contain the reconciled durable records; `catalog_selected_previews` and `catalog_publisher_proposals` provide projections without duplicate rows. Publisher draft IDs are remapped to catalog proposal IDs.
+The current schema omits five retired physical PostgreSQL relations: `library_collection_document_features`, `library_metadata_quality_state`, `library_collection_validation_attempts`, `library_book_previews`, and `publisher_merge_proposals`. Feature/quality caches and validation attempts use local SQLite. Catalog preview requests/pages and catalog publisher proposals already contain the reconciled durable records; `catalog_selected_previews` and `catalog_publisher_proposals` provide projections without duplicate rows. Publisher drafts use catalog proposal IDs.
 
 Personality decisions, explicit reviewed retries, accepted identities, and identity conflicts remain durable. Their model exclusions and processing/failure/deferral checkpoints are local. Non-PDF results, unsupported reasons and verified MIME facts remain durable; attempts and errors are local. Cleanup plans/reviews/phases remain durable; counts/run IDs/errors are local. Preview generation intent/leases remain durable; errors are local. There is no ongoing dual write or store fallback.
 
-The cutover requires a verified local transfer and consistent recovery dump; see [operations](operations.md). Retained legacy import renderers refuse revision 0062 rather than recreate retired owners. Recover this schema through an explicitly planned dump restore. Existing workflow enablement is unchanged by this storage migration.
+Fresh bootstrap does not replay the completed storage cutover. Older-schema transfers and recovery use the historical checkout under [operations](operations.md). Retained legacy import renderers refuse this catalog rather than recreate retired owners. Workflow enablement remains subject to the adaptation gap above.
 
-## Relational normalization: revisions 0060 and 0061
+## Relational normalization
 
-These revisions define the normalized domain relations; revision 0062 defines operational ownership. For another environment, inspect its deployed Alembic revision read-only rather than inferring deployment from the checkout. Backend and recovery-tool adaptation is separate work and is not included in these database changes.
+The baseline defines normalized domain relations and durable workflow ownership. For another environment, inspect its deployed Alembic revision read-only rather than inferring deployment from the checkout. Backend and recovery-tool adaptation remains separate work.
 
-Revision 0060 validates credit-slot uniqueness, distinct entity/name membership within proposals, alias and contribution states, confirmed contribution targets, age ranges, and self-reference/merge-status rules. Reference authors belong to `catalog_references`, with cascading deletion and publication-key updates. Three known unique constraints duplicating primary keys are removed only after checking their equivalence; unexpected dependencies abort the migration.
+Constraints enforce credit-slot uniqueness, distinct entity/name membership within proposals, alias and contribution states, confirmed contribution targets, age ranges, and self-reference/merge-status rules. Reference authors belong to `catalog_references`, with cascading deletion and publication-key updates. Primary keys provide identity uniqueness without duplicate unique constraints.
 
-Revision 0061 decomposes the remaining domain lists and credit labels:
+Domain lists and credit labels use these relations:
 
 | Relation | Identity and fact |
 | --- | --- |
@@ -53,15 +53,15 @@ Revision 0061 decomposes the remaining domain lists and credit labels:
 | `catalog_credit_groups` | Publication, role, and outer position identify the group and its role label |
 | `catalog_contributions` | Stable contribution ID identifies a credited name/entity at a unique nested position within its group |
 
-Migration preserves list order, repeated values, empty sufficient-mode groups, and absent versus empty reference URL lists (`urls_present`). It verifies reconstruction against every old list and label before dropping the old columns with `RESTRICT`. Conflicting data aborts the transaction; it never infers merges or discards conflicting rows. Publication and contribution IDs, source evidence, review snapshots, and existing historical revisions are retained. One primary collection and one source-work reference per publication remain intentional cardinalities. `has_metadata` and `metadata_present` retain their distinct meanings.
+Ordered child rows retain list order, repeated values, empty sufficient-mode groups, and absent versus empty reference URL lists (`urls_present`). Stable publication and contribution IDs, source evidence, review snapshots, and historical revisions remain durable. One primary collection and one source-work reference per publication remain intentional cardinalities. `has_metadata` and `metadata_present` retain their distinct meanings.
 
 Ordered child relations address the first-normal-form concern of storing independently editable domain lists in array columns. Moving the role label to its credit group removes its dependency on a group key repeated across contributions. This improves normalization without claiming strict BCNF for the whole catalog: stored search keys are intentional derived values, and JSONB evidence, snapshots, proposals, and audit payloads retain their document semantics.
 
-PostgreSQL 18 with UTF-8 owns derived keys through `catalog_name_key`, `catalog_title_key`, and `catalog_identifier_key`, enforced on every insert/update by database triggers. Names use Unicode case folding with the built-in `pg_unicode_fast` collation; collection titles additionally replace runs outside the retained Latin/Tatar-Cyrillic character allowlist with a space and trim it. ISBN keys remove characters other than digits and `X` after uppercasing; other identifier kinds retain their value. These keys are controlled derived values, not separate identity claims or uniqueness rules. Backfill records old/new values in audit revisions and advances affected entity/collection revisions, so previously reviewed snapshots may require renewed review.
+PostgreSQL 18 with UTF-8 owns derived keys through `catalog_name_key`, `catalog_title_key`, and `catalog_identifier_key`, enforced on every insert/update by database triggers. Names use Unicode case folding with the built-in `pg_unicode_fast` collation; collection titles additionally replace runs outside the retained Latin/Tatar-Cyrillic character allowlist with a space and trim it. ISBN keys remove characters other than digits and `X` after uppercasing; other identifier kinds retain their value. These keys are controlled derived values, not separate identity claims or uniqueness rules. Reviewed snapshots must match the current entity/collection revisions before mutation.
 
 Database statement locks and row triggers prevent taxonomy and merge cycles, and enforce the taxonomy's shared DDC rule. Reference URL presence is protected against contradictory child rows.
 
-Read projections `catalog_publication_metadata`, `catalog_document_metadata`, `catalog_sufficient_mode_metadata`, `catalog_reference_metadata`, and `catalog_contribution_metadata` reconstruct the previous envelope without storing duplicate domain rows. Installed Schema.org and legacy read views use these projections. Scalar projected fields remain automatically updatable, but collection-valued fields and role labels require writes to the normalized child relations. Existing backend/import helpers that still write the former arrays or per-contribution labels need adaptation before use; these migrations do not establish their readiness.
+Read projections `catalog_publication_metadata`, `catalog_document_metadata`, `catalog_sufficient_mode_metadata`, `catalog_reference_metadata`, and `catalog_contribution_metadata` reconstruct the previous envelope without storing duplicate domain rows. Installed Schema.org and legacy read views use these projections. Scalar projected fields remain automatically updatable, but collection-valued fields and role labels require writes to the normalized child relations. Existing backend/import helpers that still write the former arrays or per-contribution labels need adaptation before use; schema bootstrap does not establish their readiness.
 
 ## Owners and mutation rules
 
@@ -79,6 +79,6 @@ The catalog preview worker uses MD5-verified sources and the pinned page detecto
 
 ## Recovery tooling
 
-`scripts/catalog_import.py`, `scripts/catalog_manual_*.py`, `app/catalog/importer.py`, and `app/catalog/cutover.py` remain implementation/recovery tools. Their completed manual-stage handoffs are removed. Consult code and persisted manifests for an explicitly planned recovery, with a restore-tested backup and writers paused. Never infer committed state from a client response. Preserve saved index definitions and verify restoration before restarting writers.
+`scripts/catalog_import.py`, `scripts/catalog_manual_*.py`, `app/catalog/importer.py`, and `app/catalog/cutover.py` describe historical import operations, not current bootstrap. Fresh baseline databases omit the migration-only adapter installers those operations used. Use the historical checkout and persisted manifests for an explicitly planned recovery under [operations](operations.md), with a restore-tested backup and writers paused. Never infer committed state from a client response. Preserve saved index definitions and verify restoration before restarting writers.
 
 [Backup and recovery](postgres-backup-recovery.md) covers portable dumps and isolated restore drills. Any new persisted-data migration or compatibility choice requires owner agreement.

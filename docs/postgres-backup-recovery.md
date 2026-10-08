@@ -48,4 +48,6 @@ docker run --rm --volume=/tmp/manzara-restore.dump:/backup/manzara.dump:ro \
 
 Compare local SHA-256 with object metadata. Restore into a new, empty, isolated PostgreSQL database via a private libpq service file using `pg_restore --no-owner --no-privileges`. Never use production for drills. Verify Alembic revision, normalized catalog/checkpoint counts, constraints/indexes, and representative reads. Backend readiness remains a separate unresolved issue.
 
+The active Alembic history starts at `20261008_0062`. Dumps at older revisions need the historical checkout and reviewed upgrade procedure in [operations](operations.md); do not stamp a restored older schema to the baseline. Restore dumps directly into an empty database rather than creating the baseline over their objects first.
+
 Enable Actions failure notifications and verify recovery points periodically; schedules may be missed. Update client major version before a server upgrade beyond PostgreSQL 18.

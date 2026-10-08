@@ -1,1 +1,9 @@
-Single database configuration for Manzara migrations.
+Manzara has one retained baseline: 20261008_0062, with no parent revision.
+Its frozen SQL includes the durable catalog, workflow checkpoints, views,
+functions, triggers, constraints, and pg_trgm dependency. Python metadata is
+not a complete schema definition. Future migrations descend from this baseline.
+
+The baseline preserves the deployed revision ID and contains no corpus rows,
+operational-state transfers, or historical adapter installers. Bootstrap,
+older-database upgrade policy, and recovery are documented in
+../docs/operations.md.
