@@ -5,7 +5,7 @@ Paths are relative to the repo root; all implementation rows below live in `app/
 | Concern | Owners |
 | --- | --- |
 | Task registration and launch | `tasks.py`, `collection_tasks.py`, `runtime/run_*.py` |
-| Normalization facade / HTTP / durable writes | `normalization.py`, `app/library_normalization_routes.py`, `app/repositories/normalization.py` |
+| Normalization facade / durable writes | `normalization.py`, `app/repositories/normalization.py`, `app/catalog/personality_normalization.py` |
 | Normalization matching / mentions / views | `normalization_rules.py`, `normalization_queries.py`, `normalization_views.py` |
 | Canonicals / decisions / history / quality / suggestions | `normalization_canonicals.py`, `normalization_decisions.py`, `normalization_history.py`, `normalization_quality.py`, `normalization_suggestions.py` |
 | Personality extraction and review | `personality_normalization.py`, `personality_normalization_prompt.py`, `personality_workbench.py`, `runtime/run_normalize_personalities.py`; [contract](../../../../docs/personality-normalization.md) |
@@ -18,6 +18,6 @@ Paths are relative to the repo root; all implementation rows below live in `app/
 | Collections | `collection_detection.py`, `collection_validation.py`, `collection_catalog.py`, `runtime/run_collection_apply.py`; [rules](collections.md) |
 | Static publishing export | `site_export.py`, `site_export_repository.py`, `runtime/run_site_export.py`; [contract](site-export.md) |
 | Cleanup planning | `document_cleanup.py`, `document_cleanup_service.py`, `document_cleanup_repository.py`; execution belongs to Maintenance |
-| Domain HTTP assembly | `app/library_*_routes.py`, `app/dependencies.py` |
+| CLI task composition | `app/cli/`; flow-owned execution: `runtime/run_normalize_personalities.py`, `runtime/run_prepare_document_cleanup.py`, `cleanup_cli.py` |
 
 Legacy SQL/ORM assumptions need auditing against the migrated [catalog](../../../../docs/catalog-model.md). Validation policy and coverage limits: [verification](../../../../docs/verification.md).

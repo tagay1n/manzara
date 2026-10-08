@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -432,6 +433,48 @@ class CoreRepository:
             # domain migration can remove the former cloud runtime tables.
             self._local_state.initialize()
             command.upgrade(config, "head")
+
+    def init_local_state(self) -> None:
+        """Initialize disposable runtime state without migrating PostgreSQL."""
+        self._local_state.initialize()
+
+    def check_personality_catalog(self) -> None:
+        """Read-only preflight for the supported normalized catalog contract."""
+        required = {
+            "catalog_publications": {"publication_id", "inclusion", "has_metadata", "metadata_present"},
+            "catalog_publication_languages": {"publication_id", "position", "language"},
+            "catalog_documents": {"md5", "publication_id"},
+            "catalog_names": {"name_id", "kind", "raw_name"},
+            "catalog_entities": {"entity_id", "kind", "approval", "identity_key", "revision"},
+            "catalog_aliases": {"alias_id", "name_id", "entity_id", "approval", "revision"},
+            "catalog_alias_reviews": {"alias_id", "name_id", "entity_id", "successful_model", "source_roles"},
+            "catalog_entity_roles": {"entity_id", "role"},
+            "catalog_contributions": {"contribution_id", "publication_id", "name_id", "role", "position", "nested_position"},
+            "catalog_credit_groups": {"publication_id", "role", "position"},
+            "catalog_protections": {"record_kind", "record_key", "field"},
+            "catalog_revisions": {"record_kind", "record_key", "actor", "before", "after"},
+            "personality_normalization_checkpoints": {"raw_name", "canonical_id", "source_fingerprint", "state"},
+        }
+        with self._connect() as conn:
+            conn.execute("SET TRANSACTION READ ONLY")
+            conn.execute("SET LOCAL statement_timeout = '5s'")
+            rows = conn.execute(
+                "SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=? AND table_name=ANY(?)",
+                (self.schema, list(required)),
+            ).fetchall()
+            present: dict[str, set[str]] = {}
+            for row in rows:
+                present.setdefault(row["table_name"], set()).add(row["column_name"])
+            missing = [f"{table}.{column}" for table, columns in required.items()
+                       for column in sorted(columns - present.get(table, set()))]
+            if missing:
+                raise RuntimeError("Catalog is incompatible with personality normalization; missing: " + ", ".join(missing))
+            version_schema = str(os.environ.get("MANZARA_ALEMBIC_VERSION_SCHEMA") or self.schema)
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", version_schema):
+                raise ValueError("Invalid migration version schema")
+            revision = conn.execute(f'SELECT version_num FROM "{version_schema}".alembic_version_manzara').scalar()
+            if not re.fullmatch(r"\d{8}_\d{4}", str(revision)) or int(str(revision).split("_")[1]) < 61:
+                raise RuntimeError("Catalog revision 20261007_0061 or later is required; apply migrations separately.")
 
 
     def _row_to_task(self, row: Dict[str, Any]) -> Dict[str, Any]:

@@ -3,7 +3,8 @@
 ## Current priorities
 
 - Adapt backend reads, writes, and workers to the migrated PostgreSQL catalog. Audit legacy SQL/ORM assumptions before treating workflows as ready. See [catalog model](docs/catalog-model.md).
-- Implement a rich operations CLI after its scope is defined. Preserve backend-owned decisions, safe stop/resume, bounded logs, and structured artifacts.
+- Adapt and enable additional CLI tasks one slice at a time. Personality normalization and cleanup planning/review are implemented; runtime readiness remains unverified without explicitly authorized credential-backed execution.
+- Retire or replace the obsolete API assembly test only when test work is explicitly requested.
 
 ## Older requests needing owner reprioritization
 

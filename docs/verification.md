@@ -8,9 +8,9 @@ Review changed code and contracts, inspect relevant paths/configuration, and use
 
 ## Coverage available on request
 
-This checkout retains `tests/test_api_assembly.py`, a database-free regression for API assembly after frontend removal. It uses `app.factory`, avoiding production configuration and startup migrations. Pytest is not listed in `requirements.txt`; a requested run needs an environment with it installed.
+`tests/test_api_assembly.py` is retained but obsolete: its API factory was removed with the owner-authorized HTTP retirement. It has not been modified or run. There is no CLI or catalog integration suite; pytest is not a runtime dependency. Replacing this test requires an explicit request for test work.
 
-The former frontend/catalog/worker/architecture suites, shared fixtures, and Testcontainers setup are absent. No PostgreSQL test fixture currently exists. API assembly coverage does not establish catalog reads/writes, review protections, privacy, checkpoint recovery, or safe-stop behavior.
+Static CLI validation includes syntax inspection, retained import/reference checks, dependency inspection, and `git diff --check`. It does not establish terminal interaction, live provider behavior, transactional catalog mutations, checkpoint recovery, or safe-stop readiness.
 
 If the owner requests database tests, use an isolated PostgreSQL instance matching the migrated catalog with explicit test-only configuration. Never fall back to the owner's database or local config. Keep test scope within the request.
 

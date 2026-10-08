@@ -28,11 +28,11 @@ class IsbnCleanupDecision:
 def cleanup_reasons(*, language: Any, mime_type: Any, source_path: Any = "") -> list[str]:
     """Return independently observable reasons for moving a document aside."""
     reasons: list[str] = []
-    normalized_language = str(language or "").strip().casefold()
-    is_tatar = normalized_language in TATAR_LANGUAGE_CODES or normalized_language.startswith(
-        ("tt-", "tat-")
-    )
-    if normalized_language and not is_tatar:
+    values = language if isinstance(language, (list, tuple)) else [language]
+    languages = [str(value or "").strip().casefold() for value in values if str(value or "").strip()]
+    is_tatar = any(value in TATAR_LANGUAGE_CODES or value.startswith(("tt-", "tat-"))
+                   for value in languages)
+    if languages and not is_tatar:
         reasons.append("non_tatar")
     if not classify_document(str(source_path or ""), str(mime_type or "")).accepted:
         reasons.append("non_document")

@@ -6,11 +6,10 @@ from __future__ import annotations
 import argparse
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 import json
-import os
 import re
 from pathlib import Path
-import signal
 import sys
 import threading
 import uuid
@@ -25,7 +24,7 @@ def _bootstrap_repo_root() -> None:
 
 _bootstrap_repo_root()
 
-from app.db import Database
+from app.catalog.contracts import CatalogConflict
 from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_model_pool import (
     GeminiModelPoolExhaustedError,
@@ -39,6 +38,7 @@ from app.gemini_requests import generate_structured_json
 from app.gemini_pacing import GeminiPacingPolicy
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
 from app.gemini_workers import current_gemini_worker_id, emit_gemini_worker_log, resolve_gemini_workers
+from app.task_runtime.contracts import RunContext, RunOptions
 from app.modules.library.personality_normalization import (
     PersonalityResponse,
     PersonalityCandidate,
@@ -53,8 +53,6 @@ from app.modules.library.personality_normalization_prompt import (
     PERSONALITY_NORMALIZATION_PROMPT_VERSION,
     build_personality_normalization_prompt,
 )
-from app.run_artifact_channel import emit_run_artifact
-from app.settings import load_settings
 
 
 TASK_ID = "library.normalize_personalities"
@@ -71,13 +69,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=None, help="Optional candidate cap")
     parser.add_argument("--workers", type=int, default=None)
     return parser.parse_args()
-
-
-def _run_id() -> int:
-    value = str(os.environ.get("MANZARA_TASK_RUN_ID") or "").strip()
-    if not value.isdigit() or int(value) < 1:
-        raise RuntimeError("MANZARA_TASK_RUN_ID is required")
-    return int(value)
 
 
 def _checkpoint_attempts(checkpoint: dict[str, Any] | None) -> dict[str, Any]:
@@ -225,7 +216,7 @@ class _WorkQueue:
                 self.active += 1
                 self.turns[candidate.raw_name] += 1
                 return candidate
-            if self.should_stop():
+            if self.should_stop() and self.outcome != "failed":
                 self.outcome = "stopped"
             return None
 
@@ -246,6 +237,8 @@ class _WorkQueue:
             final_states = ("succeeded", "not_person", "unusable", "deferred", "failed")
             processed = sum(counts[state] for state in final_states)
             return {"current": processed, "total": total, "processed": processed,
+                    "resolved": processed - counts["deferred"], "active": self.active,
+                    "phase": "processing", "outcome": self.outcome,
                     **{state: counts[state] for state in final_states}, "skipped": 0,
                     "retry_pending": counts["retry_pending"],
                     "model_attempts": dict(self.model_attempts),
@@ -258,24 +251,30 @@ def run_personality_normalization(
     request_json: Callable[..., str] = generate_structured_json,
     candidates: Sequence[PersonalityCandidate] | None = None,
     limit: int | None = None, workers: int = 1,
+    progress_sink: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     """Persist explicit decisions and process one bounded shared retry queue."""
+    RunOptions(workers=workers, limit=limit)
     source = list(candidates) if candidates is not None else extract_personality_candidates(db.list_personality_source_documents())
     # One queue entry per raw name even when a caller supplies duplicate candidates.
     source = list({candidate.raw_name: candidate for candidate in source}.values())
     eligible, skipped = _eligible_candidates(source, db.list_personality_checkpoints())
     if limit is not None:
-        eligible = eligible[:max(0, int(limit))]
+        eligible = eligible[:limit]
     queue = _WorkQueue(eligible, should_stop)
     progress_lock = threading.Lock()
     # Every worker shares this run scope; a new run starts with fresh pacing.
     pacing_policy = GeminiPacingPolicy(f"{TASK_ID}:{run_id if run_id is not None else uuid.uuid4().hex}")
 
     def publish(*, force: bool = False) -> None:
-        if run_id is not None:
+        if run_id is not None or progress_sink is not None:
             with progress_lock:
-                db.publish_run_progress(task_id=TASK_ID, run_id=run_id, panel_id=PANEL_ID,
-                                        progress=queue.snapshot(len(eligible)), force=force)
+                snapshot = {**queue.snapshot(len(eligible)), "skipped": skipped, "source_total": len(source)}
+                if progress_sink is not None:
+                    progress_sink(snapshot, force=force)
+                else:
+                    db.publish_run_progress(task_id=TASK_ID, run_id=run_id, panel_id=PANEL_ID,
+                                            progress=snapshot, force=force)
 
     def process(candidate: PersonalityCandidate, manager: GeminiRuntimeManager, worker_id: str) -> None:
         checkpoint = db.get_personality_checkpoint(candidate.raw_name)
@@ -287,6 +286,8 @@ def run_personality_normalization(
                 "source_roles": list(candidate.roles), "prompt_version": PERSONALITY_NORMALIZATION_PROMPT_VERSION,
                 "schema_version": SCHEMA_VERSION}
         emit_gemini_worker_log(f"library personalities: person start raw_name={candidate.raw_name}", worker_id=worker_id)
+        db.save_personality_checkpoint(**base, state="processing", attempted_models=attempts,
+            canonical_id=(checkpoint or {}).get("canonical_id"), retryable=bool((checkpoint or {}).get("retryable")))
 
         def call_model(model_name: str, api_key: str, _lease: Any) -> str:
             with queue.condition:
@@ -311,7 +312,8 @@ def run_personality_normalization(
             if isinstance(previous, dict) and previous.get("kind") in {"recovered_response", "transient"}:
                 attempts[model_name]["previous_failure"] = previous
             db.save_personality_checkpoint(**base, state="processing", attempted_models=attempts,
-                                           failure_context=error, retryable=False)
+                                           failure_context=error, retryable=False,
+                                           canonical_id=(checkpoint or {}).get("canonical_id"))
 
         state = "failed"
         retry = False
@@ -325,11 +327,13 @@ def run_personality_normalization(
                             if isinstance(failure, dict) and failure.get("kind") == "recovered_response" else failure
                             for model, failure in attempts.items()}
             db.save_personality_checkpoint(**base, state=state, attempted_models=attempts,
-                                           failure_context=str(exc), retryable=False)
+                                           failure_context=str(exc), retryable=False,
+                                           canonical_id=(checkpoint or {}).get("canonical_id"))
         except GeminiModelPoolUnavailableError as exc:
             state = "deferred"
             db.save_personality_checkpoint(**base, state=state, attempted_models=attempts,
-                                           failure_context=str(exc), retryable=True)
+                                           failure_context=str(exc), retryable=True,
+                                           canonical_id=(checkpoint or {}).get("canonical_id"))
             retry = exc.retry_at is not None
             if not retry and exc.all_models_unavailable:
                 # No usable pool or known retry time: preserve untouched work.
@@ -345,13 +349,18 @@ def run_personality_normalization(
                 if previous:
                     attempts[exc.model_name]["previous_failure"] = previous
             db.save_personality_checkpoint(**base, state=state, attempted_models=attempts,
-                                           failure_context=str(exc), retryable=retry)
+                                           failure_context=str(exc), retryable=retry,
+                                           canonical_id=(checkpoint or {}).get("canonical_id"))
             emit_gemini_worker_log(f"library personalities: person {state} raw_name={candidate.raw_name} reason={exc}", worker_id=worker_id)
         except GeminiStopRequestedError:
             with queue.condition:
-                queue.outcome = "stopped"
+                if queue.outcome != "failed":
+                    queue.outcome = "stopped"
             # An existing deferred checkpoint stays durable across stop during retry.
             state = "deferred" if checkpoint and checkpoint.get("retryable") else "pending"
+            db.save_personality_checkpoint(**base, state=state, attempted_models=attempts,
+                canonical_id=(checkpoint or {}).get("canonical_id"), retryable=state == "deferred",
+                failure_context=(checkpoint or {}).get("failure_context"))
         else:
             decision = result.value
             components = decision.person_components()
@@ -363,11 +372,19 @@ def run_personality_normalization(
                                                failure_context=decision.reason, retryable=False, completed=True)
                 emit_gemini_worker_log(f"library personalities: person decision raw_name={candidate.raw_name} outcome={state} reason={decision.reason}", worker_id=worker_id)
             else:
-                canonical = db.persist_personality_normalization(**base, components=storage_components(components),
-                    display_name=build_canonical_name(components), identity_key=personality_identity_key(components), model=result.model_name)
-                with queue.condition:
-                    queue.model_successes[result.model_name] += 1
-                emit_gemini_worker_log(f"library personalities: person success raw_name={candidate.raw_name} canonical_id={canonical['canonical_id']}", worker_id=worker_id)
+                try:
+                    canonical = db.persist_personality_normalization(**base, components=storage_components(components),
+                        display_name=build_canonical_name(components), identity_key=personality_identity_key(components), model=result.model_name)
+                except CatalogConflict as exc:
+                    state = "failed"
+                    db.save_personality_checkpoint(**base, state=state, attempted_models=attempts,
+                                                   failure_context=str(exc), retryable=False,
+                                           canonical_id=(checkpoint or {}).get("canonical_id"))
+                    emit_gemini_worker_log(f"library personalities: identity conflict raw_name={candidate.raw_name} reason={exc}", worker_id=worker_id)
+                else:
+                    with queue.condition:
+                        queue.model_successes[result.model_name] += 1
+                    emit_gemini_worker_log(f"library personalities: person success raw_name={candidate.raw_name} entity_id={canonical['canonical_id']}", worker_id=worker_id)
         if retry and queue.turns[candidate.raw_name] == 1:
             emit_gemini_worker_log(f"library personalities: queue tail raw_name={candidate.raw_name} retry=1/1", worker_id=worker_id)
         queue.finish(candidate, state, retry=retry)
@@ -376,13 +393,15 @@ def run_personality_normalization(
     def work() -> None:
         worker_id = current_gemini_worker_id("personalities")
         manager = GeminiRuntimeManager(db, task_id=TASK_ID, panel_id=PANEL_ID,
-            should_stop=should_stop, worker_id=worker_id, pacing_policy=pacing_policy)
+            should_stop=lambda: should_stop() or queue.outcome == "failed",
+            worker_id=worker_id, pacing_policy=pacing_policy)
         while (candidate := queue.claim()) is not None:
             try:
                 process(candidate, manager, worker_id)
             except BaseException:
                 with queue.condition:
                     queue.outcome = "failed"
+                    queue.states[candidate.raw_name] = "failed"
                     queue.active -= 1
                     queue.condition.notify_all()
                 raise
@@ -390,32 +409,48 @@ def run_personality_normalization(
     publish()
     emit_gemini_worker_log(f"library personalities: start eligible={len(eligible)} total={len(source)}", worker_id="coordinator")
     count = min(max(1, int(workers)), max(1, len(eligible)))
-    if count == 1:
-        work()
-    else:
-        with ThreadPoolExecutor(max_workers=count, thread_name_prefix="personalities-worker") as executor:
-            list(executor.map(lambda _index: work(), range(count)))
-    with queue.condition:
-        queue.states = {name: "deferred" if state == "retry_pending" else state for name, state in queue.states.items()}
-    publish(force=True)
+    try:
+        if count == 1:
+            work()
+        else:
+            with ThreadPoolExecutor(max_workers=count, thread_name_prefix="personalities-worker") as executor:
+                futures = [executor.submit(copy_context().run, work) for _index in range(count)]
+                for future in futures:
+                    future.result()
+    finally:
+        with queue.condition:
+            queue.states = {name: "deferred" if state == "retry_pending" else state for name, state in queue.states.items()}
+        publish(force=True)
     snapshot = queue.snapshot(len(eligible))
     return {"kind": "library.personality_normalization_summary", **snapshot,
             "outcome": queue.outcome, "total": len(source), "processed": snapshot["processed"] + skipped,
-            "skipped": skipped, "workers": count, "remaining": len(eligible) - snapshot["processed"]}
+            "skipped": skipped, "workers": count, "eligible_total": len(eligible),
+            "remaining": len(eligible) - snapshot["resolved"]}
+
+
+def execute(context: RunContext) -> dict[str, Any]:
+    """Flow-owned handler for the transport-independent task runtime."""
+    context.db.check_personality_catalog()
+    if context.should_stop():
+        return {"kind": "library.personality_normalization_summary", "outcome": "stopped"}
+    models = load_required_gemini_model_pool()
+    summary = run_personality_normalization(
+        db=context.db, models=models, run_id=context.run_id, should_stop=context.should_stop,
+        limit=context.options.limit, workers=context.options.workers,
+        progress_sink=context.progress,
+    )
+    emit_gemini_worker_log(f"library personalities: final {json.dumps(summary, ensure_ascii=False, sort_keys=True)}", worker_id="coordinator")
+    return summary
 
 
 def main() -> None:
     args = _parse_args()
-    workers = resolve_gemini_workers(args.workers)
-    settings = load_settings()
-    db = Database(settings.database_url, schema=settings.database_schema, local_state_path=settings.local_state_path)
-    stop = {"requested": False}
-    signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("requested", True))
-    signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("requested", True))
-    emit_gemini_worker_log(f"library personalities: configured workers={workers}", worker_id="coordinator")
-    summary = run_personality_normalization(db=db, models=load_required_gemini_model_pool(), run_id=_run_id(), should_stop=lambda: stop["requested"], limit=args.limit, workers=workers)
-    emit_run_artifact(summary)
-    emit_gemini_worker_log(f"library personalities: final {json.dumps(summary, ensure_ascii=False, sort_keys=True)}", worker_id="coordinator")
+    from app.cli import main as cli_main
+
+    arguments = ["--task", TASK_ID, "--workers", str(resolve_gemini_workers(args.workers))]
+    if args.limit is not None:
+        arguments += ["--limit", str(args.limit)]
+    cli_main(arguments)
 
 
 if __name__ == "__main__":

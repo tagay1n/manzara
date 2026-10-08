@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
@@ -9,8 +10,8 @@ from typing import Any
 
 from sqlalchemy import text
 
-from app.modules.library.runtime.metadata.fields import extract_page_count, parse_meta
 from app.modules.library.runtime.metadata.isbn_utils import equivalent_isbn_values
+from app.catalog.contracts import integer
 from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 
@@ -44,6 +45,11 @@ def _enrich_review_page_counts(
         ]
         enriched_reviews.append(enriched)
     return enriched_reviews
+
+
+def review_snapshot(candidates: Iterable[Mapping[str, Any]]) -> str:
+    payload = json.dumps(list(candidates), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _removed_review_md5s(review: Mapping[str, Any]) -> set[str]:
@@ -119,7 +125,7 @@ def _reconcile_pending_reviews(conn: Any) -> dict[str, int]:
         present_md5s = {
             str(value).strip().lower()
             for value in conn.execute(
-                text("SELECT md5 FROM document WHERE md5=ANY(:md5s)"),
+                text("SELECT md5 FROM catalog_documents WHERE md5=ANY(:md5s)"),
                 {"md5s": candidate_md5s},
             ).scalars()
         }
@@ -219,33 +225,47 @@ class DocumentCleanupRepository:
     def dispose(self) -> None:
         release_postgres_engine(self.engine)
 
-    def list_documents_for_planning(self) -> list[dict[str, Any]]:
-        with self.engine.connect() as conn:
-            return [
-                dict(row)
-                for row in conn.execute(
-                    text(
-                        """
-                        SELECT d.md5, d.mime_type, d.ya_path, d.ya_resource_id,
-                               d.language, d."full", d.sharing_restricted,
-                               m.schema_org
-                        FROM document d
-                        LEFT JOIN metadata m ON m.md5 = d.md5
-                        WHERE d.md5 IS NOT NULL
-                        ORDER BY d.md5
-                        """
-                    )
-                ).mappings()
-            ]
+    @contextmanager
+    def write_transaction(self, *, conn: Any = None):
+        """Opt cleanup mutations into writes without changing session defaults."""
+        if conn is not None:
+            yield conn
+            return
+        with self.engine.begin() as connection:
+            connection.execute(text("SET TRANSACTION READ WRITE"))
+            yield connection
 
-    def enqueue_cleanup(self, payload: Mapping[str, Any]) -> tuple[int, bool]:
+    def list_documents_for_planning(self, *, conn: Any = None, md5s: Iterable[str] | None = None) -> list[dict[str, Any]]:
+        where = "WHERE d.md5=ANY(:md5s)" if md5s is not None else ""
+        parameters = {"md5s": list(md5s)} if md5s is not None else {}
+        with nullcontext(conn) if conn is not None else self.engine.connect() as connection:
+            return [dict(row) for row in connection.execute(text(f"""
+                SELECT d.md5, d.publication_id, d.revision AS document_revision,
+                       p.revision AS publication_revision, y.revision AS source_revision,
+                       d.mime_type, d.complete AS "full", d.restricted AS sharing_restricted,
+                       y.source_path AS ya_path, y.resource_id AS ya_resource_id,
+                       p.name AS title, p.page_count,
+                       ARRAY(SELECT language FROM catalog_publication_languages l
+                             WHERE l.publication_id=p.publication_id ORDER BY position) AS language,
+                       ARRAY(SELECT value FROM catalog_identifiers i
+                             WHERE i.publication_id=p.publication_id AND kind='isbn'
+                             ORDER BY position) AS isbn
+                FROM catalog_documents d
+                JOIN catalog_publications p USING (publication_id)
+                LEFT JOIN catalog_locations y
+                  ON y.md5=d.md5 AND y.provider='yandex' AND y.purpose='source'
+                {where}
+                ORDER BY d.md5
+            """), parameters).mappings()]
+
+    def enqueue_cleanup(self, payload: Mapping[str, Any], *, conn: Any = None) -> tuple[int, bool]:
         values = {
             **dict(payload),
             "evidence_json": json.dumps(
                 payload.get("evidence") or {}, ensure_ascii=False, sort_keys=True
             ),
         }
-        with self.engine.begin() as conn:
+        with self.write_transaction(conn=conn) as conn:
             if str(values["scope"]) in {"duplicate_resource", "source_resource"}:
                 existing = conn.execute(
                     text(
@@ -340,7 +360,7 @@ class DocumentCleanupRepository:
         ]:
             aliases = equivalent_isbn_values(identifier)
             identity_isbns.update(aliases or [str(identifier)])
-        with self.engine.begin() as conn:
+        with self.write_transaction() as conn:
             _lock_isbn_reviews(conn)
             possible_reviews = conn.execute(
                 text(
@@ -420,7 +440,7 @@ class DocumentCleanupRepository:
 
     def reconcile_pending_reviews(self) -> dict[str, int]:
         """Persistently reconcile pending reviews with the current document catalog."""
-        with self.engine.begin() as conn:
+        with self.write_transaction() as conn:
             self.lock_isbn_reviews_in_transaction(conn)
             return self.reconcile_pending_reviews_in_locked_transaction(conn)
 
@@ -495,6 +515,8 @@ class DocumentCleanupRepository:
                     {"status": status, "limit": max(1, min(int(limit), 500))},
                 ).mappings()
             ]
+            for review in reviews:
+                review["review_snapshot"] = review_snapshot(review["candidates_json"] or [])
             candidate_md5s = sorted(
                 {
                     str(candidate.get("md5") or "").strip().lower()
@@ -505,23 +527,19 @@ class DocumentCleanupRepository:
             )
             if not candidate_md5s:
                 return reviews
-            metadata_rows = conn.execute(
-                text("SELECT md5, schema_org FROM metadata WHERE md5 = ANY(:md5s)"),
-                {"md5s": candidate_md5s},
-            ).mappings()
-            page_counts = {
-                str(row["md5"]).strip().lower(): extract_page_count(
-                    parse_meta(row.get("schema_org"))
-                )
-                for row in metadata_rows
-            }
+            page_counts = dict(conn.execute(text("""
+                SELECT d.md5, p.page_count FROM catalog_documents d
+                JOIN catalog_publications p USING (publication_id)
+                WHERE d.md5=ANY(:md5s)
+            """), {"md5s": candidate_md5s}).all())
             return _enrich_review_page_counts(reviews, page_counts)
 
-    def decide_review(self, review_id: int, *, keep_md5s: Iterable[str]) -> dict[str, Any]:
+    def decide_review(self, review_id: int, *, keep_md5s: Iterable[str], expected_snapshot: str, conn: Any = None) -> dict[str, Any]:
+        integer(review_id, "review_id")
         keep = tuple(sorted({str(value).strip().lower() for value in keep_md5s if value}))
         if not keep:
             raise ValueError("At least one document must be kept")
-        with self.engine.begin() as conn:
+        with self.write_transaction(conn=conn) as conn:
             _lock_isbn_reviews(conn)
             review = conn.execute(
                 text(
@@ -536,6 +554,8 @@ class DocumentCleanupRepository:
             if review is None:
                 raise ValueError("ISBN review not found")
             candidates = list(review["candidates_json"] or [])
+            if expected_snapshot != review_snapshot(candidates):
+                raise ValueError("ISBN review changed; inspect cleanup reviews again")
             by_md5 = {str(item.get("md5") or "").lower(): dict(item) for item in candidates}
             if not set(keep).issubset(by_md5):
                 raise ValueError("keep_md5s contains a document outside this review")
@@ -553,6 +573,23 @@ class DocumentCleanupRepository:
                 raise ValueError("ISBN review is no longer pending")
             if status == "pending":
                 candidate_md5s = set(by_md5)
+                # Lock the reviewed file/publication/source facts until plans commit.
+                conn.execute(text("SELECT md5 FROM catalog_documents WHERE md5=ANY(:md5s) FOR UPDATE"),
+                             {"md5s": sorted(candidate_md5s)})
+                conn.execute(text("""SELECT publication_id FROM catalog_publications
+                    WHERE publication_id IN (SELECT publication_id FROM catalog_documents
+                                             WHERE md5=ANY(:md5s)) FOR UPDATE"""),
+                             {"md5s": sorted(candidate_md5s)})
+                conn.execute(text("SELECT location_id FROM catalog_locations WHERE md5=ANY(:md5s) FOR UPDATE"),
+                             {"md5s": sorted(candidate_md5s)})
+                current = {item["md5"]: item for item in self.list_documents_for_planning(conn=conn, md5s=candidate_md5s)}
+                for md5, candidate in by_md5.items():
+                    document = current.get(md5)
+                    if document is None or any(candidate.get(key) != document.get(key) for key in
+                        ("publication_id", "document_revision", "publication_revision", "source_revision")):
+                        raise ValueError("ISBN candidates changed; rerun cleanup preparation before reviewing")
+                    if candidate.get("source_path") != document["ya_path"]:
+                        raise ValueError("ISBN source changed; rerun cleanup preparation")
                 remove = candidate_md5s - set(keep)
                 decided_reviews = conn.execute(
                     text(
@@ -609,13 +646,13 @@ class DocumentCleanupRepository:
             "review_id": int(review_id),
             "isbn": str(review["isbn"]),
             "keep_md5s": list(keep),
-            "remove_candidates": [item for md5, item in by_md5.items() if md5 not in keep],
+            "remove_candidates": [item for md5, item in by_md5.items() if md5 not in keep] if status == "pending" else [],
         }
 
     def undo_review(self, review_id: int) -> dict[str, Any]:
         """Reopen one decision when its exclusive cleanup plans remain reversible."""
-        normalized_review_id = int(review_id)
-        with self.engine.begin() as conn:
+        normalized_review_id = integer(review_id, "review_id")
+        with self.write_transaction() as conn:
             _lock_isbn_reviews(conn)
             review = conn.execute(
                 text(

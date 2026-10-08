@@ -10,7 +10,6 @@ from app.modules.library.document_cleanup import (
     build_isbn_cleanup_decisions,
     cleanup_reasons,
 )
-from app.modules.library.runtime.metadata.fields import extract_isbn_values, parse_meta
 
 
 def prepare_document_cleanup(
@@ -19,6 +18,7 @@ def prepare_document_cleanup(
     filtered_out_path: str,
     source_root_path: str,
     should_stop: Callable[[], bool] = lambda: False,
+    log: Callable[[str], None] = print,
     on_progress: Callable[[int, int, Mapping[str, int]], None] | None = None,
 ) -> dict[str, Any]:
     """Create safe cleanup plans and reviews without touching storage or documents."""
@@ -26,6 +26,7 @@ def prepare_document_cleanup(
     documents = repository.list_documents_for_planning()
     counters = {
         "scanned": 0,
+        "skipped_missing_source": 0,
         "plans_created": 0,
         "plans_reused": 0,
         "plans_suppressed": 0,
@@ -50,9 +51,12 @@ def prepare_document_cleanup(
     for document in documents:
         if should_stop():
             break
+        counters["scanned"] += 1
         md5 = str(document.get("md5") or "").strip().lower()
         source_path = str(document.get("ya_path") or "").strip()
         if not md5 or not source_path:
+            counters["skipped_missing_source"] += 1
+            log(f"cleanup skipped md5={md5} reason=missing_source_path")
             continue
         by_md5[md5] = dict(document)
         reasons = cleanup_reasons(
@@ -75,17 +79,18 @@ def prepare_document_cleanup(
                     source_root_path=source_root_path,
                     source_path=source_path,
                 ),
-                "evidence": {"reasons": reasons},
+                "evidence": {"reasons": reasons, **{key: document.get(key) for key in
+                    ("publication_id", "document_revision", "publication_revision", "source_revision")}},
             }
             if repository.is_cleanup_suppressed(payload):
                 counters["plans_suppressed"] += 1
             else:
-                _, created = repository.enqueue_cleanup(payload)
+                cleanup_id, created = repository.enqueue_cleanup(payload)
+                log(f"cleanup plan md5={md5} cleanup_id={cleanup_id} reason={reason} created={created}")
                 counters["plans_created" if created else "plans_reused"] += 1
                 planned_by_reason[reason] += 1
                 counters[f"planned_{reason}"] += 1
-        schema_org = parse_meta(document.get("schema_org"))
-        isbn_values = extract_isbn_values(schema_org)
+        isbn_values = document.get("isbn") or []
         if isbn_values and not reasons:
             isbn_documents.append(
                 {
@@ -94,10 +99,9 @@ def prepare_document_cleanup(
                     "full": document.get("full"),
                     "mime_type": document.get("mime_type"),
                     "source_path": source_path,
-                    "title": str(schema_org.get("name") or ""),
+                    "title": str(document.get("title") or ""),
                 }
             )
-        counters["scanned"] += 1
         if on_progress and (
             counters["scanned"] == total or counters["scanned"] % 1000 == 0
         ):
@@ -121,12 +125,16 @@ def prepare_document_cleanup(
                 "source_path": str(by_md5[md5].get("ya_path") or ""),
                 "mime_type": str(by_md5[md5].get("mime_type") or ""),
                 "full": bool(by_md5[md5].get("full")),
+                "page_count": by_md5[md5].get("page_count"),
+                "source_resource_id": by_md5[md5].get("ya_resource_id"),
+                **{key: by_md5[md5].get(key) for key in
+                   ("publication_id", "document_revision", "publication_revision", "source_revision")},
             }
             for md5 in decision.candidate_md5s
         ]
         counters["isbn_review_groups"] += 1
         counters["isbn_review_candidates"] += len(decision.candidate_md5s)
-        _, created = repository.upsert_isbn_review(
+        review_id, created = repository.upsert_isbn_review(
             isbn=decision.isbn,
             candidates=candidates,
             evidence={
@@ -135,6 +143,7 @@ def prepare_document_cleanup(
                 "automatic_cleanup": False,
             },
         )
+        log(f"cleanup ISBN review review_id={review_id} candidates={len(candidates)} created={created}")
         counters[
             "isbn_reviews_created" if created else "isbn_reviews_reused"
         ] += 1
@@ -158,10 +167,9 @@ def prepare_document_cleanup(
         "review_reconciliation": dict(reconciliation),
         "stopped": bool(should_stop()),
     }
-    print(
-        f"document cleanup preparation: final {json.dumps(summary, sort_keys=True)}",
-        flush=True,
-    )
+    if on_progress:
+        on_progress(counters["scanned"], total, counters)
+    log(f"document cleanup preparation: final {json.dumps(summary, sort_keys=True)}")
     return summary
 
 
@@ -170,11 +178,17 @@ def apply_isbn_review_decision(
     repository: Any,
     review_id: int,
     keep_md5s: list[str],
+    expected_snapshot: str,
     filtered_out_path: str,
     source_root_path: str,
 ) -> dict[str, Any]:
     """Persist a review decision and queue every non-kept document."""
-    decision = repository.decide_review(review_id, keep_md5s=keep_md5s)
+    with repository.write_transaction() as conn:
+        return _queue_review_decision(repository, conn, review_id, keep_md5s, expected_snapshot, filtered_out_path, source_root_path)
+
+
+def _queue_review_decision(repository, conn, review_id, keep_md5s, expected_snapshot, filtered_out_path, source_root_path):
+    decision = repository.decide_review(review_id, keep_md5s=keep_md5s, expected_snapshot=expected_snapshot, conn=conn)
     queued = 0
     for candidate in decision["remove_candidates"]:
         md5 = str(candidate["md5"])
@@ -185,7 +199,7 @@ def apply_isbn_review_decision(
                 "action": "move",
                 "reason": "duplicate_isbn",
                 "md5": md5,
-                "source_resource_id": None,
+                "source_resource_id": candidate.get("source_resource_id"),
                 "source_path": source_path,
                 "target_path": cleanup_target_path(
                     filtered_out_path,
@@ -197,8 +211,10 @@ def apply_isbn_review_decision(
                     "isbn": decision["isbn"],
                     "review_id": review_id,
                     "keep_md5s": decision["keep_md5s"],
+                    **{key: candidate.get(key) for key in
+                       ("publication_id", "document_revision", "publication_revision", "source_revision")},
                 },
-            }
+            }, conn=conn,
         )
         queued += int(created)
     return {**decision, "queued": queued}

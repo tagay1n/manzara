@@ -1,110 +1,62 @@
-"""Prepare document cleanup plans without mutating documents or storage."""
+"""Flow-owned cleanup preparation for the inline task runtime."""
 
 from __future__ import annotations
 
-import os
-import signal
 from typing import Any, Mapping
 
-from app.db import Database
-from app.document_storage import load_document_storage_settings
 from app.modules.library.document_cleanup_repository import DocumentCleanupRepository
 from app.modules.library.document_cleanup_service import prepare_document_cleanup
-from app.postgres_engine import is_transient_postgres_error
-from app.run_artifact_channel import emit_run_artifact
 from app.runtime_config import load_runtime_config
 from app.settings import load_settings
+from app.task_runtime.contracts import RunContext
 
 TASK_ID = "library.prepare_document_cleanup"
-PANEL_ID = "maintenance"
 
 
-def _run_id() -> int:
-    value = str(os.environ.get("MANZARA_TASK_RUN_ID") or "").strip()
-    if not value.isdigit() or int(value) <= 0:
-        raise RuntimeError("MANZARA_TASK_RUN_ID is required")
-    return int(value)
+def cleanup_paths() -> dict[str, str]:
+    """Planning needs source paths, without requiring storage credentials."""
+    config = load_runtime_config()
+    value: Any = config
+    for key in ("yandex", "disk", "documents"):
+        value = value.get(key) if isinstance(value, Mapping) else None
+    if not isinstance(value, Mapping):
+        raise ValueError("Configure yandex.disk.documents for cleanup planning")
+    paths = {}
+    for key in ("source_path", "filtered_out_path"):
+        path = value.get(key)
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"Configure yandex.disk.documents.{key}")
+        paths[key] = path.strip()
+    return {"source_root_path": paths["source_path"], "filtered_out_path": paths["filtered_out_path"]}
 
 
-def _progress(current: int, total: int, counters: Mapping[str, int]) -> dict[str, Any]:
-    return {
-        "current": int(current),
-        "total": int(total),
-        "percent": round((current / total) * 100, 2) if total else 100,
-        "plans_created": int(counters.get("plans_created") or 0),
-        "planned_non_tatar": int(counters.get("planned_non_tatar") or 0),
-        "planned_non_document": int(counters.get("planned_non_document") or 0),
-        "planned_duplicate_isbn": int(counters.get("planned_duplicate_isbn") or 0),
-        "reviews_created": int(counters.get("isbn_reviews_created") or 0),
-    }
-
-
-def _publish_progress(
-    db: Database,
-    *,
-    run_id: int,
-    current: int,
-    total: int,
-    counters: Mapping[str, int],
-) -> None:
-    """Publish progress without aborting durable planning on a DB outage."""
+def execute(context: RunContext) -> dict[str, Any]:
+    if context.options.limit is not None or context.options.workers != 1:
+        raise ValueError("Cleanup requires the complete ISBN cohort: use one worker and no limit")
+    if context.should_stop():
+        return {"kind": "library.document_cleanup_preparation_summary", "outcome": "stopped"}
+    paths = cleanup_paths()
+    settings = load_settings()
+    repository = DocumentCleanupRepository(settings.database_url, schema=settings.database_schema)
     try:
-        db.publish_run_progress(
-            task_id=TASK_ID,
-            run_id=run_id,
-            panel_id=PANEL_ID,
-            progress=_progress(current, total, counters),
-        )
-    except Exception as exc:
-        if not is_transient_postgres_error(exc):
-            raise
-        print(
-            f"document cleanup preparation: progress deferred; PostgreSQL unavailable: {exc}",
-            flush=True,
-        )
-
-
-def main() -> int:
-    run_id = _run_id()
-    app_settings = load_settings()
-    storage = load_document_storage_settings(load_runtime_config())
-    repository = DocumentCleanupRepository(
-        app_settings.database_url, schema=app_settings.database_schema
-    )
-    db = Database(
-        app_settings.database_url, schema=app_settings.database_schema,
-        local_state_path=app_settings.local_state_path,
-    )
-    stop_state = {"requested": False}
-
-    def request_stop(_signum: int, _frame: Any) -> None:
-        stop_state["requested"] = True
-        print("document cleanup preparation: graceful stop requested", flush=True)
-
-    def publish(current: int, total: int, counters: Mapping[str, int]) -> None:
-        _publish_progress(
-            db,
-            run_id=run_id,
-            current=current,
-            total=total,
-            counters=counters,
-        )
-
-    signal.signal(signal.SIGINT, request_stop)
-    try:
-        print(f"document cleanup preparation: start run_id={run_id}", flush=True)
+        context.log(f"document cleanup preparation start run_id={context.run_id}")
         summary = prepare_document_cleanup(
-            repository=repository,
-            filtered_out_path=storage.filtered_out_path,
-            source_root_path=storage.source_path,
-            should_stop=lambda: bool(stop_state["requested"]),
-            on_progress=publish,
+            repository=repository, **paths, should_stop=context.should_stop, log=context.log,
+            on_progress=lambda current, total, counters: context.progress({
+                "phase": "planning", "current": current, "total": total, **counters,
+                "percent": round(current / total * 100, 2) if total else 100,
+                "reviews_created": counters.get("isbn_reviews_created", 0),
+            }),
         )
-        emit_run_artifact(summary)
-        return 0
+        return {**summary, "outcome": "stopped" if summary["stopped"] else "completed"}
     finally:
         repository.dispose()
 
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+def main() -> None:
+    from app.cli import main as cli_main
+    cli_main(["--task", TASK_ID])
+
+
+if __name__ == "__main__":
+    main()

@@ -8,6 +8,8 @@ import sys
 import threading
 from typing import Any, TextIO
 
+from app.task_runtime.logging import LOG_SINK
+
 GEMINI_WORKERS_ENV = "MANZARA_GEMINI_WORKERS"
 GEMINI_WORKERS_DEFAULT = 1
 _WORKER_LOG_LOCK = threading.Lock()
@@ -61,7 +63,6 @@ def emit_gemini_worker_log(
     stream: TextIO | None = None,
 ) -> None:
     """Emit atomic worker-attributed stdout lines for the task log collector."""
-    output = stream or sys.stdout
     prefix = f"[worker={_safe_worker_id(worker_id)}]"
     physical_lines = str(message or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
     if physical_lines and physical_lines[-1] == "":
@@ -69,6 +70,12 @@ def emit_gemini_worker_log(
     if not physical_lines:
         physical_lines = [""]
     payload = "".join(f"{prefix} {line}\n" for line in physical_lines)
+    sink = LOG_SINK.get()
+    if sink is not None and stream is None:
+        for line in payload.splitlines():
+            sink(line)
+        return
+    output = stream or sys.stdout
     with _WORKER_LOG_LOCK:
         output.write(payload)
         output.flush()

@@ -7,6 +7,8 @@ These rules apply to `app/task_runtime/`. Shared contracts also cover `app/tasks
 - Do not persist stdout/stderr or `task.log` events in either database. Serve bounded log pages from the artifact file using run-local cursors.
 - Coalesce `task.progress` persistence in local SQLite and remove transient progress events at the terminal run boundary. Keep the latest progress snapshot on the local `runs` row.
 - Log start, per-item, decision, failure, and final-summary boundaries. Include stable identifiers for successful mutations.
-- Never derive structured artifacts by parsing logs. Emit compact `task.artifact` SSE payloads into local SQLite and expose large details through paginated endpoints.
+- Never derive structured artifacts by parsing logs. Persist compact `task.artifact` events in local SQLite and save large details in run artifacts. The CLI reads bounded log pages; HTTP/SSE transport is retired.
+- CLI tasks run in background threads with explicit run contexts and cooperative cancellation. Share one bounded PostgreSQL engine; never mutate per-task process environment or redirect global stdout. Propagate the run log context into worker threads.
+- CLI startup initializes only SQLite and checks the catalog read-only. PostgreSQL migrations remain a separate operation. Hold the local session lock before recovery and retain disabled-task history.
 - Preserve graceful stop boundaries, restartable checkpoints, redaction, and actionable error context in run state, logs, and events.
 - Use `after_log_id` for follow and `before_log_id` for backfill. Keep reads bounded.

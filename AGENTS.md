@@ -6,7 +6,7 @@ Owner: tans1q
 
 - Use English with the owner unless another language is explicitly requested. Never use Russian in owner-facing replies, UI copy, artifacts, or summaries without an explicit request.
 - Manzara is a monorepo for Tatar-language content operations. Flows live in `app/modules/<flow>/`; shared backend code lives in `app/`. Flows may import shared core; shared core must not import flow internals. Cross-flow imports go through shared core.
-- The web frontend is removed; a rich operations CLI is not implemented. PostgreSQL catalog migration is complete according to the owner, but backend adaptation is unfinished. Do not assume operational readiness.
+- The web frontend and HTTP APIs are removed. The inline operations CLI supports personality normalization and cleanup preparation; other tasks are disabled pending catalog adaptation. PostgreSQL catalog migration is complete according to the owner. Static inspection does not establish operational readiness.
 - Read [docs/architecture.md](docs/architecture.md) to locate owners, then only matching guidance. Before editing, read the nearest `AGENTS.md`. For `app/gemini_*.py`, also read [docs/gemini-runtime.md](docs/gemini-runtime.md).
 
 ## Invariants
@@ -23,7 +23,7 @@ Owner: tans1q
 - Create, modify, or run tests only when the owner explicitly requests that test work. Ordinary implementation, fixes, refactoring, documentation, and commits do not authorize tests or require TDD/full-suite runs. Use code review and appropriate non-test inspection by default; report validation limits. See [docs/verification.md](docs/verification.md).
 - Validate external control payloads strictly: explicit boolean allowlists; integral integers without truncation.
 - Prefer declarative registries and shared contracts; small functions, shallow nesting, side effects at boundaries.
-- Define shared workflow states once. Preserve backward-compatible API and SSE schemas.
+- Define shared workflow states once. Preserve retained task/event payload schemas; HTTP/SSE transport has been retired by owner decision.
 - Tasks stop at safe boundaries, resume from persisted checkpoints, surface actionable failures, and keep dedicated structured artifact logs.
 - Structured artifacts require persisted `task.artifact` events, never log parsing. Log reads use bounded cursor pagination.
 - Deliver small slices, verify runtime/dependency assumptions, and update stale guidance in the same change. Nearest instructions win.

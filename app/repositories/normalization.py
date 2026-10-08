@@ -68,13 +68,15 @@ class NormalizationRepository:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""SELECT d.md5,jsonb_build_object(
-                        'inLanguage',array_to_string(p.languages,','),{people}) AS schema_org
+                        'inLanguage',COALESCE((SELECT jsonb_agg(l.language ORDER BY l.position)
+                            FROM catalog_publication_languages l WHERE l.publication_id=p.publication_id),
+                            '[]'::jsonb),{people}) AS schema_org
                     FROM catalog_documents d JOIN catalog_publications p USING(publication_id)
                     LEFT JOIN catalog_contributions c ON c.publication_id=p.publication_id
                         AND c.role IN ('author','editor','translator','illustrator','contributor')
                     LEFT JOIN catalog_names n USING(name_id)
                     WHERE p.inclusion='included' AND p.has_metadata AND p.metadata_present
-                    GROUP BY d.md5,p.languages ORDER BY d.md5"""
+                    GROUP BY d.md5,p.publication_id ORDER BY d.md5"""
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -352,69 +354,18 @@ class NormalizationRepository:
         prompt_version: str,
         schema_version: str,
     ) -> Dict[str, Any]:
-        """Atomically retain a successful alias and exact-compatible canonical."""
-        now = utc_now()
-        fields = ("surname_full", "surname_initials", "name_full", "name_initials", "father_name_full", "father_name_initials", "title", "sex")
-        values = [components.get(field) for field in fields]
-        with self._lock:
-            with self._connect() as conn:
-                matches = conn.execute(
-                    """SELECT * FROM normalization_canonicals
-                       WHERE entity_type='personality' AND status='active' AND identity_key=?
-                       FOR UPDATE""",
-                    (identity_key,),
-                ).fetchall()
-                canonical = None
-                for row in matches:
-                    candidate = dict(row)
-                    if all(
-                        not candidate.get(field) or not components.get(field)
-                        or candidate.get(field) == components.get(field)
-                        for field in fields if field != "title"
-                    ):
-                        canonical = candidate
-                        break
-                if canonical is None:
-                    cur = conn.execute(
-                        """INSERT INTO normalization_canonicals (
-                            entity_type, display_name, normalized_name, status, merged_into_id,
-                            notes, surname_full, surname_initials, name_full, name_initials,
-                            father_name_full, father_name_initials, title, sex, identity_key,
-                            created_at, updated_at
-                        ) VALUES ('personality', ?, ?, 'active', NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING canonical_id""",
-                        (display_name, identity_key, *values, identity_key, now, now),
-                    )
-                    canonical_id = int(cur.scalar())
-                else:
-                    canonical_id = int(canonical["canonical_id"])
-                conn.execute(
-                    """SELECT catalog_upsert('normalization_aliases', jsonb_build_object('entity_type', 'personality', 'raw_name', ?, 'normalized_name', ?, 'script_label', 'other', 'docs_count', ?, 'mentions_count', ?, 'marker_count', 0, 'decision_status', 'linked', 'canonical_id', ?, 'confidence', 1.0, 'source', 'gemini_personality_normalizer', 'reason', 'structured_success', 'surname_full', ?, 'surname_initials', ?, 'name_full', ?, 'name_initials', ?, 'father_name_full', ?, 'father_name_initials', ?, 'title', ?, 'sex', ?, 'source_roles', ?::jsonb, 'successful_model', ?, 'prompt_version', ?, 'schema_version', ?, 'created_at', ?, 'updated_at', ?), ARRAY['entity_type','raw_name']::text[], ARRAY['normalized_name','docs_count','mentions_count','decision_status','canonical_id','confidence','source','reason','surname_full','surname_initials','name_full','name_initials','father_name_full','father_name_initials','title','sex','source_roles','successful_model','prompt_version','schema_version','updated_at']::text[], ARRAY[]::text[])""",
-                    (raw_name, identity_key, int(document_count), int(mention_count), canonical_id,
-                     *values, json.dumps(sorted(set(source_roles)), ensure_ascii=False), model,
-                     prompt_version, schema_version, now, now),
-                )
-                conn.execute(
-                    """INSERT INTO personality_normalization_checkpoints (
-                        raw_name, source_fingerprint, document_count, mention_count, source_roles,
-                        prompt_version, schema_version, state, attempted_models, failure_context,
-                        retryable, canonical_id, updated_at, completed_at
-                    ) VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, 'succeeded', '{}'::jsonb, NULL, FALSE, ?, ?, ?)
-                    ON CONFLICT(raw_name) DO UPDATE SET
-                        source_fingerprint=excluded.source_fingerprint, document_count=excluded.document_count,
-                        mention_count=excluded.mention_count, source_roles=excluded.source_roles,
-                        prompt_version=excluded.prompt_version, schema_version=excluded.schema_version,
-                        state='succeeded', attempted_models='{}'::jsonb, failure_context=NULL,
-                        retryable=FALSE, canonical_id=excluded.canonical_id, updated_at=excluded.updated_at,
-                        completed_at=excluded.completed_at
-                    """,
-                    (raw_name, source_fingerprint, int(document_count), int(mention_count),
-                     json.dumps(sorted(set(source_roles)), ensure_ascii=False), prompt_version,
-                     schema_version, canonical_id, now, now),
-                )
-                row = conn.execute(
-                    "SELECT * FROM normalization_canonicals WHERE canonical_id=?", (canonical_id,)
-                ).fetchone()
-        return dict(row)
+        """Write normalized catalog hypotheses through the shared engine."""
+        from app.catalog.repository import CatalogRepository
+
+        if self._engine is None:
+            raise RuntimeError("Catalog normalization requires the shared PostgreSQL engine")
+        return CatalogRepository(self._engine, schema=self.schema).normalize_personality(
+            raw_name=raw_name, source_fingerprint=source_fingerprint,
+            document_count=document_count, mention_count=mention_count,
+            source_roles=source_roles, components=components, display_name=display_name,
+            identity_key=identity_key, model=model, prompt_version=prompt_version,
+            schema_version=schema_version,
+        )
 
     def create_normalization_group(
         self,

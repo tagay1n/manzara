@@ -91,7 +91,7 @@ class RunRepository:
                     """
                     UPDATE runs
                     SET status = ?, pid = ?, heartbeat_at = ?, updated_at = ?
-                    WHERE run_id = ?
+                    WHERE run_id = ? AND status = 'starting'
                     """,
                     (TASK_RUN_STATUS_RUNNING, pid, now, now, run_id),
                 )

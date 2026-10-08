@@ -16,6 +16,7 @@ from app.catalog.metadata_store import MetadataStore
 from app.catalog.identities import IdentityStore
 from app.catalog.previews import PreviewStore
 from app.catalog.grouping import GroupingStore
+from app.catalog.personality_normalization import PersonalityNormalizationStore
 
 
 RECORDS = {
@@ -33,7 +34,7 @@ def snapshot(value: Any) -> Any:
     return json.loads(json.dumps(value, default=lambda item: item.isoformat()))
 
 
-class CatalogRepository(MetadataStore, IdentityStore, PreviewStore, GroupingStore):
+class CatalogRepository(MetadataStore, IdentityStore, PreviewStore, GroupingStore, PersonalityNormalizationStore):
     def __init__(self, engine, *, schema="monocorpus"):
         self.engine = engine
         self.schema = schema
