@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -30,6 +31,8 @@ from app.gemini_runtime import (
 )
 from app.gemini_workers import emit_gemini_worker_log
 from app.modules.library.collection_constants import COLLECTIONS_PANEL_ID
+from app.modules.library.collection_features import attach_features
+from app.operational_state import configured_store
 from app.modules.library.collection_detection import (
     PROMPT_VERSION,
     AdaptiveBatchSizer,
@@ -161,7 +164,6 @@ def _attempt_hash(
 
 
 def _record_attempt(
-    conn: Any,
     *,
     proposal_id: int,
     run_id: int,
@@ -173,37 +175,14 @@ def _record_attempt(
     error: str | None = None,
 ) -> None:
     now = _now()
-    conn.execute(
-        text(
-            """
-            INSERT INTO library_collection_validation_attempts (
-                proposal_id,run_id,model_name,prompt_version,input_hash,
-                requested_md5_json,batch_size,status,response_json,error_text,
-                latency_ms,created_at,completed_at
-            ) VALUES (
-                :proposal_id,NULL,:model,:prompt_version,:input_hash,
-                CAST(:md5s AS JSONB),:batch_size,:status,CAST(:response AS JSONB),:error,
-                :latency_ms,:created_at,:completed_at
-            )
-            """
-        ),
-        {
-            "proposal_id": proposal_id,
-            "model": model,
-            "prompt_version": PROMPT_VERSION,
-            "input_hash": _attempt_hash(proposal_id, model, documents),
-            "md5s": json.dumps([item["md5"] for item in documents]),
-            "batch_size": len(documents),
-            "status": status,
-            "response": json.dumps(response, ensure_ascii=False)
-            if response is not None
-            else None,
-            "error": error,
-            "latency_ms": int((time.monotonic() - started) * 1000),
-            "created_at": now,
-            "completed_at": now,
-        },
-    )
+    configured_store().put("library.collection_validation_attempts", uuid.uuid4().hex, {
+        "proposal_id": proposal_id, "run_id": run_id, "model_name": model,
+        "prompt_version": PROMPT_VERSION, "input_hash": _attempt_hash(proposal_id, model, documents),
+        "requested_md5_json": [item["md5"] for item in documents], "batch_size": len(documents),
+        "status": status, "response_json": dict(response) if response is not None else None,
+        "error_text": error, "latency_ms": int((time.monotonic() - started) * 1000),
+        "created_at": now, "completed_at": now,
+    })
 
 
 def _publish_progress(
@@ -250,19 +229,12 @@ def _validate_collection_proposals_worker(
     try:
         with engine.begin() as conn:
             _set_search_path(conn)
-            recent_sizes = (
-                conn.execute(
-                    text(
-                        """
-                    SELECT DISTINCT ON (model_name) model_name, batch_size, status
-                    FROM library_collection_validation_attempts
-                    ORDER BY model_name, attempt_id DESC
-                    """
-                    )
-                )
-                .mappings()
-                .all()
-            )
+            recent_by_model = {}
+            for attempt in configured_store().list("library.collection_validation_attempts").values():
+                model = attempt["model_name"]
+                if model not in recent_by_model or attempt["created_at"] > recent_by_model[model]["created_at"]:
+                    recent_by_model[model] = attempt
+            recent_sizes = recent_by_model.values()
             for recent in recent_sizes:
                 size = int(recent["batch_size"] or 20)
                 if recent["status"] == "malformed_or_timeout":
@@ -326,11 +298,8 @@ def _validate_collection_proposals_worker(
                         conn.execute(
                             text(
                                 """
-                            SELECT pi.md5,pi.input_hash,pi.deterministic_score,
-                                   f.title,f.work_type,f.publication_date,f.issue_number,
-                                   f.publishers_json,f.authors_json,f.genres_json,f.description
+                            SELECT pi.md5,pi.input_hash,pi.deterministic_score
                             FROM library_collection_proposal_items pi
-                            JOIN library_collection_document_features f ON f.md5=pi.md5
                             WHERE pi.proposal_id=:id AND pi.validated_at IS NULL
                             ORDER BY pi.deterministic_score DESC,pi.md5
                             """
@@ -340,6 +309,7 @@ def _validate_collection_proposals_worker(
                         .mappings()
                         .all()
                     )
+                    pending = attach_features(conn, pending)
                 if not pending:
                     break
                 available_models = [
@@ -399,7 +369,6 @@ def _validate_collection_proposals_worker(
                         with engine.begin() as conn:
                             _set_search_path(conn)
                             _record_attempt(
-                                conn,
                                 proposal_id=int(proposal["proposal_id"]),
                                 run_id=run_id,
                                 model=model,
@@ -419,7 +388,6 @@ def _validate_collection_proposals_worker(
                         with engine.begin() as conn:
                             _set_search_path(conn)
                             _record_attempt(
-                                conn,
                                 proposal_id=int(proposal["proposal_id"]),
                                 run_id=run_id,
                                 model=model,
@@ -439,7 +407,6 @@ def _validate_collection_proposals_worker(
                         with engine.begin() as conn:
                             _set_search_path(conn)
                             _record_attempt(
-                                conn,
                                 proposal_id=int(proposal["proposal_id"]),
                                 run_id=run_id,
                                 model=model,
@@ -456,7 +423,6 @@ def _validate_collection_proposals_worker(
                         with engine.begin() as conn:
                             _set_search_path(conn)
                             _record_attempt(
-                                conn,
                                 proposal_id=int(proposal["proposal_id"]),
                                 run_id=run_id,
                                 model=model,
@@ -477,7 +443,6 @@ def _validate_collection_proposals_worker(
                         with engine.begin() as conn:
                             _set_search_path(conn)
                             _record_attempt(
-                                conn,
                                 proposal_id=int(proposal["proposal_id"]),
                                 run_id=run_id,
                                 model=model,
@@ -500,7 +465,6 @@ def _validate_collection_proposals_worker(
                         with engine.begin() as conn:
                             _set_search_path(conn)
                             _record_attempt(
-                                conn,
                                 proposal_id=int(proposal["proposal_id"]),
                                 run_id=run_id,
                                 model=model,

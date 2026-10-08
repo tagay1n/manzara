@@ -7,3 +7,5 @@
 - Only explicit owner approval creates collections or memberships. New collections need two approved documents; existing-collection attachments may contain one. Keep apply separate from proposal approval.
 - Validation uses the shared model pool with one verdict per batch and no consensus voting. Start at or below 20; retry timeout/malformed output twice, then reduce `20 -> 10 -> 5 -> 2 -> 1`. `400`, `429`, blackout, and `5xx` do not change size.
 - Validate response MD5 sets exactly; missing, duplicated, unknown, or malformed results fail the response.
+
+- Document features are reproducible local SQLite caches. Reconstruct and verify proposal input hashes against current metadata before review/approval; stale inputs require renewed detection. Validation attempts and retry batch history are local; proposals, verdicts, signatures, and approved memberships remain durable.

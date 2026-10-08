@@ -25,6 +25,7 @@ class PersonalityNormalizationStore:
         reviews = self.table("alias_reviews")
         checkpoint_table = f'"{self.schema}".personality_normalization_checkpoints'
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             conn.execute(text("SELECT set_config('manzara.catalog_actor', 'task', true)"))
             # Serialize creation even when there is no matching row yet.
             for key in sorted(("identity:" + identity_key, "name:" + raw_name)):
@@ -100,22 +101,22 @@ class PersonalityNormalizationStore:
                 "document_count": document_count, "mention_count": mention_count,
                 "source_roles": json.dumps(sorted(set(source_roles)), ensure_ascii=False),
                 "prompt_version": prompt_version, "schema_version": schema_version,
-                "canonical_id": entity_id, "now": now,
+                "canonical_id": entity_id, "now": now, "model": model,
             }
             conn.execute(text(f"""
                 INSERT INTO {checkpoint_table} (
                     raw_name,source_fingerprint,document_count,mention_count,source_roles,
-                    prompt_version,schema_version,state,attempted_models,failure_context,
-                    retryable,canonical_id,updated_at,completed_at
+                    prompt_version,schema_version,state,decision_reason,successful_model,decision_evidence,
+                    canonical_id,updated_at,completed_at
                 ) VALUES (:raw_name,:source_fingerprint,:document_count,:mention_count,
                     CAST(:source_roles AS jsonb),:prompt_version,:schema_version,
-                    'succeeded','{{}}'::jsonb,NULL,FALSE,:canonical_id,:now,:now)
+                    'succeeded',NULL,:model,'{{}}'::jsonb,:canonical_id,:now,:now)
                 ON CONFLICT(raw_name) DO UPDATE SET
                     source_fingerprint=excluded.source_fingerprint,document_count=excluded.document_count,
                     mention_count=excluded.mention_count,source_roles=excluded.source_roles,
                     prompt_version=excluded.prompt_version,schema_version=excluded.schema_version,
-                    state='succeeded',attempted_models='{{}}'::jsonb,failure_context=NULL,
-                    retryable=FALSE,canonical_id=excluded.canonical_id,
+                    state='succeeded',decision_reason=NULL,successful_model=excluded.successful_model,
+                    decision_evidence='{{}}'::jsonb,canonical_id=excluded.canonical_id,
                     updated_at=excluded.updated_at,completed_at=excluded.completed_at
             """), values)
             return {**entity, "canonical_id": entity_id}

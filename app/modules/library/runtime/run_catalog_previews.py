@@ -5,13 +5,15 @@ import signal
 
 from boto3 import Session
 from botocore.config import Config
-from sqlalchemy import create_engine
+from sqlalchemy import text
+from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 from app.catalog.repository import CatalogRepository
 from app.document_storage import load_document_storage_settings
 from app.modules.library.catalog_preview_worker import drain_preview_requests, render_catalog_preview
 from app.modules.library.preview_detection import DocLayNetPageDetector
-from app.modules.library.runtime.run_generate_book_previews import _resolved_settings, _run_id
+from app.modules.library.preview_runtime import _resolved_settings, _run_id
+from app.modules.library.previews import PREVIEW_RECIPE_VERSION
 from app.run_artifact_channel import emit_run_artifact
 from app.runtime_config import load_runtime_config
 from app.settings import load_settings
@@ -28,7 +30,7 @@ def main():
     settings, credentials = _resolved_settings(configuration, run_id=run_id)
     storage = load_document_storage_settings(configuration)
     app_settings = load_settings()
-    engine = create_engine(app_settings.database_url)
+    engine = acquire_postgres_engine(app_settings.database_url, schema=app_settings.database_schema)
     stop = {"requested": False}
 
     def request_stop(_signum, _frame):
@@ -45,6 +47,17 @@ def main():
             config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
         detector = DocLayNetPageDetector.from_huggingface(cache_dir=settings.model_cache_dir)
         repository = CatalogRepository(engine, schema=app_settings.database_schema)
+        with engine.connect() as conn:
+            pending = conn.execute(text("""SELECT d.md5 FROM catalog_documents d
+                JOIN catalog_publications p USING(publication_id)
+                WHERE p.inclusion='included' AND d.mime_type='application/pdf' AND NOT d.restricted
+                AND NOT EXISTS(SELECT 1 FROM catalog_preview_requests r WHERE r.md5=d.md5 AND r.recipe=:recipe AND r.status='ready')
+                ORDER BY d.md5"""), {"recipe": PREVIEW_RECIPE_VERSION}).scalars().all()
+        for md5 in pending:
+            if stop["requested"]:
+                break
+            repository.request_preview(md5, actor=f"preview-worker:{run_id}",
+                idempotency_key=f"recipe:{PREVIEW_RECIPE_VERSION}", recipe=PREVIEW_RECIPE_VERSION)
 
         def render(request):
             return render_catalog_preview(repository, request, settings=settings, source_s3=client,
@@ -65,7 +78,7 @@ def main():
         raise
     finally:
         emit_run_artifact(summary)
-        engine.dispose()
+        release_postgres_engine(engine)
 
 
 if __name__ == "__main__":

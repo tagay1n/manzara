@@ -4,9 +4,10 @@ import json
 from typing import Any, Dict, List, Optional
 
 from app.repositories.core import utc_now
+from app.repositories.personality_checkpoints import PersonalityCheckpointRepository
 
 
-class NormalizationRepository:
+class NormalizationRepository(PersonalityCheckpointRepository):
     """PostgreSQL operations for the normalization domain."""
 
     def list_normalization_canonicals(
@@ -230,114 +231,6 @@ class NormalizationRepository:
                 (entity_type, int(canonical_id)),
             ).fetchall()
         return [dict(row) for row in rows]
-
-    def get_personality_checkpoint(self, raw_name: str) -> Optional[Dict[str, Any]]:
-        """Return the durable per-exact-name normalization checkpoint."""
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM personality_normalization_checkpoints WHERE raw_name=?",
-                (raw_name,),
-            ).fetchone()
-        return dict(row) if row else None
-
-    def list_personality_checkpoints(self) -> List[Dict[str, Any]]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM personality_normalization_checkpoints ORDER BY raw_name"
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def get_personality_decision_counts(self) -> Dict[str, int]:
-        with self._connect() as conn:
-            rows = conn.execute("""SELECT state, COUNT(*) AS count
-                FROM personality_normalization_checkpoints
-                WHERE state IN ('not_person', 'unusable', 'failed', 'deferred', 'retry_requested')
-                GROUP BY state""").fetchall()
-        return {str(row["state"]): int(row["count"]) for row in rows}
-
-    def list_personality_decisions(self, *, state: str = "all", page: int = 1) -> Dict[str, Any]:
-        states = ("not_person", "unusable", "failed", "deferred", "retry_requested")
-        if state not in (*states, "all"):
-            raise ValueError("unsupported personality decision state")
-        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
-            raise ValueError("page must be a positive integer")
-        selected = list(states) if state == "all" else [state]
-        with self._connect() as conn:
-            rows = conn.execute("""SELECT raw_name, state, failure_context AS reason,
-                document_count, mention_count, source_roles, updated_at, retryable
-                FROM personality_normalization_checkpoints WHERE state = ANY(?)
-                ORDER BY updated_at DESC, raw_name LIMIT 41 OFFSET ?""",
-                (selected, (page - 1) * 40)).fetchall()
-        return {"items": [dict(row) for row in rows[:40]], "page": page,
-                "page_size": 40, "has_more": len(rows) > 40}
-
-    def retry_personality_decision(self, *, raw_name: str, updated_at: str) -> Dict[str, Any]:
-        """Optimistically reopen an explicitly reviewed negative decision only."""
-        with self._lock:
-            with self._connect() as conn:
-                row = conn.execute("SELECT * FROM personality_normalization_checkpoints WHERE raw_name=? FOR UPDATE",
-                                   (raw_name,)).fetchone()
-                if row is None or row["updated_at"] != updated_at or row["state"] not in {"not_person", "unusable"}:
-                    raise ValueError("personality decision conflict; reload and try again")
-                conn.execute("""UPDATE personality_normalization_checkpoints
-                    SET state='retry_requested', retryable=TRUE, completed_at=NULL, updated_at=?
-                    WHERE raw_name=?""", (utc_now(), raw_name))
-        return {"raw_name": raw_name, "state": "retry_requested"}
-
-    def save_personality_checkpoint(
-        self,
-        *,
-        raw_name: str,
-        source_fingerprint: str,
-        document_count: int,
-        mention_count: int,
-        source_roles: list[str],
-        prompt_version: str,
-        schema_version: str,
-        state: str,
-        attempted_models: Dict[str, Any] | None = None,
-        failure_context: str | None = None,
-        retryable: bool = False,
-        canonical_id: int | None = None,
-        completed: bool = False,
-    ) -> None:
-        """Upsert one resumable checkpoint in PostgreSQL immediately."""
-        if state in {"not_person", "unusable"}:
-            if canonical_id is not None or retryable or not isinstance(failure_context, str) or not failure_context.strip():
-                raise ValueError("negative personality decisions require a reason and no canonical or automatic retry")
-        now = utc_now()
-        with self._lock:
-            with self._connect() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO personality_normalization_checkpoints (
-                        raw_name, source_fingerprint, document_count, mention_count,
-                        source_roles, prompt_version, schema_version, state,
-                        attempted_models, failure_context, retryable, canonical_id,
-                        updated_at, completed_at
-                    ) VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?)
-                    ON CONFLICT(raw_name) DO UPDATE SET
-                        source_fingerprint=excluded.source_fingerprint,
-                        document_count=excluded.document_count,
-                        mention_count=excluded.mention_count,
-                        source_roles=excluded.source_roles,
-                        prompt_version=excluded.prompt_version,
-                        schema_version=excluded.schema_version,
-                        state=excluded.state,
-                        attempted_models=excluded.attempted_models,
-                        failure_context=excluded.failure_context,
-                        retryable=excluded.retryable,
-                        canonical_id=excluded.canonical_id,
-                        updated_at=excluded.updated_at,
-                        completed_at=excluded.completed_at
-                    """,
-                    (
-                        raw_name, source_fingerprint, int(document_count), int(mention_count),
-                        json.dumps(sorted(set(source_roles)), ensure_ascii=False), prompt_version,
-                        schema_version, state, json.dumps(attempted_models or {}, ensure_ascii=False),
-                        failure_context, bool(retryable), canonical_id, now, now if completed else None,
-                    ),
-                )
 
     def persist_personality_normalization(
         self,

@@ -2,7 +2,7 @@
 
 ## Status and adaptation gap
 
-Database-only normalization through Alembic revision `20261007_0061` is applied in the owner's PostgreSQL catalog. Deployed relations, constraints, derived keys, audit revisions, and sampled read envelopes were inspected. The CLI personality task and cleanup planner/review commands use catalog-native reads/writes; other workflows remain disabled pending adaptation. Credential-backed execution has not established task readiness. The local, untracked `catalog-migration-buffer.sql` records completed data migration and physical-table retirement; it is a read-only status query, not a tracked schema definition.
+Alembic revision `20261008_0062` is applied in the owner's PostgreSQL catalog. Deployed relations, constraints, derived keys, audit revisions, and sampled read envelopes were inspected. The CLI personality task and cleanup planner/review commands use catalog-native reads/writes; other workflows remain disabled pending adaptation. Credential-backed execution has not established task readiness. The local, untracked `catalog-migration-buffer.sql` records completed data migration and physical-table retirement; it is a read-only status query, not a tracked schema definition.
 
 The retired physical relations are `document`, `metadata`, `classification`, `normalization_canonicals`, `normalization_aliases`, `library_collections`, and `library_collection_items`. Their names are adapter views over normalized catalog relations. Views store no duplicate domain rows. Legacy upserts use the strict `catalog_upsert` command because views lack unique indexes.
 
@@ -28,9 +28,17 @@ Human confirmation is separate from entity active/merged status and AI success. 
 
 Editable metadata lives in columns/relations; Schema.org is generated transport. JSONB holds evidence, snapshots, proposals, manifests, and audit revisions. Retained durable workflow tables own their checkpoints. Sparse import evidence and the verified external backup preserve provenance without duplicating every source payload.
 
+## Operational ownership: revision 0062
+
+Owner-approved revision `20261008_0062` retires five physical PostgreSQL relations: `library_collection_document_features`, `library_metadata_quality_state`, `library_collection_validation_attempts`, `library_book_previews`, and `publisher_merge_proposals`. Feature/quality caches and validation attempts move to local SQLite. Catalog preview requests/pages and catalog publisher proposals already contain the reconciled durable records; `catalog_selected_previews` and `catalog_publisher_proposals` provide projections without duplicate rows. Publisher draft IDs are remapped to catalog proposal IDs.
+
+Personality decisions, explicit reviewed retries, accepted identities, and identity conflicts remain durable. Their model exclusions and processing/failure/deferral checkpoints are local. Non-PDF results, unsupported reasons and verified MIME facts remain durable; attempts and errors are local. Cleanup plans/reviews/phases remain durable; counts/run IDs/errors are local. Preview generation intent/leases remain durable; errors are local. There is no ongoing dual write or store fallback.
+
+The cutover requires a verified local transfer and consistent recovery dump; see [operations](operations.md). Retained legacy import renderers refuse revision 0062 rather than recreate retired owners. Recover this schema through an explicitly planned dump restore. Existing workflow enablement is unchanged by this storage migration.
+
 ## Relational normalization: revisions 0060 and 0061
 
-These revisions define the current database contract. For another environment, inspect its deployed Alembic revision read-only rather than inferring deployment from the checkout. Backend and recovery-tool adaptation is separate work and is not included in these database changes.
+These revisions define the normalized domain relations; revision 0062 defines operational ownership. For another environment, inspect its deployed Alembic revision read-only rather than inferring deployment from the checkout. Backend and recovery-tool adaptation is separate work and is not included in these database changes.
 
 Revision 0060 validates credit-slot uniqueness, distinct entity/name membership within proposals, alias and contribution states, confirmed contribution targets, age ranges, and self-reference/merge-status rules. Reference authors belong to `catalog_references`, with cascading deletion and publication-key updates. Three known unique constraints duplicating primary keys are removed only after checking their equivalence; unexpected dependencies abort the migration.
 

@@ -20,7 +20,9 @@ This workflow remains in the repository; compatibility with the migrated catalog
 
 ## Database tools
 
-Alembic inspection commands: `PYTHONPATH=. .venv/bin/alembic heads` for the code chain; `current` connects to the configured database. Server startup runs pending upgrades automatically.
+Alembic inspection commands: `PYTHONPATH=. .venv/bin/alembic heads` for the code chain; `current` connects to the configured database. CLI startup initializes only SQLite; durable upgrades are separate operations.
+
+Revision `20261008_0062` requires `PYTHONPATH=. .venv/bin/python scripts/reduce_postgres_storage.py --apply`, after owner approval of its storage policy. The command takes the local session lock, pauses domain writes with database locks, reconciles duplicate previews/publisher proposals, creates a consistent custom-format dump, verifies local transfers by hash, and applies the forward retirement transaction. Ordinary Alembic upgrade refuses this revision without a transfer receipt. Recovery artifacts live under `durable/postgres-storage-cutover/<timestamp>/`; the PostgreSQL evidence receipt records their hashes and paths. Archive listing is verified; this does not constitute a restore drill. Recovery requires an explicitly planned dump restore, never an automatic store fallback.
 
 Historical import helpers (`scripts/migrate_sqlite_to_postgres.py`, `scripts/migrate_postgres_to_aiven.py`) are not normal setup and may assume retired schemas. Use only for an explicitly planned recovery after reviewing their code and target state.
 

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping
 
 from sqlalchemy import text
 
 from app.modules.library.document_cleanup_repository import DocumentCleanupRepository
+from app.operational_state import configured_store
 
 
 class MonocorpusSyncRepository(DocumentCleanupRepository):
@@ -45,7 +47,7 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                         """
                         SELECT cleanup_id, scope, action, reason, md5,
                                source_resource_id, source_path, target_path,
-                               status, phase, evidence_json, attempts
+                               status, phase, evidence_json
                         FROM document_cleanup_queue
                         WHERE status IN ('planned', 'running', 'failed')
                         ORDER BY cleanup_id
@@ -56,11 +58,11 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
 
     def mark_cleanup_running(self, cleanup_id: int, *, run_id: int, phase: str) -> bool:
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             claimed = conn.execute(
                 text(
                     """
                     UPDATE document_cleanup_queue SET status='running', phase=:phase,
-                        run_id=NULL, attempts=attempts+1, last_error=NULL,
                         updated_at=CURRENT_TIMESTAMP
                     WHERE cleanup_id=:cleanup_id
                       AND status IN ('planned', 'running', 'failed')
@@ -69,10 +71,19 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                 ),
                 {"cleanup_id": cleanup_id, "phase": phase},
             ).scalar_one_or_none()
+        if claimed is not None:
+            store = configured_store()
+            with store.transaction() as local:
+                previous = local.execute("SELECT payload_json FROM operational_items WHERE scope=? AND item_id=?",
+                    ("maintenance.cleanup", str(cleanup_id))).fetchone()
+                payload = json.loads(previous["payload_json"]) if previous else {}
+                store.put("maintenance.cleanup", cleanup_id, {"attempts": int(payload.get("attempts", 0)) + 1,
+                    "run_id": run_id, "last_error": None}, conn=local)
         return claimed is not None
 
     def mark_cleanup_phase(self, cleanup_id: int, phase: str) -> None:
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             conn.execute(
                 text(
                     """
@@ -85,37 +96,45 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
 
     def mark_cleanup_completed(self, cleanup_id: int) -> None:
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             conn.execute(
                 text(
                     """
                     UPDATE document_cleanup_queue SET status='completed', phase='completed',
-                        last_error=NULL, completed_at=CURRENT_TIMESTAMP,
+                        completed_at=CURRENT_TIMESTAMP,
                         updated_at=CURRENT_TIMESTAMP WHERE cleanup_id=:cleanup_id
                     """
                 ),
                 {"cleanup_id": cleanup_id},
             )
 
+        self._clear_cleanup_error(cleanup_id)
+
     def mark_cleanup_failed(self, cleanup_id: int, error: str) -> None:
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             conn.execute(
                 text(
                     """
                     UPDATE document_cleanup_queue SET status='failed',
-                        last_error=:error, updated_at=CURRENT_TIMESTAMP
+                        updated_at=CURRENT_TIMESTAMP
                     WHERE cleanup_id=:cleanup_id
                     """
                 ),
-                {"cleanup_id": cleanup_id, "error": str(error)[:4000]},
+                {"cleanup_id": cleanup_id},
             )
+        store = configured_store()
+        previous = store.get("maintenance.cleanup", cleanup_id) or {}
+        store.put("maintenance.cleanup", cleanup_id, {**previous, "last_error": str(error)[:4000]})
 
     def mark_cleanup_canceled(self, cleanup_id: int, reason: str) -> None:
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             conn.execute(
                 text(
                     """
                     UPDATE document_cleanup_queue SET status='canceled',
-                        phase='canceled', last_error=NULL,
+                        phase='canceled',
                         evidence_json=evidence_json || jsonb_build_object(
                             'cancellation', :reason
                         ),
@@ -126,6 +145,14 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                 ),
                 {"cleanup_id": cleanup_id, "reason": str(reason)[:1000]},
             )
+
+        self._clear_cleanup_error(cleanup_id)
+
+    @staticmethod
+    def _clear_cleanup_error(cleanup_id):
+        store = configured_store()
+        previous = store.get("maintenance.cleanup", cleanup_id) or {}
+        store.put("maintenance.cleanup", cleanup_id, {**previous, "last_error": None})
 
     def save_discovered_document(
         self,
@@ -142,6 +169,7 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
             values["ya_public_url"] = None
             values["ya_public_key"] = None
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             updated = conn.execute(
                 text(
                     """
@@ -195,6 +223,7 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
     def delete_document_state(self, md5: str) -> None:
         """Delete one document and all of its owned state atomically."""
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             self.lock_isbn_reviews_in_transaction(conn)
             conn.execute(
                 text("DELETE FROM library_upstream_metadata WHERE md5=:md5"),

@@ -11,7 +11,7 @@ Owner: tans1q
 
 ## Invariants
 
-- Durable domain data and safety-critical workflow checkpoints use PostgreSQL (`MANZARA_DATABASE_URL`, schema `MANZARA_DB_SCHEMA`, default `monocorpus`). Definitions, runs, events, conveyor, Gemini coordination, and AI retry exclusions use only local SQLite (`~/.manzara/state/runtime.sqlite3` or `MANZARA_LOCAL_STATE_PATH`). Never fall back between stores or dual-write.
+- Durable domain data and safety-critical workflow checkpoints use PostgreSQL (`MANZARA_DATABASE_URL`, schema `MANZARA_DB_SCHEMA`, default `monocorpus`). Definitions, runs, events, conveyor, Gemini coordination, flow attempts/errors, AI retry exclusions, and reproducible caches use only local SQLite (`~/.manzara/state/runtime.sqlite3` or `MANZARA_LOCAL_STATE_PATH`). Never fall back between stores or dual-write.
 - The backend owns domain decisions and persisted truth. Clients own rendering, transport, interaction, and transient state.
 - Artifacts live under `~/.manzara` or `MANZARA_ARTIFACTS_ROOT`; never create repository-root runtime artifact directories.
 - Keep secrets out of git and logs. Local configuration is gitignored; keep `config.example.yaml` masked and structurally current, and never load it at runtime.

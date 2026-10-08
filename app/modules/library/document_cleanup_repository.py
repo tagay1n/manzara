@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from app.modules.library.runtime.metadata.isbn_utils import equivalent_isbn_values
 from app.catalog.contracts import integer
+from app.operational_state import configured_store
 from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 
@@ -462,7 +463,7 @@ class DocumentCleanupRepository:
                     f"""
                     SELECT cleanup_id, scope, action, reason, md5,
                            source_resource_id, source_path, target_path, status,
-                           phase, evidence_json, attempts, run_id, last_error,
+                           phase, evidence_json,
                            created_at, updated_at, completed_at
                     FROM document_cleanup_queue
                     {where}
@@ -471,7 +472,8 @@ class DocumentCleanupRepository:
                 ),
                 {"status": status, "limit": max(1, min(int(limit), 500))},
             ).mappings()
-            return [dict(row) for row in rows]
+            runtime = configured_store().list("maintenance.cleanup")
+            return [{**dict(row), **runtime.get(str(row["cleanup_id"]), {})} for row in rows]
 
     def get_overview(self) -> dict[str, int]:
         with self.engine.connect() as conn:
@@ -722,7 +724,7 @@ class DocumentCleanupRepository:
                     text(
                         """
                         UPDATE document_cleanup_queue SET
-                            status='canceled', phase='canceled', last_error=NULL,
+                            status='canceled', phase='canceled',
                             completed_at=COALESCE(completed_at, CURRENT_TIMESTAMP),
                             updated_at=CURRENT_TIMESTAMP,
                             evidence_json=evidence_json || jsonb_build_object(
@@ -744,6 +746,10 @@ class DocumentCleanupRepository:
                 ),
                 {"review_id": normalized_review_id},
             )
+        store = configured_store()
+        for cleanup_id in cancel_ids:
+            previous = store.get("maintenance.cleanup", cleanup_id) or {}
+            store.put("maintenance.cleanup", cleanup_id, {**previous, "last_error": None})
         return {
             "review_id": normalized_review_id,
             "isbn": str(review["isbn"]),

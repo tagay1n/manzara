@@ -41,7 +41,6 @@ def _candidate_config_paths() -> tuple[Path, ...]:
     return (
         repo_root / "config.local.yaml",
         repo_root / "config.yaml",
-        repo_root / "config.example.yaml",
     )
 
 
@@ -95,6 +94,13 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     target_schema = _resolve_schema()
     version_schema = _resolve_version_schema()
+    supplied = config.attributes.get("connection")
+    if supplied is not None:
+        context.configure(connection=supplied, target_metadata=target_metadata,
+            compare_type=True, version_table=VERSION_TABLE, version_table_schema=version_schema)
+        with context.begin_transaction():
+            context.run_migrations()
+        return
     connectable = create_engine(
         _resolve_database_url(),
         poolclass=pool.NullPool,

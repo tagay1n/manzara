@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
-LOCAL_STATE_SCHEMA_VERSION = 5
+LOCAL_STATE_SCHEMA_VERSION = 6
 _FOR_UPDATE_RE = re.compile(r"\s+FOR\s+UPDATE\b", re.IGNORECASE)
 
 
@@ -63,7 +63,7 @@ class LocalStateStore:
         self.path.parent.chmod(0o700)
         with self.connect() as conn:
             version = int(conn.execute("PRAGMA user_version").scalar() or 0)
-            if version not in (0, 1, 2, 3, 4, LOCAL_STATE_SCHEMA_VERSION):
+            if version not in (0, 1, 2, 3, 4, 5, LOCAL_STATE_SCHEMA_VERSION):
                 raise RuntimeError(
                     f"Unsupported local runtime schema version {version}; "
                     f"expected {LOCAL_STATE_SCHEMA_VERSION}"
@@ -433,6 +433,11 @@ CREATE TABLE IF NOT EXISTS ai_item_checkpoints (
     operational_failure_count INTEGER NOT NULL DEFAULT 0,
     last_error TEXT, terminal_reason TEXT, run_id INTEGER, updated_at TEXT NOT NULL,
     PRIMARY KEY(flow_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS operational_items (
+    scope TEXT NOT NULL, item_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL, updated_at TEXT NOT NULL,
+    PRIMARY KEY(scope, item_id)
 );
 """
 

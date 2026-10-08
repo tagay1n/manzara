@@ -378,7 +378,7 @@ def run_personality_normalization(
                 except CatalogConflict as exc:
                     state = "failed"
                     db.save_personality_checkpoint(**base, state=state, attempted_models=attempts,
-                                                   failure_context=str(exc), retryable=False,
+                                                   failure_context=str(exc), retryable=False, domain_conflict=True,
                                            canonical_id=(checkpoint or {}).get("canonical_id"))
                     emit_gemini_worker_log(f"library personalities: identity conflict raw_name={candidate.raw_name} reason={exc}", worker_id=worker_id)
                 else:

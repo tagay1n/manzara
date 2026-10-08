@@ -6,7 +6,7 @@ These are workflow requirements; catalog-dependent repositories still need compa
 
 - Use the shared persistent MD5-verified source cache. Populate processing misses from verified primary Backblaze storage. Enforce `documents.cache_max_gib` (default 50 GiB); evict least-recently-used completed sources to 90% when exceeded, protecting recent partial downloads and the current source.
 - Preview detection uses pinned `yolov12l-doclaynet.pt`, CPU `imgsz=1024`, first/last three pages. Ignore page-header/footer/picture-only layouts. Select first useful front, last useful back, then next distinct front; persist actual page numbers and distinct roles. Zero/fewer than three qualifying pages is a completed outcome.
-- Legacy preview checkpoints retain status, page count, recipe, and nullable selected roles. New catalog requests use durable generation/lease records. Retain rendered workspaces; never prune previews automatically. Review-prefetched sources remain cached until ordinary eviction.
+- Catalog requests/pages are the sole durable preview owner, retaining generation intent, leases, recipe, page count, and selected roles. Attempt counts and transient errors are local; the duplicate `library_book_previews` table is retired. Retain rendered workspaces; never prune previews automatically. Review-prefetched sources remain cached until ordinary eviction.
 
 ## Extraction and publication
 
@@ -16,6 +16,7 @@ These are workflow requirements; catalog-dependent repositories still need compa
 - Every prepared image needs a public HTML reference. Publish only after object verification and source-snapshot recheck; then remove objects outside the expected key set. Keep downstream metadata workspaces separate.
 - QA cohorts are deterministic and capped per normalized MIME. Full-catalog promotion and known-source repairs need owner review. Use repeated `--only-md5` plus `--retry-known-failures` for exact reviewed retry cohorts; preserve prior outputs for comparison.
 - Only deterministic verified-byte container/decoding/parser failures justify a guarded `corrupted` move. Unsupported/OCR-only content, converter timeouts, output-validation/storage failures, and missing tools are operational or deferred outcomes, never proof of corruption.
+- Non-PDF successful outputs, unsupported decisions, verified MIME facts, and recipe versions are durable. Processing/failure/deferral state, attempt counts, run IDs, and errors are local SQLite; regeneration must retain prior durable output.
 - Recipe versions live in `non_pdf_types.py`; inspect code instead of maintaining a second version ledger here.
 
 ## Converter contracts

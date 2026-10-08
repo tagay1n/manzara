@@ -13,6 +13,8 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from sqlalchemy import text
 
 from app.modules.library.metadata_terms import termset_name
+from app.modules.library.collection_features import FEATURE_SCOPE
+from app.operational_state import configured_store
 from app.modules.library.stats import create_runtime_engine, dispose_runtime_engine
 
 DETECTOR_VERSION = "metadata-v1"
@@ -226,7 +228,7 @@ def _series_hints(schema: Mapping[str, Any]) -> list[str]:
 
 
 def build_document_features(md5: str, schema: Mapping[str, Any]) -> dict[str, Any]:
-    """Build durable metadata-only features; source locations are intentionally absent."""
+    """Build reproducible metadata-only features; source locations are intentionally absent."""
     raw_title = _title(schema)
     published = str(schema.get("datePublished") or "").strip()
     year_match = re.search(r"\b(?:18|19|20)\d{2}\b", published)
@@ -615,7 +617,6 @@ def discover_collections(
 ) -> dict[str, Any]:
     """Refresh metadata features and create path-independent review proposals."""
     policy = CollectionEligibilityPolicy()
-    now = _utc_now()
     engine, config_source = create_runtime_engine()
     counters = Counter()
     generated_keys: set[str] = set()
@@ -676,61 +677,6 @@ def discover_collections(
                 if on_progress and counters["scanned"] % 1000 == 0:
                     on_progress(dict(counters))
 
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO library_collection_document_features (
-                            md5, input_hash, eligible, exclusion_reason, title,
-                            normalized_title, title_core, work_type, publication_date,
-                            publication_year, issue_number, publishers_json, authors_json,
-                            genres_json, description, series_hints_json, has_issue_marker,
-                            created_at, updated_at
-                        ) VALUES (
-                            :md5, :input_hash, :eligible, :exclusion_reason, :title,
-                            :normalized_title, :title_core, :work_type, :publication_date,
-                            :publication_year, :issue_number, CAST(:publishers AS JSONB),
-                            CAST(:authors AS JSONB), CAST(:genres AS JSONB), :description,
-                            CAST(:series_hints AS JSONB), :has_issue_marker, :created_at, :updated_at
-                        )
-                        ON CONFLICT (md5) DO UPDATE SET
-                            input_hash = EXCLUDED.input_hash,
-                            eligible = EXCLUDED.eligible,
-                            exclusion_reason = EXCLUDED.exclusion_reason,
-                            title = EXCLUDED.title,
-                            normalized_title = EXCLUDED.normalized_title,
-                            title_core = EXCLUDED.title_core,
-                            work_type = EXCLUDED.work_type,
-                            publication_date = EXCLUDED.publication_date,
-                            publication_year = EXCLUDED.publication_year,
-                            issue_number = EXCLUDED.issue_number,
-                            publishers_json = EXCLUDED.publishers_json,
-                            authors_json = EXCLUDED.authors_json,
-                            genres_json = EXCLUDED.genres_json,
-                            description = EXCLUDED.description,
-                            series_hints_json = EXCLUDED.series_hints_json,
-                            has_issue_marker = EXCLUDED.has_issue_marker,
-                            updated_at = CASE
-                                WHEN library_collection_document_features.input_hash <> EXCLUDED.input_hash
-                                  OR library_collection_document_features.eligible <> EXCLUDED.eligible
-                                THEN EXCLUDED.updated_at
-                                ELSE library_collection_document_features.updated_at
-                            END
-                        """
-                    ),
-                    {
-                        **feature,
-                        "publishers": json.dumps(
-                            feature["publishers"], ensure_ascii=False
-                        ),
-                        "authors": json.dumps(feature["authors"], ensure_ascii=False),
-                        "genres": json.dumps(feature["genres"], ensure_ascii=False),
-                        "series_hints": json.dumps(
-                            feature["series_hints"], ensure_ascii=False
-                        ),
-                        "created_at": now,
-                        "updated_at": now,
-                    },
-                )
 
             if should_stop():
                 return {
@@ -741,14 +687,11 @@ def discover_collections(
                     **dict(counters),
                 }
 
-            conn.execute(
-                text(
-                    """
-                    DELETE FROM library_collection_document_features f
-                    WHERE NOT EXISTS (SELECT 1 FROM metadata m WHERE m.md5 = f.md5)
-                    """
-                )
-            )
+            cache = configured_store()
+            with cache.transaction() as local:
+                cache.clear(FEATURE_SCOPE, conn=local)
+                for feature in features:
+                    cache.put(FEATURE_SCOPE, feature["md5"], feature, conn=local)
             canonical_members = set(
                 conn.execute(text("SELECT md5 FROM library_collection_items"))
                 .scalars()
@@ -761,7 +704,9 @@ def discover_collections(
                         """
                     WITH match_values AS (
                         SELECT f.*, value.normalized_value AS match_value
-                        FROM library_collection_document_features f
+                        FROM jsonb_to_recordset(CAST(:local_features AS jsonb)) AS f(
+                            md5 TEXT,input_hash TEXT,title TEXT,title_core TEXT,
+                            series_hints_json JSONB,eligible BOOLEAN)
                         CROSS JOIN LATERAL (
                             SELECT f.title_core AS normalized_value
                             UNION
@@ -789,7 +734,9 @@ def discover_collections(
                       AND similarity(f.match_value, s.normalized_value) >= 0.72
                     ORDER BY f.md5, score DESC
                     """
-                    )
+                    ),
+                    {"local_features": json.dumps([{**feature,
+                        "series_hints_json": feature["series_hints"]} for feature in features], ensure_ascii=False)},
                 )
                 .mappings()
                 .all()

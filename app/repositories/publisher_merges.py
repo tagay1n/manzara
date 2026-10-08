@@ -192,13 +192,13 @@ class PublisherMergeRepository:
                 fingerprint = hashlib.sha256(_json(identities).encode()).hexdigest()
                 # Pending owner edits live in the draft and are never replaced on reruns.
                 existing = conn.execute(
-                    "SELECT 1 FROM publisher_merge_proposals WHERE fingerprint=? AND status IN ('pending','staged','skipped')",
+                    "SELECT 1 FROM catalog_publisher_proposals WHERE fingerprint=? AND status IN ('pending','staged','skipped')",
                     (fingerprint,),
                 ).fetchone()
                 if existing:
                     continue
                 conn.execute(
-                    "INSERT INTO publisher_merge_proposals(analysis_id,fingerprint,proposal,members,created_at,updated_at) VALUES (?,?,?::jsonb,?::jsonb,?,?)",
+                    "INSERT INTO catalog_publisher_proposals(analysis_id,fingerprint,proposal,members,created_at,updated_at) VALUES (?,?,?::jsonb,?::jsonb,?,?)",
                     (analysis_id, fingerprint, _json(group), _json(members), now, now),
                 )
                 count += 1
@@ -211,9 +211,10 @@ class PublisherMergeRepository:
     def discard_publisher_analyses(self):
         """Explicit owner reset of generated analyses; preserve domain decisions."""
         with self._lock, self._connect() as conn:
+            conn.execute("SET TRANSACTION READ WRITE")
             draft = _draft(conn)
             staged = conn.execute(
-                "SELECT proposal,review_edit FROM publisher_merge_proposals WHERE status='staged'"
+                "SELECT proposal,review_edit FROM catalog_publisher_proposals WHERE status='staged'"
             ).fetchall()
             owned = {
                 key
@@ -245,14 +246,14 @@ class PublisherMergeRepository:
                 "UPDATE publisher_review_draft SET changes=?::jsonb,reviewed=?::jsonb,proposal_ids='[]'::jsonb,revision=revision+1,updated_at=? WHERE singleton=1",
                 (_json(changes), _json(reviewed), utc_now()),
             )
-            conn.execute("DELETE FROM publisher_merge_proposals")
+            conn.execute("DELETE FROM catalog_publisher_proposals")
             conn.execute("DELETE FROM publisher_merge_analyses")
 
     def get_publisher_review(self):
         with self._connect() as conn:
             draft = _draft(conn)
             rows = conn.execute(
-                "SELECT proposal_id,proposal,members,status,review_edit FROM publisher_merge_proposals WHERE status IN ('pending','staged','skipped') ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'skipped' THEN 1 ELSE 2 END, CASE proposal->>'confidence' WHEN 'strong' THEN 0 WHEN 'possible' THEN 1 ELSE 2 END, proposal_id"
+                "SELECT proposal_id,proposal,members,status,review_edit FROM catalog_publisher_proposals WHERE status IN ('pending','staged','skipped') ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'skipped' THEN 1 ELSE 2 END, CASE proposal->>'confidence' WHEN 'strong' THEN 0 WHEN 'possible' THEN 1 ELSE 2 END, proposal_id"
             ).fetchall()
             analysis = conn.execute(
                 "SELECT inventory,response FROM publisher_merge_analyses WHERE state='imported' ORDER BY analysis_id DESC LIMIT 1"
@@ -321,6 +322,7 @@ class PublisherMergeRepository:
 
     def save_publisher_draft(self, changes, revision, expected=None):
         with self._lock, self._connect() as conn:
+            conn.execute("SET TRANSACTION READ WRITE")
             draft = _draft(conn)
             if draft["revision"] != revision:
                 raise ValueError("Publisher draft conflict; refresh the page.")
@@ -344,7 +346,7 @@ class PublisherMergeRepository:
             # Preserve staged groups if a manual caller saves its remaining changes.
             for pid in draft["proposal_ids"]:
                 proposal = conn.execute(
-                    "SELECT proposal FROM publisher_merge_proposals WHERE proposal_id=?",
+                    "SELECT proposal FROM catalog_publisher_proposals WHERE proposal_id=?",
                     (pid,),
                 ).fetchone()["proposal"]
                 owned = set(proposal["member_ids"])
@@ -377,16 +379,17 @@ class PublisherMergeRepository:
 
     def discard_publisher_draft(self, revision):
         with self._lock, self._connect() as conn:
+            conn.execute("SET TRANSACTION READ WRITE")
             draft = _draft(conn)
             if draft["revision"] != revision:
                 raise ValueError("Publisher draft conflict; refresh the page.")
             conn.execute(
-                "UPDATE publisher_merge_proposals SET review_edit=NULL,updated_at=? WHERE status IN ('pending','staged','skipped')",
+                "UPDATE catalog_publisher_proposals SET review_edit=NULL,updated_at=? WHERE status IN ('pending','staged','skipped')",
                 (utc_now(),),
             )
             for pid in draft["proposal_ids"]:
                 conn.execute(
-                    "UPDATE publisher_merge_proposals SET status='pending',updated_at=? WHERE proposal_id=? AND status='staged'",
+                    "UPDATE catalog_publisher_proposals SET status='pending',updated_at=? WHERE proposal_id=? AND status='staged'",
                     (utc_now(), pid),
                 )
             conn.execute(
@@ -398,9 +401,10 @@ class PublisherMergeRepository:
     def publisher_review_action(self, proposal_id, action, member_ids, display_name):
         now = utc_now()
         with self._lock, self._connect() as conn:
+            conn.execute("SET TRANSACTION READ WRITE")
             draft = _draft(conn)
             row = conn.execute(
-                "SELECT * FROM publisher_merge_proposals WHERE proposal_id=? FOR UPDATE",
+                "SELECT * FROM catalog_publisher_proposals WHERE proposal_id=? FOR UPDATE",
                 (proposal_id,),
             ).fetchone()
             if not row or row["status"] not in ("pending", "skipped"):
@@ -411,7 +415,7 @@ class PublisherMergeRepository:
             members = [entries[key] for key in member_ids]
             if action == "edit":
                 conn.execute(
-                    "UPDATE publisher_merge_proposals SET review_edit=?::jsonb,updated_at=? WHERE proposal_id=?",
+                    "UPDATE catalog_publisher_proposals SET review_edit=?::jsonb,updated_at=? WHERE proposal_id=?",
                     (
                         _json({"member_ids": member_ids, "display_name": display_name}),
                         now,
@@ -481,7 +485,7 @@ class PublisherMergeRepository:
                     ),
                 )
                 conn.execute(
-                    "UPDATE publisher_merge_proposals SET review_edit=?::jsonb WHERE proposal_id=?",
+                    "UPDATE catalog_publisher_proposals SET review_edit=?::jsonb WHERE proposal_id=?",
                     (
                         _json({"member_ids": member_ids, "display_name": display_name}),
                         proposal_id,
@@ -514,7 +518,7 @@ class PublisherMergeRepository:
                     or row["review_edit"]
                 ):
                     conn.execute(
-                        "UPDATE publisher_merge_proposals SET review_edit=?::jsonb WHERE proposal_id=?",
+                        "UPDATE catalog_publisher_proposals SET review_edit=?::jsonb WHERE proposal_id=?",
                         (
                             _json(
                                 {"member_ids": member_ids, "display_name": chosen_name}
@@ -524,7 +528,7 @@ class PublisherMergeRepository:
                     )
                 status = "skipped"
             conn.execute(
-                "UPDATE publisher_merge_proposals SET status=?,updated_at=? WHERE proposal_id=?",
+                "UPDATE catalog_publisher_proposals SET status=?,updated_at=? WHERE proposal_id=?",
                 (status, now, proposal_id),
             )
         return self.get_publisher_review()
@@ -543,7 +547,7 @@ class PublisherMergeRepository:
     def _finish_publisher_draft_apply(self, conn, draft):
         for pid in draft["proposal_ids"]:
             conn.execute(
-                "UPDATE publisher_merge_proposals SET status='applied',updated_at=? WHERE proposal_id=? AND status='staged'",
+                "UPDATE catalog_publisher_proposals SET status='applied',updated_at=? WHERE proposal_id=? AND status='staged'",
                 (utc_now(), pid),
             )
         conn.execute(

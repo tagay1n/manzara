@@ -4,7 +4,7 @@
 
 ## Ownership and execution
 
-Library owns inventory/prompt/validation/review intents. PostgreSQL repositories own snapshots, response checkpoints, proposals, revisioned drafts, and pairwise separation decisions. SQLite owns task lifecycle/artifact events only.
+Library owns inventory/prompt/validation/review intents. PostgreSQL repositories own snapshots, response checkpoints, proposals, revisioned drafts, and pairwise separation decisions. SQLite owns task lifecycle/artifact events and operational telemetry. `catalog_proposals` is the sole publisher proposal owner; `catalog_publisher_proposals` is a command/read view, replacing the duplicate physical `publisher_merge_proposals` table. Review drafts refer to catalog proposal IDs.
 
 - `auto` audits all identities until a valid analysis checkpoint, then unresolved names. `new` includes skipped unresolved names; groups require an unresolved member and at most one established publisher. Preserve its ID and chosen name. `all` permits proposed established-publisher merges. All scopes see active publishers and approved aliases.
 - Reserve two PostgreSQL connections: one for the session advisory lock, one for short transactions. Commit after acquiring the lock; release on every exit.

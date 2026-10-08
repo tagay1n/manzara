@@ -54,12 +54,6 @@ class LibrarySiteExportRepository:
                             collection.collection_id,
                             collection.title AS collection_title,
                             collection.include_in_library AS collection_include,
-                            preview.recipe_version AS preview_recipe_version,
-                            preview.status AS preview_status,
-                            preview.source_page_count,
-                            preview.first_preview_page,
-                            preview.second_preview_page,
-                            preview.last_preview_page,
                             EXISTS (
                                 SELECT 1
                                 FROM document_cleanup_queue cleanup
@@ -75,8 +69,6 @@ class LibrarySiteExportRepository:
                           ON collection_item.md5 = d.md5
                         LEFT JOIN library_collections collection
                           ON collection.collection_id = collection_item.collection_id
-                        LEFT JOIN library_book_previews preview
-                          ON preview.md5 = d.md5
                         WHERE m.lib IS TRUE
                         ORDER BY d.md5
                         """
@@ -109,19 +101,19 @@ class LibrarySiteExportRepository:
                     )
                 ).mappings().all()
                 candidates = [dict(row) for row in candidates]
-                if conn.execute(text("SELECT to_regclass(:table)"), {"table": f'"{self.schema}".catalog_imports'}).scalar():
-                    if conn.execute(text(f'SELECT EXISTS(SELECT 1 FROM "{self.schema}".catalog_imports WHERE state=\'active\')')).scalar():
-                        aliases = self._attach_catalog_snapshot(conn, candidates)
+                aliases = self._attach_catalog_snapshot(conn, candidates)
         return [dict(row) for row in candidates], [dict(row) for row in aliases]
 
     def _attach_catalog_snapshot(self, conn, candidates):
         """Resolve exact mentions and immutable preview assets in the same snapshot."""
         # The schema was validated at construction, and all values remain bound.
         prefix = f'"{self.schema}".'
-        credits = conn.execute(text(f'''SELECT d.md5,c.role,c.role_name,c.resolution,c.entity_id,n.raw_name,
+        credits = conn.execute(text(f'''SELECT d.md5,c.role,g.role_name,c.resolution,c.entity_id,n.raw_name,
             e.display_name,e.approval,e.status FROM {prefix}catalog_contributions c
-            JOIN {prefix}catalog_documents d USING(publication_id)
-            JOIN {prefix}catalog_publications p USING(publication_id)
+            JOIN {prefix}catalog_credit_groups g ON g.publication_id=c.publication_id
+                AND g.role=c.role AND g.position=c.position
+            JOIN {prefix}catalog_documents d ON d.publication_id=c.publication_id
+            JOIN {prefix}catalog_publications p ON p.publication_id=c.publication_id
             JOIN {prefix}catalog_names n USING(name_id) LEFT JOIN {prefix}catalog_entities e USING(entity_id)
             WHERE p.inclusion='included' ORDER BY d.md5,c.role,c.position,c.nested_position''')).mappings()
         by_document = {}

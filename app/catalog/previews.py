@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import uuid
 
 from sqlalchemy import or_, select
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
 
 from app.catalog.contracts import CatalogConflict, integer, nonblank
@@ -12,6 +13,7 @@ from app.catalog.contracts import CatalogConflict, integer, nonblank
 class PreviewStore:
     def request_preview(self, md5, *, actor, idempotency_key, recipe="webp-v2"):
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             doc = self._record(conn, "document", md5)
             if doc["mime_type"] != "application/pdf":
                 raise ValueError("preview generation currently supports PDF documents")
@@ -28,6 +30,7 @@ class PreviewStore:
         table = self.table("preview_requests")
         now = datetime.now(timezone.utc)
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             # One active generation per document. Expired claims are retryable.
             conn.exec_driver_sql("SELECT pg_advisory_xact_lock(hashtext('catalog-preview-claim'))")
             active = select(table.c.md5).where(table.c.status == "processing", table.c.lease_until > now)
@@ -64,6 +67,7 @@ class PreviewStore:
                 nonblank(page.get("large_key"), "large_key")
         table, page_table = self.table("preview_requests"), self.table("preview_pages")
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             row = conn.execute(select(table).where(table.c.request_id == request_id).with_for_update()).mappings().one()
             if row["status"] != "processing" or row["claim_token"] != claim_token or row["lease_until"] <= datetime.now(timezone.utc):
                 raise CatalogConflict("preview claim expired or was replaced")
@@ -74,11 +78,13 @@ class PreviewStore:
                 for page in pages:
                     conn.execute(page_table.insert().values(request_id=request_id, **page))
             after = dict(conn.execute(table.update().where(table.c.request_id == request_id).values(
-                status="failed" if error else "ready", error=error, lease_until=None,
+                status="failed" if error else "ready", lease_until=None,
                 source_page_count=source_page_count,
             ).returning(table)).mappings().one())
             self._audit(conn, "preview", request_id, dict(row), after, actor)
-            return after
+        from app.operational_state import configured_store
+        configured_store().put("library.preview_requests", request_id, {"error": error})
+        return after
 
     def renew_preview(self, request_id, claim_token, *, lease_seconds=300):
         integer(request_id, "request_id")
@@ -88,6 +94,7 @@ class PreviewStore:
         table = self.table("preview_requests")
         now = datetime.now(timezone.utc)
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             row = conn.execute(table.update().where(table.c.request_id == request_id,
                 table.c.status == "processing", table.c.claim_token == claim_token, table.c.lease_until > now,
             ).values(lease_until=now + timedelta(seconds=lease_seconds)).returning(table)).mappings().first()

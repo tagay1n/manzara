@@ -52,6 +52,12 @@ def read_snapshot(engine, *, domain_schema="monocorpus", dataset_schema="public"
     with engine.connect().execution_options(isolation_level="REPEATABLE READ") as conn:
         with conn.begin():
             conn.execute(text("SET TRANSACTION READ ONLY"))
+            version = conn.execute(text("SELECT to_regclass(:relation)"),
+                {"relation": f'"{domain_schema}".alembic_version_manzara'}).scalar()
+            if version is not None:
+                revision = conn.execute(text(f'SELECT version_num FROM "{domain_schema}".alembic_version_manzara')).scalar()
+                if revision and str(revision) >= "20261008_0062":
+                    raise ValueError("Legacy import is retired for this catalog; restore the recorded PostgreSQL dump instead")
             conn.execute(text("SET LOCAL statement_timeout = '60s'"))
             available = {(row.table_schema, row.table_name) for row in conn.execute(text(
                 "SELECT table_schema,table_name FROM information_schema.tables WHERE table_schema IN (:domain,:dataset)"

@@ -453,7 +453,7 @@ class CoreRepository:
             "catalog_credit_groups": {"publication_id", "role", "position"},
             "catalog_protections": {"record_kind", "record_key", "field"},
             "catalog_revisions": {"record_kind", "record_key", "actor", "before", "after"},
-            "personality_normalization_checkpoints": {"raw_name", "canonical_id", "source_fingerprint", "state"},
+            "personality_normalization_checkpoints": {"raw_name", "canonical_id", "source_fingerprint", "state", "decision_reason", "decision_evidence"},
         }
         with self._connect() as conn:
             conn.execute("SET TRANSACTION READ ONLY")
@@ -473,8 +473,8 @@ class CoreRepository:
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", version_schema):
                 raise ValueError("Invalid migration version schema")
             revision = conn.execute(f'SELECT version_num FROM "{version_schema}".alembic_version_manzara').scalar()
-            if not re.fullmatch(r"\d{8}_\d{4}", str(revision)) or int(str(revision).split("_")[1]) < 61:
-                raise RuntimeError("Catalog revision 20261007_0061 or later is required; apply migrations separately.")
+            if not re.fullmatch(r"\d{8}_\d{4}", str(revision)) or int(str(revision).split("_")[1]) < 62:
+                raise RuntimeError("Catalog revision 20261008_0062 or later is required; apply migrations separately.")
 
 
     def _row_to_task(self, row: Dict[str, Any]) -> Dict[str, Any]:

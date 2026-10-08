@@ -198,7 +198,7 @@ def build_metadata(schema: str) -> MetaData:
                      Column("status", Text, nullable=False, server_default="pending"),
                      Column("private", Boolean, nullable=False), Column("actor", Text, nullable=False),
                      Column("claim_token", Text), Column("lease_until", DateTime(timezone=True)),
-                     Column("error", Text), Column("source_page_count", Integer),
+                     Column("source_page_count", Integer),
                      Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
                      UniqueConstraint("md5", "idempotency_key"))
     Index("idx_catalog_preview_queue", previews.c.status, previews.c.request_id)

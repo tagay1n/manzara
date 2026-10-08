@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from app.db import Database
 from app.modules.library.collection_constants import COLLECTIONS_PANEL_ID
+from app.modules.library.collection_features import attach_features, load_features
 from app.modules.library.collection_detection import (
     normalize_collection_text,
     title_core,
@@ -310,14 +311,11 @@ def get_collection_proposal_review(proposal_id: int) -> dict[str, Any]:
                 conn.execute(
                     text(
                         """
-                    SELECT pi.*, f.title, f.work_type, f.publication_date, f.issue_number,
-                           f.publishers_json, f.authors_json, f.genres_json, f.description,
-                           m.lib
+                    SELECT pi.*, m.lib
                     FROM library_collection_proposal_items pi
-                    JOIN library_collection_document_features f ON f.md5=pi.md5
                     LEFT JOIN metadata m ON m.md5=pi.md5
                     WHERE pi.proposal_id=:id
-                    ORDER BY COALESCE(pi.gemini_confidence,0) DESC, f.title, pi.md5
+                    ORDER BY COALESCE(pi.gemini_confidence,0) DESC, pi.md5
                     """
                     ),
                     {"id": int(proposal_id)},
@@ -325,6 +323,8 @@ def get_collection_proposal_review(proposal_id: int) -> dict[str, Any]:
                 .mappings()
                 .all()
             )
+            rows = attach_features(conn, rows)
+            rows.sort(key=lambda row: (-float(row.get("gemini_confidence") or 0), row["title"], row["md5"]))
         items = [
             {
                 "md5": row["md5"],
@@ -406,16 +406,11 @@ def decide_collection_proposal(
                 "ai_dismissed",
             }:
                 raise ValueError("Collection proposal is not awaiting review")
-            available = set(
-                conn.execute(
-                    text(
-                        "SELECT md5 FROM library_collection_proposal_items WHERE proposal_id=:id"
-                    ),
-                    {"id": int(proposal_id)},
-                )
-                .scalars()
-                .all()
-            )
+            proposal_items = conn.execute(text("SELECT md5,input_hash FROM library_collection_proposal_items WHERE proposal_id=:id"),
+                {"id": int(proposal_id)}).mappings().all()
+            if decision != "reject":
+                attach_features(conn, proposal_items)
+            available = {row["md5"] for row in proposal_items}
             if decision == "reject":
                 selected = []
             elif not set(selected).issubset(available):
@@ -476,16 +471,7 @@ def decide_collection_proposal(
                         f"Membership conflict for {len(conflicts)} selected document(s)"
                     )
                 for md5 in selected:
-                    feature = (
-                        conn.execute(
-                            text(
-                                "SELECT title,title_core FROM library_collection_document_features WHERE md5=:md5"
-                            ),
-                            {"md5": md5},
-                        )
-                        .mappings()
-                        .one()
-                    )
+                    feature = load_features(conn, [md5])[md5]
                     conn.execute(
                         text(
                             """SELECT catalog_upsert('library_collection_items', jsonb_build_object('collection_id', :collection_id, 'md5', :md5, 'item_title', :title, 'created_at', :now, 'updated_at', :now), ARRAY['md5']::text[], ARRAY[]::text[], ARRAY[]::text[])"""

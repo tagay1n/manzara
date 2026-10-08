@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import re
 import zipfile
@@ -24,6 +25,7 @@ from app.document_storage import (
 )
 from app.gemini_model_pool import GeminiModelResponseError
 from app.local_state import AIItemCheckpointStore
+from app.operational_state import OperationalStateStore
 from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     PasswordProtectedDocumentError,
@@ -144,6 +146,17 @@ class MetadataExtractionRepository:
             str(database_url), schema=normalized
         )
         self.checkpoint_store = checkpoint_store
+        self.quality_store = OperationalStateStore(checkpoint_store._store.path)
+
+    def _record_quality(self, md5, schema_org, issues, quality_issue, *, previous=None):
+        fingerprint = hashlib.sha256(json.dumps(schema_org, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        if previous and previous.get("input_hash") == fingerprint and previous.get("contract_version") == CONTRACT_VERSION:
+            return
+        self.quality_store.put("library.metadata_quality", md5, {
+            "contract_version": CONTRACT_VERSION, "input_hash": fingerprint,
+            "status": "invalid" if issues or quality_issue else "resolved",
+            "issues_json": list(issues) + ([{"code": "quality", "message": quality_issue}] if quality_issue else []),
+        })
 
     def _checkpoints(self) -> AIItemCheckpointStore:
         return self.checkpoint_store
@@ -160,6 +173,10 @@ class MetadataExtractionRepository:
         force_md5s: frozenset[str] = frozenset(),
     ) -> list[MetadataExtractionCandidate]:
         """Return only pending documents with a verified primary object."""
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
+            raise ValueError("limit must be a nonnegative integer")
+        if limit == 0:
+            return []
         sql = """
             SELECT
                 d.md5,
@@ -168,43 +185,11 @@ class MetadataExtractionRepository:
                 d.content_url,
                 upstream.payload_json AS upstream_metadata,
                 d.primary_storage_size,
-                d.ya_path
+                d.ya_path, m.schema_org, d.meta_extraction_method
             FROM document d
             LEFT JOIN metadata m ON m.md5 = d.md5
-            LEFT JOIN library_metadata_quality_state quality ON quality.md5 = d.md5
             LEFT JOIN library_upstream_metadata upstream ON upstream.md5 = d.md5
-            WHERE (
-                  m.md5 IS NULL
-                  OR m.schema_org IS NULL
-                  OR (
-                      NULLIF(BTRIM(m.schema_org->>'name'), '') IS NULL
-                      AND (
-                          quality.md5 IS NULL
-                          OR quality.status <> 'resolved'
-                          OR quality.contract_version IS DISTINCT FROM :contract_version
-                      )
-                  )
-                  OR NOT EXISTS (
-                      SELECT 1
-                      FROM jsonb_each(m.schema_org::jsonb) AS signal(key, value)
-                      WHERE signal.key = ANY(ARRAY[
-                                'author', 'contributor', 'publisher', 'datePublished',
-                                'isbn', 'inLanguage', 'description', 'numberOfPages',
-                                'bookEdition', 'about', 'genre', 'audience',
-                                'suggestedMinAge', 'isBasedOn'
-                            ])
-                        AND signal.value <> 'null'::jsonb
-                        AND signal.value <> to_jsonb(''::text)
-                        AND signal.value <> '[]'::jsonb
-                        AND signal.value <> '{}'::jsonb
-                  )
-                  OR quality.status = 'invalid'
-                  OR (
-                      d.meta_extraction_method IS NOT NULL
-                      AND NULLIF(BTRIM(m.schema_org->>'inLanguage'), '') IS NULL
-                  )
-                  OR d.md5 = ANY(:force_md5s)
-              )
+            WHERE TRUE
               AND d.document_url IS NOT NULL
               AND d.primary_storage_size IS NOT NULL
               AND d.primary_storage_verified_at IS NOT NULL
@@ -239,9 +224,18 @@ class MetadataExtractionRepository:
             "library.metadata_extract",
             [str(row.get("md5") or "") for row in rows],
         )
+        quality_cache = self.quality_store.list("library.metadata_quality")
         candidates: list[MetadataExtractionCandidate] = []
         seen: set[str] = set()
         for row in rows:
+            schema_org = row.get("schema_org")
+            issues = metadata_contract_issues(schema_org) if isinstance(schema_org, Mapping) else []
+            quality_issue = metadata_quality_issue(schema_org)
+            self._record_quality(row["md5"], schema_org, issues, quality_issue,
+                                 previous=quality_cache.get(row["md5"]))
+            needs_language = row.get("meta_extraction_method") is not None and isinstance(schema_org, Mapping) and not _has_value(schema_org.get("inLanguage"))
+            if row["md5"] not in force_md5s and schema_org is not None and not quality_issue and not issues and not needs_language:
+                continue
             checkpoint = (
                 None
                 if str(row.get("md5") or "") in force_md5s
@@ -270,7 +264,7 @@ class MetadataExtractionRepository:
                 )
             seen.add(candidate.md5)
             candidates.append(candidate)
-            if limit is not None and len(candidates) >= max(0, int(limit)):
+            if limit is not None and len(candidates) >= limit:
                 break
         return candidates
 
@@ -362,16 +356,13 @@ class MetadataExtractionRepository:
         """Persist usable metadata, allowing explicit replacement for source repairs."""
         language = str(schema_org.get("inLanguage") or "").strip() or None
         with self.engine.begin() as conn:
+            conn.execute(text("SET TRANSACTION READ WRITE"))
             rows = conn.execute(
                 text(
                     """
-                    SELECT d.md5, d.meta_extraction_method, m.schema_org,
-                           quality.status AS quality_status,
-                           quality.contract_version AS quality_contract_version
+                    SELECT d.md5, d.meta_extraction_method, m.schema_org
                     FROM document d
                     LEFT JOIN metadata m ON m.md5 = d.md5
-                    LEFT JOIN library_metadata_quality_state quality
-                      ON quality.md5 = d.md5
                     WHERE d.md5 = :md5
                     FOR UPDATE OF d
                     """
@@ -388,10 +379,7 @@ class MetadataExtractionRepository:
                 and isinstance(existing_schema_org, Mapping)
                 and not _has_value(existing_schema_org.get("inLanguage"))
             )
-            quality_invalid = (
-                rows[0].get("quality_status") == "invalid"
-                and rows[0].get("quality_contract_version") == CONTRACT_VERSION
-            )
+            quality_invalid = bool(metadata_contract_issues(existing_schema_org)) if isinstance(existing_schema_org, Mapping) else True
             if (
                 existing_schema_org is not None
                 and not replace_existing
@@ -400,26 +388,7 @@ class MetadataExtractionRepository:
                 and metadata_quality_issue(existing_schema_org) is None
                 and not metadata_contract_issues(existing_schema_org)
             ):
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO library_metadata_quality_state (
-                            md5, contract_version, status, issues_json,
-                            detected_at, resolved_at, updated_at
-                        ) VALUES (
-                            :md5, :contract_version, 'resolved', '[]'::jsonb,
-                            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                        )
-                        ON CONFLICT (md5) DO UPDATE SET
-                            contract_version = EXCLUDED.contract_version,
-                            status = 'resolved',
-                            issues_json = '[]'::jsonb,
-                            resolved_at = CURRENT_TIMESTAMP,
-                            updated_at = CURRENT_TIMESTAMP
-                        """
-                    ),
-                    {"md5": str(md5), "contract_version": CONTRACT_VERSION},
-                )
+                self._record_quality(md5, existing_schema_org, [], None)
                 self._checkpoints().clear("library.metadata_extract", str(md5))
                 self._checkpoints().clear("library.metadata_evaluate", str(md5))
                 return False
@@ -460,26 +429,7 @@ class MetadataExtractionRepository:
             )
             if int(updated.rowcount or 0) != 1:
                 raise RuntimeError(f"Document metadata marker update failed for {md5}")
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO library_metadata_quality_state (
-                        md5, contract_version, status, issues_json,
-                        detected_at, resolved_at, updated_at
-                    ) VALUES (
-                        :md5, :contract_version, 'resolved', '[]'::jsonb,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    )
-                    ON CONFLICT (md5) DO UPDATE SET
-                        contract_version = EXCLUDED.contract_version,
-                        status = 'resolved',
-                        issues_json = '[]'::jsonb,
-                        resolved_at = CURRENT_TIMESTAMP,
-                        updated_at = CURRENT_TIMESTAMP
-                    """
-                ),
-                {"md5": str(md5), "contract_version": CONTRACT_VERSION},
-            )
+        self._record_quality(md5, schema_org, [], None)
         self._checkpoints().clear("library.metadata_extract", str(md5))
         self._checkpoints().clear("library.metadata_evaluate", str(md5))
         return True

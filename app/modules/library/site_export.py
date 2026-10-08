@@ -26,8 +26,6 @@ from app.modules.library.metadata_contract import (
 )
 from app.modules.library.previews import (
     PREVIEW_RECIPE_VERSION,
-    preview_object_key,
-    preview_pages_from_row,
 )
 from app.modules.library.runtime.metadata.fields import extract_publish_year
 
@@ -277,43 +275,7 @@ def _preview(row: Mapping[str, Any], storage: ExportStorage) -> dict[str, Any] |
                   "large_url": object_url(storage.endpoint_url, storage.public_preview_bucket, page["large_key"])}
                  for page in preview["pages"]]
         return {"source_page_count": preview["source_page_count"], "pages": pages} if pages else None
-    if (
-        row.get("preview_recipe_version") != PREVIEW_RECIPE_VERSION
-        or row.get("preview_status") != "ready"
-        or not storage.public_preview_bucket
-    ):
-        return None
-    preview_row = {
-        "md5": row.get("md5"),
-        "first_preview_page": row.get("first_preview_page"),
-        "second_preview_page": row.get("second_preview_page"),
-        "last_preview_page": row.get("last_preview_page"),
-    }
-    pages: list[dict[str, Any]] = []
-    for page in preview_pages_from_row(preview_row):
-        pages.append(
-            {
-                "role": page.role,
-                "page_number": page.page_number,
-                "small_url": object_url(
-                    storage.endpoint_url,
-                    storage.public_preview_bucket,
-                    preview_object_key(str(row["md5"]), page.object_alias, "small"),
-                ),
-                "large_url": object_url(
-                    storage.endpoint_url,
-                    storage.public_preview_bucket,
-                    preview_object_key(str(row["md5"]), page.object_alias, "large"),
-                ),
-            }
-        )
-    if not pages:
-        return None
-    count = row.get("source_page_count")
-    return {
-        "source_page_count": int(count) if count is not None else None,
-        "pages": pages,
-    }
+    return None
 
 
 def _language_facets(value: Any) -> list[str]:

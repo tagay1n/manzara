@@ -9,6 +9,12 @@ from app.catalog.importer import SOURCE_TABLES
 
 
 def _editor_block(body):
+    # Manual import stages describe the frozen pre-retirement source schema.
+    body = body.replace("BEGIN", """BEGIN
+    IF EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='personality_normalization_checkpoints'
+              AND column_name='decision_reason') THEN
+        RAISE EXCEPTION 'manual source import is retired; use the recorded PostgreSQL recovery dump';
+    END IF;""", 1)
     # PG Studio splits the raw text at semicolons, including inside quoted blocks.
     # PostgreSQL decodes octal escapes in E-strings before parsing the block body.
     encoded = body.replace('\\', '\\\\').replace("'", "''").replace(';', r'\073')

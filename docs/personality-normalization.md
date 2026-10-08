@@ -18,7 +18,7 @@ Negative decisions require a nonblank reason of at most 300 characters and null 
 
 Candidate reads use normalized publications/documents/names/credits and ordered publication languages, retaining raw names, roles/counts, language hints, and source fingerprints. Language hints now come from the migrated child relation; any resulting fingerprint change follows existing changed-input eligibility rules. Canonical display changes must not alter source identity. This adapted read does not establish readiness of every remaining normalization operation.
 
-PostgreSQL checkpoints retain input fingerprints, contract versions, decisions, failure/recovery evidence, timestamps, and model hints. Negative decisions create no canonical and never rewrite source metadata. Unchanged negatives are skipped; changed inputs/contracts or explicit retry reopen eligible work.
+PostgreSQL checkpoints retain input fingerprints, contract versions, accepted identities, semantic negative reasons/evidence, identity conflicts, explicit human retry intent, timestamps, and successful model hints. SQLite owns processing, pending/failed/deferred attempts, content-failure exclusions, and recovery evidence; `app/repositories/personality_checkpoints.py` composes the two stores without fallback or dual writes. Negative decisions create no canonical and never rewrite source metadata. Unchanged negatives are skipped; changed inputs/contracts or explicit retry reopen eligible work.
 
 Review operations remain backend services without a CLI workbench in this slice. Review retry requires the reviewed `updated_at`, rejects stale commands, and marks `retry_requested` without deleting evidence. Correct source metadata before retrying a negative decision.
 
@@ -32,7 +32,7 @@ Review ownership is checked before inserting the alias: the catalog trigger may 
 
 Untouched names precede checkpointed names before applying the candidate limit. Workers share one queue; each name gets one first-pass turn and at most one later turn, after all first-pass workers finish.
 
-Yield on 429, service 5xx, transport failures, and local deadlines without content-excluding the model. Record shared provider state first. Wait stoppably when no capacity is ready; total daily exhaustion preserves untouched work. A second transient failure leaves durable deferral; stopping preserves pending retry state.
+Yield on 429, service 5xx, transport failures, and local deadlines without content-excluding the model. Record shared provider state first. Wait stoppably when no capacity is ready; total daily exhaustion preserves untouched work. A second transient failure leaves local deferral; stopping preserves local pending retry state.
 
 Personality-only pacing and the 60-second HTTP I/O timeout are defined in [Gemini runtime](gemini-runtime.md). An I/O timeout is not a total streaming deadline.
 

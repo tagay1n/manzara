@@ -10,7 +10,7 @@ The inline CLI supports personality normalization and cleanup preparation, with 
 | Task descriptors, run contexts, session ownership | `app/task_runtime/contracts.py`, `app/task_runtime/session.py` |
 | Durable DB facade and repositories | `app/db.py`, `app/repositories/`, `app/postgres_engine.py` |
 | Catalog contract and transactional commands | `app/catalog/`; personality writes: `app/catalog/personality_normalization.py`; [catalog model](catalog-model.md) |
-| Local runtime schema | `app/local_state.py` |
+| Local runtime schema and flow operations | `app/local_state.py`, `app/operational_state.py`; personality composition: `app/repositories/personality_checkpoints.py` |
 | Task execution, logs, artifacts | `app/tasks.py`, `app/task_runtime/`, `app/run_log_store.py`, `app/run_artifact_channel.py`, `app/run_summary.py`; [task rules](../app/task_runtime/AGENTS.md) |
 | Retained conveyor state and shared workflow states | `app/repositories/conveyor.py`, `app/runtime_states.py`; conveyor execution is unavailable |
 | Gemini config, pool, quota, transport, pacing | `app/gemini_*.py`, `app/repositories/gemini*.py`; [Gemini contract](gemini-runtime.md) |
