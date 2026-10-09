@@ -51,6 +51,8 @@ def _walk_files(yadisk: Any, root: str, *, context: RunContext, counters: dict[s
         if current in visited:
             continue
         visited.add(current)
+        context.log(f'sync directory listing start path={current}')
+        _progress(context, counters, current)
         try:
             children = list(yadisk.listdir(current, fields=[
                 'name', 'path', 'type', 'size', 'md5', 'mime_type', 'resource_id', 'public_key', 'public_url']))
@@ -60,6 +62,7 @@ def _walk_files(yadisk: Any, root: str, *, context: RunContext, counters: dict[s
             counters['failed'] += 1
             context.log(f'sync directory unavailable path={current} error={type(exc).__name__}')
             continue
+        context.log(f'sync directory listing complete path={current} resources={len(children)}')
         for resource in reversed(children):
             if context.should_stop():
                 return
@@ -386,7 +389,9 @@ def run_monocorpus_sync(*, repository: MonocorpusSyncRepository, yadisk: Any, pr
     planned = {}
     context.log(f'sync start run_id={context.run_id}')
     try:
+        context.log('sync loading active cleanup plans')
         items = repository.list_active_cleanup()
+        context.log(f'sync cleanup queue loaded plans={len(items)}')
         for number, item in enumerate(items):
             if context.should_stop():
                 break
@@ -403,16 +408,19 @@ def run_monocorpus_sync(*, repository: MonocorpusSyncRepository, yadisk: Any, pr
         active = repository.list_active_cleanup()
         excluded_paths = {cleanup_source_path(item) for item in active}
         excluded_md5s = {item['md5'] for item in active if item['scope'] == 'document'}
+        context.log('sync loading catalog document snapshot')
         existing = repository.list_documents()
+        context.log(f'sync catalog snapshot loaded documents={len(existing)}')
         _progress(context, counters, stage='scanning')
         for resource in _walk_files(yadisk, settings.source_path, context=context, counters=counters):
             if context.should_stop():
                 break
             counters['discovered'] += 1
             path = resource['source_path']
+            context.log(f"sync file visited discovered={counters['discovered']} md5={resource['source_md5']} path={path}")
+            _progress(context, counters, path)
             if path in excluded_paths or resource['source_md5'] in excluded_md5s:
                 context.log(f'sync skipped path={path} reason=active cleanup plan')
-                _progress(context, counters, path)
                 continue
             try:
                 _plan_resource(resource, existing=existing, planned=planned, repository=repository, yadisk=yadisk,
@@ -424,6 +432,7 @@ def run_monocorpus_sync(*, repository: MonocorpusSyncRepository, yadisk: Any, pr
                 context.log(f"sync item failed path={path} md5={resource['source_md5']} error={type(exc).__name__}: {exc}")
             _progress(context, counters, path)
         if not context.should_stop():
+            context.log(f'sync discovery complete discovered={counters["discovered"]} catalog_planned={len(planned)}')
             _apply_catalog(planned, repository=repository, yadisk=yadisk, context=context, counters=counters)
     except Exception as exc:
         counters['failed'] += 1
@@ -457,13 +466,17 @@ def execute(context: RunContext) -> dict[str, Any]:
     with ExitStack() as resources:
         repository = MonocorpusSyncRepository(context.db.database_url, schema=context.db.schema)
         resources.callback(repository.dispose)
+        context.log('sync setup catalog preflight start')
         repository.catalog.preflight()
+        context.log('sync setup acquiring catalog lock')
         with repository.sync_lock():
+            context.log('sync setup catalog lock acquired; validating Yandex token')
             yadisk = YaDisk(settings.yadisk_token)
             resources.callback(yadisk.close)
             yadisk.default_args.update(timeout=(10, 30), poll_timeout=60, n_retries=2)
             if yadisk.check_token() is not True:
                 raise RuntimeError('Yandex Disk token validation failed')
+            context.log('sync setup Yandex token valid; initializing primary storage client')
             primary_s3 = _s3_client(settings.primary)
             resources.callback(primary_s3.close)
             return run_monocorpus_sync(repository=repository, yadisk=yadisk, primary_s3=primary_s3,

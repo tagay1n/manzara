@@ -37,6 +37,8 @@ Paste the encoded file into `MANZARA_MAINTENANCE_CONFIG_BASE64`. No additional r
 
 The runner initializes artifact/cache/configuration/local SQLite paths under `$RUNNER_TEMP/manzara` through `$GITHUB_ENV`, with schema `monocorpus` and pool size 4. Every run starts with fresh orchestration state; cleanup plans/reviews/phases stay in PostgreSQL. The workflow installs only its dependencies selected from `requirements.txt`, without document-inference packages.
 
+Actions step output streams the existing redacted task logs in bounded cursor pages, including Sync setup, directory listings, file visits, and per-file outcomes. Every 30 seconds, a console-only `task.status` snapshot reports run state, elapsed time, time since the last log output, and latest persisted progress/counters. A snapshot shows the process is still observing the run; advancing file/counter messages establish progress. Final log pages are flushed before the stage summary. Authoritative log files and persisted `task.artifact` events retain their existing contracts.
+
 GitHub summaries show stage outcomes/counters and overall job status. Logs, structured task artifacts, and local SQLite diagnostics are uploaded with seven-day retention, including available files after failure. Configuration, credentials, and document caches are excluded; SQLite is never restored from Actions artifacts/caches. Setup failures may have no task artifacts; inspect the Actions step output. Private configuration is removed at the final workflow boundary. Static inspection does not establish connectivity, duration, recovery behavior, or daily operational readiness; a credential-backed manual run requires explicit owner authorization.
 
 ## Scheduled Google export

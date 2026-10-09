@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+import json
 import signal
 import threading
 import time
@@ -11,8 +12,35 @@ from typing import Any, Callable
 from app.db import Database
 from app.runtime_states import TASK_RUN_STATUS_COMPLETED, TASK_RUN_STATUS_STOPPED
 from app.task_runtime.contracts import RunOptions, TaskDescriptor
+from app.task_runtime.logging import redact
 from app.task_runtime.session import SessionLock
 from app.tasks import TaskRunner
+
+
+_LOG_PAGE_SIZE = 200
+_STATUS_INTERVAL_SECONDS = 30
+
+
+def _stream_logs(runner, task_id, run_id, cursor) -> tuple[int, int]:
+    rows = runner.get_run_logs(task_id=task_id, run_id=run_id,
+                               after_log_id=cursor, limit=_LOG_PAGE_SIZE)
+    for row in rows:
+        print(f"{row['ts']} | task_id={task_id} run_id={run_id} | {row['line']}", flush=True)
+    return (rows[-1]["log_id"] if rows else cursor), len(rows)
+
+
+def _print_status(db, run_id, started_at, last_log_output) -> None:
+    run = db.get_run(run_id)
+    if run is None:
+        raise RuntimeError(f"Run {run_id} is missing during execution")
+    now = time.monotonic()
+    snapshot = {
+        "kind": "task.status", "task_id": run["task_id"], "run_id": run_id,
+        "status": run["status"], "elapsed_seconds": int(now - started_at),
+        "seconds_since_log_output": int(now - last_log_output),
+        "progress": run.get("progress") or {},
+    }
+    print(redact(json.dumps(snapshot, ensure_ascii=True)), flush=True)
 
 
 def _run_stages(db, runner, descriptors, stop, deadline, on_result) -> int:
@@ -22,14 +50,29 @@ def _run_stages(db, runner, descriptors, stop, deadline, on_result) -> int:
         started = runner.start_task(descriptor.task_id, options=RunOptions())
         run_id = started["run"]["run_id"]
         print(f"Starting {descriptor.task_id} run_id={run_id}", flush=True)
+        started_at = last_log_output = time.monotonic()
+        next_status = started_at + _STATUS_INTERVAL_SECONDS
+        cursor = 0
         stopping = False
         while not runner.is_idle():
+            cursor, count = _stream_logs(runner, descriptor.task_id, run_id, cursor)
+            now = time.monotonic()
+            if count:
+                last_log_output = now
+            if now >= next_status:
+                _print_status(db, run_id, started_at, last_log_output)
+                next_status = now + _STATUS_INTERVAL_SECONDS
             if not stopping and (stop.is_set() or time.monotonic() >= deadline):
                 stop.set()
                 stopping = True
                 print("Safe stop requested; finishing the current operation", flush=True)
                 runner.request_shutdown()
             time.sleep(0.5)
+        # Drain the final lines in bounded pages, including worker finalization.
+        while True:
+            cursor, count = _stream_logs(runner, descriptor.task_id, run_id, cursor)
+            if count < _LOG_PAGE_SIZE:
+                break
         # Read after the worker exits, including artifact/event finalization.
         run = db.get_run(run_id)
         if run is None:
