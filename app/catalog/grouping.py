@@ -3,6 +3,7 @@
 from sqlalchemy import select
 
 from app.catalog.contracts import CatalogConflict, integer, validate_patch
+from app.document_operation_lock import lock_document_transaction
 
 
 class GroupingStore:
@@ -13,6 +14,9 @@ class GroupingStore:
             raise ValueError("publication grouping is bounded and requires explicit resolutions")
         with self.engine.begin() as conn:
             conn.exec_driver_sql("SELECT pg_advisory_xact_lock(hashtext('catalog-publication-grouping'))")
+            docs = self.table('documents')
+            for md5 in conn.execute(select(docs.c.md5).where(docs.c.publication_id.in_(source_revisions)).order_by(docs.c.md5)).scalars():
+                lock_document_transaction(conn, md5)
             rows = {key: self._record(conn, "publication", key, revision=expected) for key, expected in sorted({target_id: revision, **source_revisions}.items())}
             if any(row["merged_into_id"] is not None for row in rows.values()):
                 raise CatalogConflict("publication was already grouped")

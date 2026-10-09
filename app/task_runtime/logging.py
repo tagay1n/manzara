@@ -90,6 +90,30 @@ def bind_run_log(sink: Callable[[str], None] | None) -> Iterator[None]:
         LOG_SINK.reset(token)
 
 
+class StdoutRunLog:
+    """Workflow log sink: structured, redacted, flushed, and never captured."""
+
+    path = None
+
+    def __init__(self, task_id, panel_id, run_id, console_sink):
+        self._console_sink = console_sink
+        self._lock = threading.Lock()
+        self._context = f"run_id={run_id} task_id={task_id} source=runtime"
+
+    def __call__(self, message, *, level="INFO"):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        safe = redact(message).replace("\r", "").replace("\n", "\\n")
+        with self._lock:
+            self._console_sink(f"{timestamp} | {redact(level)} | {self._context} | {safe}")
+
+    def flush(self):
+        # The console callback flushes synchronously on every line.
+        pass
+
+    def close(self):
+        pass
+
+
 class RunLog:
     def __init__(self, root: Path, task_id: str, panel_id: str, run_id: int,
                  console_sink: Callable[[str], None] | None = None):

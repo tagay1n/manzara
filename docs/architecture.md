@@ -20,6 +20,7 @@ The inline CLI supports personality normalization, non-PDF extraction, and expli
 | Library | [Library rules](../app/modules/library/AGENTS.md), [owner lookup](../app/modules/library/guidance/navigation.md) |
 | Catalog sync commands | `app/catalog/document_sync.py`; set-based writes: `app/catalog/document_sync_bulk.py`; execution: `app/modules/maintenance/runtime/sync_monocorpus.py` |
 | Maintenance | [Maintenance rules](../app/modules/maintenance/AGENTS.md) |
+| Backblaze transfer queue/checkpoints and document coordination | `app/catalog/document_transfer.py`, `app/document_operation_lock.py`; execution: `app/modules/maintenance/runtime/sync_documents_s3.py`; workflow runner: `scripts/run_backblaze_transfer.py` |
 | Source storage and eligibility | `app/document_storage.py`, `app/document_sync_filter.py`, `app/document_cleanup_paths.py` |
 | Durable schema baseline and future migrations | `alembic/versions/`, `alembic/sql/baseline_0062.sql`; [bootstrap and historical recovery policy](operations.md) |
 | Backups / exports | `.github/workflows/`, `scripts/backup_postgres_to_b2.py`; Google Sheets: `app/modules/maintenance/dump_state.py`, shared snapshot: `app/catalog/export.py`; [operations](operations.md), [recovery](postgres-backup-recovery.md) |
@@ -28,8 +29,8 @@ The inline CLI supports personality normalization, non-PDF extraction, and expli
 
 PostgreSQL owns durable domain data and workflow checkpoints. SQLite owns disposable orchestration and provider/retry state; see root rules for exact boundaries.
 
-`app/postgres_engine.py` owns the bounded SQLAlchemy pools. Repositories share its engine per database/schema within a process; do not create independent engines. CLI tasks run in background threads and share the same pool, default size 4. Sync holds one pool connection for its schema-wide advisory lock and requires at least two connections so short mutation transactions can proceed. Retained standalone scripts have separate process-local budgets; publisher analysis reserves 2 for its advisory-lock session and short transactions. Local task/event/Gemini reads do not use PostgreSQL.
+`app/postgres_engine.py` owns the bounded SQLAlchemy pools. Repositories share its engine per database/schema within a process; do not create independent engines. CLI tasks run in background threads and share the same pool, default size 4. Sync holds one pool connection for its schema-wide advisory lock and another during a document remote operation; it requires at least three connections so short mutation transactions can proceed. Transfer reserves one connection for its document session lock and requires at least two. Both workflows configure size 4. Per-document operation locks serialize conflicting storage and catalog changes while unrelated documents can proceed. Retained standalone scripts have separate process-local budgets; publisher analysis reserves 2 for its advisory-lock session and short transactions. Local task/event/Gemini reads do not use PostgreSQL.
 
-CLI and batch startup initialize only SQLite. Normalization, non-PDF extraction, and daily maintenance check the catalog read-only before work. Alembic owns durable schema changes and runs separately. `app/local_state.py` owns the disposable SQLite schema. Never infer the deployed schema from Alembic files alone.
+CLI and batch startup initialize only SQLite. Normalization, non-PDF extraction, daily maintenance, and Backblaze transfer check the catalog read-only before work. Alembic owns durable schema changes and runs separately. `app/local_state.py` owns the disposable SQLite schema. Never infer the deployed schema from Alembic files alone.
 
 Validation policy and coverage limits: [verification](verification.md). Update this map when ownership moves.

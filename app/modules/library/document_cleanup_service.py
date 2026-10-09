@@ -6,6 +6,7 @@ import json
 from typing import Any, Callable, Mapping
 
 from app.document_cleanup_paths import cleanup_target_path
+from app.document_operation_lock import DocumentOperationBusy
 from app.modules.library.document_cleanup import (
     build_isbn_cleanup_decisions,
     cleanup_reasons,
@@ -30,6 +31,7 @@ def prepare_document_cleanup(
         "plans_created": 0,
         "plans_reused": 0,
         "plans_suppressed": 0,
+        "plans_deferred": 0,
         "planned_duplicate_isbn": 0,
         "planned_non_document": 0,
         "planned_non_tatar": 0,
@@ -85,7 +87,12 @@ def prepare_document_cleanup(
             if repository.is_cleanup_suppressed(payload):
                 counters["plans_suppressed"] += 1
             else:
-                cleanup_id, created = repository.enqueue_cleanup(payload)
+                try:
+                    cleanup_id, created = repository.enqueue_cleanup(payload)
+                except DocumentOperationBusy as exc:
+                    counters['plans_deferred'] += 1
+                    log(f'cleanup plan deferred md5={md5} error={exc}')
+                    continue
                 log(f"cleanup plan md5={md5} cleanup_id={cleanup_id} reason={reason} created={created}")
                 counters["plans_created" if created else "plans_reused"] += 1
                 planned_by_reason[reason] += 1

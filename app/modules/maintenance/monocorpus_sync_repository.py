@@ -18,6 +18,7 @@ from app.document_cleanup_contracts import (
     CLEANUP_PHASE_DATABASE, CLEANUP_PHASE_YANDEX,
 )
 from app.document_cleanup_paths import cleanup_source_path, source_path
+from app.document_operation_lock import document_operation
 
 
 class MonocorpusSyncRepository(DocumentCleanupRepository):
@@ -30,8 +31,8 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
     @contextmanager
     def sync_lock(self):
         """One sync writer per schema, including clients with other local stores."""
-        if self.engine.pool.size() < 2:
-            raise RuntimeError('Sync requires MANZARA_DB_POOL_SIZE >= 2 for its lock and short transactions')
+        if self.engine.pool.size() < 3:
+            raise RuntimeError('Sync requires MANZARA_DB_POOL_SIZE >= 3 for schema/document locks and short transactions')
         with self.engine.connect() as conn:
             locked = conn.execute(text("SELECT pg_try_advisory_lock(hashtext(current_schema()), hashtext('maintenance.monocorpus_sync'))")).scalar_one()
             conn.rollback()
@@ -49,6 +50,14 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
 
     def list_documents(self) -> dict[str, dict[str, Any]]:
         return self.catalog.list_documents()
+
+    @contextmanager
+    def cleanup_operation(self, cleanup_id):
+        with self.engine.connect() as conn:
+            md5 = conn.execute(text('SELECT md5 FROM document_cleanup_queue WHERE cleanup_id=:id'),
+                               {'id': cleanup_id}).scalar_one()
+        with document_operation(self.engine, md5) as conn:
+            yield conn
 
     def list_active_cleanup(self) -> list[dict[str, Any]]:
         with self.engine.connect() as conn:

@@ -19,6 +19,7 @@ from app.document_cleanup_paths import cleanup_source_path, cleanup_target_path,
 from app.document_resources import EMPTY_MD5, cleanup_source_meta, resource_meta, resource_value, verify_resource
 from app.document_storage import DocumentStorageSettings, load_document_storage_settings, remove_cached_document
 from app.document_sync_filter import classify_document, normalize_document_mime
+from app.document_operation_lock import DocumentOperationBusy, check_document_operation, document_operation
 from app.modules.maintenance.document_cleanup_executor import execute_yandex_cleanup
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
 from app.postgres_engine import is_transient_postgres_error
@@ -178,6 +179,24 @@ def _apply_remote_cleanup(item: Mapping[str, Any], *, yadisk: Any) -> None:
 
 def _apply_cleanup(item: Mapping[str, Any], *, repository: MonocorpusSyncRepository, yadisk: Any,
                    primary_s3: Any, settings: DocumentStorageSettings, context: RunContext) -> tuple[int, str]:
+    try:
+        with repository.cleanup_operation(item['cleanup_id']) as conn:
+            return _apply_cleanup_owned(item, repository=repository, yadisk=yadisk,
+                                        primary_s3=primary_s3, settings=settings, context=context,
+                                        operation_connection=conn)
+    except DocumentOperationBusy as exc:
+        context.log(f"cleanup deferred cleanup_id={item['cleanup_id']} error={exc}")
+        return 0, 'deferred'
+    except Exception as exc:
+        context.log(f"cleanup operation failed cleanup_id={item['cleanup_id']} error={redact(exc)}")
+        if is_transient_postgres_error(exc):
+            raise
+        return 0, 'failed'
+
+
+def _apply_cleanup_owned(item: Mapping[str, Any], *, repository: MonocorpusSyncRepository, yadisk: Any,
+                         primary_s3: Any, settings: DocumentStorageSettings, context: RunContext,
+                         operation_connection) -> tuple[int, str]:
     cleanup_id = integer(item['cleanup_id'], 'cleanup_id')
     removed = 0
     try:
@@ -193,6 +212,7 @@ def _apply_cleanup(item: Mapping[str, Any], *, repository: MonocorpusSyncReposit
                 repository.mark_cleanup_canceled(cleanup_id, 'Cleanup source and target are both missing')
                 context.log(f'cleanup canceled cleanup_id={cleanup_id} reason=source and target missing')
                 return 0, 'canceled'
+            check_document_operation(operation_connection)
             _apply_remote_cleanup(item, yadisk=yadisk)
             if item['scope'] == 'document':
                 repository.mark_cleanup_phase(cleanup_id, CLEANUP_PHASE_STORAGE)
@@ -206,10 +226,12 @@ def _apply_cleanup(item: Mapping[str, Any], *, repository: MonocorpusSyncReposit
         if item['scope'] == 'document':
             if item['phase'] == CLEANUP_PHASE_STORAGE:
                 repository.validate_cleanup_document(item)
+                check_document_operation(operation_connection)
                 removed = _cleanup_managed_storage(item['md5'], primary_s3=primary_s3, settings=settings)
                 cache = remove_cached_document(settings.cache_path, item['md5'])
                 context.log(f"cleanup storage complete cleanup_id={cleanup_id} md5={item['md5']} objects_removed={removed} cache_removed={len(cache)}")
                 repository.mark_cleanup_phase(cleanup_id, CLEANUP_PHASE_DATABASE)
+            check_document_operation(operation_connection)
             repository.delete_document_state(item['md5'], expected=item['evidence_json']['execution_document'])
         elif item['reason'] == 'filename_newlines':
             repository.mark_cleanup_phase(cleanup_id, CLEANUP_PHASE_DATABASE)
@@ -236,7 +258,7 @@ def _execute_plan(payload: Mapping[str, Any], *, repository: MonocorpusSyncRepos
                                      primary_s3=primary_s3, settings=settings, context=context)
     counters['objects_removed'] += removed
     counters[f'cleanups_{outcome}'] += 1
-    counters['failed'] += int(outcome == 'failed')
+    counters['failed'] += int(outcome in {'failed', 'deferred'})
 
 
 def _canonical_path(current: Mapping[str, Any] | None) -> str | None:
@@ -325,20 +347,22 @@ def _publish_batch(results, *, repository, yadisk, context, counters):
         path = current['ya_path']
         _progress(context, counters, path, stage='publishing', current=number, total=len(targets))
         try:
-            # The scan may be old: recheck catalog privacy/revisions and remote
-            # identity immediately before each individual publication request.
-            repository.validate_publication(current)
-            verify_resource(resource_meta(yadisk, path), md5=md5, resource_id=current['ya_resource_id'])
-            yadisk.publish(path)
-            published = resource_meta(yadisk, path)
-            verify_resource(published, md5=md5, resource_id=current['ya_resource_id'])
-            public_url = resource_value(published, 'public_url')
-            if not public_url:
-                raise RuntimeError('Yandex publication did not return a public URL')
-            counters['published'] += 1
-            links.append({'payload': {**current, 'ya_public_url': public_url,
-                                      'ya_public_key': resource_value(published, 'public_key')}, 'expected': current})
-            context.log(f'sync publication success md5={md5} path={path}')
+            with document_operation(repository.engine, md5) as operation_connection:
+                # The scan may be old: recheck catalog privacy/revisions and remote
+                # identity immediately before each individual publication request.
+                repository.validate_publication(current)
+                verify_resource(resource_meta(yadisk, path), md5=md5, resource_id=current['ya_resource_id'])
+                check_document_operation(operation_connection)
+                yadisk.publish(path)
+                published = resource_meta(yadisk, path)
+                verify_resource(published, md5=md5, resource_id=current['ya_resource_id'])
+                public_url = resource_value(published, 'public_url')
+                if not public_url:
+                    raise RuntimeError('Yandex publication did not return a public URL')
+                counters['published'] += 1
+                links.append({'payload': {**current, 'ya_public_url': public_url,
+                                          'ya_public_key': resource_value(published, 'public_key')}, 'expected': current})
+                context.log(f'sync publication success md5={md5} path={path}')
         except Exception as exc:
             if is_transient_postgres_error(exc):
                 raise
@@ -383,7 +407,7 @@ def run_monocorpus_sync(*, repository: MonocorpusSyncRepository, yadisk: Any, pr
     counters = dict.fromkeys((
         'discovered', 'created', 'updated', 'unchanged', 'published', 'duplicate_resources_queued',
         'corrupted_zero_detected', 'corrupted_plans_created', 'corrupted_plans_reused', 'filtered',
-        'cleanups_completed', 'cleanups_canceled', 'cleanups_failed', 'objects_removed', 'failed',
+        'cleanups_completed', 'cleanups_canceled', 'cleanups_failed', 'cleanups_deferred', 'objects_removed', 'failed',
         'catalog_planned', 'catalog_applied', 'catalog_pending', 'publications_pending'), 0)
     error = None
     planned = {}
@@ -400,7 +424,7 @@ def run_monocorpus_sync(*, repository: MonocorpusSyncRepository, yadisk: Any, pr
                                              settings=settings, context=context)
             counters['objects_removed'] += removed
             counters[f'cleanups_{outcome}'] += 1
-            counters['failed'] += int(outcome == 'failed')
+            counters['failed'] += int(outcome in {'failed', 'deferred'})
             _progress(context, counters, item['source_path'], stage='cleanup', current=number + 1, total=len(items))
         if context.should_stop():
             return _finish(context, counters, planned)

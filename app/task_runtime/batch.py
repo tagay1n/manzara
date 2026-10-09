@@ -12,7 +12,7 @@ from typing import Any, Callable
 from app.db import Database
 from app.runtime_states import TASK_RUN_STATUS_COMPLETED, TASK_RUN_STATUS_STOPPED
 from app.task_runtime.contracts import RunOptions, TaskDescriptor
-from app.task_runtime.logging import redact
+from app.task_runtime.logging import StdoutRunLog, redact
 from app.task_runtime.session import SessionLock
 from app.tasks import TaskRunner
 
@@ -82,8 +82,11 @@ def run_batch(
     on_result: Callable[[dict[str, Any]], None],
     preflight: Callable[[Database], None],
     budget_seconds: int = 5 * 60 * 60,
+    log_to_file: bool = True,
 ) -> int:
     """Own local state and stop cooperatively between sequential task stages."""
+    if type(log_to_file) is not bool:
+        raise ValueError('log_to_file must be boolean')
     stop = threading.Event()
     deadline = time.monotonic() + budget_seconds
     with ExitStack() as resources:
@@ -101,7 +104,10 @@ def run_batch(
         if recovered:
             db.insert_event("system.recovery", None, None, None, {"recovered_runs": recovered})
         console = _ConsoleLogs()
-        runner = TaskRunner(db, descriptors, console_sink=console)
+        log_factory = None if log_to_file else (
+            lambda task_id, panel_id, run_id: StdoutRunLog(task_id, panel_id, run_id, console)
+        )
+        runner = TaskRunner(db, descriptors, console_sink=console, log_factory=log_factory)
         resources.callback(runner.shutdown)
         if stop.is_set() or time.monotonic() >= deadline:
             return 130

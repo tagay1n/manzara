@@ -1,87 +1,46 @@
-"""Upload PostgreSQL-discovered documents into primary Backblaze storage."""
+"""Workflow-only sequential transfer into verified primary Backblaze storage."""
 
-from __future__ import annotations
-
-import json
-import os
-import signal
-import threading
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
+import json
 from pathlib import Path
-from typing import Any, Callable, Mapping
+import shutil
+from tempfile import TemporaryDirectory
+import threading
+from typing import Any, Mapping
 
 from boto3 import Session
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from yadisk_client import YaDisk
 
-from app.db import Database
+from app.artifacts import workspace_dir
+from app.catalog.contracts import CatalogConflict, document_md5, integer
+from app.catalog.document_transfer import pending
+from app.document_cleanup_paths import source_path
+from app.document_operation_lock import DocumentOperationBusy, check_document_operation, document_operation
+from app.document_resources import resource_meta, resource_value, verify_resource
 from app.document_storage import (
-    DocumentStorageSettings,
-    build_cache_index,
-    document_object_key,
-    find_valid_cache_entry,
-    load_document_storage_settings,
-    materialize_cached_document,
-    normalized_extension,
-    object_url,
-    prune_document_cache,
+    DocumentStorageSettings, build_cache_index, calculate_md5, document_object_key,
+    find_valid_cache_entry, load_document_storage_settings, object_url,
+    resolve_document_object_location,
 )
-from app.modules.maintenance.document_sync_repository import (
-    PostgresDocumentSyncRepository,
-)
+from app.modules.maintenance.document_sync_repository import PostgresDocumentSyncRepository
 from app.modules.runtime_shared_utils import encrypt
-from app.run_artifact_channel import emit_run_artifact
 from app.runtime_config import load_runtime_config
-from app.settings import load_settings
-
+from app.task_runtime.contracts import RunContext
+from app.task_runtime.logging import redact
 
 TASK_ID = "maintenance.sync_documents_s3"
-PANEL_ID = "maintenance"
+_DISK_RESERVE_BYTES = 1024**3
 
 
 class YandexDownloadUnavailable(RuntimeError):
-    """A pending document could not be acquired from its persisted Yandex path."""
+    """A pending document's persisted source could not be acquired."""
 
 
 def _etag(value: Any) -> str:
     return str(value or "").strip().strip('"')
-
-
-def _progress_payload(
-    *,
-    stage: str,
-    current: int,
-    total: int,
-    counters: Mapping[str, int],
-    current_path: str = "",
-    current_bytes: int = 0,
-    current_size: int = 0,
-) -> dict[str, Any]:
-    item_fraction = (
-        min(max(current_bytes, 0), current_size) / current_size
-        if current_size > 0
-        else 0
-    )
-    completed = current + item_fraction if stage == "uploading" else current
-    percent = round((completed / total) * 100, 2) if total else 100
-    return {
-        "stage": stage,
-        "current": int(current),
-        "total": int(total),
-        "percent": max(0, min(percent, 100)),
-        "current_path": current_path,
-        "current_bytes": int(current_bytes),
-        "current_size": int(current_size),
-        **{key: int(value) for key, value in counters.items()},
-    }
-
-
-def _publish_progress(state_db: Any, run_id: int, payload: dict[str, Any]) -> None:
-    state_db.publish_run_progress(
-        run_id=run_id,
-        progress=payload,
-    )
 
 
 def _head_object_or_none(s3: Any, bucket: str, key: str) -> dict[str, Any] | None:
@@ -100,9 +59,10 @@ def _remote_matches(
     remote: Mapping[str, Any] | None,
     *,
     md5: str,
-    size: int,
+    size: int | None,
 ) -> bool:
-    if not remote or int(remote.get("ContentLength") or -1) != int(size):
+    if (not remote or size is None or type(remote.get("ContentLength")) is not int
+            or remote['ContentLength'] != size):
         return False
     metadata = remote.get("Metadata")
     source_md5 = (
@@ -122,7 +82,7 @@ def _confirm_upload(
 ) -> dict[str, Any]:
     head = dict(s3.head_object(Bucket=bucket, Key=key))
     metadata = head.get("Metadata")
-    if int(head.get("ContentLength") or -1) != int(size):
+    if type(head.get("ContentLength")) is not int or head['ContentLength'] != size:
         raise RuntimeError("S3 size verification failed")
     if not isinstance(metadata, Mapping) or str(
         metadata.get("source-md5") or ""
@@ -131,7 +91,7 @@ def _confirm_upload(
     return head
 
 
-def _abort_incomplete_uploads(s3: Any, bucket: str, key: str) -> int:
+def _abort_incomplete_uploads(s3: Any, bucket: str, key: str, log) -> int:
     aborted = 0
     key_marker: str | None = None
     upload_id_marker: str | None = None
@@ -149,17 +109,19 @@ def _abort_incomplete_uploads(s3: Any, bucket: str, key: str) -> int:
                 continue
             s3.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
             aborted += 1
-            print(
+            log(
                 "document upload: aborted incomplete multipart upload "
                 f"bucket={bucket} key={key} upload_id={upload_id}",
-                flush=True,
             )
-        if not response.get("IsTruncated"):
+        truncated = response.get('IsTruncated', False)
+        if type(truncated) is not bool:
+            raise ValueError('Multipart pagination requires an explicit boolean IsTruncated')
+        if not truncated:
             break
         key_marker = str(response.get("NextKeyMarker") or "") or None
         upload_id_marker = str(response.get("NextUploadIdMarker") or "") or None
         if not key_marker:
-            break
+            raise RuntimeError('Incomplete multipart pagination response; retry exact-key recovery')
     return aborted
 
 
@@ -167,296 +129,237 @@ def _public_object_removed(s3: Any, bucket: str, key: str) -> bool:
     return _head_object_or_none(s3, bucket, key) is None
 
 
-def _acquire_source(
-    *,
-    row: Mapping[str, Any],
-    cache_index: Mapping[str, list[Path]],
-    yadisk: Any,
-    settings: DocumentStorageSettings,
-) -> tuple[Path, str]:
-    md5 = str(row["md5"])
-    cached = find_valid_cache_entry(cache_index, md5)
+def _target(row, settings):
+    md5 = document_md5(row['md5'])
+    restricted = row['sharing_restricted']
+    if type(restricted) is not bool:
+        raise CatalogConflict('Document privacy is unknown')
+    bucket = settings.private_bucket if restricted else settings.public_bucket
+    path = source_path(row['ya_path']) if row.get('ya_path') else None
+    restricted_root = source_path(settings.restricted_path)
+    if path and (path == restricted_root or path.startswith(restricted_root + '/')) and not restricted:
+        raise CatalogConflict('Restricted-folder source has unrestricted catalog privacy; refresh Sync before transfer')
+    locator = str(row.get('document_url') or '').strip()
+    if not locator:
+        return bucket, document_object_key(md5, row.get('ya_path') or '', row.get('mime_type'))
+    if restricted and not locator.startswith('enc:'):
+        raise CatalogConflict('Restricted primary locator must be encrypted; review before repair')
+    location = resolve_document_object_location(document_url=locator,
+        encryption_key=settings.encryption_key, endpoint_url=settings.primary.endpoint_url)
+    if (location is None or location[0] != bucket
+            or document_object_key(md5, location[1], None) != location[1]):
+        raise CatalogConflict('Primary locator is outside its document identity/privacy destination; review before repair')
+    return location
+
+
+@contextmanager
+def _acquire_source(row, *, cache_index, yadisk, workspace, log):
+    cached = find_valid_cache_entry(cache_index, row['md5'])
     if cached:
-        return cached[0], "cache"
-    source_path = str(row.get("ya_path") or "")
-    if not source_path.strip():
-        raise YandexDownloadUnavailable("persisted Yandex path is empty")
-
-    def download(candidate: Path) -> None:
+        size = cached[0].stat().st_size
+        if row['source_size'] is not None and size != row['source_size']:
+            raise RuntimeError('Cached document size differs from the catalog source')
+        yield cached[0], 'cache'
+        return
+    path = row.get('ya_path')
+    if not path:
+        raise YandexDownloadUnavailable('Persisted Yandex source path is missing; refresh catalog discovery')
+    meta = resource_meta(yadisk, path)
+    verify_resource(meta, md5=row['md5'], resource_id=row['ya_resource_id'])
+    size = integer(resource_value(meta, 'size'), 'Yandex source size', minimum=0)
+    if row['source_size'] is not None and size != row['source_size']:
+        raise CatalogConflict('Yandex source size changed; refresh catalog discovery')
+    if shutil.disk_usage(workspace).free < size + _DISK_RESERVE_BYTES:
+        raise RuntimeError(f'Insufficient runner disk space for document bytes={size}; retry on a larger runner')
+    with TemporaryDirectory(prefix=row['md5'] + '-', dir=workspace) as directory:
+        destination = Path(directory) / 'document.download'
+        log(f"document download start md5={row['md5']} size={size}")
         try:
-            yadisk.download(source_path, str(candidate))
+            yadisk.download(path, str(destination))
         except Exception as exc:
-            raise YandexDownloadUnavailable(
-                f"{type(exc).__name__}: {exc}"
-            ) from exc
-
-    source = materialize_cached_document(
-        cache_path=settings.cache_path,
-        expected_md5=md5,
-        extension=normalized_extension(source_path, row.get("mime_type")),
-        download=download,
-        cache_max_bytes=settings.cache_max_bytes,
-    )
-    return source, "yandex"
+            raise YandexDownloadUnavailable(f'Yandex download failed: {type(exc).__name__}: {exc}') from exc
+        if destination.stat().st_size != size or calculate_md5(destination) != row['md5']:
+            raise RuntimeError('Downloaded source failed MD5/size verification')
+        yield destination, 'yandex'
 
 
-def _stored_document_url(
-    canonical_url: str,
-    *,
-    restricted: bool,
-    settings: DocumentStorageSettings,
-) -> str:
-    if not restricted:
-        return canonical_url
-    return encrypt(canonical_url, {"encryption_key": settings.encryption_key})
+def _progress(context, counters, *, stage, total, processed, md5='', **values):
+    size = values.get('current_size', 0)
+    current_bytes = max(0, values.get('current_bytes', 0))
+    fraction = min(current_bytes, size) / size if size > 0 else 0
+    percent = min(100, round((processed + fraction) / total * 100, 2)) if total else 100
+    values['current_bytes'] = current_bytes
+    context.progress({'stage': stage, 'current': processed, 'total': total,
+                      'percent': percent, 'current_path': '', 'current_bytes': 0,
+                      'current_size': 0, 'current_md5': md5, **counters, **values})
 
 
-def run_document_upload(
-    *,
-    repository: Any,
-    state_db: Any,
-    yadisk: Any,
-    primary_s3: Any,
-    settings: DocumentStorageSettings,
-    run_id: int,
-    should_stop: Callable[[], bool],
-) -> dict[str, Any]:
-    """Upload pending PostgreSQL rows at one-document safe boundaries."""
-    prune_document_cache(
-        settings.cache_path,
-        max_bytes=settings.cache_max_bytes,
-    )
-    pending = repository.list_pending_documents()
-    total = len(pending)
+def _cleanup_stale_upload(repository, conn, row, settings, s3, bucket, key, counters, log):
+    # Only an object absent before this attempt can belong to this attempt.
+    # Never delete a now-checkpointed object, even if our commit response was lost.
+    check_document_operation(conn)
+    with conn.begin():
+        current = repository.snapshot(conn, row['md5'])
+    if current and current['document_url']:
+        location = resolve_document_object_location(document_url=current['document_url'],
+            encryption_key=settings.encryption_key, endpoint_url=settings.primary.endpoint_url)
+        if location == (bucket, key):
+            log(f"stale upload retained md5={row['md5']} reason=current checkpoint uses object")
+            return
+    check_document_operation(conn)
+    s3.delete_object(Bucket=bucket, Key=key)
+    if not _public_object_removed(s3, bucket, key):
+        raise RuntimeError('Stale attempt object remains after deletion')
+    counters['stale_upload_cleaned'] += 1
+
+
+def _upload_source(source, *, s3, bucket, key, row, size, context,
+                   counters, total, processed):
+    upload_bytes = 0
+    progress_lock = threading.Lock()
+
+    def on_upload(delta):
+        nonlocal upload_bytes
+        with progress_lock:
+            upload_bytes += delta
+            _progress(context, counters, stage='uploading', total=total,
+                      processed=processed, md5=row['md5'],
+                      current_bytes=upload_bytes, current_size=size)
+
+    context.log(f"document upload start md5={row['md5']} size={size}")
+    s3.upload_file(str(source), bucket, key,
+        ExtraArgs={'Metadata': {'source-md5': row['md5']},
+                   'ContentType': row.get('mime_type') or 'application/octet-stream'},
+        Callback=on_upload)
+    return _confirm_upload(s3, bucket, key, row['md5'], size)
+
+
+def _transfer_one(row, *, repository, conn, settings, yadisk, s3, cache_index,
+                  workspace, context, counters, total, processed, resources):
+    row = repository.revalidate(conn, row)
+    bucket, key = _target(row, settings)
+    remote = _head_object_or_none(s3, bucket, key)
+    created = False
+    confirmed = False
+    size = row['source_size']
+    try:
+        if not _remote_matches(remote, md5=row['md5'], size=size):
+            _progress(context, counters, stage='downloading', total=total,
+                      processed=processed, md5=row['md5'])
+            source, kind = resources.enter_context(_acquire_source(
+                row, cache_index=cache_index, yadisk=yadisk, workspace=workspace, log=context.log))
+            counters[f'source_{kind}'] += 1
+            size = source.stat().st_size
+            repository.revalidate(conn, row)
+            if not _remote_matches(remote, md5=row['md5'], size=size):
+                _abort_incomplete_uploads(s3, bucket, key, context.log)
+                repository.revalidate(conn, row)
+                head = _upload_source(source, s3=s3, bucket=bucket, key=key, row=row,
+                                      size=size, context=context, counters=counters,
+                                      total=total, processed=processed)
+                created = remote is None
+                remote = head
+                confirmed = True
+                counters['uploaded'] += 1
+                counters['reuploaded'] += int(not created)
+                counters['bytes_uploaded'] += size
+            else:
+                counters['recovered_existing'] += 1
+        else:
+            counters['recovered_existing'] += 1
+        repository.revalidate(conn, row)
+        if row['sharing_restricted']:
+            public_remote = _head_object_or_none(s3, settings.public_bucket, key)
+            if public_remote is not None:
+                # Refuse to delete a foreign/corrupt object based solely on its name.
+                if not _remote_matches(public_remote, md5=row['md5'], size=size):
+                    raise CatalogConflict('Public object identity is insufficient for restricted-object cleanup')
+                repository.revalidate(conn, row)
+                s3.delete_object(Bucket=settings.public_bucket, Key=key)
+                if not _public_object_removed(s3, settings.public_bucket, key):
+                    raise RuntimeError('Obsolete public object remains after deletion')
+                counters['private_cleaned'] += 1
+        locator = row['document_url']
+        if not str(locator or '').strip():
+            locator = object_url(settings.primary.endpoint_url, bucket, key)
+            if row['sharing_restricted']:
+                locator = encrypt(locator, {'encryption_key': settings.encryption_key})
+        payload = {'locator': locator, 'size': integer(remote['ContentLength'], 'remote size', minimum=0),
+                   'etag': _etag(remote.get('ETag')), 'verified_at': datetime.now(timezone.utc)}
+        if not payload['etag']:
+            raise RuntimeError('Confirmed object is missing an ETag')
+        repository.save_storage_checkpoint(conn, row, payload)
+        counters['checkpointed'] += 1
+        counters['repaired'] += int(bool(str(row.get('document_url') or '').strip()))
+        context.log(f"document checkpoint success md5={row['md5']}")
+    except CatalogConflict:
+        counters['checkpoint_raced'] += 1
+        if created and confirmed:
+            _cleanup_stale_upload(repository, conn, row, settings, s3, bucket, key, counters, context.log)
+        raise
+
+
+def run_document_upload(*, repository, yadisk, primary_s3, settings, context):
+    counters = dict.fromkeys(('uploaded', 'reuploaded', 'recovered_existing', 'checkpointed', 'repaired',
+                             'checkpoint_raced', 'stale_upload_cleaned', 'source_cache', 'source_yandex',
+                             'skipped_download', 'private_cleaned', 'deferred', 'failed', 'bytes_uploaded'), 0)
+    total = repository.count_pending_documents()
+    context.log(f'document transfer start pending={total}')
+    if not total:
+        _progress(context, counters, stage='completed', total=0, processed=0)
+        return {'kind': 'maintenance.document_s3_upload_summary', 'outcome': 'completed',
+                'pending_before': 0, 'pending_after': 0, 'processed': 0, 'stopped': False, **counters}
     cache_index = build_cache_index(settings.cache_path)
-    counters = {
-        "uploaded": 0,
-        "reuploaded": 0,
-        "recovered_existing": 0,
-        "checkpointed": 0,
-        "checkpoint_raced": 0,
-        "stale_upload_cleaned": 0,
-        "source_cache": 0,
-        "source_yandex": 0,
-        "skipped_download": 0,
-        "private_cleaned": 0,
-        "failed": 0,
-        "bytes_uploaded": 0,
-    }
-    print(
-        f"document upload: start run_id={run_id} pending={total} "
-        f"cache_entries={len(cache_index)}",
-        flush=True,
-    )
-    _publish_progress(
-        state_db,
-        run_id,
-        _progress_payload(
-            stage="uploading", current=0, total=total, counters=counters
-        ),
-    )
-    processed = 0
-    stopped = bool(should_stop())
-    for row in pending:
-        if stopped or should_stop():
-            stopped = True
+    workspace = workspace_dir('maintenance', 'document-transfer', run_id=context.run_id)
+    workspace.chmod(0o700)
+    processed, cursor = 0, ''
+    while not context.should_stop():
+        rows = repository.list_pending_documents(after=cursor)
+        if not rows:
             break
-        md5 = str(row["md5"])
-        source_path = str(row.get("ya_path") or "")
-        print(
-            f"document upload: process current={processed + 1}/{total} "
-            f"md5={md5} path={source_path}",
-            flush=True,
-        )
-        try:
-            source_file, source_kind = _acquire_source(
-                row=row,
-                cache_index=cache_index,
-                yadisk=yadisk,
-                settings=settings,
-            )
-            counters[f"source_{source_kind}"] += 1
-            size = source_file.stat().st_size
-            restricted = bool(row.get("sharing_restricted"))
-            bucket = settings.private_bucket if restricted else settings.public_bucket
-            key = document_object_key(md5, source_path, row.get("mime_type"))
-            remote = _head_object_or_none(primary_s3, bucket, key)
-            uploaded_this_attempt = False
-            if _remote_matches(remote, md5=md5, size=size):
-                verified_head = remote or {}
-                counters["recovered_existing"] += 1
-                print(
-                    f"document upload: existing object verified md5={md5} "
-                    f"target=s3://{bucket}/{key}",
-                    flush=True,
-                )
-            else:
-                was_present = remote is not None
-                _abort_incomplete_uploads(primary_s3, bucket, key)
-                uploaded_bytes = 0
-                progress_lock = threading.Lock()
-
-                def publish_upload_progress(delta: int) -> None:
-                    nonlocal uploaded_bytes
-                    with progress_lock:
-                        increment = max(0, int(delta))
-                        uploaded_bytes += increment
-                        _publish_progress(
-                            state_db,
-                            run_id,
-                            _progress_payload(
-                                stage="uploading",
-                                current=processed,
-                                total=total,
-                                counters=counters,
-                                current_path=source_path,
-                                current_bytes=uploaded_bytes,
-                                current_size=size,
-                            ),
-                        )
-
-                primary_s3.upload_file(
-                    str(source_file),
-                    bucket,
-                    key,
-                    ExtraArgs={
-                        "Metadata": {"source-md5": md5},
-                        "ContentType": str(
-                            row.get("mime_type") or "application/octet-stream"
-                        ),
-                    },
-                    Callback=publish_upload_progress,
-                )
-                verified_head = _confirm_upload(
-                    primary_s3, bucket, key, md5, size
-                )
-                counters["uploaded"] += 1
-                counters["reuploaded"] += int(was_present)
-                counters["bytes_uploaded"] += size
-                uploaded_this_attempt = True
-
-            if restricted:
-                public_remote = _head_object_or_none(
-                    primary_s3, settings.public_bucket, key
-                )
-                if public_remote is not None:
-                    primary_s3.delete_object(Bucket=settings.public_bucket, Key=key)
-                    if not _public_object_removed(
-                        primary_s3, settings.public_bucket, key
-                    ):
-                        raise RuntimeError(
-                            "Obsolete public object remains after deletion"
-                        )
-                    counters["private_cleaned"] += 1
-
-            canonical_url = object_url(
-                settings.primary.endpoint_url, bucket, key
-            )
-            checkpoint = {
-                "document_url": _stored_document_url(
-                    canonical_url,
-                    restricted=restricted,
-                    settings=settings,
-                ),
-                "primary_storage_size": int(
-                    verified_head.get("ContentLength") or size
-                ),
-                "primary_storage_etag": _etag(verified_head.get("ETag")),
-                "primary_storage_verified_at": datetime.now(
-                    timezone.utc
-                ).isoformat(),
-            }
-            if repository.save_storage_checkpoint(
-                md5,
-                checkpoint,
-                expected={
-                    "ya_path": row.get("ya_path"),
-                    "mime_type": row.get("mime_type"),
-                    "sharing_restricted": row.get("sharing_restricted"),
-                },
-            ):
-                counters["checkpointed"] += 1
-                print(
-                    f"document upload: success md5={md5} target=s3://{bucket}/{key}",
-                    flush=True,
-                )
-            else:
-                counters["checkpoint_raced"] += 1
-                if uploaded_this_attempt:
-                    primary_s3.delete_object(Bucket=bucket, Key=key)
-                    if not _public_object_removed(primary_s3, bucket, key):
-                        raise RuntimeError(
-                            "Stale uploaded object remains after checkpoint race"
-                        )
-                    counters["stale_upload_cleaned"] += 1
-                print(
-                    f"document upload: checkpoint skipped md5={md5} "
-                    "reason=row changed or is no longer pending",
-                    flush=True,
-                )
-        except YandexDownloadUnavailable as exc:
-            counters["skipped_download"] += 1
-            print(
-                f"document upload: skipped md5={md5} path={source_path} "
-                f"reason=yandex_unavailable error={exc}",
-                flush=True,
-            )
-        except Exception as exc:
-            counters["failed"] += 1
-            print(
-                f"document upload: failed md5={md5} path={source_path} "
-                f"error={type(exc).__name__}: {exc}",
-                flush=True,
-            )
-        processed += 1
-        _publish_progress(
-            state_db,
-            run_id,
-            _progress_payload(
-                stage="uploading",
-                current=processed,
-                total=total,
-                counters=counters,
-                current_path=source_path,
-            ),
-        )
-        if should_stop():
-            stopped = True
-            break
-
-    pending_after = repository.count_pending_documents()
-    summary = {
-        "kind": "maintenance.document_s3_upload_summary",
-        "pending_before": total,
-        "pending_after": pending_after,
-        "processed": processed,
-        "stopped": stopped,
-        **counters,
-    }
-    _publish_progress(
-        state_db,
-        run_id,
-        _progress_payload(
-            stage="stopped" if stopped else "completed",
-            current=processed,
-            total=total,
-            counters=counters,
-        ),
-    )
-    print(f"document upload: final {json.dumps(summary, sort_keys=True)}", flush=True)
+        for row in rows:
+            if context.should_stop():
+                break
+            cursor = row['md5']
+            result = {'kind': 'maintenance.document_s3_transfer_item', 'md5': row['md5'],
+                      'outcome': 'completed'}
+            context.log(f"document transfer process md5={row['md5']}")
+            try:
+                with document_operation(repository.engine, row['md5']) as conn, ExitStack() as resources:
+                    # A candidate may have been completed by another run since paging.
+                    with conn.begin():
+                        current = repository.snapshot(conn, row['md5'])
+                    if current is not None and not pending(current):
+                        result['outcome'] = 'already_completed'
+                        context.log(f"document transfer already completed md5={row['md5']}")
+                    else:
+                        _transfer_one(row, repository=repository, conn=conn, settings=settings,
+                            yadisk=yadisk, s3=primary_s3, cache_index=cache_index, workspace=workspace,
+                            context=context, counters=counters, total=total, processed=processed, resources=resources)
+            except DocumentOperationBusy as exc:
+                counters['deferred'] += 1
+                result.update(outcome='deferred', error=redact(exc))
+                context.log(f"document transfer deferred md5={row['md5']} error={exc}")
+            except YandexDownloadUnavailable as exc:
+                counters['skipped_download'] += 1
+                result.update(outcome='source_unavailable', error=redact(exc))
+                context.log(f"document source unavailable md5={row['md5']} error={exc}", level='ERROR')
+            except Exception as exc:
+                counters['failed'] += 1
+                result.update(outcome='failed', error=redact(exc))
+                context.log(f"document transfer failed md5={row['md5']} error={type(exc).__name__}: {exc}", level='ERROR')
+            context.artifact(result)
+            processed += 1
+            _progress(context, counters, stage='transferring', total=total, processed=processed)
+    stopped = context.should_stop()
+    unresolved = counters['failed'] + counters['deferred'] + counters['skipped_download']
+    outcome = 'failed' if unresolved else 'stopped' if stopped else 'completed'
+    summary = {'kind': 'maintenance.document_s3_upload_summary', 'outcome': outcome,
+               'pending_before': total, 'pending_after': repository.count_pending_documents(),
+               'processed': processed, 'stopped': stopped, **counters}
+    _progress(context, counters, stage=outcome, total=total, processed=processed)
+    context.log(f'document transfer final {json.dumps(summary, sort_keys=True)}')
     return summary
-
-
-def _run_id() -> int:
-    value = str(os.environ.get("MANZARA_TASK_RUN_ID") or "").strip()
-    if not value.isdigit() or int(value) <= 0:
-        raise RuntimeError("MANZARA_TASK_RUN_ID is required")
-    return int(value)
-
-
-def _result_exit_code(_summary: Mapping[str, Any]) -> int:
-    """Per-item gaps are reportable outcomes, not process failures."""
-    return 0
 
 
 def _create_s3_client(connection: Any) -> Any:
@@ -468,6 +371,8 @@ def _create_s3_client(connection: Any) -> Any:
         region_name=connection.region_name,
         config=Config(
             signature_version="s3v4",
+            connect_timeout=10, read_timeout=60,
+            retries={"mode": "standard", "total_max_attempts": 3},
             s3={"addressing_style": "path"},
         ),
     )
@@ -503,51 +408,24 @@ def _validate_primary_buckets(s3: Any, public_bucket: str, private_bucket: str) 
         )
 
 
-def main() -> int:
-    run_id = _run_id()
-    app_settings = load_settings()
+def execute(context: RunContext):
+    if context.options.workers != 1 or context.options.limit is not None:
+        raise ValueError('Transfer requires one worker and no candidate limit')
+    if context.should_stop():
+        return {'kind': 'maintenance.document_s3_upload_summary', 'outcome': 'stopped', 'stopped': True}
     settings = load_document_storage_settings(load_runtime_config())
-    state_db = Database(
-        app_settings.database_url, schema=app_settings.database_schema,
-        local_state_path=app_settings.local_state_path,
-    )
-    repository = PostgresDocumentSyncRepository(
-        app_settings.database_url, schema=app_settings.database_schema
-    )
-    yadisk = YaDisk(settings.yadisk_token)
-    if yadisk.check_token() is False:
-        raise RuntimeError("Yandex Disk token validation failed")
-    primary_s3 = _create_s3_client(settings.primary)
-    _validate_primary_buckets(
-        primary_s3,
-        settings.public_bucket,
-        settings.private_bucket,
-    )
-    stop_state = {"requested": False}
-
-    def request_stop(_signum: int, _frame: Any) -> None:
-        stop_state["requested"] = True
-        print(
-            "document upload: graceful stop requested; finishing current document",
-            flush=True,
-        )
-
-    signal.signal(signal.SIGINT, request_stop)
-    try:
-        summary = run_document_upload(
-            repository=repository,
-            state_db=state_db,
-            yadisk=yadisk,
-            primary_s3=primary_s3,
-            settings=settings,
-            run_id=run_id,
-            should_stop=lambda: bool(stop_state["requested"]),
-        )
-        emit_run_artifact(summary)
-        return _result_exit_code(summary)
-    finally:
-        repository.dispose()
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    with ExitStack() as resources:
+        repository = PostgresDocumentSyncRepository(context.db.database_url, schema=context.db.schema)
+        resources.callback(repository.dispose)
+        repository.preflight()
+        if not repository.count_pending_documents():
+            return run_document_upload(repository=repository, yadisk=None, primary_s3=None,
+                                       settings=settings, context=context)
+        yadisk = YaDisk(settings.yadisk_token)
+        resources.callback(yadisk.close)
+        yadisk.default_args.update(timeout=(10, 30), poll_timeout=60, n_retries=2)
+        primary_s3 = _create_s3_client(settings.primary)
+        resources.callback(primary_s3.close)
+        _validate_primary_buckets(primary_s3, settings.public_bucket, settings.private_bucket)
+        return run_document_upload(repository=repository, yadisk=yadisk, primary_s3=primary_s3,
+                                   settings=settings, context=context)

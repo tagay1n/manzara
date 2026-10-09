@@ -43,8 +43,8 @@ def _preflight(db) -> None:
                          ("content_images", storage.content_images_bucket)):
         if not bucket:
             raise ValueError(f"Configure documents.primary_storage.bucket.{name}")
-    if db.get_pool_metrics()["max_size"] < 2:
-        raise ValueError("Maintenance requires MANZARA_DB_POOL_SIZE >= 2")
+    if db.get_pool_metrics()["max_size"] < 3:
+        raise ValueError("Maintenance requires MANZARA_DB_POOL_SIZE >= 3 for sync and document operation locks")
     repository = MonocorpusSyncRepository(db.database_url, schema=db.schema)
     try:
         repository.catalog.preflight()

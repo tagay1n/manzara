@@ -4,7 +4,7 @@ Manzara runs Tatar-language content workflows through an inline terminal CLI and
 
 ## Current status
 
-**Normalize personalities** and **Extract non-PDF** are enabled interactive CLI tasks. Normalization uses the shared Gemini runtime; extraction uses local document converters and verified Backblaze sources. Cleanup preparation and Sync run together through standalone daily maintenance; cleanup review commands remain in the CLI. These workflows use the normalized PostgreSQL catalog and resumable checkpoints. Other tasks are disabled pending catalog adaptation and appear only in `/task all`. Operational readiness must be assessed for each execution path; static inspection alone does not establish it.
+**Normalize personalities** and **Extract non-PDF** are enabled interactive CLI tasks. Normalization uses the shared Gemini runtime; extraction uses local document converters and verified Backblaze sources. Cleanup preparation and Sync run together through standalone daily maintenance; cleanup review commands remain in the CLI. These workflows use the normalized PostgreSQL catalog and resumable checkpoints. Backblaze document transfer has a separate automatic/manual GitHub workflow and is absent from the CLI. Other tasks are disabled pending catalog adaptation and appear only in `/task all`. Operational readiness must be assessed for each execution path; static inspection alone does not establish it.
 
 ## Setup and launch
 
@@ -18,7 +18,7 @@ python3 -m venv .venv
 
 Copy the masked structure of `config.example.yaml` to a gitignored `config.local.yaml` or `config.yaml`. Runtime configuration resolves `MANZARA_CONFIG_PATH`, then local configuration; never load the example at runtime.
 
-Optional `--workers N`, `--limit N`, and `--task TASK_ID` select next-run settings and the initial interactive task. Launching never starts a task automatically. Interactive execution requires a terminal; `--help` works without configuration. Backblaze upload remains disabled.
+Optional `--workers N`, `--limit N`, and `--task TASK_ID` select next-run settings and the initial interactive task. Launching never starts a task automatically. Interactive execution requires a terminal; `--help` works without configuration. Backblaze upload is available only through its [GitHub workflow](docs/operations.md#backblaze-document-transfer).
 
 Select non-PDF extraction with `.venv/bin/python -m app --task library.extract_non_pdf --per-mime-limit 1`, then enter `/run`. It runs sequentially with one worker. [Document processing](app/modules/library/guidance/documents.md#extraction-and-publication) owns source eligibility, converter requirements, cohort/retry controls, and retained output behavior.
 
@@ -51,7 +51,7 @@ Renderer updates and transcript messages share a nonblocking terminal writer. In
 
 Reopening preserves compatible completed decisions and resumes eligible work. One CLI session owns each local runtime store; a second session reports the conflict.
 
-CLI and maintenance startup initialize local SQLite and recover interrupted local runs. Python task registrations own task titles, grouping, worker defaults, and handlers. Older local runtime databases are recreated once for schema version 7 under the owner-approved [fresh-state policy](docs/operations.md#local-runtime-state). They do **not** apply PostgreSQL migrations. Normalization, non-PDF extraction, and daily maintenance check the catalog read-only before processing; incompatible schemas must be migrated separately.
+CLI and maintenance startup initialize local SQLite and recover interrupted local runs. Python task registrations own task titles, grouping, worker defaults, and handlers. Older local runtime databases are recreated once for schema version 7 under the owner-approved [fresh-state policy](docs/operations.md#local-runtime-state). They do **not** apply PostgreSQL migrations. Normalization, non-PDF extraction, daily maintenance, and Backblaze transfer check the catalog read-only before processing; incompatible schemas must be migrated separately.
 
 | Setting | Purpose / default |
 | --- | --- |
@@ -65,7 +65,7 @@ CLI and maintenance startup initialize local SQLite and recover interrupted loca
 
 Every enabled task shares the process's bounded PostgreSQL engine. Task definitions are code-owned. Runs, events, Gemini coordination, and AI retry exclusions remain in local SQLite; domain data and safety-critical checkpoints remain in PostgreSQL.
 
-New interactive run messages stream into native terminal scrollback with compact formatting and visible warning/error severity. No verbose `.log` file is created for these runs; terminal retention controls how much output survives. Saved run summaries, restartable checkpoints, structured `run-<run_id>.artifact.json` files under `~/.manzara/logs/task-runs/<task_id>/`, and persisted `task.artifact` events remain. Daily maintenance continues to write authoritative `.log` files and Actions console output. Existing log files/history remain intact; saved summaries link their files when present. Overrides use the configured artifacts root.
+New interactive run messages stream into native terminal scrollback with compact formatting and visible warning/error severity. No verbose `.log` file is created for these runs; terminal retention controls how much output survives. Saved run summaries, restartable checkpoints, structured `run-<run_id>.artifact.json` files under `~/.manzara/logs/task-runs/<task_id>/`, and persisted `task.artifact` events remain. Daily maintenance continues to write authoritative `.log` files and Actions console output. Backblaze transfer writes redacted logs only to Actions stdout. Existing log files/history remain intact; saved summaries link their files when present. Overrides use the configured artifacts root.
 
 Gemini models and account/project-grouped keys come from local configuration, with no model default. See the [Gemini contract](docs/gemini-runtime.md).
 

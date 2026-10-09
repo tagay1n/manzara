@@ -13,6 +13,7 @@ from app.catalog.contracts import CatalogConflict, boolean, document_md5, intege
 from app.catalog.document_sync_bulk import insert_records, reserve_publications, update_records
 from app.document_cleanup_paths import source_path
 from app.document_storage import normalized_extension
+from app.document_operation_lock import DocumentOperationBusy, lock_document_transaction
 
 
 _DOCUMENTS = """
@@ -139,6 +140,7 @@ class DocumentSyncStore:
         return dict(row) if row else None
 
     def _lock(self, conn, md5):
+        lock_document_transaction(conn, md5)
         conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(current_schema()), hashtext(:identity))"),
                      {"identity": f"catalog-document:{md5}"})
         row = conn.execute(text("SELECT * FROM catalog_documents WHERE md5=:md5 FOR UPDATE"),
@@ -179,7 +181,15 @@ class DocumentSyncStore:
             return {'results': {}, 'conflicts': {}}
         conn.execute(text("SELECT set_config('lock_timeout','5s',true), "
                           "set_config('statement_timeout','30s',true)"))
-        md5s = sorted(prepared)
+        conflicts = {}
+        for md5 in sorted(prepared):
+            try:
+                lock_document_transaction(conn, md5)
+            except DocumentOperationBusy as exc:
+                conflicts[md5] = str(exc)
+        md5s = sorted(set(prepared) - conflicts.keys())
+        if not md5s:
+            return {'results': {}, 'conflicts': conflicts}
         documents, locations = self._lock_batch(conn, md5s)
         snapshots = {row['md5']: dict(row) for row in conn.execute(
             text(_DOCUMENTS + ' WHERE d.md5=ANY(:md5s)'), {'md5s': md5s}).mappings()}
@@ -197,7 +207,7 @@ class DocumentSyncStore:
         sources = {row['md5']: row for row in locations if (row['provider'], row['purpose']) == ('yandex', 'source')}
         primaries = {row['md5']: row for row in locations if (row['provider'], row['purpose']) == ('s3', 'primary')}
         updates = {kind: [] for kind in ('document', 'source', 'primary')}
-        new_documents, new_sources, outcomes, conflicts = [], [], {}, {}
+        new_documents, new_sources, outcomes = [], [], {}
         for md5 in md5s:
             values, source, expected = prepared[md5]
             before, current = documents.get(md5), snapshots.get(md5)

@@ -48,6 +48,7 @@ def execute(context: RunContext) -> dict[str, Any]:
                 "reviews_created": counters.get("isbn_reviews_created", 0),
             }),
         )
-        return {**summary, "outcome": "stopped" if summary["stopped"] else "completed"}
+        outcome = 'failed' if summary['plans_deferred'] else 'stopped' if summary['stopped'] else 'completed'
+        return {**summary, 'outcome': outcome}
     finally:
         repository.dispose()

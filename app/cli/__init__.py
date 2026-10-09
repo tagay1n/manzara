@@ -14,6 +14,7 @@ def build_descriptors():
         library_task_definitions,
     )
     from app.modules.maintenance.tasks import (
+        MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID,
         MAINTENANCE_MONOCORPUS_SYNC_TASK_ID,
         maintenance_task_definitions,
     )
@@ -28,7 +29,8 @@ def build_descriptors():
         return execute(context)
 
     handlers = {"library.normalize_personalities": normalize, "library.extract_non_pdf": extract_non_pdf}
-    scheduled = {LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID, MAINTENANCE_MONOCORPUS_SYNC_TASK_ID}
+    scheduled = {LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID, MAINTENANCE_MONOCORPUS_SYNC_TASK_ID,
+                 MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID}
     definitions = [*library_task_definitions(), *collection_task_definitions(),
                    *maintenance_task_definitions()]
     return [TaskDescriptor(

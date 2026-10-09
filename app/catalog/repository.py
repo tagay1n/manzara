@@ -17,6 +17,7 @@ from app.catalog.identities import IdentityStore
 from app.catalog.previews import PreviewStore
 from app.catalog.grouping import GroupingStore
 from app.catalog.personality_normalization import PersonalityNormalizationStore
+from app.document_operation_lock import lock_document_transaction
 
 
 RECORDS = {
@@ -44,6 +45,8 @@ class CatalogRepository(MetadataStore, IdentityStore, PreviewStore, GroupingStor
         return self.tables[name]
 
     def _record(self, conn, kind, key, *, revision=None):
+        if kind == 'document':
+            lock_document_transaction(conn, key)
         name, column = RECORDS[kind]
         table = self.table(name)
         row = conn.execute(select(table).where(table.c[column] == key).with_for_update()).mappings().first()

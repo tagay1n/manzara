@@ -10,6 +10,7 @@ from sqlalchemy import inspect, text
 
 from app.catalog.contracts import CatalogConflict
 from app.catalog.repository import CatalogRepository
+from app.document_operation_lock import lock_document_transaction
 
 
 SOURCES = """
@@ -105,6 +106,7 @@ class NonPdfCatalogStore:
         return dict(row) if row else None
 
     def _lock(self, conn, md5):
+        lock_document_transaction(conn, md5)
         # Same order and document lock identity as catalog sync/cleanup.
         conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(current_schema()), hashtext(:identity))"),
                      {"identity": f"catalog-document:{md5}"})

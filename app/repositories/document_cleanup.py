@@ -14,6 +14,7 @@ from app.catalog.isbn import equivalent_isbn_values
 from app.catalog.contracts import integer
 from app.operational_state import configured_store
 from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
+from app.document_operation_lock import lock_document_transaction
 
 
 _ISBN_REVIEW_LOCK = text(
@@ -267,6 +268,7 @@ class DocumentCleanupRepository:
             ),
         }
         with self.write_transaction(conn=conn) as conn:
+            lock_document_transaction(conn, values['md5'])
             if str(values["scope"]) in {"duplicate_resource", "source_resource"}:
                 existing = conn.execute(
                     text(
