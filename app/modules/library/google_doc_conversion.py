@@ -18,19 +18,10 @@ OPERATIVE_FOLDER_ID = "1WFYCcbrtKGv3KTwyKdcKHKxXwmr9iFHE"
 
 
 def _load_credentials() -> Credentials:
-    credentials_dir = private_credentials_dir("google-drive")
-    legacy_root = Path(
-        os.environ.get("MONOCORPUS_REPO_PATH", "/home/tans1q/projects/monocorpus")
-    ).expanduser()
-    candidates = (
-        credentials_dir / "personal_token.json",
-        legacy_root / "_artifacts" / "credentials" / "personal_token.json",
-    )
-    token_path = next((path for path in candidates if path.is_file()), None)
-    if token_path is None:
+    token_path = private_credentials_dir("google-drive") / "personal_token.json"
+    if not token_path.is_file():
         raise FileNotFoundError(
-            "Google Drive OAuth token not found; expected "
-            f"{candidates[0]} or {candidates[1]}"
+            f"Google Drive OAuth token not found; expected {token_path}"
         )
     return Credentials.from_authorized_user_file(str(token_path), DRIVE_SCOPES)
 

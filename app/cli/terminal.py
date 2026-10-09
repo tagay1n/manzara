@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 import os
 import signal
@@ -144,6 +145,10 @@ class Terminal:
 
     def _progress_text(self, run):
         progress = run.get("progress") or {}
+        if run.get('task_id') == 'library.extract_non_pdf' and 'total' in progress:
+            return (f"{progress.get('current', 0)}/{progress['total']} examined · "
+                    f"{progress.get('ready', 0)} ready · {progress.get('failed', 0)} failed · "
+                    f"{progress.get('deferred', 0)} deferred")
         if progress.get("phase") == "discovering":
             if run.get("status") not in TASK_RUN_ACTIVE_STATUSES:
                 return "Candidate discovery did not finish."
@@ -277,7 +282,12 @@ class Terminal:
                 raise ValueError("Workers must be a positive integer")
             if limit and (not limit.isascii() or not limit.isdigit()):
                 raise ValueError("Limit must be a positive integer or blank")
-            self.options[self.task.task_id] = RunOptions(int(workers), int(limit) if limit else None)
+            maximum = self.task.workers_max
+            if maximum is not None and int(workers) > maximum:
+                raise ValueError(f"{self.task.title} supports at most {maximum} worker(s)")
+            self.options[self.task.task_id] = replace(
+                self.options[self.task.task_id], workers=int(workers), limit=int(limit) if limit else None,
+            )
         except ValueError as exc:
             self.message = str(exc)
             return
@@ -370,6 +380,15 @@ class Terminal:
             attempts = summary.get("model_attempts") or {}
             if attempts:
                 lines.append("Model attempts: " + ", ".join(f"{model}: {count}" for model, count in attempts.items()))
+        if summary.get("kind") == "library.non_pdf_extraction_summary":
+            for label, key in (("Candidates", "total"), ("Processed", "processed"), ("Ready", "ready"),
+                               ("Failed", "failed"), ("Deferred", "deferred"), ("Unsupported", "unsupported"),
+                               ("Corrupt plans", "corrupted"), ("Checkpoint conflicts", "checkpoint_raced")):
+                lines.append(f"{label}: {summary.get(key, 0)}")
+            lines.append("Workspace: " + str(summary.get("workspace_path", "")))
+            lines.append(f"MIME cohort cap: {options.get('per_mime_limit') or 'unlimited'} · explicit retries: {options.get('retry_known_failures', False)}")
+            if options.get("only_md5s"):
+                lines.append("Source cohort: " + ", ".join(options["only_md5s"]))
         error = summary.get("error") or run.get("error_text")
         if error:
             lines.append("Error: " + str(error))
@@ -395,11 +414,18 @@ class Terminal:
             else:
                 options = self.options[task.task_id]
                 text += f"Next run: {options.workers} worker(s), limit {options.limit or 'unlimited'}\n"
+                if task.task_id == "library.extract_non_pdf":
+                    text += (f"MIME cohort cap: {options.per_mime_limit or 'unlimited'} · "
+                             f"explicit retries: {options.retry_known_failures}\n")
+                    if options.only_md5s:
+                        text += "Source cohort: " + ", ".join(options.only_md5s) + "\n"
             if run:
                 progress = run.get("progress") or {}
                 text += f"Run {run['run_id']}: {_status(run)} · elapsed {_elapsed(run)}\n{self._progress_text(run)}\n"
                 names = (('created', 'updated', 'unchanged', 'published', 'cleanups_completed', 'failed')
                          if run.get('task_id') == 'maintenance.monocorpus_sync'
+                         else ('ready', 'failed', 'deferred', 'unsupported', 'corrupted', 'checkpoint_raced')
+                         if run.get('task_id') == 'library.extract_non_pdf'
                          else ('succeeded', 'not_person', 'unusable', 'failed', 'deferred', 'retry_pending', 'skipped'))
                 text += "  ".join(f"{name}: {progress.get(name, 0)}" for name in names)
                 waiting = self.waiting.get(run["run_id"])
@@ -474,7 +500,15 @@ class Terminal:
             for task in self.descriptors:
                 default = resolve_gemini_workers() if os.environ.get("MANZARA_GEMINI_WORKERS") else task.workers_default
                 workers = self.arguments.workers if self.arguments.workers is not None else default
-                self.options[task.task_id] = RunOptions(workers, self.arguments.limit)
+                if task.workers_max == 1:
+                    workers = 1
+                extraction = task.task_id == "library.extract_non_pdf"
+                self.options[task.task_id] = RunOptions(
+                    workers, self.arguments.limit,
+                    per_mime_limit=self.arguments.per_mime_limit if extraction else None,
+                    retry_known_failures=self.arguments.retry_known_failures if extraction else False,
+                    only_md5s=tuple(dict.fromkeys(self.arguments.only_md5)) if extraction else (),
+                )
             self.event_cursor = await asyncio.to_thread(self.db.get_latest_event_id)
             self.ready = True
             self.message = "Select a task with arrows, then press Enter."

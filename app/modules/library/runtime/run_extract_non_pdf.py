@@ -6,12 +6,11 @@ import argparse
 import re
 from collections import Counter, defaultdict
 import json
-import os
 from pathlib import Path
-import signal
 import sys
 from typing import Any, Callable, Mapping
 import zipfile
+from uuid import uuid4
 
 
 def _bootstrap_repo_root() -> None:
@@ -63,7 +62,6 @@ from app.modules.library.non_pdf_repository import (  # noqa: E402
     MAX_AUTOMATIC_ATTEMPTS,
     NonPdfExtractionRepository,
 )
-from app.run_artifact_channel import emit_run_artifact  # noqa: E402
 from app.modules.library.non_pdf_types import DeferredDocumentExtraction  # noqa: E402
 from app.modules.library.non_pdf_types import (  # noqa: E402
     POWERPOINT_EXTRACTOR_VERSION,
@@ -74,7 +72,9 @@ from app.modules.library.non_pdf_types import (  # noqa: E402
     extractor_version_for_format,
 )
 from app.runtime_config import load_runtime_config  # noqa: E402
-from app.settings import load_settings  # noqa: E402
+from app.operational_state import OperationalStateStore  # noqa: E402
+from app.task_runtime.contracts import RunContext  # noqa: E402
+from app.catalog.contracts import CatalogConflict  # noqa: E402
 
 
 TASK_ID = "library.extract_non_pdf"
@@ -161,13 +161,6 @@ def _record_pptx_inspection(
     )
 
 
-def _run_id() -> int:
-    raw = str(os.environ.get("MANZARA_TASK_RUN_ID") or "").strip()
-    if not raw.isdigit() or int(raw) <= 0:
-        raise RuntimeError("MANZARA_TASK_RUN_ID is required")
-    return int(raw)
-
-
 def _s3_client(storage: DocumentStorageSettings) -> Any:
     return Session().client(
         "s3",
@@ -247,12 +240,13 @@ def _mime_key(value: str) -> str:
 
 
 def _publish_progress(
-    db: Database, run_id: int, current: int, total: int, counters: Mapping[str, int]
+    db: Database, run_id: int, current: int, total: int, counters: Mapping[str, int], *, force: bool = False,
 ) -> None:
     payload = _progress(current, total, counters)
     db.publish_run_progress(
         run_id=run_id,
         progress=payload,
+        force=force,
     )
 
 
@@ -263,11 +257,12 @@ def _upload_assets(
     s3: Any,
     storage: DocumentStorageSettings,
     extractor_version: str = EXTRACTOR_VERSION,
+    generation_id: str,
 ) -> tuple[dict[str, str], int, int]:
     urls: dict[str, str] = {}
     uploaded = reused = 0
     for asset in prepared.assets:
-        key = f"{md5}/{asset.ordinal}{asset.path.suffix.lower()}"
+        key = f"{md5}/{generation_id}/{asset.ordinal}{asset.path.suffix.lower()}"
         head = _matching_object(
             s3,
             bucket=storage.content_images_bucket,
@@ -282,8 +277,6 @@ def _upload_assets(
                 key,
                 ExtraArgs={
                     "ContentType": _image_content_type(asset.path.suffix),
-                    # Stable short keys are replaced when the extractor changes,
-                    # so they must not carry an immutable browser cache policy.
                     "CacheControl": "public, max-age=3600",
                     "Metadata": {
                         "source-md5": md5,
@@ -318,12 +311,13 @@ def _expected_asset_urls(
     *,
     md5: str,
     storage: DocumentStorageSettings,
+    generation_id: str,
 ) -> dict[str, str]:
     return {
         asset.source_ref: object_url(
             storage.primary.endpoint_url,
             storage.content_images_bucket,
-            f"{md5}/{asset.ordinal}{asset.path.suffix.lower()}",
+            f"{md5}/{generation_id}/{asset.ordinal}{asset.path.suffix.lower()}",
         )
         for asset in prepared.assets
     }
@@ -335,8 +329,9 @@ def _delete_stale_assets(
     bucket: str,
     md5: str,
     expected_keys: set[str],
+    generation_id: str,
 ) -> int:
-    prefix = f"{md5}/"
+    prefix = f"{md5}/{generation_id}/"
     existing: list[str] = []
     continuation: str | None = None
     while True:
@@ -380,6 +375,7 @@ def run_extraction(
     workspace: Path,
     run_id: int,
     should_stop: Callable[[], bool],
+    log: Callable[[str], None],
     limit: int | None = None,
     per_mime_limit: int | None = None,
     retry_known_failures: bool = False,
@@ -398,6 +394,7 @@ def run_extraction(
         only_md5s=only_md5s,
     )
     total = len(candidates)
+    generation_id = f"run-{run_id}-{uuid4().hex}"
     counters: Counter[str] = Counter(
         ready=0,
         failed=0,
@@ -430,13 +427,12 @@ def run_extraction(
     formats: Counter[str] = Counter()
     mime_outcomes: defaultdict[str, Counter[str]] = defaultdict(Counter)
     _publish_progress(db, run_id, 0, total, counters)
-    print(
+    log(
         f"non-pdf extraction: start run_id={run_id} version={EXTRACTOR_VERSION} "
         f"candidates={total} content_bucket={storage.content_bucket} "
         f"images_bucket={storage.content_images_bucket} "
         f"per_mime_limit={per_mime_limit} "
-        f"retry_known_failures={retry_known_failures}",
-        flush=True,
+        f"retry_known_failures={retry_known_failures}"
     )
     processed = 0
     google_doc_converter = GoogleDriveDocxConverter()
@@ -450,17 +446,19 @@ def run_extraction(
         repository.start_attempt(
             candidate.md5, extractor_version=item_version, run_id=run_id
         )
+        log(f"non-pdf extraction: item start md5={candidate.md5} source={candidate.source_path}")
         doc_workspace = workspace / candidate.md5
         doc_workspace.mkdir(parents=True, exist_ok=True)
         (doc_workspace / "pptx-inspection.json").unlink(missing_ok=True)
+        committed = False
         detected: str | None = None
 
         def record_detection(inspection) -> None:
-            nonlocal detected, item_version
+            nonlocal detected, item_version, candidate
             detected_format = inspection.format
             detected = detected_format
             item_version = extractor_version_for_format(detected_format)
-            repository.record_detected_source(
+            candidate = repository.record_detected_source(
                 candidate,
                 detected_format=detected_format,
                 extractor_version=item_version,
@@ -505,23 +503,10 @@ def run_extraction(
                 )
             formats[detected] += 1
             image_urls = _expected_asset_urls(
-                prepared, md5=candidate.md5, storage=storage
+                prepared, md5=candidate.md5, storage=storage, generation_id=generation_id
             )
             markdown = render_markdown(prepared, asset_urls=image_urls)
             validate_rendered_markdown(prepared, markdown, asset_urls=image_urls)
-            uploaded_urls, uploaded_images, reused_images = _upload_assets(
-                prepared,
-                md5=candidate.md5,
-                s3=s3,
-                storage=storage,
-                extractor_version=item_version,
-            )
-            if uploaded_urls != image_urls:
-                raise RuntimeError(
-                    "Uploaded image URL manifest changed after validation"
-                )
-            counters["uploaded_images"] += uploaded_images
-            counters["reused_images"] += reused_images
             archive_path = _write_content_archive(
                 candidate.md5, markdown, doc_workspace / f"{candidate.md5}.zip"
             )
@@ -539,32 +524,26 @@ def run_extraction(
                     "markdown_path": str(doc_workspace / "final.md"),
                     "unformatted_path": str(doc_workspace / "unformatted.md"),
                     "archive_path": str(archive_path),
+                    "generation_id": generation_id,
                     "validation_path": str(doc_workspace / "validation.json"),
                 },
             )
-            key = f"{candidate.md5}.zip"
-            head = _matching_object(
-                s3,
-                bucket=storage.content_bucket,
-                key=key,
-                source_md5=candidate.md5,
-                extractor_version=item_version,
-            )
-            if head is None:
-                s3.upload_file(
-                    str(archive_path),
-                    storage.content_bucket,
-                    key,
-                    ExtraArgs={
-                        "ContentType": "application/zip",
-                        "Metadata": {
-                            "source-md5": candidate.md5,
-                            "extractor-version": item_version,
-                            "detected-format": detected,
-                            "asset-count": str(len(prepared.assets)),
-                        },
-                    },
+            with repository.publication(candidate) as conn:
+                uploaded_urls, uploaded_images, reused_images = _upload_assets(
+                    prepared,
+                    md5=candidate.md5,
+                    s3=s3,
+                    storage=storage,
+                    extractor_version=item_version,
+                    generation_id=generation_id,
                 )
+                if uploaded_urls != image_urls:
+                    raise RuntimeError(
+                        "Uploaded image URL manifest changed after validation"
+                    )
+                counters["uploaded_images"] += uploaded_images
+                counters["reused_images"] += reused_images
+                key = f"{candidate.md5}/{generation_id}.zip"
                 head = _matching_object(
                     s3,
                     bucket=storage.content_bucket,
@@ -573,80 +552,100 @@ def run_extraction(
                     extractor_version=item_version,
                 )
                 if head is None:
-                    raise RuntimeError(f"Content archive verification failed: {key}")
-                counters["uploaded_archives"] += 1
-            else:
-                counters["reused_archives"] += 1
-            url = object_url(storage.primary.endpoint_url, storage.content_bucket, key)
-            if not _public_object_available(url):
-                raise RuntimeError(f"Content archive is not publicly readable: {key}")
-            if repository.save_success(
-                candidate,
-                extractor_version=item_version,
-                detected_format=detected,
-                run_id=run_id,
-                content_url=url,
-            ):
+                    s3.upload_file(
+                        str(archive_path),
+                        storage.content_bucket,
+                        key,
+                        ExtraArgs={
+                            "ContentType": "application/zip",
+                            "Metadata": {
+                                "source-md5": candidate.md5,
+                                "extractor-version": item_version,
+                                "detected-format": detected,
+                                "asset-count": str(len(prepared.assets)),
+                            },
+                        },
+                    )
+                    head = _matching_object(
+                        s3,
+                        bucket=storage.content_bucket,
+                        key=key,
+                        source_md5=candidate.md5,
+                        extractor_version=item_version,
+                    )
+                    if head is None:
+                        raise RuntimeError(f"Content archive verification failed: {key}")
+                    counters["uploaded_archives"] += 1
+                else:
+                    counters["reused_archives"] += 1
+                url = object_url(storage.primary.endpoint_url, storage.content_bucket, key)
+                if not _public_object_available(url):
+                    raise RuntimeError(f"Content archive is not publicly readable: {key}")
+                repository.save_success(
+                    candidate, conn=conn, extractor_version=item_version,
+                    detected_format=detected, content_url=url,
+                    size=int(head["ContentLength"]), etag=head.get("ETag"),
+                )
                 expected_image_keys = {
-                    f"{candidate.md5}/{asset.ordinal}{asset.path.suffix.lower()}"
+                    f"{candidate.md5}/{generation_id}/{asset.ordinal}{asset.path.suffix.lower()}"
                     for asset in prepared.assets
                 }
                 counters["deleted_stale_images"] += _delete_stale_assets(
-                    s3,
-                    bucket=storage.content_images_bucket,
-                    md5=candidate.md5,
-                    expected_keys=expected_image_keys,
+                    s3, bucket=storage.content_images_bucket, md5=candidate.md5,
+                    expected_keys=expected_image_keys, generation_id=generation_id,
                 )
-                counters["ready"] += 1
-                counters["pptx_extracted"] += int(detected == "pptx")
-                counters["powerpoint_extracted"] += int(detected == "powerpoint")
-                mime_outcomes[_mime_key(candidate.mime_type)]["ready"] += 1
-                print(
-                    f"non-pdf extraction: ready md5={candidate.md5} "
-                    f"format={detected} "
-                    f"conversion={prepared.legacy_conversion or 'native'} "
-                    f"images={len(prepared.assets)} url={url}",
-                    flush=True,
-                )
-            else:
-                counters["checkpoint_raced"] += 1
-                mime_outcomes[_mime_key(candidate.mime_type)]["checkpoint_raced"] += 1
-                print(
-                    f"non-pdf extraction: checkpoint skipped md5={candidate.md5} "
-                    "reason=source or content row changed",
-                    flush=True,
-                )
+            committed = True
+            repository.mark_outcome(
+                candidate, extractor_version=item_version, detected_format=detected,
+                status="ready", run_id=run_id,
+            )
+            counters["ready"] += 1
+            counters["pptx_extracted"] += int(detected == "pptx")
+            counters["powerpoint_extracted"] += int(detected == "powerpoint")
+            mime_outcomes[_mime_key(candidate.mime_type)]["ready"] += 1
+            log(
+                f"non-pdf extraction: ready md5={candidate.md5} format={detected} "
+                f"conversion={prepared.legacy_conversion or 'native'} images={len(prepared.assets)} url={url}"
+            )
+        except CatalogConflict as exc:
+            counters["checkpoint_raced"] += 1
+            mime_outcomes[_mime_key(candidate.mime_type)]["checkpoint_raced"] += 1
+            repository.mark_outcome(
+                candidate, extractor_version=item_version, detected_format=detected,
+                status="failed", run_id=run_id, error_text=str(exc),
+            )
+            log(f"non-pdf extraction: checkpoint conflict md5={candidate.md5} reason={exc}")
         except CorruptDocumentError as exc:
             if cleanup_repository is None:
                 raise RuntimeError(
                     "Corrupt document planning requires a cleanup repository"
                 ) from exc
-            cleanup_id, created = cleanup_repository.enqueue_cleanup(
-                build_corrupt_cleanup_plan(
-                    storage=storage,
-                    md5=candidate.md5,
-                    source_path=candidate.source_path,
-                    mime_type=candidate.mime_type,
-                    source_size=candidate.primary_storage_size,
-                    task_id=TASK_ID,
-                    run_id=run_id,
-                    error=exc,
+            with repository.publication(candidate) as conn:
+                cleanup_id, created = cleanup_repository.enqueue_cleanup(
+                    build_corrupt_cleanup_plan(
+                        storage=storage,
+                        md5=candidate.md5,
+                        source_path=candidate.source_path,
+                        mime_type=candidate.mime_type,
+                        source_size=candidate.primary_storage_size,
+                        task_id=TASK_ID,
+                        run_id=run_id,
+                        error=exc,
+                    ), conn=conn,
                 )
-            )
             counters["corrupted" if created else "corrupted_plan_reused"] += 1
             mime_outcomes[_mime_key(candidate.mime_type)]["corrupted"] += 1
             repository.mark_outcome(
-                candidate.md5,
+                candidate,
                 extractor_version=item_version,
                 detected_format=detected,
                 status="failed",
                 run_id=run_id,
                 error_text=f"{type(exc).__name__}: {exc}",
             )
-            print(
+            log(
                 f"non-pdf extraction: corrupted plan md5={candidate.md5} "
-                f"cleanup_id={cleanup_id} detector={exc.detector} created={created}",
-                flush=True,
+                f"cleanup_id={cleanup_id} detector={exc.detector} created={created}"
             )
         except DeferredDocumentExtraction as exc:
             detected = exc.detected_format
@@ -654,7 +653,7 @@ def run_extraction(
             counters["deferred"] += 1
             mime_outcomes[_mime_key(candidate.mime_type)]["deferred"] += 1
             repository.mark_outcome(
-                candidate.md5,
+                candidate,
                 extractor_version=item_version,
                 detected_format=detected,
                 status="deferred",
@@ -668,9 +667,8 @@ def run_extraction(
                 run_id=run_id,
                 counters=counters,
             )
-            print(
-                f"non-pdf extraction: deferred md5={candidate.md5} reason={exc.reason}",
-                flush=True,
+            log(
+                f"non-pdf extraction: deferred md5={candidate.md5} reason={exc.reason}"
             )
         except UnsupportedDocumentFormat as exc:
             detected = exc.detected_format
@@ -678,45 +676,46 @@ def run_extraction(
             counters["unsupported"] += 1
             mime_outcomes[_mime_key(candidate.mime_type)]["unsupported"] += 1
             repository.mark_outcome(
-                candidate.md5,
+                candidate,
                 extractor_version=item_version,
                 detected_format=detected,
                 status="unsupported",
                 run_id=run_id,
                 error_text=str(exc),
             )
-            print(
-                f"non-pdf extraction: unsupported md5={candidate.md5} format={detected}",
-                flush=True,
+            log(
+                f"non-pdf extraction: unsupported md5={candidate.md5} format={detected}"
             )
         except Exception as exc:  # noqa: BLE001
+            if committed:
+                raise
             status = _failure_status(exc)
             counters[status] += 1
             mime_outcomes[_mime_key(candidate.mime_type)][status] += 1
             repository.mark_outcome(
-                candidate.md5,
+                candidate,
                 extractor_version=item_version,
                 detected_format=detected,
                 status=status,
                 run_id=run_id,
                 error_text=f"{type(exc).__name__}: {exc}",
             )
-            print(
+            log(
                 f"non-pdf extraction: {status} md5={candidate.md5} "
-                f"format={detected or 'unknown'} error={type(exc).__name__}: {exc}",
-                flush=True,
+                f"format={detected or 'unknown'} error={type(exc).__name__}: {exc}"
             )
         processed += 1
         _publish_progress(db, run_id, processed, total, counters)
         if should_stop():
-            print(
-                "non-pdf extraction: graceful stop boundary reached after current document",
-                flush=True,
+            log(
+                "non-pdf extraction: graceful stop boundary reached after current document"
             )
             break
+    _publish_progress(db, run_id, processed, total, counters, force=True)
     summary = {
         "kind": "library.non_pdf_extraction_summary",
         "workspace_path": str(workspace),
+        "generation_id": generation_id,
         "extractor_version": EXTRACTOR_VERSION,
         "powerpoint_extractor_version": POWERPOINT_EXTRACTOR_VERSION,
         "spreadsheet_extractor_version": SPREADSHEET_EXTRACTOR_VERSION,
@@ -735,75 +734,71 @@ def run_extraction(
             for mime, outcomes in sorted(mime_outcomes.items())
         },
         "stopped": bool(should_stop()),
+        "outcome": "stopped" if should_stop() else (
+            "failed" if counters["failed"] or counters["checkpoint_raced"] else (
+                "deferred" if counters["deferred"] else "completed"
+            )
+        ),
     }
-    print(
-        f"non-pdf extraction: final {json.dumps(summary, ensure_ascii=False, sort_keys=True)}",
-        flush=True,
+    log(
+        f"non-pdf extraction: final {json.dumps(summary, ensure_ascii=False, sort_keys=True)}"
     )
     return summary
 
 
-def main() -> int:
-    args = _parse_args()
-    run_id = _run_id()
-    settings = load_settings()
-    storage = load_document_storage_settings(load_runtime_config())
-    prune_document_cache(
-        storage.cache_path,
-        max_bytes=storage.cache_max_bytes,
-    )
-    if not storage.content_bucket or not storage.content_images_bucket:
-        raise RuntimeError(
-            "documents.primary_storage.bucket.content and content_images are required"
-        )
-    require_converter_binaries()
-    s3 = _s3_client(storage)
-    s3.head_bucket(Bucket=storage.content_bucket)
-    s3.head_bucket(Bucket=storage.content_images_bucket)
-    workspace = workspace_dir("library", "non-pdf-extraction", run_id=run_id)
+def execute(context: RunContext) -> dict[str, Any]:
+    """Run in the CLI worker with explicit logging, cancellation and local state."""
+    if context.options.workers != 1:
+        raise ValueError("Non-PDF extraction is sequential; select one worker")
+    if context.should_stop():
+        return {"kind": "library.non_pdf_extraction_summary", "outcome": "stopped"}
     repository = NonPdfExtractionRepository(
-        settings.database_url, schema=settings.database_schema
+        context.db.database_url, schema=context.db.schema,
+        runtime=OperationalStateStore(context.db.local_state_path),
     )
-    cleanup_repository = DocumentCleanupRepository(
-        settings.database_url, schema=settings.database_schema
-    )
-    db = Database(
-        settings.database_url,
-        schema=settings.database_schema,
-        local_state_path=settings.local_state_path,
-    )
-    stop = {"requested": False}
-
-    def request_stop(_signum: int, _frame: Any) -> None:
-        stop["requested"] = True
-        print(
-            "non-pdf extraction: graceful stop requested; finishing current document",
-            flush=True,
-        )
-
-    signal.signal(signal.SIGINT, request_stop)
-    signal.signal(signal.SIGTERM, request_stop)
+    cleanup_repository = None
     try:
-        summary = run_extraction(
-            repository=repository,
-            cleanup_repository=cleanup_repository,
-            db=db,
-            s3=s3,
-            storage=storage,
-            workspace=workspace,
-            run_id=run_id,
-            should_stop=lambda: bool(stop["requested"]),
-            limit=args.limit,
-            per_mime_limit=args.per_mime_limit,
-            retry_known_failures=args.retry_known_failures,
-            only_md5s=frozenset(args.only_md5) if args.only_md5 else None,
+        repository.preflight()
+        storage = load_document_storage_settings(load_runtime_config())
+        if not storage.content_bucket or not storage.content_images_bucket:
+            raise RuntimeError("documents.primary_storage.bucket.content and content_images are required")
+        require_converter_binaries()
+        if context.should_stop():
+            return {"kind": "library.non_pdf_extraction_summary", "outcome": "stopped"}
+        prune_document_cache(storage.cache_path, max_bytes=storage.cache_max_bytes)
+        s3 = _s3_client(storage)
+        s3.head_bucket(Bucket=storage.content_bucket)
+        s3.head_bucket(Bucket=storage.content_images_bucket)
+        cleanup_repository = DocumentCleanupRepository(context.db.database_url, schema=context.db.schema)
+        return run_extraction(
+            repository=repository, cleanup_repository=cleanup_repository,
+            db=context.db, s3=s3, storage=storage,
+            workspace=workspace_dir("library", "non-pdf-extraction", run_id=context.run_id),
+            run_id=context.run_id, should_stop=context.should_stop, log=context.log,
+            limit=context.options.limit, per_mime_limit=context.options.per_mime_limit,
+            retry_known_failures=context.options.retry_known_failures,
+            only_md5s=frozenset(context.options.only_md5s) if context.options.only_md5s else None,
         )
-        emit_run_artifact(summary)
-        return 0
     finally:
-        cleanup_repository.dispose()
+        if cleanup_repository is not None:
+            cleanup_repository.dispose()
         repository.dispose()
 
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+def main() -> None:
+    args = _parse_args()
+    from app.cli import main as cli_main
+
+    arguments = ["--task", TASK_ID, "--workers", "1"]
+    for flag, value in (("--limit", args.limit), ("--per-mime-limit", args.per_mime_limit)):
+        if value is not None:
+            arguments += [flag, str(value)]
+    for md5 in args.only_md5:
+        arguments += ["--only-md5", md5]
+    if args.retry_known_failures:
+        arguments.append("--retry-known-failures")
+    cli_main(arguments)
+
+
+if __name__ == "__main__":
+    main()

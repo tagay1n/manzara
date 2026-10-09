@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 
@@ -22,7 +23,11 @@ def build_descriptors():
         from app.modules.library.runtime.run_normalize_personalities import execute
         return execute(context)
 
-    handlers = {"library.normalize_personalities": normalize}
+    def extract_non_pdf(context):
+        from app.modules.library.runtime.run_extract_non_pdf import execute
+        return execute(context)
+
+    handlers = {"library.normalize_personalities": normalize, "library.extract_non_pdf": extract_non_pdf}
     scheduled = {LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID, MAINTENANCE_MONOCORPUS_SYNC_TASK_ID}
     definitions = [*library_task_definitions(), *collection_task_definitions(),
                    *maintenance_task_definitions()]
@@ -38,6 +43,12 @@ def _positive(value: str) -> int:
     if not value.isascii() or not value.isdigit() or int(value) < 1:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return int(value)
+
+
+def _md5(value: str) -> str:
+    if re.fullmatch(r"[0-9a-fA-F]{32}", value) is None:
+        raise argparse.ArgumentTypeError("must be 32 hexadecimal digits")
+    return value.lower()
 
 
 def main(arguments: list[str] | None = None) -> None:
@@ -57,9 +68,20 @@ def main(arguments: list[str] | None = None) -> None:
     undo = cleanup_commands.add_parser("undo", help="Undo a decision before cleanup starts")
     undo.add_argument("review_id", type=_positive)
     parser.add_argument("--task", default="library.normalize_personalities", help="Initially selected task ID")
-    parser.add_argument("--workers", type=_positive, help="Worker count for normalization")
-    parser.add_argument("--limit", type=_positive, help="Optional normalization candidate limit")
+    parser.add_argument("--workers", type=_positive, help="Worker count; non-PDF extraction requires 1")
+    parser.add_argument("--limit", type=_positive, help="Optional candidate limit")
+    parser.add_argument("--per-mime-limit", type=_positive, help="Non-PDF extraction: deterministic cohort cap per MIME")
+    parser.add_argument("--only-md5", action="append", type=_md5, default=[], metavar="MD5",
+                        help="Non-PDF extraction: restrict to these sources; repeat for a cohort")
+    parser.add_argument("--retry-known-failures", action="store_true",
+                        help="Non-PDF extraction: retry deferred and exhausted failures")
     args = parser.parse_args(arguments)
+    if (args.per_mime_limit is not None or args.only_md5 or args.retry_known_failures) and (
+        args.command is not None or args.task != "library.extract_non_pdf"
+    ):
+        parser.error("Non-PDF cohort/retry options require --task library.extract_non_pdf")
+    if args.task == "library.extract_non_pdf" and args.workers not in (None, 1):
+        parser.error("Non-PDF extraction requires --workers 1")
     if args.command == "cleanup":
         from app.modules.library.cleanup_cli import execute
         try:

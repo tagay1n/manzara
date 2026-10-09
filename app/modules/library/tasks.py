@@ -37,8 +37,9 @@ def library_task_definitions() -> list[dict[str, Any]]:
         },
         {
             "task_id": LIBRARY_EXTRACT_NON_PDF_TASK_ID,
+            "workers_max": 1,
             "group_id": "library",
-            "title": "Extract non-pdf",
+            "title": "Extract non-PDF",
         },
         {
             "task_id": LIBRARY_METADATA_EXTRACT_TASK_ID,

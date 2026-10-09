@@ -289,13 +289,19 @@ def prune_document_cache(
             removed_files += 1
             removed_bytes += size
 
-    print(
+    from app.task_runtime.logging import LOG_SINK
+
+    message = (
         "document cache: pruned "
         f"initial_bytes={initial} remaining_bytes={max(0, total)} "
         f"removed_files={removed_files} removed_bytes={removed_bytes} "
-        f"failed_files={len(failed)}",
-        flush=True,
+        f"failed_files={len(failed)}"
     )
+    sink = LOG_SINK.get()
+    if sink is not None:
+        sink(message)
+    else:
+        print(message, flush=True)
     return CachePruneResult(
         initial,
         max(0, total),
