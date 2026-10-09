@@ -10,13 +10,17 @@ Local SQLite state is disposable but may be removed only with all Manzara proces
 
 ## Scheduled Google export
 
-`.github/workflows/nightly-google-export.yml` runs at 00:07 UTC and supports manual dispatch. It calls `python -m app.modules.maintenance.runtime.dump_state --validate-sharing` to export the catalog to the established Drive folder and Sheets worksheet.
+`.github/workflows/nightly-google-export.yml` (Nightly Google Sheets Export) runs daily at 00:07 UTC and supports manual dispatch. Exact start time is not required; check successful daily runs. It calls `python -m app.modules.maintenance.runtime.dump_state --validate-sharing` to publish the catalog to the established spreadsheet's `documents` worksheet. The former `tt` worksheet is renamed in place on the first publication. No Drive archive is created or uploaded; PostgreSQL recovery dumps remain the separate [backup workflow](postgres-backup-recovery.md).
 
-Actions secrets: `MANZARA_DATABASE_URL` and `GOOGLE_OAUTH_TOKEN_JSON_BASE64` (base64 OAuth token JSON with Drive/Sheets refresh authorization). Local tokens belong under `private/credentials/google-drive/`; keep them out of git and logs.
+Actions secrets: `MANZARA_DATABASE_URL` and `GOOGLE_OAUTH_TOKEN_JSON_BASE64` (base64 OAuth token JSON with Sheets refresh authorization). The existing token path remains `private/credentials/google-drive/personal_token.json`; no Drive API scope is requested by this exporter. Keep tokens out of git and logs.
 
 The sharing gate checks the same database snapshot used for export. Restricted-folder documents, including descendants, require `sharing_restricted=true`, an `enc:` document link when present, and blank/null `ya_public_url`. Failures report MD5/rules without links. The check uses the encryption marker and does not decrypt links.
 
-This workflow remains in the repository; compatibility with the migrated catalog and remote configuration must be verified before claiming successful scheduled exports.
+The shared reader in `app/catalog/export.py` reads normalized tables in bounded batches within one read-only, repeatable-read snapshot and uses the shared metadata renderer. It does not read legacy `document`/`metadata` views or migrate persisted data. The complete worksheet is prepared and its cell lengths validated before remote replacement.
+
+Columns, in order: `md5`, `mime_type`, `ya_path`, `ya_public_url`, `publisher`, `author`, `title`, `isbn`, `publish_year`, `language`, `translated`, `page_count`, `full`, `sharing_restricted`, `document_url`, `content_url`, `meta`, `size`. `meta` is generated Schema.org JSON from relational facts, preserving full metadata rather than exposing storage JSON as a domain owner. `size` comes from the primary S3 location's persisted byte size, uses binary units (`B`, `KiB`, `MiB`, etc.), and stays blank when unknown. Publication writes RAW values to preserve JSON, identifiers, and literal text.
+
+GitHub summaries record successful row/column counts or a Sheets publication failure. Code inspection alone does not establish scheduled execution; check the deployed workflow's run history after publishing a change.
 
 ## Database tools
 

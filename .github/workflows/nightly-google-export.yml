@@ -1,4 +1,4 @@
-name: 'Nightly Google Sheets & Drive Export'
+name: 'Nightly Google Sheets Export'
 
 on:
   schedule:
@@ -33,9 +33,9 @@ jobs:
         shell: bash
         run: |
           mapfile -t packages < <(
-            sed -n -E '/^(gspread|google-api-python-client|google-auth-oauthlib|psycopg2-binary|pyyaml|sqlalchemy)==/p' requirements.txt
+            sed -n -E '/^(gspread|google-auth-oauthlib|psycopg2-binary|pyyaml|sqlalchemy)==/p' requirements.txt
           )
-          test "${#packages[@]}" -eq 6
+          test "${#packages[@]}" -eq 5
           python -m pip install "${packages[@]}"
 
       - name: Prepare Google OAuth credentials
@@ -60,7 +60,7 @@ jobs:
           chmod 600 "$credentials_dir/personal_token.json"
 
       # Validate the same remote database snapshot that will be exported.
-      - name: Validate sharing and export catalog to Google Drive and Sheets
+      - name: Validate sharing and publish catalog to Google Sheets
         env:
           MANZARA_ARTIFACTS_ROOT: ${{ runner.temp }}/manzara
         run: python -m app.modules.maintenance.runtime.dump_state --validate-sharing

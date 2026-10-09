@@ -1,41 +1,26 @@
-"""Export the document catalog to CSV, Google Drive, and Google Sheets."""
+"""Publish the document catalog to Google Sheets."""
 
 from __future__ import annotations
 
 import csv
-from datetime import datetime
 import json
+import os
 from pathlib import Path
 import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
-import zipfile
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 
-from app.modules.library.runtime.metadata.fields import extract_flat_fields
+from app.catalog.export import fetch_document_export, flatten_export_metadata
 from app.modules.maintenance.catalog_sharing import validate_catalog_sharing
 
 
-SCOPES = (
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-)
-SHARED_FOLDER_ID = "1WFYCcbrtKGv3KTwyKdcKHKxXwmr9iFHE"
+SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 SPREADSHEET_ID = "1qDm6iHJu44wN78YvYRbn44oFd28UfRs9HT-7UAzeZZ8"
-WORKSHEET_NAME = "tt"
+WORKSHEET_NAME = "documents"
+PREVIOUS_WORKSHEET_NAME = "tt"
 SHEETS_WRITE_INTERVAL_SECONDS = 1.1
 
-EXCLUDED_CSV_COLUMNS = {
-    "ya_public_key",
-    "ya_resource_id",
-    "content_extraction_method",
-    "meta_extraction_method",
-    "lib",
-    "genre",
-    "primary_storage_size",
-    "primary_storage_etag",
-    "primary_storage_verified_at",
-}
 DOCUMENT_EXPORT_COLUMN_ORDER = [
     "md5",
     "mime_type",
@@ -54,6 +39,7 @@ DOCUMENT_EXPORT_COLUMN_ORDER = [
     "document_url",
     "content_url",
     "meta",
+    "size",
 ]
 FLAT_METADATA_COLUMNS = (
     "publisher",
@@ -70,21 +56,10 @@ class StopRequested(RuntimeError):
     """Raised when a graceful stop is observed at an export boundary."""
 
 
-def fetch_document_rows(engine: Engine) -> tuple[list[str], list[dict[str, Any]]]:
+def fetch_document_rows(engine: Engine, *, schema: str = "monocorpus") -> tuple[list[str], list[dict[str, Any]]]:
     """Read document rows and their normalized schema.org metadata."""
-    query = text(
-        """
-        SELECT d.*, m.schema_org
-        FROM document AS d
-        LEFT JOIN metadata AS m ON m.md5 = d.md5
-        ORDER BY d.ya_path
-        """
-    )
-    with engine.connect() as connection:
-        result = connection.execute(query)
-        source_columns = list(result.keys())
-        rows = [dict(row) for row in result.mappings()]
-    return source_columns, rows
+    rows = fetch_document_export(engine, schema=schema)
+    return list(rows[0]) if rows else [*DOCUMENT_EXPORT_COLUMN_ORDER, "schema_org"], rows
 
 
 def prepare_document_export(
@@ -93,23 +68,11 @@ def prepare_document_export(
     source_columns: Sequence[str] | None = None,
 ) -> tuple[list[str], list[list[Any]]]:
     """Flatten metadata and return an ordered, CSV-compatible export matrix."""
-    record_list = [dict(record) for record in records]
-    discovered_columns = list(source_columns or ())
-    for record in record_list:
-        for column in record:
-            if column not in discovered_columns:
-                discovered_columns.append(column)
-
-    rows: list[dict[str, Any]] = []
-    for record in record_list:
-        has_schema_org = "schema_org" in record
+    rows = []
+    for source in records:
+        record = dict(source)
         schema_org = record.pop("schema_org", None)
-        if not has_schema_org and "meta" in record:
-            schema_org = record.get("meta")
-        for column in EXCLUDED_CSV_COLUMNS:
-            record.pop(column, None)
-        record.pop("meta", None)
-        flattened = extract_flat_fields(schema_org)
+        flattened = flatten_export_metadata(schema_org)
         for column in FLAT_METADATA_COLUMNS:
             record[column] = flattened.get(column)
         record["meta"] = (
@@ -117,22 +80,24 @@ def prepare_document_export(
             if schema_org is not None
             else None
         )
-        rows.append(record)
+        record["size"] = format_document_size(record.get("size"))
+        rows.append([record.get(column) for column in DOCUMENT_EXPORT_COLUMN_ORDER])
+    return list(DOCUMENT_EXPORT_COLUMN_ORDER), rows
 
-    candidate_columns = [
-        column
-        for column in discovered_columns
-        if column not in EXCLUDED_CSV_COLUMNS and column not in {"schema_org", "meta"}
-    ]
-    for column in (*FLAT_METADATA_COLUMNS, "meta"):
-        if column not in candidate_columns:
-            candidate_columns.append(column)
-    preferred = [
-        column for column in DOCUMENT_EXPORT_COLUMN_ORDER if column in candidate_columns
-    ]
-    remaining = [column for column in candidate_columns if column not in preferred]
-    columns = preferred + remaining
-    return columns, [[record.get(column) for column in columns] for record in rows]
+
+def format_document_size(size: int | None) -> str | None:
+    """Format persisted primary-storage bytes; an unknown size remains blank."""
+    if size is None:
+        return None
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise ValueError("Document size must be a nonnegative integer or null")
+    units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB")
+    amount = float(size)
+    unit = 0
+    while amount >= 1024 and unit < len(units) - 1:
+        amount /= 1024
+        unit += 1
+    return f"{size} B" if unit == 0 else f"{amount:.1f} {units[unit]}"
 
 
 def write_csv(
@@ -143,12 +108,6 @@ def write_csv(
         writer = csv.writer(handle)
         writer.writerow(columns)
         writer.writerows(rows)
-
-
-def create_zip(csv_path: Path, zip_path: Path, title: str) -> None:
-    """Create a ZIP archive containing the timestamped CSV."""
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.write(csv_path, arcname=f"{title}.csv")
 
 
 def load_google_credentials(
@@ -180,24 +139,6 @@ def load_google_credentials(
     return credentials
 
 
-def upload_zip_to_drive(zip_path: Path, credentials: Any, title: str) -> None:
-    """Upload the state archive to the established shared Drive folder."""
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaFileUpload
-
-    service = build("drive", "v3", credentials=credentials)
-    media = MediaFileUpload(str(zip_path), mimetype="application/zip", resumable=True)
-    service.files().create(
-        body={
-            "name": f"{title}.zip",
-            "mimeType": "application/zip",
-            "parents": [SHARED_FOLDER_ID],
-        },
-        media_body=media,
-        fields="id",
-    ).execute()
-
-
 def upload_csv_to_sheets(
     csv_path: Path,
     credentials: Any,
@@ -211,6 +152,9 @@ def upload_csv_to_sheets(
 
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
         data = list(csv.reader(handle))
+    for row_number, row in enumerate(data, start=1):
+        if any(len(value.encode("utf-16-le")) // 2 > 50000 for value in row):
+            raise ValueError(f"Sheets row {row_number} exceeds the 50,000-character cell limit")
     required_rows = max(40000, len(data))
     required_columns = max(25, len(data[0]) if data else 1)
 
@@ -222,16 +166,22 @@ def upload_csv_to_sheets(
             time.sleep(SHEETS_WRITE_INTERVAL_SECONDS)
         write_started = True
 
+    if should_stop():
+        raise StopRequested("graceful stop requested before Sheets replacement")
     spreadsheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID)
     try:
         worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
     except WorksheetNotFound:
-        pace_write()
-        worksheet = spreadsheet.add_worksheet(
-            title=WORKSHEET_NAME,
-            rows=required_rows,
-            cols=required_columns,
-        )
+        try:
+            worksheet = spreadsheet.worksheet(PREVIOUS_WORKSHEET_NAME)
+        except WorksheetNotFound:
+            pace_write()
+            worksheet = spreadsheet.add_worksheet(
+                title=WORKSHEET_NAME, rows=required_rows, cols=required_columns,
+            )
+        else:
+            pace_write()
+            worksheet.update_title(WORKSHEET_NAME)
 
     if should_stop():
         raise StopRequested("graceful stop requested before Sheets replacement")
@@ -246,7 +196,7 @@ def upload_csv_to_sheets(
     for start in range(0, len(data), chunk_size):
         chunk = data[start : start + chunk_size]
         pace_write()
-        worksheet.update(values=chunk, range_name=f"A{start + 1}")
+        worksheet.update(values=chunk, range_name=f"A{start + 1}", value_input_option="RAW")
         print(
             f"dump state: sheets rows {start + 1}-{start + len(chunk)} uploaded",
             flush=True,
@@ -275,18 +225,16 @@ def run_dump(
     workspace: Path,
     credentials_dir: Path,
     legacy_credentials_dir: Path | None = None,
+    schema: str = "monocorpus",
     validate_sharing: bool = False,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> dict[str, Any]:
     """Execute the complete export and return a compact run summary."""
     workspace.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    title = f"monocorpus_{timestamp}"
-    csv_path = workspace / "monocorpus_backup.csv"
-    zip_path = workspace / "monocorpus_backup.zip"
+    csv_path = workspace / "documents.csv"
 
     print("dump state: reading document catalog", flush=True)
-    source_columns, records = fetch_document_rows(engine)
+    source_columns, records = fetch_document_rows(engine, schema=schema)
     if validate_sharing:
         validate_catalog_sharing(records)
         print(
@@ -295,7 +243,6 @@ def run_dump(
         )
     columns, rows = prepare_document_export(records, source_columns=source_columns)
     write_csv(csv_path, columns, rows)
-    create_zip(csv_path, zip_path, title)
     print(
         f"dump state: exported rows={len(rows)} columns={len(columns)}",
         flush=True,
@@ -304,21 +251,30 @@ def run_dump(
         raise StopRequested("graceful stop requested before remote upload")
 
     credentials = load_google_credentials(credentials_dir, legacy_credentials_dir)
-    upload_zip_to_drive(zip_path, credentials, title)
-    print(f"dump state: Drive archive uploaded name={title}.zip", flush=True)
-    # Once the remote publish starts, finish both destinations so Google Sheets is
-    # never knowingly left cleared or only partly replaced.
-    sheet_rows = upload_csv_to_sheets(csv_path, credentials)
+    print("dump state: publishing Google Sheets", flush=True)
+    try:
+        sheet_rows = upload_csv_to_sheets(csv_path, credentials)
+    except Exception:
+        _github_progress("- Sheets publishing failed.")
+        raise
+    _github_progress(f"- Sheets published: {sheet_rows} documents, {len(columns)} columns.")
     summary = {
         "spreadsheet_id": SPREADSHEET_ID,
         "worksheet": WORKSHEET_NAME,
         "rows_exported": len(rows),
         "rows_uploaded": sheet_rows,
         "columns_exported": len(columns),
-        "drive_archive": f"{title}.zip",
+        "sheet_columns": columns,
     }
     print(f"dump state: completed {json.dumps(summary, sort_keys=True)}", flush=True)
     return summary
+
+
+def _github_progress(message: str) -> None:
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with Path(summary).open("a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
 
 
 __all__ = [

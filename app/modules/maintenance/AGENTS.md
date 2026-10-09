@@ -2,7 +2,7 @@
 
 These rules apply to `app/modules/maintenance/`.
 
-Yandex Sync and its cleanup executor use the normalized catalog and inline CLI runtime. Backblaze upload and export remain pending catalog adaptation/verification. Static inspection does not establish remote execution readiness; legacy SQL names do not establish current compatibility. See `docs/catalog-model.md` from the repo root.
+Yandex Sync and its cleanup executor use the normalized catalog and inline CLI runtime. The scheduled Google Sheets export uses `app/catalog/export.py` for a read-only normalized snapshot; its operations and column contract live in `docs/operations.md`. Backblaze document upload remains pending catalog adaptation/verification. Static inspection does not establish remote execution readiness; legacy SQL names do not establish current compatibility. See `docs/catalog-model.md` from the repo root.
 
 Read only the guidance matching the changed behavior:
 

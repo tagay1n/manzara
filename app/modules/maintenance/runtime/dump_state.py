@@ -21,7 +21,7 @@ SCHEMA_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Export the document catalog to Google Drive and Sheets."
+        description="Publish the document catalog to Google Sheets."
     )
     parser.add_argument(
         "--validate-sharing",
@@ -66,6 +66,7 @@ def main() -> int:
                 workspace=Path(temp_dir),
                 credentials_dir=credentials_dir,
                 legacy_credentials_dir=args.legacy_credentials_dir,
+                schema=settings.database_schema,
                 validate_sharing=args.validate_sharing,
                 should_stop=lambda: bool(stop_state["requested"]),
             )
