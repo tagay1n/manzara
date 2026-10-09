@@ -30,7 +30,7 @@ Run daily maintenance without a terminal using `python scripts/run_daily_mainten
 - `q` or the first Ctrl-C requests safe stop and waits for active requests to reach their checkpoints before exiting. Press Ctrl-C again during shutdown to force the entire CLI process to exit immediately with code 130, including while startup or finalization is waiting. The terminal is restored; interrupted runs are recovered on the next launch and resume from persisted checkpoints. Force exit can skip final logs, summaries, and unfinished checkpoint writes. Provider requests have a 60-second I/O timeout, not a hard total-duration limit.
 - Reopening preserves compatible completed decisions and resumes eligible work. One CLI session owns each local runtime store; a second session reports the conflict.
 
-CLI and maintenance startup initialize local SQLite, seed definitions without pruning history, and recover interrupted local runs. They do **not** apply PostgreSQL migrations. Normalization and daily maintenance check the catalog read-only before processing; incompatible schemas must be migrated separately.
+CLI and maintenance startup initialize local SQLite and recover interrupted local runs. Python task registrations own task titles, grouping, worker defaults, and handlers. Older local runtime databases are recreated once for schema version 7 under the owner-approved [fresh-state policy](docs/operations.md#local-runtime-state). They do **not** apply PostgreSQL migrations. Normalization and daily maintenance check the catalog read-only before processing; incompatible schemas must be migrated separately.
 
 | Setting | Purpose / default |
 | --- | --- |

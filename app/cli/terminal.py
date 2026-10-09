@@ -144,18 +144,6 @@ class Terminal:
 
     def _progress_text(self, run):
         progress = run.get("progress") or {}
-        if run.get('task_id') == 'maintenance.monocorpus_sync':
-            stage = progress.get('stage', 'starting')
-            if stage == 'scanning':
-                return (f"Scanning · {progress.get('discovered', 0)} resources · "
-                        f"{progress.get('catalog_planned', 0)} catalog changes buffered")
-            if stage == 'applying':
-                return (f"Applying · {progress.get('current', 0)}/{progress.get('total', 0)} examined · "
-                        f"{progress.get('catalog_applied', 0)} committed")
-            if stage == 'finished':
-                return (f"Finished · {progress.get('catalog_applied', 0)} catalog changes committed · "
-                        f"{progress.get('catalog_pending', 0)} pending")
-            return f"{stage.capitalize()} · {progress.get('current', 0)}/{progress.get('total', 0)}"
         if progress.get("phase") == "discovering":
             if run.get("status") not in TASK_RUN_ACTIVE_STATUSES:
                 return "Candidate discovery did not finish."
@@ -382,23 +370,6 @@ class Terminal:
             attempts = summary.get("model_attempts") or {}
             if attempts:
                 lines.append("Model attempts: " + ", ".join(f"{model}: {count}" for model, count in attempts.items()))
-        if summary.get("kind") == "library.document_cleanup_preparation_summary":
-            for label, key in (("Scanned", "scanned"), ("Missing source", "skipped_missing_source"),
-                               ("Plans created", "plans_created"),
-                               ("Plans reused", "plans_reused"), ("Plans suppressed", "plans_suppressed"),
-                               ("ISBN reviews created", "isbn_reviews_created"),
-                               ("ISBN reviews reused", "isbn_reviews_reused")):
-                lines.append(f"{label}: {summary.get(key, 0)}")
-            lines.append("Inspect ISBN reviews: python -m app cleanup reviews")
-            lines.append("Inspect queued plans: python -m app cleanup queue")
-        if summary.get('kind') == 'maintenance.monocorpus_sync_summary':
-            for label, key in (('Resources scanned', 'discovered'), ('Filtered', 'filtered'),
-                               ('Catalog changes planned', 'catalog_planned'), ('Catalog changes committed', 'catalog_applied'),
-                               ('Catalog changes pending', 'catalog_pending'), ('Created', 'created'), ('Updated', 'updated'),
-                               ('Unchanged', 'unchanged'), ('Published', 'published'), ('Publications pending', 'publications_pending'),
-                               ('Cleanups completed', 'cleanups_completed'), ('Cleanups failed', 'cleanups_failed'),
-                               ('Failed', 'failed')):
-                lines.append(f'{label}: {summary.get(key, 0)}')
         error = summary.get("error") or run.get("error_text")
         if error:
             lines.append("Error: " + str(error))
@@ -484,15 +455,10 @@ class Terminal:
         self.db = Database(settings.database_url, schema=settings.database_schema,
                            pool_size=settings.database_pool_size, local_state_path=settings.local_state_path)
         self.db.init_local_state()
-        descriptors = self.descriptor_factory(settings)
-        self.db.seed_panels([{"panel_id": name, "title": title} for name, title in
-                             (("library", "Library"), ("metadata", "Metadata"), ("maintenance", "Maintenance"), ("collections", "Collections"))])
-        self.db.seed_tasks([task.definition for task in descriptors])
+        descriptors = self.descriptor_factory()
         recovered = self.db.recover_active_runs()
-        self.db.recover_active_conveyor_runs()
         if recovered:
             self.db.insert_event("system.recovery", None, None, None, {"recovered_runs": recovered})
-        # Preserve definitions and history for disabled tasks; never prune on startup.
         self.runner = TaskRunner(self.db, descriptors)
         return descriptors
 
@@ -506,10 +472,8 @@ class Terminal:
                 raise ValueError(f"Unknown task ID: {self.arguments.task}")
             self.selected = selected
             for task in self.descriptors:
-                definition = await asyncio.to_thread(self.db.get_task, task.task_id)
-                default = resolve_gemini_workers() if os.environ.get("MANZARA_GEMINI_WORKERS") else (definition.get("gemini_workers_default") or 1)
-                configured = definition.get("gemini_workers_next") or default
-                workers = self.arguments.workers if self.arguments.workers is not None else configured
+                default = resolve_gemini_workers() if os.environ.get("MANZARA_GEMINI_WORKERS") else task.workers_default
+                workers = self.arguments.workers if self.arguments.workers is not None else default
                 self.options[task.task_id] = RunOptions(workers, self.arguments.limit)
             self.event_cursor = await asyncio.to_thread(self.db.get_latest_event_id)
             self.ready = True

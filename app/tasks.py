@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import json
 import os
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from app.artifacts import task_runs_dir
 from app.db import Database
@@ -29,13 +29,15 @@ class _RunHandle:
 
 
 class TaskRunner:
-    def __init__(self, db: Database, descriptors: list[TaskDescriptor]):
+    def __init__(self, db: Database, descriptors: list[TaskDescriptor], *,
+                 console_sink: Callable[[str], None] | None = None):
         self.db = db
         self.descriptors = {item.task_id: item for item in descriptors}
         self._lock = threading.RLock()
         self._runs: dict[str, _RunHandle] = {}
         self._closing = False
         self._root = task_runs_dir()
+        self._console_sink = console_sink
 
     def start_task(self, task_id: str, *, options: RunOptions) -> dict[str, Any]:
         with self._lock:
@@ -44,30 +46,28 @@ class TaskRunner:
             descriptor = self.descriptors[task_id]
             if not descriptor.available:
                 raise ValueError(descriptor.unavailable_reason)
+            if descriptor.workers_max is not None and options.workers > descriptor.workers_max:
+                raise ValueError(f"{descriptor.title} supports at most {descriptor.workers_max} worker(s)")
             handle = self._runs.get(task_id)
             if handle is not None and handle.thread.is_alive():
                 return {"action": "noop", "reason": "already_running", "run": self.db.get_run(handle.context.run_id)}
             active = self.db.get_active_run_for_task(task_id)
             if active:
                 raise ValueError("A persisted active run needs recovery; reopen Manzara before starting another run")
-            task = self.db.get_task(task_id)
-            if task is None:
-                raise ValueError("Task definition is missing; reopen Manzara")
-            self.db.set_task_gemini_workers_next(task_id, options.workers)
-            run_id = self.db.create_run(task)
+            run_id = self.db.create_run(task_id=task_id, panel_id=descriptor.group_id,
+                                        workers=options.workers)
             try:
-                log = RunLog(self._root, task_id, task["panel_id"], run_id)
+                log = RunLog(self._root, task_id, descriptor.group_id, run_id, self._console_sink)
                 context = RunContext(
-                    db=self.db, task_id=task_id, panel_id=task["panel_id"], run_id=run_id,
+                    db=self.db, task_id=task_id, panel_id=descriptor.group_id, run_id=run_id,
                     options=options, stop_event=threading.Event(), log=log,
                     progress=lambda progress, force=False: self.db.publish_run_progress(
-                        task_id=task_id, run_id=run_id, panel_id=task["panel_id"],
-                        progress=progress, force=force,
+                        run_id=run_id, progress=progress, force=force,
                     ),
-                    artifact=lambda payload: self._publish_artifact(task, run_id, payload),
+                    artifact=lambda payload: self._publish_artifact(task_id, descriptor.group_id, run_id, payload),
                 )
                 self.db.update_run_summary(run_id, {"options": options.as_dict(), "log_path": str(log.path)})
-                self.db.insert_event("task.started", task_id, run_id, task["panel_id"], {"status": TASK_RUN_STATUS_STARTING})
+                self.db.insert_event("task.started", task_id, run_id, descriptor.group_id, {"status": TASK_RUN_STATUS_STARTING})
                 thread = threading.Thread(target=self._execute, args=(descriptor, context, log),
                                           name=f"run-{run_id}", daemon=False)
                 self._runs[task_id] = _RunHandle(context, thread)
@@ -115,19 +115,19 @@ class TaskRunner:
             for thread in threads:
                 thread.join()
 
-    def _publish_artifact(self, task: dict, run_id: int, payload: dict) -> None:
+    def _publish_artifact(self, task_id: str, group_id: str, run_id: int, payload: dict) -> None:
         if not isinstance(payload, dict) or not isinstance(payload.get("kind"), str) or not payload["kind"]:
             raise ValueError("Structured run artifacts require a kind")
         from app.run_log_store import safe_task_slug
 
-        target = self._root / safe_task_slug(task["task_id"]) / f"run-{run_id}.artifact.json"
+        target = self._root / safe_task_slug(task_id) / f"run-{run_id}.artifact.json"
         temporary = target.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(target)
         compact = {key: value for key, value in payload.items()
                    if isinstance(value, (str, int, float, bool)) or value is None}
         compact["artifact_path"] = str(target)
-        self.db.insert_event("task.artifact", task["task_id"], run_id, task["panel_id"], compact)
+        self.db.insert_event("task.artifact", task_id, run_id, group_id, compact)
 
     def _execute(self, descriptor: TaskDescriptor, context: RunContext, log: RunLog) -> None:
         heartbeat_stop = threading.Event()

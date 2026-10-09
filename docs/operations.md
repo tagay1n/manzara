@@ -37,7 +37,7 @@ Paste the encoded file into `MANZARA_MAINTENANCE_CONFIG_BASE64`. No additional r
 
 The runner initializes artifact/cache/configuration/local SQLite paths under `$RUNNER_TEMP/manzara` through `$GITHUB_ENV`, with schema `monocorpus` and pool size 4. Every run starts with fresh orchestration state; cleanup plans/reviews/phases stay in PostgreSQL. The workflow installs only its dependencies selected from `requirements.txt`, without document-inference packages.
 
-Actions step output streams the existing redacted task logs in bounded cursor pages, including Sync setup, directory listings, file visits, and per-file outcomes. Every 30 seconds, a console-only `task.status` snapshot reports run state, elapsed time, time since the last log output, and latest persisted progress/counters. A snapshot shows the process is still observing the run; advancing file/counter messages establish progress. Final log pages are flushed before the stage summary. Authoritative log files and persisted `task.artifact` events retain their existing contracts.
+Each redacted structured task log line is written directly to Actions stdout and its artifact file, with immediate flushing, including Sync setup, directory listings, file visits, and per-file outcomes. No file polling or parsing is involved in console output. Every 30 seconds, a console-only `task.status` snapshot reports run state, elapsed time, time since the last log output, and latest persisted progress/counters. A snapshot shows the process is still observing the run; advancing file/counter messages establish progress. Authoritative log files and persisted `task.artifact` events retain their existing contracts.
 
 GitHub summaries show stage outcomes/counters and overall job status. Logs, structured task artifacts, and local SQLite diagnostics are uploaded with seven-day retention, including available files after failure. Configuration, credentials, and document caches are excluded; SQLite is never restored from Actions artifacts/caches. Setup failures may have no task artifacts; inspect the Actions step output. Private configuration is removed at the final workflow boundary. Static inspection does not establish connectivity, duration, recovery behavior, or daily operational readiness; a credential-backed manual run requires explicit owner authorization.
 
@@ -54,6 +54,12 @@ The shared reader in `app/catalog/export.py` reads normalized tables in bounded 
 Columns, in order: `md5`, `mime_type`, `ya_path`, `ya_public_url`, `publisher`, `author`, `title`, `isbn`, `publish_year`, `language`, `translated`, `page_count`, `full`, `sharing_restricted`, `document_url`, `content_url`, `meta`, `size`. `meta` is generated Schema.org JSON from relational facts, preserving full metadata rather than exposing storage JSON as a domain owner. `size` comes from the primary S3 location's persisted byte size, uses binary units (`B`, `KiB`, `MiB`, etc.), and stays blank when unknown. Publication writes RAW values to preserve JSON, identifiers, and literal text.
 
 GitHub summaries record successful row/column counts or a Sheets publication failure. Code inspection alone does not establish scheduled execution; check the deployed workflow's run history after publishing a change.
+
+## Local runtime state
+
+Local SQLite schema version 7 removes dashboard/task-definition and conveyor tables. The owner approved fresh local state: the first initialization of an older runtime database clears its local run/event history, Gemini coordination, retry exclusions, flow attempts/errors, and caches stored in SQLite, then creates the current schema. PostgreSQL domain data and durable checkpoints, artifact files, and source-document cache files are unaffected. Subsequent startups at version 7 retain their local state. Unknown future schema versions are rejected.
+
+Task registrations live in Python code; the runner records explicit run options and executes Python handlers. Progress uses coalesced run snapshots, with no duplicate progress events. Lifecycle, structured artifact, and Gemini coordination events remain persisted. The historical `panel_id` payload field denotes the task group, without a dashboard definition.
 
 ## Database tools
 

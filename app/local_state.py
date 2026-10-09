@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
-LOCAL_STATE_SCHEMA_VERSION = 6
+LOCAL_STATE_SCHEMA_VERSION = 7
 _FOR_UPDATE_RE = re.compile(r"\s+FOR\s+UPDATE\b", re.IGNORECASE)
 
 
@@ -63,40 +63,32 @@ class LocalStateStore:
         self.path.parent.chmod(0o700)
         with self.connect() as conn:
             version = int(conn.execute("PRAGMA user_version").scalar() or 0)
-            if version not in (0, 1, 2, 3, 4, 5, LOCAL_STATE_SCHEMA_VERSION):
+            if not 0 <= version <= LOCAL_STATE_SCHEMA_VERSION:
                 raise RuntimeError(
                     f"Unsupported local runtime schema version {version}; "
                     f"expected {LOCAL_STATE_SCHEMA_VERSION}"
                 )
-            conn._connection.executescript(_SCHEMA)
-            if version == 1:
-                key_columns = {
-                    str(row[1])
-                    for row in conn._connection.execute(
-                        "PRAGMA table_info(gemini_keys)"
-                    )
-                }
-                if "quota_domain_id" not in key_columns:
-                    conn._connection.execute(
-                        "ALTER TABLE gemini_keys ADD COLUMN quota_domain_id TEXT"
-                    )
-                conn._connection.executescript(_MIGRATE_V1_TO_V2)
-            if 0 < version < 4:
-                conn.execute(
-                    """INSERT INTO gemini_project_model_spacing
-                        (quota_domain_id, model_name, next_request_at)
-                        SELECT k.quota_domain_id, s.model_name, MAX(s.cooldown_until)
-                        FROM gemini_key_model_state s JOIN gemini_keys k USING(key_id)
-                        WHERE s.cooldown_until IS NOT NULL
-                        GROUP BY k.quota_domain_id, s.model_name
-                        ON CONFLICT(quota_domain_id, model_name) DO UPDATE SET
-                        next_request_at=MAX(next_request_at, excluded.next_request_at)"""
+            if version < LOCAL_STATE_SCHEMA_VERSION:
+                # Owner-approved fresh local state: no web-schema migration or
+                # transfer of historical orchestration/provider retry records.
+                tables = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+                statements = [
+                    'DROP TABLE "' + str(row["name"]).replace('"', '""') + '";'
+                    for row in tables
+                ]
+                conn.execute("PRAGMA foreign_keys = OFF")
+                conn._connection.executescript(
+                    "BEGIN;\n" + "\n".join(statements) + "\nCOMMIT;"
                 )
+                conn.execute("PRAGMA foreign_keys = ON")
+            conn._connection.executescript(_SCHEMA)
             conn.execute(f"PRAGMA user_version = {LOCAL_STATE_SCHEMA_VERSION}")
             # IDs remain unique against retained run artifacts if the disposable
             # database is recreated on the same laptop.
             floor = int(time.time() * 1000)
-            for table in ("runs", "events", "conveyor_runs"):
+            for table in ("runs", "events"):
                 updated = conn.execute(
                     "UPDATE sqlite_sequence SET seq=MAX(seq, ?) WHERE name=?",
                     (floor, table),
@@ -316,26 +308,13 @@ def _utc_now() -> str:
 
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS panel_definitions (
-    panel_id TEXT PRIMARY KEY, title TEXT NOT NULL,
-    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS task_definitions (
-    task_id TEXT PRIMARY KEY, panel_id TEXT NOT NULL, title TEXT NOT NULL,
-    task_type TEXT NOT NULL, icon_idle TEXT NOT NULL, icon_running TEXT NOT NULL,
-    command_json TEXT NOT NULL, cwd TEXT NOT NULL,
-    meaningful_result_json TEXT NOT NULL DEFAULT '{}',
-    gemini_workers_default INTEGER, gemini_workers_next INTEGER,
-    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
     panel_id TEXT NOT NULL, status TEXT NOT NULL, stop_mode TEXT, pid INTEGER,
     started_at TEXT NOT NULL, finished_at TEXT, heartbeat_at TEXT,
     exit_code INTEGER, error_text TEXT, summary_json TEXT NOT NULL DEFAULT '{}',
     progress_json TEXT NOT NULL DEFAULT '{}', gemini_workers INTEGER,
-    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    FOREIGN KEY(task_id) REFERENCES task_definitions(task_id)
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_runs_task_status ON runs(task_id, status);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
@@ -344,31 +323,6 @@ CREATE TABLE IF NOT EXISTS events (
     task_id TEXT, run_id INTEGER, panel_id TEXT, ts TEXT NOT NULL,
     payload_json TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS conveyor_definitions (
-    conveyor_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0,
-    stages_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS conveyor_runs (
-    conveyor_run_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    definition_revision INTEGER NOT NULL, status TEXT NOT NULL, outcome TEXT,
-    started_at TEXT NOT NULL, finished_at TEXT, stop_requested INTEGER NOT NULL DEFAULT 0,
-    error_text TEXT
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_conveyor_one_active_run
-ON conveyor_runs((1)) WHERE status IN ('starting', 'running');
-CREATE TABLE IF NOT EXISTS conveyor_run_items (
-    conveyor_run_id INTEGER NOT NULL, item_id TEXT NOT NULL, stage_id TEXT NOT NULL,
-    stage_order INTEGER NOT NULL, task_order INTEGER NOT NULL, task_id TEXT NOT NULL,
-    status TEXT NOT NULL, task_run_id INTEGER, meaningful INTEGER,
-    output_json TEXT NOT NULL DEFAULT '{}', error_text TEXT,
-    started_at TEXT, finished_at TEXT,
-    PRIMARY KEY(conveyor_run_id, item_id),
-    FOREIGN KEY(conveyor_run_id) REFERENCES conveyor_runs(conveyor_run_id) ON DELETE CASCADE,
-    FOREIGN KEY(task_run_id) REFERENCES runs(run_id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_conveyor_run_items_stage
-ON conveyor_run_items(conveyor_run_id, stage_order, task_order);
 CREATE TABLE IF NOT EXISTS gemini_keys (
     key_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, masked_key TEXT NOT NULL,
     quota_domain_id TEXT NOT NULL,
@@ -439,18 +393,6 @@ CREATE TABLE IF NOT EXISTS operational_items (
     payload_json TEXT NOT NULL, updated_at TEXT NOT NULL,
     PRIMARY KEY(scope, item_id)
 );
-"""
-
-
-_MIGRATE_V1_TO_V2 = """
--- Version 1 treated every 429 as daily exhaustion. Those rows cannot be
--- classified retroactively, so clear them once when installing quota-aware
--- cooldown state.
-UPDATE gemini_key_model_state
-SET exhausted = 0, exhausted_at = NULL, cooldown_until = NULL;
-UPDATE gemini_keys
-SET quota_domain_id = key_id
-WHERE quota_domain_id IS NULL OR quota_domain_id = '';
 """
 
 

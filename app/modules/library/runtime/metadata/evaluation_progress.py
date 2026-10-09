@@ -79,8 +79,6 @@ class _EvaluationProgress:
             "model_successes": dict(self.model_successes),
         }
         self.db.publish_run_progress(
-            task_id=TASK_ID,
             run_id=self.run_id,
-            panel_id=PANEL_ID,
             progress=payload,
         )

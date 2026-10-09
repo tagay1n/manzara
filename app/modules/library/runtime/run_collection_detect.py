@@ -40,9 +40,7 @@ def main() -> None:
             return
         snapshot = {"status": "running", **progress}
         db.publish_run_progress(
-            task_id="library.collection_detect",
             run_id=run_id,
-            panel_id=COLLECTIONS_PANEL_ID,
             progress=snapshot,
         )
 
@@ -65,11 +63,8 @@ def main() -> None:
             else "completed"
         )
         db.publish_run_progress(
-            task_id="library.collection_detect",
             run_id=run_id,
-            panel_id=COLLECTIONS_PANEL_ID,
             progress={"status": terminal_status, **payload},
-            status=terminal_status,
             force=True,
         )
     emit_run_artifact(payload)

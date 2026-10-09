@@ -13,7 +13,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-def _descriptors(settings):
+def _descriptors():
     from app.modules.library.runtime.run_prepare_document_cleanup import TASK_ID as cleanup_id, execute as prepare
     from app.modules.library.tasks import library_task_definitions
     from app.modules.maintenance.runtime.sync_monocorpus import TASK_ID as sync_id, execute as sync
@@ -21,9 +21,9 @@ def _descriptors(settings):
     from app.task_runtime.contracts import TaskDescriptor
 
     definitions = {item["task_id"]: item for item in
-                   [*library_task_definitions(), *maintenance_task_definitions(settings.maintenance)]}
+                   [*library_task_definitions(), *maintenance_task_definitions()]}
     return [TaskDescriptor(task_id=task_id, title=definitions[task_id]["title"], group="Maintenance",
-                           definition=definitions[task_id], execute=handler)
+                           group_id=definitions[task_id]["group_id"], execute=handler)
             for task_id, handler in ((cleanup_id, prepare), (sync_id, sync))]
 
 
@@ -92,7 +92,7 @@ def main() -> int:
         from app.task_runtime.logging import redact
 
         settings = load_settings()
-        exit_code = run_batch(settings, _descriptors(settings), preflight=_preflight,
+        exit_code = run_batch(settings, _descriptors(), preflight=_preflight,
                               on_result=lambda run: _report_run(run, results))
     except Exception as exc:
         # Imports can fail before shared redaction is available.

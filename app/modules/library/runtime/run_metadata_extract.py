@@ -164,9 +164,7 @@ def _publish_progress(
         "model_successes": dict(model_successes),
     }
     db.publish_run_progress(
-        task_id=TASK_ID,
         run_id=run_id,
-        panel_id=PANEL_ID,
         progress=payload,
     )
 

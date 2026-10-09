@@ -23,13 +23,11 @@ from app.modules.library.normalization_quality import get_merge_candidates, get_
 from app.modules.library.normalization_queries import get_evidence
 from app.modules.library.normalization_rules import ENTITY_TYPES
 from app.modules.library.normalization_views import (
-    get_normalization_dashboard,
     get_review_queue,
 )
 
 __all__ = [
     "ENTITY_TYPES",
-    "get_normalization_dashboard",
     "get_review_queue",
     "list_canonicals",
     "create_canonical",

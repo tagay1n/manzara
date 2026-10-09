@@ -10,10 +10,6 @@ from typing import Any
 import yaml
 
 from app.artifacts import local_state_path
-from app.modules.maintenance.config import (
-    MaintenanceSettings,
-    load_maintenance_settings,
-)
 
 
 @dataclass(frozen=True)
@@ -22,7 +18,6 @@ class Settings:
 
     database_url: str
     database_schema: str
-    maintenance: MaintenanceSettings
     database_pool_size: int = 4
     local_state_path: Path | None = None
 
@@ -132,7 +127,6 @@ def load_settings() -> Settings:
     return Settings(
         database_url=database_url,
         database_schema=database_schema,
-        maintenance=load_maintenance_settings(),
         database_pool_size=_load_database_pool_size(),
         local_state_path=_load_local_state_path(),
     )

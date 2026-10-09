@@ -288,7 +288,7 @@ def _is_terminated_upload_error(error: Exception) -> bool:
 
 
 class GeminiRuntimeManager:
-    """Shared Gemini key allocator with DB-backed runtime state + SSE events."""
+    """Shared Gemini key allocator with local runtime state and coordination events."""
 
     def __init__(
         self,

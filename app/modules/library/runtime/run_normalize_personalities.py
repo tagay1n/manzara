@@ -273,8 +273,7 @@ def run_personality_normalization(
                 if progress_sink is not None:
                     progress_sink(snapshot, force=force)
                 else:
-                    db.publish_run_progress(task_id=TASK_ID, run_id=run_id, panel_id=PANEL_ID,
-                                            progress=snapshot, force=force)
+                    db.publish_run_progress(run_id=run_id, progress=snapshot, force=force)
 
     def process(candidate: PersonalityCandidate, manager: GeminiRuntimeManager, worker_id: str) -> None:
         checkpoint = db.get_personality_checkpoint(candidate.raw_name)

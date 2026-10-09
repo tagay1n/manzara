@@ -78,19 +78,24 @@ def bind_run_log(sink: Callable[[str], None] | None) -> Iterator[None]:
 
 
 class RunLog:
-    def __init__(self, root: Path, task_id: str, panel_id: str, run_id: int):
+    def __init__(self, root: Path, task_id: str, panel_id: str, run_id: int,
+                 console_sink: Callable[[str], None] | None = None):
         self.path = run_log_path(root, task_id, run_id)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open("a", encoding="utf-8")
         self._lock = threading.Lock()
+        self._console_sink = console_sink
         self._context = f"run_id={run_id} task_id={task_id} panel_id={panel_id} source=runtime"
 
     def __call__(self, message: str, *, level: str = "INFO") -> None:
         timestamp = datetime.now(timezone.utc).isoformat()
         safe = redact(message).replace("\r", "").replace("\n", "\\n")
+        line = f"{timestamp} | {level} | {self._context} | {safe}"
         with self._lock:
-            self._handle.write(f"{timestamp} | {level} | {self._context} | {safe}\n")
+            self._handle.write(line + "\n")
             self._handle.flush()
+            if self._console_sink is not None:
+                self._console_sink(line)
 
     def close(self) -> None:
         with self._lock:

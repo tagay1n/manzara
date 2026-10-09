@@ -17,16 +17,16 @@ from app.task_runtime.session import SessionLock
 from app.tasks import TaskRunner
 
 
-_LOG_PAGE_SIZE = 200
 _STATUS_INTERVAL_SECONDS = 30
 
 
-def _stream_logs(runner, task_id, run_id, cursor) -> tuple[int, int]:
-    rows = runner.get_run_logs(task_id=task_id, run_id=run_id,
-                               after_log_id=cursor, limit=_LOG_PAGE_SIZE)
-    for row in rows:
-        print(f"{row['ts']} | task_id={task_id} run_id={run_id} | {row['line']}", flush=True)
-    return (rows[-1]["log_id"] if rows else cursor), len(rows)
+class _ConsoleLogs:
+    def __init__(self) -> None:
+        self.last_output = time.monotonic()
+
+    def __call__(self, line: str) -> None:
+        print(line, flush=True)
+        self.last_output = time.monotonic()
 
 
 def _print_status(db, run_id, started_at, last_log_output) -> None:
@@ -43,24 +43,21 @@ def _print_status(db, run_id, started_at, last_log_output) -> None:
     print(redact(json.dumps(snapshot, ensure_ascii=True)), flush=True)
 
 
-def _run_stages(db, runner, descriptors, stop, deadline, on_result) -> int:
+def _run_stages(db, runner, descriptors, stop, deadline, on_result, console) -> int:
     for descriptor in descriptors:
         if stop.is_set() or time.monotonic() >= deadline:
             return 130
         started = runner.start_task(descriptor.task_id, options=RunOptions())
         run_id = started["run"]["run_id"]
         print(f"Starting {descriptor.task_id} run_id={run_id}", flush=True)
-        started_at = last_log_output = time.monotonic()
+        started_at = time.monotonic()
+        console.last_output = started_at
         next_status = started_at + _STATUS_INTERVAL_SECONDS
-        cursor = 0
         stopping = False
         while not runner.is_idle():
-            cursor, count = _stream_logs(runner, descriptor.task_id, run_id, cursor)
             now = time.monotonic()
-            if count:
-                last_log_output = now
             if now >= next_status:
-                _print_status(db, run_id, started_at, last_log_output)
+                _print_status(db, run_id, started_at, console.last_output)
                 next_status = now + _STATUS_INTERVAL_SECONDS
             if not stopping and (stop.is_set() or time.monotonic() >= deadline):
                 stop.set()
@@ -68,11 +65,6 @@ def _run_stages(db, runner, descriptors, stop, deadline, on_result) -> int:
                 print("Safe stop requested; finishing the current operation", flush=True)
                 runner.request_shutdown()
             time.sleep(0.5)
-        # Drain the final lines in bounded pages, including worker finalization.
-        while True:
-            cursor, count = _stream_logs(runner, descriptor.task_id, run_id, cursor)
-            if count < _LOG_PAGE_SIZE:
-                break
         # Read after the worker exits, including artifact/event finalization.
         run = db.get_run(run_id)
         if run is None:
@@ -105,16 +97,13 @@ def run_batch(
                       pool_size=settings.database_pool_size, local_state_path=settings.local_state_path)
         resources.callback(db.close)
         db.init_local_state()
-        panel_ids = dict.fromkeys(item.definition["panel_id"] for item in descriptors)
-        db.seed_panels([{"panel_id": name, "title": name.title()} for name in panel_ids])
-        db.seed_tasks([item.definition for item in descriptors])
         recovered = db.recover_active_runs()
-        db.recover_active_conveyor_runs()
         if recovered:
             db.insert_event("system.recovery", None, None, None, {"recovered_runs": recovered})
-        runner = TaskRunner(db, descriptors)
+        console = _ConsoleLogs()
+        runner = TaskRunner(db, descriptors, console_sink=console)
         resources.callback(runner.shutdown)
         if stop.is_set() or time.monotonic() >= deadline:
             return 130
         preflight(db)
-        return _run_stages(db, runner, descriptors, stop, deadline, on_result)
+        return _run_stages(db, runner, descriptors, stop, deadline, on_result, console)

@@ -140,22 +140,6 @@ def _query_aggregated_mentions(
     return [dict(row) for row in rows], str(config_source)
 
 
-def _query_docs_with_entities_count(entity_type: str) -> int:
-    engine, _ = create_runtime_engine()
-    with engine.connect() as conn:
-        value = conn.execute(
-            text(
-                f"""
-                {_mentions_cte_sql(entity_type)}
-                SELECT COUNT(DISTINCT md5) AS count
-                FROM mentions
-                """
-            )
-        ).scalar()
-    dispose_runtime_engine(engine)
-    return int(value or 0)
-
-
 def _runtime_snapshot_for_alias(entity_type: str, raw_name: str) -> Dict[str, Any]:
     rows, _ = _query_aggregated_mentions(
         entity_type,

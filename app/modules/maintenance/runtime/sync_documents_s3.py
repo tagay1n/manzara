@@ -79,9 +79,7 @@ def _progress_payload(
 
 def _publish_progress(state_db: Any, run_id: int, payload: dict[str, Any]) -> None:
     state_db.publish_run_progress(
-        task_id=TASK_ID,
         run_id=run_id,
-        panel_id=PANEL_ID,
         progress=payload,
     )
 

@@ -1,10 +1,7 @@
-"""Task definitions owned by the Library flow."""
+"""Task registrations owned by the Library flow."""
 
 from __future__ import annotations
-
-from pathlib import Path
 from typing import Any
-
 
 LIBRARY_GENERATE_BOOK_PREVIEWS_TASK_ID = "library.generate_book_previews"
 LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID = "library.prepare_document_cleanup"
@@ -14,116 +11,50 @@ LIBRARY_SITE_EXPORT_TASK_ID = "library.site_export"
 LIBRARY_NORMALIZE_PERSONALITIES_TASK_ID = "library.normalize_personalities"
 
 
-def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, Any]]:
-    """Return task definitions implemented by the Library module."""
-    root = app_root or Path(__file__).resolve().parents[3]
-    runner = root / "app" / "modules" / "library" / "runtime" / "run_generate_book_previews.py"
-    py_bootstrap = 'PY_BIN=".venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3"; '
+def library_task_definitions() -> list[dict[str, Any]]:
+    """Return registrations for Python task handlers."""
     return [
         {
             "task_id": "library.catalog_preview_requests",
-            "panel_id": "library",
+            "group_id": "library",
             "title": "Process admin preview requests",
-            "task_type": "preview",
-            "icon_idle": "Images",
-            "icon_running": "Square",
-            "cwd": str(root),
-            "command": {"mode": "shell", "value": py_bootstrap + '"$PY_BIN" -m app.modules.library.runtime.run_catalog_previews'},
         },
         {
             "task_id": "library.suggest_publisher_merges",
-            "panel_id": "library",
+            "group_id": "library",
             "title": "Cluster publishers",
-            "task_type": "metadata",
-            "icon_idle": "Sparkles",
-            "icon_running": "Square",
-            "cwd": str(root),
-            "command": {"mode": "shell", "value": py_bootstrap + '"$PY_BIN" -m app.modules.library.runtime.run_suggest_publisher_merges'},
         },
         {
             "task_id": LIBRARY_NORMALIZE_PERSONALITIES_TASK_ID,
-            "gemini_workers_default": 1,
-            "panel_id": "library",
+            "workers_default": 1,
+            "group_id": "library",
             "title": "Normalize personalities",
-            "task_type": "metadata",
-            "icon_idle": "Sparkles",
-            "icon_running": "Square",
-            "cwd": str(root),
-            "command": {
-                "mode": "shell",
-                "value": py_bootstrap
-                + '"$PY_BIN" -m app.modules.library.runtime.run_normalize_personalities',
-            },
         },
         {
             "task_id": LIBRARY_SITE_EXPORT_TASK_ID,
-            "panel_id": "library",
+            "group_id": "library",
             "title": "Export static library",
-            "task_type": "export",
-            "icon_idle": "PackageOpen",
-            "icon_running": "Square",
-            "cwd": str(root),
-            "command": {
-                "mode": "shell",
-                "value": py_bootstrap
-                + '"$PY_BIN" -m app.modules.library.runtime.run_site_export',
-            },
         },
         {
             "task_id": LIBRARY_EXTRACT_NON_PDF_TASK_ID,
-            "panel_id": "library",
+            "group_id": "library",
             "title": "Extract non-pdf",
-            "task_type": "extract",
-            "icon_idle": "FileText",
-            "icon_running": "Square",
-            "cwd": str(root),
-            "command": {
-                "mode": "shell",
-                "value": py_bootstrap
-                + '"$PY_BIN" -m app.modules.library.runtime.run_extract_non_pdf',
-            },
         },
         {
             "task_id": LIBRARY_METADATA_EXTRACT_TASK_ID,
-            "gemini_workers_default": 1,
-            "panel_id": "metadata",
+            "workers_default": 1,
+            "group_id": "metadata",
             "title": "Extract metadata",
-            "task_type": "metadata",
-            "icon_idle": "ScanText",
-            "icon_running": "Square",
-            "cwd": str(root),
-            "command": {
-                "mode": "shell",
-                "value": py_bootstrap
-                + '"$PY_BIN" -m app.modules.library.runtime.run_metadata_extract',
-            },
         },
         {
             "task_id": LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID,
-            "panel_id": "maintenance",
+            "group_id": "maintenance",
             "title": "Cleanup plan",
-            "task_type": "scan",
-            "icon_idle": "ListFilter",
-            "icon_running": "Square",
-            "cwd": str(root),
-            "command": {
-                "mode": "shell",
-                "value": py_bootstrap
-                + '"$PY_BIN" scripts/run_daily_maintenance.py',
-            },
         },
         {
             "task_id": LIBRARY_GENERATE_BOOK_PREVIEWS_TASK_ID,
-            "panel_id": "library",
+            "group_id": "library",
             "title": "Generate book previews",
-            "task_type": "preview",
-            "icon_idle": "Images",
-            "icon_running": "Square",
-            "cwd": str(root),
-            "command": {
-                "mode": "shell",
-                "value": py_bootstrap + f'"$PY_BIN" "{runner}"',
-            },
         },
     ]
 

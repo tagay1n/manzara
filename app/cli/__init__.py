@@ -6,7 +6,7 @@ import argparse
 import sys
 
 
-def build_descriptors(settings):
+def build_descriptors():
     from app.modules.library.collection_tasks import collection_task_definitions
     from app.modules.library.tasks import (
         LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID,
@@ -25,9 +25,10 @@ def build_descriptors(settings):
     handlers = {"library.normalize_personalities": normalize}
     scheduled = {LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID, MAINTENANCE_MONOCORPUS_SYNC_TASK_ID}
     definitions = [*library_task_definitions(), *collection_task_definitions(),
-                   *maintenance_task_definitions(settings.maintenance)]
+                   *maintenance_task_definitions()]
     return [TaskDescriptor(
-        task_id=item["task_id"], title=item["title"], definition=item,
+        task_id=item["task_id"], title=item["title"], group_id=item["group_id"],
+        workers_default=item.get("workers_default", 1), workers_max=item.get("workers_max"),
         group="Maintenance" if item["task_id"].startswith("maintenance.") else "Library",
         execute=handlers.get(item["task_id"]),
     ) for item in definitions if item["task_id"] not in scheduled]

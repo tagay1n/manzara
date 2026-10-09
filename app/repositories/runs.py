@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from app.repositories.core import utc_now
 from app.runtime_states import (
@@ -17,7 +17,7 @@ from app.runtime_states import (
 
 
 class RunRepository:
-    """Machine-local SQLite operations plus cloud storage diagnostics."""
+    """Machine-local run history, progress snapshots, and structured events."""
 
     def get_latest_run_for_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Return most recent run for task."""
@@ -35,29 +35,11 @@ class RunRepository:
         return self._row_to_run(row) if row else None
 
 
-    def create_run(self, task: Dict[str, Any]) -> int:
-        """Create a run and atomically consume its one-shot worker override."""
+    def create_run(self, *, task_id: str, panel_id: str, workers: int) -> int:
+        """Create a run from the handler registration and explicit options."""
         now = utc_now()
         with self._lock:
             with self._runtime_connect(immediate=True) as conn:
-                workers = None
-                if task.get("gemini_workers_default") is not None:
-                    row = conn.execute(
-                        """SELECT gemini_workers_default, gemini_workers_next
-                           FROM task_definitions WHERE task_id = ? FOR UPDATE""",
-                        (task["task_id"],),
-                    ).fetchone()
-                    if row:
-                        workers = int(
-                            row.get("gemini_workers_next")
-                            or row.get("gemini_workers_default")
-                            or 1
-                        )
-                        conn.execute(
-                            """UPDATE task_definitions SET gemini_workers_next = NULL,
-                               updated_at = ? WHERE task_id = ?""",
-                            (now, task["task_id"]),
-                        )
                 cur = conn.execute(
                     """
                     INSERT INTO runs (
@@ -67,8 +49,8 @@ class RunRepository:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        task["task_id"],
-                        task["panel_id"],
+                        task_id,
+                        panel_id,
                         TASK_RUN_STATUS_STARTING,
                         None,
                         now,
@@ -129,14 +111,11 @@ class RunRepository:
         self,
         *,
         run_id: int,
-        task_id: str,
-        panel_id: str,
         progress: Dict[str, Any],
-        status: str = "running",
         force: bool = False,
         minimum_interval_seconds: float = 1.0,
     ) -> bool:
-        """Persist one coalesced authoritative progress snapshot and SSE event."""
+        """Persist the latest coalesced progress snapshot without event duplication."""
         if not isinstance(progress, dict):
             raise ValueError("progress must be an object")
         resolved_run_id = int(run_id)
@@ -147,10 +126,6 @@ class RunRepository:
                 return False
 
             timestamp = utc_now()
-            event_payload = {
-                "status": str(status or "running"),
-                "progress": dict(progress),
-            }
             with self._runtime_connect() as conn:
                 conn.execute(
                     """
@@ -163,19 +138,6 @@ class RunRepository:
                         timestamp,
                         timestamp,
                         resolved_run_id,
-                    ),
-                )
-                conn.execute(
-                    """
-                    INSERT INTO events (ts, type, task_id, run_id, panel_id, payload_json)
-                    VALUES (?, 'task.progress', ?, ?, ?, ?)
-                    """,
-                    (
-                        timestamp,
-                        str(task_id),
-                        resolved_run_id,
-                        str(panel_id),
-                        json.dumps(event_payload, ensure_ascii=False),
                     ),
                 )
             self._progress_last_published[resolved_run_id] = now_monotonic
@@ -220,10 +182,6 @@ class RunRepository:
                     WHERE run_id = ?
                     """,
                     (status, exit_code, error_text, now, now, now, run_id),
-                )
-                conn.execute(
-                    "DELETE FROM events WHERE run_id = ? AND type IN ('task.log', 'task.progress')",
-                    (run_id,),
                 )
             self._progress_last_published.pop(int(run_id), None)
 
@@ -360,74 +318,6 @@ class RunRepository:
         return self._row_to_run(row) if row else None
 
 
-    def list_tasks_with_latest_run(self) -> List[Dict[str, Any]]:
-        """Return each task with latest run details if available."""
-        with self._runtime_connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT
-                    t.task_id,
-                    t.panel_id,
-                    t.title,
-                    t.task_type,
-                    t.icon_idle,
-                    t.icon_running,
-                    t.command_json,
-                    t.cwd,
-                    t.gemini_workers_default,
-                    t.gemini_workers_next,
-                    r.run_id,
-                    r.status AS run_status,
-                    r.stop_mode,
-                    r.started_at,
-                    r.finished_at,
-                    r.heartbeat_at,
-                    r.exit_code,
-                    r.error_text,
-                    r.summary_json,
-                    r.progress_json,
-                    r.gemini_workers
-                FROM task_definitions t
-                LEFT JOIN runs r
-                    ON r.run_id = (
-                        SELECT run_id
-                        FROM runs r2
-                        WHERE r2.task_id = t.task_id
-                        ORDER BY r2.run_id DESC
-                        LIMIT 1
-                    )
-                ORDER BY t.panel_id, t.title
-                """
-            ).fetchall()
-
-        items: List[Dict[str, Any]] = []
-        for row in rows:
-            payload = dict(row)
-            payload["command"] = json.loads(payload.pop("command_json"))
-            payload["run_summary"] = self._decode_summary(payload.pop("summary_json", "{}"))
-            payload["run_progress"] = self._decode_summary(payload.pop("progress_json", "{}"))
-            items.append(payload)
-        return items
-
-
-    def list_recent_runs(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """Return recent runs for dashboard and quick inspection."""
-        with self._runtime_connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT run_id, task_id, panel_id, status, stop_mode,
-                       started_at, finished_at, heartbeat_at,
-                       pid, exit_code, error_text, summary_json, progress_json,
-                       gemini_workers
-                FROM runs
-                ORDER BY run_id DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-        return [self._row_to_run(row) for row in rows]
-
-
     def list_recent_runs_for_task(self, task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Return recent runs for one task."""
         with self._runtime_connect() as conn:
@@ -445,168 +335,6 @@ class RunRepository:
                 (task_id, limit),
             ).fetchall()
         return [self._row_to_run(row) for row in rows]
-
-
-    def get_database_storage_snapshot(
-        self,
-        *,
-        schema_name: Optional[str] = None,
-        table_limit: int = 200,
-    ) -> Dict[str, Any]:
-        """Return PostgreSQL storage snapshot for dashboard diagnostics."""
-        target_schema = str(schema_name or self.schema or "public").strip() or "public"
-        limit = max(1, min(int(table_limit), 500))
-        with self._connect() as conn:
-            database_name = conn.execute("SELECT current_database() AS name").scalar()
-            database_size_bytes = conn.execute(
-                "SELECT pg_database_size(current_database()) AS bytes"
-            ).scalar()
-            rows = conn.execute(
-                """
-                SELECT
-                    c.relname AS table_name,
-                    COALESCE(
-                        NULLIF(s.n_live_tup, -1),
-                        GREATEST(c.reltuples::bigint, 0)
-                    )::bigint AS estimated_rows,
-                    pg_total_relation_size(c.oid)::bigint AS total_bytes
-                FROM pg_class c
-                JOIN pg_namespace n
-                    ON n.oid = c.relnamespace
-                LEFT JOIN pg_stat_user_tables s
-                    ON s.relid = c.oid
-                WHERE c.relkind = 'r'
-                  AND n.nspname = ?
-                ORDER BY total_bytes DESC, c.relname ASC
-                LIMIT ?
-                """,
-                (target_schema, limit),
-            ).fetchall()
-
-        data_directory = None
-        try:
-            # Run in a separate transaction because permission failures here
-            # would abort the transaction for all subsequent queries.
-            with self._connect() as conn:
-                data_directory = conn.execute("SHOW data_directory").scalar()
-        except Exception:
-            # Some managed roles cannot read this setting (requires pg_read_all_settings).
-            # Keep the diagnostics endpoint usable without elevated grants.
-            data_directory = None
-
-        tables = [
-            {
-                "table_name": str(row.get("table_name") or ""),
-                "estimated_rows": int(row.get("estimated_rows") or 0),
-                "total_bytes": int(row.get("total_bytes") or 0),
-            }
-            for row in rows
-        ]
-
-        return {
-            "database_name": str(database_name or ""),
-            "database_size_bytes": int(database_size_bytes or 0),
-            "data_directory": str(data_directory or ""),
-            "schema": target_schema,
-            "tables": tables,
-        }
-
-
-    def run_count_by_status(self, panel_id: str) -> Dict[str, int]:
-        """Return run status counters for one panel."""
-        with self._runtime_connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT status, COUNT(*) AS count
-                FROM runs
-                WHERE panel_id = ?
-                GROUP BY status
-                """,
-                (panel_id,),
-            ).fetchall()
-        return {str(row["status"]): int(row["count"]) for row in rows}
-
-
-    def get_panel_run_summaries(
-        self, panel_ids: Sequence[str]
-    ) -> Dict[str, Dict[str, Any]]:
-        """Return status counts and latest outcomes for several panels at once."""
-        panels = self._normalize_id_list(panel_ids)
-        if not panels:
-            return {}
-        placeholders = self._placeholders(len(panels))
-        with self._runtime_connect() as conn:
-            rows = conn.execute(
-                f"""
-                WITH scoped AS (
-                    SELECT run_id, panel_id, status, finished_at
-                    FROM runs
-                    WHERE panel_id IN ({placeholders})
-                ),
-                counts AS (
-                    SELECT panel_id, status, COUNT(*) AS count
-                    FROM scoped
-                    GROUP BY panel_id, status
-                ),
-                latest AS (
-                    SELECT panel_id, status AS latest_status
-                    FROM (
-                        SELECT panel_id, status,
-                               ROW_NUMBER() OVER (
-                                   PARTITION BY panel_id ORDER BY run_id DESC
-                               ) AS position
-                        FROM scoped
-                    ) ranked
-                    WHERE position = 1
-                ),
-                successes AS (
-                    SELECT panel_id, MAX(finished_at) AS last_success_at
-                    FROM scoped
-                    WHERE status = 'completed'
-                    GROUP BY panel_id
-                )
-                SELECT c.panel_id, c.status, c.count,
-                       l.latest_status, s.last_success_at
-                FROM counts c
-                LEFT JOIN latest l USING (panel_id)
-                LEFT JOIN successes s USING (panel_id)
-                ORDER BY c.panel_id, c.status
-                """,
-                panels,
-            ).fetchall()
-        summaries: Dict[str, Dict[str, Any]] = {
-            panel_id: {
-                "status_counts": {},
-                "latest_status": None,
-                "last_success_at": None,
-            }
-            for panel_id in panels
-        }
-        for row in rows:
-            panel_id = str(row["panel_id"])
-            summary = summaries[panel_id]
-            summary["status_counts"][str(row["status"])] = int(row["count"])
-            summary["latest_status"] = row.get("latest_status")
-            summary["last_success_at"] = row.get("last_success_at")
-        return summaries
-
-
-    def last_successful_run(self, panel_id: str) -> Optional[str]:
-        """Return timestamp of most recent successful run."""
-        with self._runtime_connect() as conn:
-            row = conn.execute(
-                """
-                SELECT finished_at
-                FROM runs
-                WHERE panel_id = ? AND status = 'completed'
-                ORDER BY run_id DESC
-                LIMIT 1
-                """,
-                (panel_id,),
-            ).fetchone()
-        if not row:
-            return None
-        return row["finished_at"]
 
 
     def recover_active_runs(self) -> int:

@@ -190,9 +190,7 @@ def _publish_progress(
 ) -> None:
     payload = {"status": "running", **dict(counters), **extra}
     db.publish_run_progress(
-        task_id=TASK_ID,
         run_id=run_id,
-        panel_id=PANEL_ID,
         progress=payload,
     )
 
@@ -622,11 +620,8 @@ def _validate_collection_proposals_worker(
         )
         terminal_status = "stopped" if summary["stopped"] else "completed"
         db.publish_run_progress(
-            task_id=TASK_ID,
             run_id=run_id,
-            panel_id=PANEL_ID,
             progress={"status": terminal_status, **summary},
-            status=terminal_status,
             force=True,
         )
         return summary

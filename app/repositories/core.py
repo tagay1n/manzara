@@ -399,22 +399,6 @@ class CoreRepository:
     def local_state_path(self) -> Path:
         return self._local_state.path
 
-    def get_local_state_snapshot(self) -> Dict[str, Any]:
-        """Return diagnostics for the required machine-local runtime store."""
-        with self._runtime_connect() as conn:
-            schema_version = int(conn.execute("PRAGMA user_version").scalar() or 0)
-            journal_mode = str(conn.execute("PRAGMA journal_mode").scalar() or "")
-        return {
-            "path": str(self.local_state_path),
-            "schema_version": schema_version,
-            "journal_mode": journal_mode,
-            "size_bytes": (
-                int(self.local_state_path.stat().st_size)
-                if self.local_state_path.exists()
-                else 0
-            ),
-        }
-
 
     def init_schema(self) -> None:
         """Apply domain migrations and initialize mandatory local runtime state."""
@@ -477,20 +461,6 @@ class CoreRepository:
                 raise RuntimeError("Catalog revision 20261008_0062 or later is required; apply migrations separately.")
 
 
-    def _row_to_task(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        payload = dict(row)
-        payload["command"] = json.loads(payload.pop("command_json"))
-        meaningful = payload.pop("meaningful_result_json", "{}")
-        try:
-            parsed_meaningful = json.loads(meaningful or "{}")
-        except Exception:
-            parsed_meaningful = {}
-        payload["meaningful_result"] = (
-            parsed_meaningful if isinstance(parsed_meaningful, dict) else {}
-        )
-        return payload
-
-
     def _decode_summary(self, raw_summary: Any) -> Dict[str, Any]:
         text = str(raw_summary or "").strip()
         if not text:
@@ -507,58 +477,3 @@ class CoreRepository:
         payload["summary"] = self._decode_summary(payload.pop("summary_json", "{}"))
         payload["progress"] = self._decode_summary(payload.pop("progress_json", "{}"))
         return payload
-
-
-    @staticmethod
-    def _normalize_id_list(values: Sequence[str]) -> List[str]:
-        normalized: List[str] = []
-        seen: set[str] = set()
-        for raw in values:
-            value = str(raw or "").strip()
-            if not value or value in seen:
-                continue
-            seen.add(value)
-            normalized.append(value)
-        return normalized
-
-
-    @staticmethod
-    def _placeholders(count: int) -> str:
-        return ", ".join("?" for _ in range(max(0, int(count))))
-
-
-    def _select_obsolete_ids(
-        self,
-        conn: _ConnectionAdapter,
-        *,
-        table: str,
-        id_column: str,
-        keep_ids: Sequence[str],
-    ) -> List[str]:
-        keep = self._normalize_id_list(keep_ids)
-        if keep:
-            rows = conn.execute(
-                f"SELECT {id_column} FROM {table} WHERE {id_column} NOT IN ({self._placeholders(len(keep))})",
-                keep,
-            ).fetchall()
-        else:
-            rows = conn.execute(f"SELECT {id_column} FROM {table}").fetchall()
-        return [str(row[id_column]) for row in rows if str(row.get(id_column) or "").strip()]
-
-
-    def _delete_in(
-        self,
-        conn: _ConnectionAdapter,
-        *,
-        table: str,
-        id_column: str,
-        values: Sequence[Any],
-    ) -> int:
-        items = [value for value in values if value is not None]
-        if not items:
-            return 0
-        cur = conn.execute(
-            f"DELETE FROM {table} WHERE {id_column} IN ({self._placeholders(len(items))})",
-            items,
-        )
-        return int(cur.rowcount or 0)
