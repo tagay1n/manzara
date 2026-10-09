@@ -2,7 +2,7 @@
 
 These rules apply to `app/modules/maintenance/`.
 
-Catalog-dependent sync, cleanup, and export code needs adaptation/verification against the migrated PostgreSQL model. Guidance preserves required safety behavior; legacy SQL names do not establish current compatibility. See `docs/catalog-model.md` from the repo root.
+The scheduled Google Sheets export uses `app/catalog/export.py` for a read-only normalized snapshot; its operations and column contract live in `docs/operations.md`. Other catalog-dependent Maintenance code needs adaptation/verification against the migrated PostgreSQL model. Guidance preserves required safety behavior; legacy SQL names do not establish current compatibility. See `docs/catalog-model.md` from the repo root.
 
 Read only the guidance matching the changed behavior:
 
