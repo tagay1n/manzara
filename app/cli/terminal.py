@@ -1,51 +1,38 @@
-"""Inline asynchronous terminal interaction; all I/O runs off the UI loop."""
+"""Inline command prompt with permanent scrollback and explicit run ownership."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from datetime import datetime, timezone
 import os
 import signal
+import sys
 import termios
+import time
 
-from prompt_toolkit.application import Application
-from prompt_toolkit.document import Document
-from prompt_toolkit.data_structures import Point
+from prompt_toolkit.output import ColorDepth
+from prompt_toolkit.utils import get_bell_environment_variable, get_term_environment_variable
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
-from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
+from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, VSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import Style
-from prompt_toolkit.widgets import Label, TextArea
+from prompt_toolkit.widgets import Button, Label, TextArea
 
+from app.cli.commands import COMMANDS, COMMAND_BY_NAME, help_text
+from app.cli.display import InlineApplication, TerminalDisplay, emergency_notice
+from app.cli.output import OutputFailure, TerminalOutput
+from app.cli.presentation import duration, elapsed, progress_text, provider_wait, restrictions, status, summary_text
 from app.db import Database
 from app.gemini_workers import resolve_gemini_workers
-from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_COMPLETED
+from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTING
 from app.settings import load_settings
 from app.task_runtime.contracts import RunOptions
 from app.task_runtime.logging import redact
 from app.task_runtime.session import SessionLock
 from app.tasks import TaskRunner
-
-
-_ACTIONS = ("Start / Resume", "Stop safely", "Settings", "Logs", "Summary", "Recent runs", "Back")
-
-
-def _elapsed(run: dict) -> str:
-    try:
-        start = datetime.fromisoformat(run["started_at"])
-        end = datetime.fromisoformat(run["finished_at"]) if run.get("finished_at") else datetime.now(timezone.utc)
-        seconds = max(0, int((end - start).total_seconds()))
-        return f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
-    except (KeyError, TypeError, ValueError):
-        return "--:--:--"
-
-
-def _status(run: dict) -> str:
-    summary = run.get("summary") or {}
-    return "deferred" if run.get("status") == TASK_RUN_STATUS_COMPLETED and summary.get("outcome") == "deferred" else str(run.get("status", "idle"))
 
 
 class Terminal:
@@ -57,183 +44,237 @@ class Terminal:
         self.session = None
         self.descriptors = []
         self.options = {}
-        self.latest = {}
-        self.recent = []
-        self.selected = 0
-        self.action = 0
-        self.run_index = 0
-        self.inspected_run_id = None
-        self.view = "details"
+        self.selected_id = arguments.task
         self.ready = False
         self.startup_finished = False
         self.closing = False
-        self._terminal_attributes = None
-        self.pending = False
-        self.message = "Initializing local runtime…"
+        self.stopping = False
+        self.starting = False
+        self.finalizing = False
+        self.foreground = None
+        self.foreground_run_id = None
+        self.foreground_snapshot = None
+        self.foreground_started = 0.0
+        self.runtime_error = None
         self.event_cursor = 0
         self.waiting = {}
-        self.logs = []
-        self.follow = True
-        self.tasks_control = FormattedTextControl(self._tasks_text, focusable=True,
-                                                 get_cursor_position=lambda: Point(0, self.selected))
-        self.actions_control = FormattedTextControl(self._actions_text, focusable=True,
-                                                   get_cursor_position=lambda: Point(0, self.action))
-        self.runs_control = FormattedTextControl(self._runs_text, focusable=True,
-                                                get_cursor_position=lambda: Point(0, self.run_index))
-        self.detail = TextArea(read_only=True, scrollbar=True, height=8, wrap_lines=True)
+        self.output = TerminalOutput()
+        self.display = TerminalDisplay.from_pty(
+            sys.stdout, term=get_term_environment_variable(),
+            default_color_depth=ColorDepth.from_env(), enable_bell=get_bell_environment_variable(),
+        )
+        self._consumer_finished = False
+        self._terminal_attributes = None
+        self._operations = set()
+        self._stop_pending = False
+        self.mode = ""
+        self.picker_index = 0
+        self.include_disabled = False
+        self.history_rows = []
+        self._picker_generation = 0
+        self.message = "Initializing local runtime…"
+        self.form_error = ""
+        self.prompt = TextArea(height=Dimension(min=1, max=3), multiline=False, wrap_lines=True,
+                               prompt="› ")
+        # TextArea forces a one-row window for non-multiline buffers. Retain
+        # single-command input while letting wrapped text use a few rows.
+        self.prompt.window.height = Dimension(min=1, max=3)
+        self.prompt.buffer.on_text_changed += self._prompt_changed
+        self.search = TextArea(height=1, multiline=False, prompt="Search › ")
+        self.search.buffer.on_text_changed += self._search_changed
         self.workers_input = TextArea(height=1, multiline=False)
         self.limit_input = TextArea(height=1, multiline=False)
-        normal = ConditionalContainer(HSplit([
-            Window(self.tasks_control, height=6),
-            ConditionalContainer(Window(self.actions_control, height=3),
-                                 filter=Condition(lambda: self.view != "settings")),
-            ConditionalContainer(Window(self.runs_control, height=4),
-                                 filter=Condition(lambda: self.view == "history")),
-            self.detail,
-        ]), filter=Condition(lambda: self.view != "settings"))
-        settings = ConditionalContainer(HSplit([
-            Label("Settings for the next run"), Label("Workers (positive integer)"), self.workers_input,
+        self.save_button = Button("Save", handler=self._save_settings, width=8)
+        self.cancel_button = Button("Cancel", handler=self._dismiss, width=8)
+        self.picker_control = FormattedTextControl(self._picker_text)
+        picker = ConditionalContainer(HSplit([
+            Window(FormattedTextControl(self._picker_title), height=1),
+            ConditionalContainer(self.search, filter=Condition(lambda: self.mode in ("task", "history"))),
+            Window(self.picker_control, height=Dimension(min=1, max=6), wrap_lines=True),
+        ]), filter=Condition(lambda: self.mode in ("commands", "task", "history")))
+        form = ConditionalContainer(HSplit([
+            Label(lambda: f"Settings · {self.task.title if self.task else ''}"),
+            Label("Workers (positive integer)"), self.workers_input,
             Label("Candidate limit (blank = unlimited)"), self.limit_input,
-            Label("Tab: next field  Enter/Ctrl-S: save  Esc: cancel"),
-        ]), filter=Condition(lambda: self.view == "settings"))
+            ConditionalContainer(
+                Window(FormattedTextControl(lambda: [("class:warning", self.form_error)]),
+                       height=Dimension(min=1, max=3), wrap_lines=True),
+                filter=Condition(lambda: bool(self.form_error)),
+            ),
+            VSplit([self.save_button, self.cancel_button], padding=1),
+        ]), filter=Condition(lambda: self.mode == "settings"))
         self.layout = Layout(HSplit([
-            Label("Manzara  ·  task operations"),
-            Window(FormattedTextControl(self._active_text), height=3),
-            normal, settings,
-            Window(FormattedTextControl(lambda: [("class:message", redact(self.message))]), height=2, wrap_lines=True),
-            Label("↑↓ navigate  Enter actions  Tab focus  Esc back  q/Ctrl-C stop and exit  Ctrl-C again: force exit"),
-        ]), focused_element=self.tasks_control)
-        self.app = Application(
+            Window(FormattedTextControl(self._activity_text), height=Dimension(min=1),
+                   dont_extend_height=True, wrap_lines=True),
+            picker, form,
+            ConditionalContainer(self.prompt, filter=Condition(lambda: self.mode not in ("settings", "task", "history"))),
+            Window(FormattedTextControl(self._hint_text), height=Dimension(min=1, max=2), wrap_lines=True),
+        ]), focused_element=self.prompt)
+        self.app = InlineApplication(
+            output=self.display,
             layout=self.layout, key_bindings=self._keys(), full_screen=False,
-            refresh_interval=0.25, min_redraw_interval=0.05,
+            refresh_interval=0.2, min_redraw_interval=0.05,
             style=Style.from_dict({"selected": "bold ansicyan", "disabled": "ansibrightblack",
-                                  "message": "ansiyellow", "active": "ansigreen"}),
+                                  "warning": "ansiyellow", "activity": "ansigreen"}),
         )
 
     @property
     def task(self):
-        return self.descriptors[self.selected] if self.descriptors else None
+        return next((task for task in self.descriptors if task.task_id == self.selected_id), None)
 
     @property
-    def selected_run(self):
-        if self.inspected_run_id is not None:
-            return next((run for run in self.recent if run["run_id"] == self.inspected_run_id), None)
-        return self.recent[min(self.run_index, len(self.recent) - 1)] if self.recent else None
+    def locked(self):
+        return self.foreground is not None or self.closing
 
-    def _tasks_text(self):
-        if not self.descriptors:
-            return [("", "Loading task registry…")]
+    def _spawn(self, coroutine):
+        task = asyncio.create_task(coroutine)
+        self._operations.add(task)
+        task.add_done_callback(self._operations.discard)
+        return task
+
+    async def _say(self, text):
+        try:
+            await asyncio.to_thread(self.output.write, redact(text) + "\n")
+        except OutputFailure as exc:
+            self.message = str(exc)
+
+    def _prompt_changed(self, _buffer):
+        if self.mode in ("task", "history", "settings"):
+            return
+        text = self.prompt.text
+        self.mode = "commands" if text.startswith("/") and not any(char.isspace() for char in text) else ""
+        self.picker_index = 0
+
+    def _search_changed(self, _buffer):
+        self.picker_index = 0
+
+    def _picker_items(self):
+        if self.mode == "commands":
+            query = self.prompt.text.removeprefix("/").lower()
+            return [(command, f"/{command.name}  {command.description}", True)
+                    for command in COMMANDS if command.name.startswith(query)]
+        query = self.search.text.casefold()
+        if self.mode == "task":
+            return [(task, f"{task.title} · {task.group}" +
+                     (f" · disabled: {task.unavailable_reason}" if not task.available else ""), task.available)
+                    for task in self.descriptors if (task.available or self.include_disabled)
+                    and query in f"{task.title} {task.task_id} {task.group}".casefold()]
+        if self.mode == "history":
+            return [(run, f"Run {run['run_id']} · {status(run)} · {elapsed(run)} · {run['started_at']}", True)
+                    for run in self.history_rows
+                    if query in f"{run['run_id']} {status(run)} {run['started_at']}".casefold()]
+        return []
+
+    def _picker_title(self):
+        titles = {"commands": "Commands", "task": "Tasks · select, then /run",
+                  "history": f"Recent runs · {self.task.title if self.task else ''} (latest 20)"}
+        return [("", titles.get(self.mode, ""))]
+
+    def _picker_text(self):
+        items = self._picker_items()
+        if not items:
+            return [("class:disabled", "No matches")]
+        self.picker_index = min(self.picker_index, len(items) - 1)
+        # Keep the selected row visible without a permanent scrolling pane.
+        first = self.picker_index
         rows = []
-        for index, task in enumerate(self.descriptors):
-            run = self.latest.get(task.task_id) or {}
-            marker = "›" if index == self.selected else " "
-            state = _status(run) if task.available else "unavailable"
-            style = "class:selected" if index == self.selected else ("" if task.available else "class:disabled")
-            rows.append((style, f"{marker} {task.group} / {task.title}  [{state}]\n"))
+        for index in range(first, min(len(items), first + 5)):
+            _, label, enabled = items[index]
+            style = "class:selected" if index == self.picker_index else ("" if enabled else "class:disabled")
+            rows.append((style, f"{'›' if index == self.picker_index else ' '} {redact(label)}\n"))
         return rows
 
-    def _actions_text(self):
-        if not self.ready:
-            return [("", "")]
-        return [("class:selected" if index == self.action else "", f"{'›' if index == self.action else ' '} {label}\n")
-                for index, label in enumerate(_ACTIONS)]
+    def _activity_text(self):
+        if self.foreground is None:
+            title = self.task.title if self.task else "Manzara"
+            return [("", f"  Idle · {redact(title)}")]
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[int(time.monotonic() * 5) % 10]
+        run = self.foreground_snapshot
+        if self.finalizing or (run and run.get("status") not in TASK_RUN_ACTIVE_STATUSES):
+            phase = "Finalizing"
+        elif self.stopping or (run and run.get("stop_mode")):
+            phase = "Stopping"
+        elif self.starting or (run and run.get("status") == TASK_RUN_STATUS_STARTING):
+            phase = "Starting"
+        else:
+            phase = "Running"
+        elapsed_text = duration(max(0, int(time.monotonic() - self.foreground_started)))
+        parts = [f"  {spinner} {phase} · {redact(self.foreground.title)}"]
+        if self.runtime_error:
+            parts.append("progress unavailable · runtime read failed")
+        elif run and phase == "Running":
+            parts.append(redact(progress_text(run, self.app.output.get_size().columns)))
+        parts.append(elapsed_text)
+        if not self.runtime_error:
+            # Each event describes a worker or request gate, never all workers.
+            waits = [text for payload in self.waiting.values() if (text := provider_wait(payload))]
+            if waits:
+                parts.append(redact(waits[0]) + (f" (+{len(waits) - 1} waits)" if len(waits) > 1 else ""))
+        return [("class:warning" if self.runtime_error else "class:activity", "  ·  ".join(parts))]
 
-    def _runs_text(self):
-        return [("class:selected" if index == self.run_index else "",
-                 f"{'›' if index == self.run_index else ' '} run {run['run_id']}  {_status(run)}  {_elapsed(run)}\n")
-                for index, run in enumerate(self.recent)] or [("", "No runs yet")]
-
-    def _progress_text(self, run):
-        progress = run.get("progress") or {}
-        if run.get('task_id') == 'library.extract_non_pdf' and 'total' in progress:
-            return (f"{progress.get('current', 0)}/{progress['total']} examined · "
-                    f"{progress.get('ready', 0)} ready · {progress.get('failed', 0)} failed · "
-                    f"{progress.get('deferred', 0)} deferred")
-        if progress.get("phase") == "discovering":
-            if run.get("status") not in TASK_RUN_ACTIVE_STATUSES:
-                return "Candidate discovery did not finish."
-            spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[int(asyncio.get_running_loop().time() * 4) % 10]
-            return f"{spinner} discovering candidates"
-        total = progress.get("total", 0)
-        resolved = progress.get("resolved", max(0, progress.get("current", 0) - progress.get("deferred", 0)))
-        ratio = min(1, resolved / total) if total else (1 if run.get("status") == TASK_RUN_STATUS_COMPLETED else 0)
-        filled = int(16 * ratio)
-        return f"[{'━' * filled}{'·' * (16 - filled)}] {resolved}/{total} resolved · {progress.get('processed', 0)} processed"
-
-    def _active_text(self):
-        active = [run for run in self.latest.values() if run and run.get("status") in TASK_RUN_ACTIVE_STATUSES]
-        if not active:
-            return [("", "Active runs: none" + (" · shutting down" if self.closing else ""))]
-        return [("class:active", f"{run['task_id']}  {_status(run)}  {self._progress_text(run)}  {_elapsed(run)}\n")
-                for run in active]
+    def _hint_text(self):
+        if self.mode == "settings":
+            hint = "Tab move · Enter/Ctrl-S save · Esc cancel"
+        elif self.mode in ("task", "history", "commands"):
+            hint = "↑↓ select · Enter choose · Esc dismiss"
+        elif self.stopping or self.closing:
+            hint = "/ commands · Ctrl-C force exit"
+        else:
+            hint = "/ commands · " + ("Ctrl-C stop" if self.foreground else "Ctrl-C clear / exit")
+        return [("class:warning" if self.message else "class:disabled",
+                 redact(self.message) if self.message else hint)]
 
     def _keys(self):
         keys = KeyBindings()
-        editing = Condition(lambda: self.view == "settings")
-        navigating = Condition(lambda: self.layout.has_focus(self.tasks_control) or self.layout.has_focus(self.actions_control)
-                               or self.layout.has_focus(self.runs_control))
+        picking = Condition(lambda: self.mode in ("commands", "task", "history"))
+        editing = Condition(lambda: self.mode == "settings")
 
-        @keys.add("up", filter=~editing & navigating)
-        @keys.add("down", filter=~editing & navigating)
+        @keys.add("up", filter=picking)
+        @keys.add("down", filter=picking)
         def move(event):
-            delta = -1 if event.key_sequence[0].key == "up" else 1
-            if self.layout.has_focus(self.actions_control):
-                self.action = (self.action + delta) % len(_ACTIONS)
-            elif self.layout.has_focus(self.runs_control):
-                self.run_index = max(0, min(len(self.recent) - 1, self.run_index + delta))
-                if self.recent:
-                    self.inspected_run_id = self.recent[self.run_index]["run_id"]
-            elif self.descriptors:
-                self.selected = (self.selected + delta) % len(self.descriptors)
-                self.run_index = 0
-                self.inspected_run_id = None
-                self.recent = []
-                self.logs = []
-                self.view = "details"
+            count = len(self._picker_items())
+            if count:
+                self.picker_index = (self.picker_index + (-1 if event.key_sequence[0].key == "up" else 1)) % count
 
-        @keys.add("enter", filter=~editing & navigating)
+        @keys.add("enter", filter=~editing)
         def enter(event):
-            if self.layout.has_focus(self.tasks_control):
-                self.layout.focus(self.actions_control)
-            elif self.layout.has_focus(self.runs_control):
-                self.view = "summary"
-                self.layout.focus(self.detail)
+            if self.mode in ("task", "history") or (self.mode == "commands" and self._picker_items()):
+                self._choose_picker()
             else:
-                self.app.create_background_task(self._action())
+                text = self.prompt.text
+                self.prompt.text = ""
+                self.mode = ""
+                self._spawn(self._dispatch(text))
 
-        @keys.add("tab")
-        def tab(event):
-            if self.view == "settings":
-                self.layout.focus(self.limit_input if self.layout.has_focus(self.workers_input) else self.workers_input)
-            else:
-                targets = [self.tasks_control, self.actions_control,
-                           self.runs_control if self.view == "history" else self.detail]
-                current = next((i for i, target in enumerate(targets) if self.layout.has_focus(target)), -1)
-                self.layout.focus(targets[(current + 1) % len(targets)])
+        @keys.add("tab", filter=~editing)
+        def complete(event):
+            if self.mode == "commands":
+                self._choose_picker(complete=True)
+            elif self.prompt.text == "":
+                self.prompt.text = "/"
 
-        @keys.add("escape")
-        def back(event):
-            self.view = "details"
-            self.layout.focus(self.tasks_control)
+        @keys.add("tab", filter=editing)
+        @keys.add("s-tab", filter=editing)
+        def form_tab(event):
+            targets = [self.workers_input, self.limit_input, self.save_button, self.cancel_button]
+            current = next((i for i, target in enumerate(targets) if self.layout.has_focus(target)), 0)
+            step = -1 if event.key_sequence[0].key == "s-tab" else 1
+            self.layout.focus(targets[(current + step) % len(targets)])
 
         @keys.add("c-s", filter=editing)
-        @keys.add("enter", filter=editing)
         def save(event):
             self._save_settings()
 
-        @keys.add("pageup", filter=Condition(lambda: self.view == "logs"))
-        @keys.add("pagedown", filter=Condition(lambda: self.view == "logs"))
-        def page(event):
-            self.app.create_background_task(self._log_page(older=event.key_sequence[0].key == "pageup"))
+        @keys.add("enter", filter=editing)
+        def form_enter(event):
+            if self.layout.has_focus(self.cancel_button):
+                self._dismiss()
+            else:
+                self._save_settings()
 
-        @keys.add("f", filter=Condition(lambda: self.view == "logs"))
-        def follow(event):
-            self.follow = True
-            self.logs = []
-
-        @keys.add("q", filter=~editing)
-        def quit_(event):
-            self._request_exit()
+        @keys.add("escape")
+        def dismiss(event):
+            self._dismiss()
 
         @keys.add("c-c")
         def interrupt(event):
@@ -241,41 +282,84 @@ class Terminal:
 
         return keys
 
-    def _request_interrupt(self):
-        if self.closing:
-            self._force_exit()
-        else:
-            self._request_exit()
+    def _dismiss(self):
+        self._picker_generation += 1
+        self.mode = ""
+        self.form_error = ""
+        self.message = ""
+        self.layout.focus(self.prompt)
 
-    def _force_exit(self):
-        # Worker threads and executor shutdown can block indefinitely. Restore
-        # terminal state, then let process exit release connections and the lock.
-        # Leave active runs for startup recovery rather than claiming completion.
-        try:
-            if self._terminal_attributes is not None:
-                termios.tcsetattr(self.app.input.fileno(), termios.TCSANOW, self._terminal_attributes)
-            self.app.renderer.reset()
-        finally:
-            os._exit(130)
-
-    def _request_exit(self):
-        if self.closing:
+    def _choose_picker(self, *, complete=False):
+        items = self._picker_items()
+        if not items:
             return
-        self.closing = True
-        self.message = "Stopping safely; waiting for active requests and checkpoints. Press Ctrl-C again to force exit."
-        self.app.create_background_task(self._stop_for_exit())
+        value, _, enabled = items[min(self.picker_index, len(items) - 1)]
+        if not enabled:
+            self.message = value.unavailable_reason
+            self._spawn(self._say("Disabled · " + value.title + ": " + value.unavailable_reason))
+            return
+        mode = self.mode
+        self._dismiss()
+        if mode == "commands":
+            if complete:
+                self.prompt.text = f"/{value.name} "
+            else:
+                self.prompt.text = ""
+                self._spawn(self._dispatch(f"/{value.name}"))
+        elif mode == "task":
+            if self.locked:
+                self.message = "Task selection is locked until the foreground run finishes."
+                return
+            self.selected_id = value.task_id
+            self._spawn(self._say(f"Selected · {value.title}. Use /settings or /run."))
+        elif mode == "history":
+            title = self.task.title
+            self._spawn(self._say(summary_text(value, title)))
 
-    async def _stop_for_exit(self):
-        if self.runner is not None:
-            try:
-                await asyncio.to_thread(self.runner.request_shutdown)
-            except Exception as exc:
-                self.message = redact(exc) + " · Ctrl-C again to force exit"
+    async def _dispatch(self, text):
+        text = text.strip()
+        if not text:
+            return
+        self.message = ""
+        parts = text.split(maxsplit=1)
+        command = COMMAND_BY_NAME.get(parts[0][1:]) if parts[0].startswith("/") else None
+        argument = parts[1].strip() if len(parts) > 1 else ""
+        if command is None or argument not in command.arguments:
+            await self._say("Use / to choose a command, or /help for guidance. Task selection: /task or /task all.")
+            return
+        if not self.ready and command.name not in ("help", "quit"):
+            await self._say("Runtime is not ready. See the startup message; /help and /quit are available.")
+            return
+        try:
+            await getattr(self, command.handler)(argument)
+        except Exception as exc:
+            await self._say(f"/{command.name} failed: {redact(exc)}")
+
+    async def _select_task(self, argument):
+        if self.locked:
+            await self._say("Task selection is locked until the foreground run finishes.")
+            return
+        self.include_disabled = argument == "all"
+        self.mode = "task"
+        self.search.text = ""
+        self.picker_index = 0
+        self.layout.focus(self.search)
+
+    async def _settings(self, _argument):
+        if self.locked or not self.task.available:
+            await self._say("Settings require an idle, runnable task.")
+            return
+        options = self.options[self.task.task_id]
+        self.workers_input.text = str(options.workers)
+        self.limit_input.text = str(options.limit) if options.limit is not None else ""
+        self.form_error = ""
+        self.mode = "settings"
+        self.layout.focus(self.workers_input)
 
     def _save_settings(self):
         try:
-            if (self.latest.get(self.task.task_id) or {}).get("status") in TASK_RUN_ACTIVE_STATUSES:
-                raise ValueError("Settings are locked while the task is active")
+            if self.locked:
+                raise ValueError("Settings are locked until the foreground run finishes")
             workers = self.workers_input.text.strip()
             limit = self.limit_input.text.strip()
             if not workers.isascii() or not workers.isdigit():
@@ -289,190 +373,309 @@ class Terminal:
                 self.options[self.task.task_id], workers=int(workers), limit=int(limit) if limit else None,
             )
         except ValueError as exc:
-            self.message = str(exc)
+            self.form_error = str(exc)
             return
-        self.view = "details"
-        self.layout.focus(self.actions_control)
-        self.message = "Settings saved for the next run."
+        self._dismiss()
+        self._spawn(self._say("Settings saved for the next run. Use /run to start."))
 
-    async def _action(self):
-        if not self.ready or self.pending or self.closing or self.task is None:
+    async def _start(self, _argument):
+        if self.locked:
+            await self._say("A foreground run is still active or finalizing; wait for its result.")
             return
         task = self.task
-        action = _ACTIONS[self.action]
-        active = (self.latest.get(task.task_id) or {}).get("status") in TASK_RUN_ACTIVE_STATUSES
-        if action == "Settings":
-            if not task.available or active:
-                self.message = "Settings are unavailable while this task is disabled or active."
-                return
-            options = self.options[task.task_id]
-            self.workers_input.text = str(options.workers)
-            self.limit_input.text = str(options.limit) if options.limit is not None else ""
-            self.view = "settings"
-            self.layout.focus(self.workers_input)
-            return
-        if action in ("Logs", "Summary", "Recent runs"):
-            self.view = {"Logs": "logs", "Summary": "summary", "Recent runs": "history"}[action]
-            self.logs = []
-            self.follow = True
-            self.layout.focus(self.runs_control if self.view == "history" else self.detail)
-            return
-        if action == "Back":
-            self.view = "details"
-            self.layout.focus(self.tasks_control)
-            return
         if not task.available:
-            self.message = task.unavailable_reason
+            await self._say(task.unavailable_reason + " Use /task to select a runnable task.")
             return
-        self.pending = True
+        # Claim the slot before any await, including printing or start_task I/O.
+        self.foreground = task
+        self.starting = True
+        self.finalizing = False
+        self.stopping = False
+        self.foreground_run_id = None
+        self.foreground_snapshot = None
+        self.foreground_started = time.monotonic()
+        self.runtime_error = None
+        self.waiting = {}
+        options = self.options[task.task_id]
         try:
-            if action == "Start / Resume":
-                result = await asyncio.to_thread(self.runner.start_task, task.task_id, options=self.options[task.task_id])
-                if self.task and self.task.task_id == task.task_id:
-                    self.run_index = 0
-                    self.inspected_run_id = None
-                self.message = "Already running." if result["action"] == "noop" else "Run started. Controls remain available."
-            else:
-                await asyncio.to_thread(self.runner.stop_task, task.task_id)
-                self.message = "Safe stop requested; active requests finish at their checkpoint boundary."
+            text = f"Starting · {task.title} · workers {options.workers} · limit {options.limit or 'unlimited'}"
+            if task.task_id == "library.extract_non_pdf":
+                text += "\n" + restrictions(options.as_dict())
+            await self._say(text)
+            if self.stopping or self.closing:
+                await self._say(f"Stopped · {task.title} · start cancelled before execution.")
+                await self._drain()
+                self._release_foreground()
+                return
+            result = await asyncio.to_thread(self.runner.start_task, task.task_id, options=options)
+            self.foreground_run_id = result["run"]["run_id"]
+            self.foreground_snapshot = result["run"]
+            if self.stopping or self.closing:
+                await asyncio.to_thread(self.runner.stop_task, task.task_id, run_id=self.foreground_run_id)
         except Exception as exc:
-            self.message = redact(exc)
+            # start_task returns its run identity before doing any further I/O.
+            # If stop persistence fails after that, retain the foreground slot.
+            await self._say(f"Start/stop failed: {redact(exc)}")
+            if self.foreground_run_id is None:
+                await self._drain()
+                self._release_foreground()
         finally:
-            self.pending = False
+            self.starting = False
 
-    async def _log_page(self, *, older):
-        run = self.selected_run
-        if run is None or not self.logs:
+    async def _stop(self, _argument):
+        self._request_stop()
+
+    def _request_stop(self):
+        if self.foreground is None:
+            self._spawn(self._say("No foreground task is active."))
             return
-        self.follow = False
-        options = {"before_log_id": self.logs[0]["log_id"]} if older else {"after_log_id": self.logs[-1]["log_id"]}
+        if self.stopping:
+            return
+        self.stopping = True
+        self._spawn(self._say("Safe stop requested; active operations finish at checkpoint boundaries. Ctrl-C again forces exit."))
+        # During a pending start, _start delivers the stop once its ID arrives.
+        # Capture existing IDs now so a delayed stop cannot target a later run.
+        if self.foreground_run_id is not None:
+            self._spawn(self._deliver_stop(self.foreground.task_id, self.foreground_run_id))
+
+    async def _deliver_stop(self, task_id, run_id):
+        self._stop_pending = True
         try:
-            rows = await asyncio.to_thread(self.runner.get_run_logs, task_id=run["task_id"], run_id=run["run_id"], limit=100, **options)
-            if self.view == "logs" and self.selected_run and self.selected_run["run_id"] == run["run_id"]:
-                if rows:
-                    self.logs = rows
-                self._render_details()
+            if self.runner:
+                await asyncio.to_thread(self.runner.stop_task, task_id, run_id=run_id)
         except Exception as exc:
-            self.message = "Log read failed: " + redact(exc)
+            await self._say("Safe stop recording failed: " + redact(exc) + ". Ctrl-C again forces exit.")
+        finally:
+            self._stop_pending = False
 
-    def _snapshot(self, task_id):
-        latest = {task.task_id: self.db.get_latest_run_for_task(task.task_id) for task in self.descriptors}
-        recent = self.db.list_recent_runs_for_task(task_id, limit=20) if task_id else []
-        events = self.db.get_events_after(self.event_cursor, limit=200)
-        return latest, recent, events
+    async def _history(self, _argument):
+        self.mode = "history"
+        self.history_rows = []
+        self.search.text = ""
+        self.picker_index = 0
+        self.layout.focus(self.search)
+        self._picker_generation += 1
+        generation = self._picker_generation
+        task_id = self.selected_id
+        rows = await asyncio.to_thread(self.db.list_recent_runs_for_task, task_id, limit=20)
+        if self.mode == "history" and self._picker_generation == generation:
+            self.history_rows = rows
 
-    def _summary_text(self, run):
-        if run is None:
-            return "No run summary yet."
-        summary = run.get("summary") or {}
-        options = summary.get("options") or {}
-        lines = [f"{self.task.title} · run {run['run_id']}",
-                 f"Status: {_status(run)} · elapsed {_elapsed(run)}",
-                 f"Workers: {options.get('workers', run.get('gemini_workers') or 1)} · candidate limit: {options.get('limit') or 'unlimited'}"]
-        if summary.get("message"):
-            lines.append(str(summary["message"]))
-        if summary.get("kind") == "library.personality_normalization_summary":
-            lines.append(f"Source names: {summary.get('total', 0)} · eligible: {summary.get('eligible_total', 0)} · skipped: {summary.get('skipped', 0)}")
-            for label, key in (("Normalized", "succeeded"), ("Not people", "not_person"),
-                               ("Unusable", "unusable"), ("Failed", "failed"),
-                               ("Deferred", "deferred"), ("Remaining", "remaining")):
-                lines.append(f"{label}: {summary.get(key, 0)}")
-            attempts = summary.get("model_attempts") or {}
-            if attempts:
-                lines.append("Model attempts: " + ", ".join(f"{model}: {count}" for model, count in attempts.items()))
-        if summary.get("kind") == "library.non_pdf_extraction_summary":
-            for label, key in (("Candidates", "total"), ("Processed", "processed"), ("Ready", "ready"),
-                               ("Failed", "failed"), ("Deferred", "deferred"), ("Unsupported", "unsupported"),
-                               ("Corrupt plans", "corrupted"), ("Checkpoint conflicts", "checkpoint_raced")):
-                lines.append(f"{label}: {summary.get(key, 0)}")
-            lines.append("Workspace: " + str(summary.get("workspace_path", "")))
-            lines.append(f"MIME cohort cap: {options.get('per_mime_limit') or 'unlimited'} · explicit retries: {options.get('retry_known_failures', False)}")
-            if options.get("only_md5s"):
-                lines.append("Source cohort: " + ", ".join(options["only_md5s"]))
-        error = summary.get("error") or run.get("error_text")
-        if error:
-            lines.append("Error: " + str(error))
-        if summary.get("log_path"):
-            lines.append("Log: " + summary["log_path"])
-        return redact("\n".join(lines))
-
-    def _render_details(self):
-        task = self.task
-        if task is None or self.view == "settings":
-            return
-        run = self.selected_run
-        if self.view == "logs":
-            text = "\n".join(redact(row["line"]) for row in self.logs) or "No log lines yet."
-            text = ("Following logs · PageUp: older · PageDown: newer · f: follow\n" if self.follow
-                    else "Log page · PageUp: older · PageDown: newer · f: follow\n") + text
-        elif self.view == "summary":
-            text = self._summary_text(run)
+    async def _summary(self, _argument):
+        presentation_status = None
+        if self.foreground:
+            title = self.foreground.title
+            run_id = self.foreground_run_id
+            if run_id is None:
+                phase = "Stopping" if self.stopping else "Starting"
+                await self._say(f"{phase} · {title} · no run snapshot yet.")
+                return
+            run = await asyncio.to_thread(self.db.get_run, run_id)
+            if run is None:
+                raise RuntimeError(f"Run {run_id} is missing; current progress is unavailable")
+            failure = await asyncio.to_thread(self.runner.get_run_error, run_id)
+            if self.foreground_run_id == run_id and run.get("status") not in TASK_RUN_ACTIVE_STATUSES:
+                presentation_status = "finalizing"
         else:
-            text = f"{task.title}\n"
-            if not task.available:
-                text += task.unavailable_reason + "\n"
-            else:
-                options = self.options[task.task_id]
-                text += f"Next run: {options.workers} worker(s), limit {options.limit or 'unlimited'}\n"
-                if task.task_id == "library.extract_non_pdf":
-                    text += (f"MIME cohort cap: {options.per_mime_limit or 'unlimited'} · "
-                             f"explicit retries: {options.retry_known_failures}\n")
-                    if options.only_md5s:
-                        text += "Source cohort: " + ", ".join(options.only_md5s) + "\n"
-            if run:
-                progress = run.get("progress") or {}
-                text += f"Run {run['run_id']}: {_status(run)} · elapsed {_elapsed(run)}\n{self._progress_text(run)}\n"
-                names = (('created', 'updated', 'unchanged', 'published', 'cleanups_completed', 'failed')
-                         if run.get('task_id') == 'maintenance.monocorpus_sync'
-                         else ('ready', 'failed', 'deferred', 'unsupported', 'corrupted', 'checkpoint_raced')
-                         if run.get('task_id') == 'library.extract_non_pdf'
-                         else ('succeeded', 'not_person', 'unusable', 'failed', 'deferred', 'retry_pending', 'skipped'))
-                text += "  ".join(f"{name}: {progress.get(name, 0)}" for name in names)
-                waiting = self.waiting.get(run["run_id"])
-                if waiting and run["status"] in TASK_RUN_ACTIVE_STATUSES:
-                    text += f"\nProvider: {waiting}"
-                if run.get("error_text"):
-                    text += "\n" + redact(run["error_text"])
-            else:
-                text += "No previous runs."
-        if self.detail.text != text:
-            cursor = len(text) if self.view == "logs" and self.follow else min(self.detail.buffer.cursor_position, len(text))
-            self.detail.buffer.set_document(Document(text, cursor_position=cursor), bypass_readonly=True)
+            title = self.task.title
+            run = await asyncio.to_thread(self.db.get_latest_run_for_task, self.selected_id)
+            failure = None
+        await self._say(summary_text(run, title, failure=failure, presentation_status=presentation_status))
+
+    async def _help(self, _argument):
+        await self._say(help_text())
+
+    async def _quit(self, _argument):
+        self._request_exit()
+
+    def _request_interrupt(self):
+        if self.closing or self.stopping:
+            self._force_exit()
+        elif self.foreground:
+            self._request_stop()
+        elif self.mode == "settings" and (self.workers_input.text or self.limit_input.text):
+            self._dismiss()
+        elif self.mode in ("task", "history") and self.search.text:
+            self.search.text = ""
+        elif self.prompt.text:
+            self.prompt.text = ""
+            self._dismiss()
+        else:
+            self._request_exit()
+
+    def _force_exit(self):
+        # Do not fabricate completion. Recovery retains interrupted run semantics.
+        try:
+            if self._terminal_attributes is not None:
+                termios.tcsetattr(self.app.input.fileno(), termios.TCSANOW, self._terminal_attributes)
+            # Renderer reset flushes output. Force exit must not wait for a
+            # blocked terminal or acquire stdout's buffered-writer lock.
+            self.display.emergency_restore()
+        finally:
+            os._exit(130)
+
+    def _request_exit(self):
+        if self.closing:
+            return
+        self.closing = True
+        self._dismiss()
+        self.message = "Exiting safely · Ctrl-C again forces exit"
+        if self.foreground:
+            self.stopping = True
+        self._spawn(self._stop_for_exit())
+
+    async def _stop_for_exit(self):
+        if self.runner:
+            try:
+                await asyncio.to_thread(self.runner.request_shutdown)
+            except Exception as exc:
+                await self._say("Safe exit recording failed: " + redact(exc) + ". Ctrl-C again forces exit.")
+
+    def _snapshot(self, run_id, event_cursor):
+        # Determine worker exit *before* reading the final saved result. A
+        # terminal row read before exit can still become a finalization failure.
+        idle = self.runner.is_idle()
+        finalizing = self.runner.is_finalizing(run_id) if run_id is not None else False
+        run = self.db.get_run(run_id) if run_id is not None else None
+        if run_id is not None and run is None:
+            raise RuntimeError(f"Run {run_id} is missing")
+        events = self.db.get_events_after(event_cursor, limit=200)
+        failure = self.runner.get_run_error(run_id) if run_id is not None else None
+        return run, events, idle, failure, finalizing
+
+    def _consume_events(self, events):
+        for event in events:
+            self.event_cursor = event["event_id"]
+            if event["run_id"] != self.foreground_run_id:
+                continue
+            payload = event["payload"]
+            if event["type"] in ("gemini.scheduler.waiting", "gemini.pacing.changed"):
+                key = (event["type"], payload.get("worker_id") or payload.get("scope_id"))
+                if provider_wait(payload):
+                    self.waiting[key] = payload
+                else:
+                    self.waiting.pop(key, None)
+            elif event["type"] == "gemini.key.used":
+                worker = payload.get("worker_id")
+                if worker:
+                    self.waiting.pop(("gemini.scheduler.waiting", worker), None)
+        self.waiting = {key: payload for key, payload in self.waiting.items() if provider_wait(payload)}
+
+    async def _drain(self):
+        try:
+            await asyncio.to_thread(self.output.drain)
+        except OutputFailure:
+            pass  # The consumer already surfaced the failure and requested stop.
+
+    async def _finish_foreground(self, run, failure):
+        # Terminal DB state alone never releases the slot. Worker is already dead.
+        await self._drain()
+        failure = self.output.failure or failure
+        if run.get("status") in TASK_RUN_ACTIVE_STATUSES:
+            failure = failure or "Worker exited without a final persisted result; reopen Manzara for recovery."
+        if failure and self.output.failure:
+            await self._fallback(f"Failed · {self.foreground.title} · run {run['run_id']} · {elapsed(run)}\n{failure}")
+        else:
+            await self._say(summary_text(run, self.foreground.title, completion=True, failure=failure))
+            await self._drain()
+        self._release_foreground()
+
+    async def _finish_without_snapshot(self, read_failure):
+        await self._drain()
+        failure = await asyncio.to_thread(self.runner.get_run_error, self.foreground_run_id)
+        text = (f"Failed to read final result · {self.foreground.title} · run {self.foreground_run_id} · "
+                f"{duration(max(0, int(time.monotonic() - self.foreground_started)))}\n"
+                f"{failure or read_failure}\n"
+                "Final counts/outcome are unavailable. Inspect /history after reopening; an unfinished persisted run needs recovery.")
+        if self.output.failure:
+            await self._fallback(text)
+        else:
+            await self._say(text)
+            await self._drain()
+        self._release_foreground()
+        self.runtime_error = read_failure
+
+    def _release_foreground(self):
+        self.foreground = None
+        self.foreground_run_id = None
+        self.foreground_snapshot = None
+        self.stopping = False
+        self.finalizing = False
+        self.waiting = {}
+        self.runtime_error = None
+        if not self.closing:
+            self.message = ""
 
     async def _refresh(self):
         while True:
             if self.ready:
-                task_id = self.task.task_id if self.task else None
                 try:
-                    latest, recent, events = await asyncio.to_thread(self._snapshot, task_id)
-                    self.latest = latest
-                    if self.task and self.task.task_id == task_id:
-                        self.recent = recent
-                    for event in events:
-                        self.event_cursor = event["event_id"]
-                        payload = event["payload"]
-                        if event["type"] == "gemini.scheduler.waiting":
-                            self.waiting[event["run_id"]] = f"waiting until {payload.get('wait_until', 'capacity is available')}"
-                        elif event["type"] == "gemini.pacing.changed":
-                            self.waiting[event["run_id"]] = f"{payload.get('mode')} · interval {payload.get('interval_seconds')}s · {payload.get('wait_until') or 'ready'}"
-                        elif event["type"] == "gemini.key.used":
-                            self.waiting.pop(event["run_id"], None)
-                    if self.view == "logs" and self.follow and self.selected_run:
-                        run = self.selected_run
-                        options = {"after_log_id": self.logs[-1]["log_id"]} if self.logs else {"tail": True}
-                        rows = await asyncio.to_thread(self.runner.get_run_logs, task_id=run["task_id"], run_id=run["run_id"], limit=100, **options)
-                        if self.view == "logs" and self.follow and self.selected_run and self.selected_run["run_id"] == run["run_id"]:
-                            self.logs = (self.logs + rows)[-100:]
-                    self._render_details()
+                    run_id = self.foreground_run_id
+                    run, events, idle, failure, finalizing = await asyncio.to_thread(self._snapshot, run_id, self.event_cursor)
+                    if run_id != self.foreground_run_id:
+                        continue
+                    self.foreground_snapshot = run
+                    self.finalizing = finalizing
+                    self.runtime_error = None
+                    self._consume_events(events)
+                    if self.foreground and not self.starting and not self._stop_pending and idle:
+                        if run is not None:
+                            await self._finish_foreground(run, failure)
+                    if self.closing and self.startup_finished and not self.foreground and idle:
+                        await self._drain()
+                        if self.app.is_running:
+                            self.app.exit()
+                        return
                 except Exception as exc:
-                    self.message = "Runtime read failed: " + redact(exc)
-                if self.closing and not self.pending and await asyncio.to_thread(self.runner.is_idle):
-                    self.app.exit()
-                    return
+                    message = "Runtime read failed: " + redact(exc)
+                    if self.runtime_error != message:
+                        await self._say(message + ". Current progress is unavailable; /stop or /quit remain available.")
+                    self.runtime_error = message
+                    self.foreground_snapshot = None
+                    self.waiting = {}
+                    # Worker exit and output drain are knowable without DB
+                    # reads. Never strand the UI slot or claim stale success.
+                    idle = await asyncio.to_thread(self.runner.is_idle)
+                    if self.foreground and not self.starting and not self._stop_pending and idle:
+                        await self._finish_without_snapshot(message)
+                    if self.closing and self.startup_finished and not self.foreground and idle:
+                        await self._drain()
+                        if self.app.is_running:
+                            self.app.exit()
+                        return
             elif self.closing and self.startup_finished:
-                self.app.exit()
+                await self._drain()
+                if self.app.is_running:
+                    self.app.exit()
                 return
-            await asyncio.sleep(0.5)
+            self.app.invalidate()
+            await asyncio.sleep(0.3)
+
+    async def _fallback(self, text):
+        emergency_notice(text)
+
+    async def _consume_output(self):
+        while not self._consumer_finished:
+            batch = ""
+            try:
+                await self.display.drain()
+                self.app.resume_rendering()
+                await self.display.drain()
+                batch = self.output.take_batch()
+                if batch:
+                    self.app.print_transcript(batch)
+                    await self.display.drain()
+                else:
+                    await asyncio.sleep(0.05)
+            except Exception as exc:
+                self.output.fail(exc)
+                self.message = self.output.failure
+                self._request_exit()
+                await self._fallback(self.output.failure + ". Safe stop requested; Ctrl-C again forces exit.")
+                return
+            finally:
+                if batch:
+                    self.output.acknowledge()
 
     def _initialize(self):
         settings = load_settings()
@@ -485,18 +688,15 @@ class Terminal:
         recovered = self.db.recover_active_runs()
         if recovered:
             self.db.insert_event("system.recovery", None, None, None, {"recovered_runs": recovered})
-        self.runner = TaskRunner(self.db, descriptors)
+        self.runner = TaskRunner(self.db, descriptors, log_factory=self.output.sink, max_active_runs=1)
         return descriptors
 
     async def _startup(self):
         try:
             self.descriptors = await asyncio.to_thread(self._initialize)
             self.descriptors.sort(key=lambda item: (item.group, not item.available, item.title))
-            selected = next((index for index, task in enumerate(self.descriptors)
-                             if task.task_id == self.arguments.task), None)
-            if selected is None:
+            if self.task is None:
                 raise ValueError(f"Unknown task ID: {self.arguments.task}")
-            self.selected = selected
             for task in self.descriptors:
                 default = resolve_gemini_workers() if os.environ.get("MANZARA_GEMINI_WORKERS") else task.workers_default
                 workers = self.arguments.workers if self.arguments.workers is not None else default
@@ -511,39 +711,77 @@ class Terminal:
                 )
             self.event_cursor = await asyncio.to_thread(self.db.get_latest_event_id)
             self.ready = True
-            self.message = "Select a task with arrows, then press Enter."
+            self.message = ""
+            await self._say(f"Manzara · {self.task.title} selected. /task to change, /settings to edit, /run to start.")
+            if not self.task.available:
+                await self._say("Selected task disabled: " + self.task.unavailable_reason)
             if self.closing:
                 await asyncio.to_thread(self.runner.request_shutdown)
         except Exception as exc:
-            self.message = "Startup failed: " + redact(exc) + " · q/Ctrl-C to exit"
+            self.message = "Startup failed: " + redact(exc) + " · /quit to exit"
+            await self._say(self.message)
         finally:
             self.startup_finished = True
 
-    async def run(self):
+    async def run(self) -> int:
         loop = asyncio.get_running_loop()
         self._terminal_attributes = termios.tcgetattr(self.app.input.fileno())
         previous_handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
         loop.add_signal_handler(signal.SIGINT, self._request_interrupt)
         loop.add_signal_handler(signal.SIGTERM, self._request_exit)
-        startup = asyncio.create_task(self._startup())
-        refresh = asyncio.create_task(self._refresh())
+        startup = consumer = refresh = None
+
+        def begin():
+            nonlocal startup, consumer, refresh
+            # Keep one consumer for renderer frames and transcript messages.
+            consumer = asyncio.create_task(self._consume_output())
+            startup = asyncio.create_task(self._startup())
+            refresh = asyncio.create_task(self._refresh())
+
         try:
-            await self.app.run_async(handle_sigint=False)
+            await self.app.run_async(pre_run=begin, handle_sigint=False)
         finally:
-            refresh.cancel()
-            await asyncio.gather(refresh, return_exceptions=True)
-            # Initialization runs in a thread and must finish before resources are closed.
-            await startup
+            self.closing = True
+            if refresh:
+                refresh.cancel()
+                await asyncio.gather(refresh, return_exceptions=True)
+            # Initialization must finish before resource cleanup; the output
+            # consumer remains alive while workers/operations finish off-loop.
             try:
-                if self.runner is not None:
-                    await asyncio.to_thread(self.runner.shutdown)
+                if startup:
+                    await startup
+                if self.runner:
+                    await asyncio.to_thread(self.runner.request_shutdown)
             finally:
                 try:
-                    if self.db is not None:
-                        await asyncio.to_thread(self.db.close)
+                    if self._operations:
+                        await asyncio.gather(*tuple(self._operations), return_exceptions=True)
+                    if self.runner:
+                        await asyncio.to_thread(self.runner.shutdown)
+                    if consumer:
+                        await self._drain()
                 finally:
-                    if self.session is not None:
-                        self.session.close()
-                    for signum, handler in previous_handlers.items():
-                        loop.remove_signal_handler(signum)
-                        signal.signal(signum, handler)
+                    self._consumer_finished = True
+                    try:
+                        if consumer:
+                            await consumer
+                        try:
+                            # Include the toolkit's final cursor/style reset.
+                            await self.display.drain()
+                        except OutputFailure as exc:
+                            self.output.fail(exc)
+                            await self._fallback(self.output.failure)
+                    finally:
+                        self.display.close()
+                        try:
+                            if self.db:
+                                await asyncio.to_thread(self.db.close)
+                        finally:
+                            try:
+                                if self.session:
+                                    self.session.close()
+                            finally:
+                                for signum, handler in previous_handlers.items():
+                                    loop.remove_signal_handler(signum)
+                                    signal.signal(signum, handler)
+        return 1 if self.output.failure else 0

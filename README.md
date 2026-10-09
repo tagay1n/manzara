@@ -4,7 +4,7 @@ Manzara runs Tatar-language content workflows through an inline terminal CLI and
 
 ## Current status
 
-**Normalize personalities** and **Extract non-PDF** are enabled interactive CLI tasks. Normalization uses the shared Gemini runtime; extraction uses local document converters and verified Backblaze sources. Cleanup preparation and Sync run together through standalone daily maintenance; cleanup review commands remain in the CLI. These workflows use the normalized PostgreSQL catalog and resumable checkpoints. Other tasks remain visible but disabled pending catalog adaptation. Operational readiness must be assessed for each execution path; static inspection alone does not establish it.
+**Normalize personalities** and **Extract non-PDF** are enabled interactive CLI tasks. Normalization uses the shared Gemini runtime; extraction uses local document converters and verified Backblaze sources. Cleanup preparation and Sync run together through standalone daily maintenance; cleanup review commands remain in the CLI. These workflows use the normalized PostgreSQL catalog and resumable checkpoints. Other tasks are disabled pending catalog adaptation and appear only in `/task all`. Operational readiness must be assessed for each execution path; static inspection alone does not establish it.
 
 ## Setup and launch
 
@@ -20,17 +20,32 @@ Copy the masked structure of `config.example.yaml` to a gitignored `config.local
 
 Optional `--workers N`, `--limit N`, and `--task TASK_ID` select next-run settings and the initial interactive task. Launching never starts a task automatically. Interactive execution requires a terminal; `--help` works without configuration. Backblaze upload remains disabled.
 
-Select non-PDF extraction with `.venv/bin/python -m app --task library.extract_non_pdf --per-mime-limit 1`, then choose Start / Resume. It runs sequentially with one worker. [Document processing](app/modules/library/guidance/documents.md#extraction-and-publication) owns source eligibility, converter requirements, cohort/retry controls, and retained output behavior.
+Select non-PDF extraction with `.venv/bin/python -m app --task library.extract_non_pdf --per-mime-limit 1`, then enter `/run`. It runs sequentially with one worker. [Document processing](app/modules/library/guidance/documents.md#extraction-and-publication) owns source eligibility, converter requirements, cohort/retry controls, and retained output behavior.
 
 Run daily maintenance without a terminal using `python scripts/run_daily_maintenance.py`. It prepares cleanup plans/reviews, then executes persisted cleanup and Yandex Sync with one worker and no limit. Sync and Cleanup plan are absent from the interactive task list. [Operations](docs/operations.md#scheduled-sync-and-cleanup) owns the daily schedule, Actions secrets, retention, and failure behavior; [cleanup review](docs/document-cleanup.md) explains explicit ISBN decisions.
 
 ## Controls and lifecycle
 
-- ↑/↓ selects tasks; Enter opens actions. Tab switches focus, and Esc returns to the task list.
-- Actions offer Start/Resume, Stop safely, Settings, Logs, Summary, and Recent runs. Workers and the optional candidate limit are fixed for each active run.
-- Live progress and elapsed time remain visible while navigating. Logs use bounded pages: PageUp/Down reads older/newer pages; `f` resumes following.
-- `q` or the first Ctrl-C requests safe stop and waits for active requests to reach their checkpoints before exiting. Press Ctrl-C again during shutdown to force the entire CLI process to exit immediately with code 130, including while startup or finalization is waiting. The terminal is restored; interrupted runs are recovered on the next launch and resume from persisted checkpoints. Force exit can skip final logs, summaries, and unfinished checkpoint writes. Provider requests have a 60-second I/O timeout, not a hard total-duration limit.
-- Reopening preserves compatible completed decisions and resumes eligible work. One CLI session owns each local runtime store; a second session reports the conflict.
+The CLI launches idle with a compact activity row and an inline prompt. Type `/` for a filtered command picker; arrows navigate, Enter chooses, Tab completes, and Esc dismisses. Ordinary text receives a command hint; it is never executed as a shell command.
+
+| Command | Behavior |
+| --- | --- |
+| `/task`, `/task all` | Search and select a task; `all` includes disabled tasks and reasons. Selection never starts work. |
+| `/settings` | Edit workers and candidate limit with inline validation, Save, and Cancel. Tab changes focus; Enter/Ctrl-S saves; Esc cancels. Cohort/retry options are preserved. |
+| `/run` | Start/resume the selected task using current options. |
+| `/stop` | Request safe stop and keep Manzara open. |
+| `/history` | Search the selected task's latest 20 runs and print a saved summary. |
+| `/summary` | Print the foreground snapshot, or the selected task's latest saved summary at idle. |
+| `/help` | Print command and keyboard guidance. |
+| `/quit` | Stop safely, drain output, and exit. |
+
+One foreground run owns the CLI from the start request through worker finalization and output drain. Additional starts are rejected, and task selection/settings stay locked. Browsing history leaves foreground activity unchanged. Activity animates during discovery, processing, provider waits, stopping, and finalization; the spinner indicates activity, while meaningful counters indicate advancement. Provider waits describe individual workers/request gates. Runtime-read failures visibly mark progress unavailable. Completion distinguishes completed, stopped, deferred, and failed outcomes.
+
+Ctrl-C during work requests safe stop and returns to idle after finalization. At idle it clears nonempty input, or exits if input is empty. Press Ctrl-C again while stopping/exiting to force process exit with code 130, including during startup or finalization. Force exit restores terminal input mode without waiting for output; cursor/style restoration is best effort when the terminal cannot accept writes. Interrupted runs are recovered on the next launch and resume from persisted checkpoints. Force exit can skip final output, summaries, and unfinished checkpoint writes. Provider requests have a 60-second I/O timeout, not a hard total-duration limit. A bare `q` is ordinary input.
+
+Renderer updates and transcript messages share a nonblocking terminal writer. Input stays attached while output is slow; redraws are coalesced and log producers receive backpressure until the terminal catches up. Output failure requests safe shutdown and returns exit code 1. Normal shutdown drains pending output before returning.
+
+Reopening preserves compatible completed decisions and resumes eligible work. One CLI session owns each local runtime store; a second session reports the conflict.
 
 CLI and maintenance startup initialize local SQLite and recover interrupted local runs. Python task registrations own task titles, grouping, worker defaults, and handlers. Older local runtime databases are recreated once for schema version 7 under the owner-approved [fresh-state policy](docs/operations.md#local-runtime-state). They do **not** apply PostgreSQL migrations. Normalization, non-PDF extraction, and daily maintenance check the catalog read-only before processing; incompatible schemas must be migrated separately.
 
@@ -44,9 +59,9 @@ CLI and maintenance startup initialize local SQLite and recover interrupted loca
 | `MANZARA_ARTIFACTS_ROOT` | Artifact root; `~/.manzara` |
 | `MANZARA_LOCAL_STATE_PATH` | Disposable SQLite runtime; `~/.manzara/state/runtime.sqlite3` |
 
-Every enabled task shares the process's bounded PostgreSQL engine. Definitions, runs, events, Gemini coordination, and AI retry exclusions remain in local SQLite; domain data and safety-critical checkpoints remain in PostgreSQL.
+Every enabled task shares the process's bounded PostgreSQL engine. Task definitions are code-owned. Runs, events, Gemini coordination, and AI retry exclusions remain in local SQLite; domain data and safety-critical checkpoints remain in PostgreSQL.
 
-Logs live at `~/.manzara/logs/task-runs/<task_id>/run-<run_id>.log`, with structured summaries alongside them and persisted `task.artifact` events. Overrides use the configured artifacts root.
+New interactive run messages stream into native terminal scrollback with compact formatting and visible warning/error severity. No verbose `.log` file is created for these runs; terminal retention controls how much output survives. Saved run summaries, restartable checkpoints, structured `run-<run_id>.artifact.json` files under `~/.manzara/logs/task-runs/<task_id>/`, and persisted `task.artifact` events remain. Daily maintenance continues to write authoritative `.log` files and Actions console output. Existing log files/history remain intact; saved summaries link their files when present. Overrides use the configured artifacts root.
 
 Gemini models and account/project-grouped keys come from local configuration, with no model default. See the [Gemini contract](docs/gemini-runtime.md).
 

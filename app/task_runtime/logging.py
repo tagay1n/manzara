@@ -8,11 +8,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import threading
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Protocol
 
 from app.run_log_store import run_log_path
 
 LOG_SINK: ContextVar[Callable[[str], None] | None] = ContextVar("manzara_run_log", default=None)
+
+
+class RunLogSink(Protocol):
+    """Run-scoped output; terminal sinks deliberately have no file path."""
+
+    path: Path | None
+
+    def __call__(self, message: str, *, level: str = "INFO") -> None: ...
+
+    def flush(self) -> None: ...
+
+    def close(self) -> None: ...
+
 
 _LOG_REDACTION_PATTERNS = (
     (
@@ -100,3 +113,7 @@ class RunLog:
     def close(self) -> None:
         with self._lock:
             self._handle.close()
+
+    def flush(self) -> None:
+        with self._lock:
+            self._handle.flush()

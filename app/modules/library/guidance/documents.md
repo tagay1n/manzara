@@ -14,7 +14,7 @@ Select `library.extract_non_pdf` in the interactive CLI. The retained `python -m
 
 Pandoc and LibreOffice (`soffice`) are required at launch; MOBI additionally needs Calibre's `ebook-convert`. DOC/RTF and legacy PowerPoint Google fallbacks use `credentials/google-drive/personal_token.json` under the configured artifacts root. Missing optional tools/credentials produce per-item operational failures. No legacy repository credential fallback is used.
 
-The CLI accepts `--limit`, `--per-mime-limit`, repeated `--only-md5`, and `--retry-known-failures` for this task. Cohort/retry options are shown in task details and saved with run options; changing worker/limit settings preserves the cohort. Reviewed full-catalog promotion remains an owner decision.
+The CLI accepts `--limit`, `--per-mime-limit`, repeated `--only-md5`, and `--retry-known-failures` for this task. Cohort/retry options are printed when starting and in `/summary`, and saved with run options; changing workers/limit in `/settings` preserves the cohort. Select the task with `/task`, then explicitly start/resume with `/run`. Reviewed full-catalog promotion remains an owner decision.
 
 
 - Select unrestricted catalog documents with a verified `s3/primary` location and no active document cleanup plan. Read `yandex/source` paths and `s3/content` results from `catalog_locations`; publication inclusion and metadata do not gate extraction. Restricted/unknown privacy is ineligible for this public-output workflow.

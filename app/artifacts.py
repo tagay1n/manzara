@@ -15,7 +15,9 @@ workspaces/
   Completed-run directories may be removed. Never remove an active run.
 
 logs/
-  Task run logs. Remove only when the corresponding run history is no longer needed.
+  Batch task logs, existing verbose logs, and structured run artifacts.
+  New interactive verbose output lives only in terminal scrollback.
+  Remove files only when the corresponding run history is no longer needed.
 
 state/
   Machine-local disposable runtime state. Remove only while all tasks are idle.

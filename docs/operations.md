@@ -4,7 +4,7 @@
 
 Artifacts use `MANZARA_ARTIFACTS_ROOT` (default `~/.manzara`). Retention groups are `cache/`, `workspaces/`, `logs/`, `state/`, `durable/`, and `private/`; `app/artifacts.py` generates `STORAGE_LAYOUT.txt` with removal guidance.
 
-The shared source cache is `cache/source-documents`, MD5-verified and bounded by `documents.cache_max_gib`. Retained task outputs live in dedicated workspaces; task logs use `logs/task-runs/<task_id>/run-<run_id>.log`.
+The shared source cache is `cache/source-documents`, MD5-verified and bounded by `documents.cache_max_gib`. Retained task outputs live in dedicated workspaces. Batch verbose logs use `logs/task-runs/<task_id>/run-<run_id>.log`; new interactive messages live only in terminal scrollback, subject to terminal retention, without file capture. Existing log files are retained. Both modes retain saved run summaries, structured `run-<run_id>.artifact.json` files in the task directory, and persisted `task.artifact` events. Artifact creation does not depend on a verbose log file. Interactive controls and lifecycle are documented in [README](../README.md#controls-and-lifecycle).
 
 Local SQLite state is disposable but may be removed only with all Manzara processes stopped. It is never reconstructed from PostgreSQL. Domain checkpoints remain durable in PostgreSQL.
 

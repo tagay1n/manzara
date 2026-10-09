@@ -95,7 +95,9 @@ def main(arguments: list[str] | None = None) -> None:
     try:
         import asyncio
         from app.cli.terminal import Terminal
-        asyncio.run(Terminal(args, build_descriptors).run())
+        exit_code = asyncio.run(Terminal(args, build_descriptors).run())
+        if exit_code:
+            parser.exit(exit_code)
     except ImportError as exc:
         parser.exit(2, f"CLI dependency unavailable ({exc.name}); install requirements.txt.\n")
     except KeyboardInterrupt:
