@@ -13,6 +13,7 @@ import time
 from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.utils import get_bell_environment_variable, get_term_environment_variable
 from prompt_toolkit.filters import Condition
+from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, VSplit, Window
@@ -74,8 +75,9 @@ class Terminal:
         self._picker_generation = 0
         self.message = "Initializing local runtime…"
         self.form_error = ""
+        self._recalling_command = False
         self.prompt = TextArea(height=Dimension(min=1, max=3), multiline=False, wrap_lines=True,
-                               prompt="› ")
+                               prompt="› ", history=InMemoryHistory())
         # TextArea forces a one-row window for non-multiline buffers. Retain
         # single-command input while letting wrapped text use a few rows.
         self.prompt.window.height = Dimension(min=1, max=3)
@@ -140,6 +142,10 @@ class Terminal:
 
     def _prompt_changed(self, _buffer):
         if self.mode in ("task", "history", "settings"):
+            return
+        if self._recalling_command:
+            # Recalled slash commands must leave arrows available for history.
+            self.mode = ""
             return
         text = self.prompt.text
         self.mode = "commands" if text.startswith("/") and not any(char.isspace() for char in text) else ""
@@ -220,7 +226,7 @@ class Terminal:
         elif self.stopping or self.closing:
             hint = "/ commands · Ctrl-C force exit"
         else:
-            hint = "/ commands · " + ("Ctrl-C stop" if self.foreground else "Ctrl-C clear / exit")
+            hint = "/ commands · ↑↓ command history · " + ("Ctrl-C stop" if self.foreground else "Ctrl-C clear / exit")
         return [("class:warning" if self.message else "class:disabled",
                  redact(self.message) if self.message else hint)]
 
@@ -236,15 +242,26 @@ class Terminal:
             if count:
                 self.picker_index = (self.picker_index + (-1 if event.key_sequence[0].key == "up" else 1)) % count
 
+        recalling = ~picking & ~editing & Condition(lambda: self.layout.has_focus(self.prompt))
+
+        @keys.add("up", filter=recalling)
+        @keys.add("down", filter=recalling)
+        def recall(event):
+            self._recalling_command = True
+            try:
+                if event.key_sequence[0].key == "up":
+                    self.prompt.buffer.history_backward()
+                else:
+                    self.prompt.buffer.history_forward()
+            finally:
+                self._recalling_command = False
+
         @keys.add("enter", filter=~editing)
         def enter(event):
             if self.mode in ("task", "history") or (self.mode == "commands" and self._picker_items()):
                 self._choose_picker()
             else:
-                text = self.prompt.text
-                self.prompt.text = ""
-                self.mode = ""
-                self._spawn(self._dispatch(text))
+                self._submit_command(self.prompt.text)
 
         @keys.add("tab", filter=~editing)
         def complete(event):
@@ -304,8 +321,7 @@ class Terminal:
             if complete:
                 self.prompt.text = f"/{value.name} "
             else:
-                self.prompt.text = ""
-                self._spawn(self._dispatch(f"/{value.name}"))
+                self._submit_command(f"/{value.name}")
         elif mode == "task":
             if self.locked:
                 self.message = "Task selection is locked until the foreground run finishes."
@@ -315,6 +331,12 @@ class Terminal:
         elif mode == "history":
             title = self.task.title
             self._spawn(self._say(summary_text(value, title)))
+
+    def _submit_command(self, text):
+        self.prompt.text = text.strip()
+        self.prompt.buffer.reset(append_to_history=True)
+        self.mode = ""
+        self._spawn(self._dispatch(text))
 
     async def _dispatch(self, text):
         text = text.strip()
@@ -498,7 +520,7 @@ class Terminal:
         elif self.mode in ("task", "history") and self.search.text:
             self.search.text = ""
         elif self.prompt.text:
-            self.prompt.text = ""
+            self.prompt.buffer.reset()
             self._dismiss()
         else:
             self._request_exit()
@@ -596,6 +618,9 @@ class Terminal:
         self.runtime_error = read_failure
 
     def _release_foreground(self):
+        if self.foreground_run_id is not None and not self.output.failure:
+            # Final output has drained; stage one bell through the same writer.
+            self.display.bell()
         self.foreground = None
         self.foreground_run_id = None
         self.foreground_snapshot = None

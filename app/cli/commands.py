@@ -28,8 +28,10 @@ def help_text() -> str:
     commands = "\n".join(f"  /{command.name:<10} {command.description}" for command in COMMANDS)
     return ("Manzara commands\n" + commands + "\n\n"
             "  / opens command completion; arrows select, Enter chooses, Tab completes.\n"
+            "  Outside pickers: Up/Down recall commands from this session; Down past the newest restores your draft.\n"
             "  Task/history pickers: type to search; Esc dismisses.\n"
             "  Settings: Tab changes focus; Enter/Ctrl-S saves; Esc cancels.\n"
             "  Ctrl-C: stop work and stay; press again while stopping/exiting to force exit.\n"
             "  At idle: Ctrl-C clears input, or exits when input is empty.\n"
+            "  Finished tasks ring the terminal bell once; PROMPT_TOOLKIT_BELL=false disables it.\n"
             "  New interactive logs live only in terminal scrollback; saved summaries use /history.")

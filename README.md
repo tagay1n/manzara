@@ -28,6 +28,8 @@ Run daily maintenance without a terminal using `python scripts/run_daily_mainten
 
 The CLI launches idle with a compact activity row and an inline prompt. Type `/` for a filtered command picker; arrows navigate, Enter chooses, Tab completes, and Esc dismisses. Ordinary text receives a command hint; it is never executed as a shell command.
 
+Outside pickers, Up recalls older submitted commands and Down moves toward newer ones, restoring your unfinished input after the newest command. Recalled commands stay in the prompt until you press Enter; editing one resumes command completion. History includes commands chosen from the picker, skips empty input and consecutive duplicates, and lasts for the current CLI session. Press Esc to dismiss an open command picker before browsing command history. `/history` remains the task run picker.
+
 | Command | Behavior |
 | --- | --- |
 | `/task`, `/task all` | Search and select a task; `all` includes disabled tasks and reasons. Selection never starts work. |
@@ -40,6 +42,8 @@ The CLI launches idle with a compact activity row and an inline prompt. Type `/`
 | `/quit` | Stop safely, drain output, and exit. |
 
 One foreground run owns the CLI from the start request through worker finalization and output drain. Additional starts are rejected, and task selection/settings stay locked. Browsing history leaves foreground activity unchanged. Activity animates during discovery, processing, provider waits, stopping, and finalization; the spinner indicates activity, while meaningful counters indicate advancement. Provider waits describe individual workers/request gates. Runtime-read failures visibly mark progress unavailable. Completion distinguishes completed, stopped, deferred, and failed outcomes.
+
+When a run finishes, the CLI rings the terminal bell once after worker finalization and final output drain, including failed, deferred, and safely stopped runs. The summary shows the outcome. Sound depends on your terminal's audible-bell settings; set `PROMPT_TOOLKIT_BELL=false` to disable it. Browsing saved summaries does not ring the bell.
 
 Ctrl-C during work requests safe stop and returns to idle after finalization. At idle it clears nonempty input, or exits if input is empty. Press Ctrl-C again while stopping/exiting to force process exit with code 130, including during startup or finalization. Force exit restores terminal input mode without waiting for output; cursor/style restoration is best effort when the terminal cannot accept writes. Interrupted runs are recovered on the next launch and resume from persisted checkpoints. Force exit can skip final output, summaries, and unfinished checkpoint writes. Provider requests have a 60-second I/O timeout, not a hard total-duration limit. A bare `q` is ordinary input.
 
