@@ -4,29 +4,40 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from app.catalog.contracts import document_md5, integer
+from app.document_cleanup_contracts import CLEANUP_ACTIONS_BY_SCOPE
+from app.document_cleanup_paths import cleanup_source_path, source_path
+from app.document_resources import cleanup_source_meta, resource_meta, verify_resource
+
 
 def execute_yandex_cleanup(item: Mapping[str, Any], *, yadisk: Any) -> None:
-    """Execute exactly one persisted plan; reject all ad-hoc mutations."""
-    cleanup_id = item.get("cleanup_id")
-    if not isinstance(cleanup_id, int) or cleanup_id <= 0:
-        raise ValueError("Yandex cleanup requires a persisted cleanup_id")
-    status = str(item.get("status") or "").strip()
-    if status not in {"planned", "running"}:
-        raise ValueError("Yandex cleanup status must be planned or running")
-    source_path = str(item.get("source_path") or "").strip()
-    if not source_path:
-        raise ValueError("Yandex cleanup requires source_path")
-    action = str(item.get("action") or "").strip()
-    if action == "delete":
-        yadisk.remove(source_path, permanently=True)
+    """Revalidate a persisted plan's remote identity immediately before mutation."""
+    integer(item.get('cleanup_id'), 'cleanup_id')
+    if item.get('status') != 'running':
+        raise ValueError('Yandex cleanup must have a claimed persisted plan')
+    md5 = document_md5(item.get('md5'))
+    source = cleanup_source_path(item)
+    scope = item.get('scope')
+    if item.get('action') not in CLEANUP_ACTIONS_BY_SCOPE.get(scope, ()):
+        raise ValueError('Unsupported cleanup scope')
+    meta = cleanup_source_meta(yadisk, item)
+    verify_resource(meta, md5=md5, resource_id=item.get('source_resource_id'))
+    action = item.get('action')
+    if action == 'delete':
+        if scope == 'duplicate_resource':
+            canonical = source_path(item.get('evidence_json', {}).get('canonical_path'))
+            if canonical == source:
+                raise RuntimeError('Duplicate cleanup cannot delete its canonical resource')
+            verify_resource(resource_meta(yadisk, canonical), md5=md5)
+        yadisk.remove(source, permanently=True)
         return
-    if action == "move":
-        target_path = str(item.get("target_path") or "").strip()
-        if not target_path:
-            raise ValueError("Move cleanup requires target_path")
-        yadisk.move(source_path, target_path, overwrite=True)
+    if action == 'move':
+        target = source_path(item.get('target_path'))
+        if target == source or resource_meta(yadisk, target) is not None:
+            raise RuntimeError('Cleanup move target already exists; inspect it before retrying')
+        yadisk.move(source, target, overwrite=False)
         return
-    raise ValueError(f"Unsupported cleanup action: {action!r}")
+    raise ValueError(f'Unsupported cleanup action: {action!r}')
 
 
-__all__ = ["execute_yandex_cleanup"]
+__all__ = ['execute_yandex_cleanup']

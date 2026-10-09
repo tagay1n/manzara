@@ -3,7 +3,7 @@
 import json
 import re
 
-from app.modules.library.document_cleanup_repository import DocumentCleanupRepository
+from app.repositories.document_cleanup import DocumentCleanupRepository
 from app.modules.library.document_cleanup_service import apply_isbn_review_decision
 from app.modules.library.runtime.run_prepare_document_cleanup import cleanup_paths
 from app.settings import load_settings

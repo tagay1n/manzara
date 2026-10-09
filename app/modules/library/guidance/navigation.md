@@ -17,7 +17,7 @@ Paths are relative to the repo root; all implementation rows below live in `app/
 | Metadata evaluation | [focused owner lookup](evaluation-navigation.md) |
 | Collections | `collection_detection.py`, `collection_validation.py`, `collection_catalog.py`, `runtime/run_collection_apply.py`; [rules](collections.md) |
 | Static publishing export | `site_export.py`, `site_export_repository.py`, `runtime/run_site_export.py`; [contract](site-export.md) |
-| Cleanup planning | `document_cleanup.py`, `document_cleanup_service.py`, `document_cleanup_repository.py`; execution belongs to Maintenance |
+| Cleanup planning | `document_cleanup.py`, `document_cleanup_service.py`, shared `app/repositories/document_cleanup.py`; execution belongs to Maintenance |
 | CLI task composition | `app/cli/`; flow-owned execution: `runtime/run_normalize_personalities.py`, `runtime/run_prepare_document_cleanup.py`, `cleanup_cli.py` |
 
 Legacy SQL/ORM assumptions need auditing against the migrated [catalog](../../../../docs/catalog-model.md). Validation policy and coverage limits: [verification](../../../../docs/verification.md).

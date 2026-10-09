@@ -2,11 +2,11 @@
 
 ## Status and adaptation gap
 
-Alembic revision `20261008_0062` is applied in the owner's PostgreSQL catalog. Deployed relations, constraints, derived keys, audit revisions, and sampled read envelopes were inspected. The CLI personality task and cleanup planner/review commands use catalog-native reads/writes; other workflows remain disabled pending adaptation. Credential-backed execution has not established task readiness. The active Alembic history is a single baseline at that same revision. `alembic/sql/baseline_0062.sql` freezes the current schema; bootstrap and historical upgrade policy live in [operations](operations.md).
+Alembic revision `20261008_0062` is applied in the owner's PostgreSQL catalog. Deployed relations, constraints, derived keys, audit revisions, and sampled read envelopes were inspected. The CLI personality task, cleanup planner/review commands, and Yandex Sync use catalog-native reads/writes; other workflows remain disabled pending adaptation. Credential-backed execution has not established task readiness. The active Alembic history is a single baseline at that same revision. `alembic/sql/baseline_0062.sql` freezes the current schema; bootstrap and historical upgrade policy live in [operations](operations.md).
 
 The retired physical relations are `document`, `metadata`, `classification`, `normalization_canonicals`, `normalization_aliases`, `library_collections`, and `library_collection_items`. Their names are adapter views over normalized catalog relations. Views store no duplicate domain rows. Legacy upserts use the strict `catalog_upsert` command because views lack unique indexes.
 
-Personality normalization reads normalized names/credits/languages and persists atomic identity hypotheses through `app/catalog/personality_normalization.py`. Other code still uses legacy projections: `app/modules/library/normalization_queries.py`, `app/modules/library/runtime/models/`, and Maintenance sync repositories are starting points for the audit. A remaining legacy query is evidence to inspect, not proof that every such query fails.
+Personality normalization reads normalized names/credits/languages and persists atomic identity hypotheses through `app/catalog/personality_normalization.py`. Other code still uses legacy projections: `app/modules/library/normalization_queries.py`, `app/modules/library/runtime/models/`, and the disabled Backblaze upload repository are starting points for the audit. A remaining legacy query is evidence to inspect, not proof that every such query fails.
 
 Do not rerun import or retirement to fix backend behavior. Verify the deployed relations, revisions, constraints, and import manifest read-only, then repair one backend operation at a time. Current catalog integration tests are absent; successful migration does not establish worker readiness. Testing follows the explicit-request policy in root instructions.
 
@@ -22,7 +22,7 @@ Do not rerun import or retirement to fix backend behavior. Verify the deployed r
 | Preview request / page | Durable request, lease, successful generations and selected assets |
 | Evidence / proposal / revision | Source evidence, reviewed snapshots, pending changes and transactional audit |
 
-A publication may have multiple files; ISBN duplicates do not establish equivalence. Grouping requires reviewed revisions and explicit conflict resolutions. Inclusion never overrides file privacy or completeness; unknown privacy fails closed.
+Sync creates one pending publication per new file MD5, preserves existing publication membership, and never infers edition equivalence. Empty publications remain after document cleanup. A publication may have multiple files; ISBN duplicates do not establish equivalence. Grouping requires reviewed revisions and explicit conflict resolutions. Inclusion never overrides file privacy or completeness; unknown privacy fails closed.
 
 Human confirmation is separate from entity active/merged status and AI success. A spelling can belong to multiple identities. Linking an alias must not resolve every matching mention; contribution resolution identifies the reviewed occurrence. Publisher types come from publisher mentions, then publisher aliases.
 
@@ -66,8 +66,8 @@ Read projections `catalog_publication_metadata`, `catalog_document_metadata`, `c
 ## Owners and mutation rules
 
 - Schema: Alembic versions and frozen SQL under `alembic/`; Python table metadata in `app/catalog/schema.py`.
-- Shared domain API: `app/catalog/repository.py`, `contracts.py`, `metadata_store.py`, `identities.py`, `grouping.py`, and `previews.py`.
-- HTTP operations and the independent catalog admin API are retired. Shared catalog commands remain in `app/catalog/`; the CLI exposes normalization, cleanup planning/review, and run inspection, with other operations awaiting later slices.
+- Shared domain API: `app/catalog/document_sync.py` for file discovery/deletion, `app/catalog/repository.py`, `contracts.py`, `metadata_store.py`, `identities.py`, `grouping.py`, and `previews.py`.
+- HTTP operations and the independent catalog admin API are retired. Shared catalog commands remain in `app/catalog/`; the CLI exposes normalization, cleanup planning/review, and run inspection, and Yandex Sync, with other operations awaiting later slices.
 - Mutations check reviewed revisions and write audit records transactionally; stale commands raise `CatalogConflict`. Metadata updates need publication and document revisions. Identity/alias commands verify affected identities and mentions.
 - Admin edits protect fields from later automation. Protected publication changes enter metadata review; file/privacy and collection conflicts fail for explicit resolution. Deleting aliases preserves source names and explicitly resolved mentions.
 

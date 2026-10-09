@@ -10,7 +10,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from app.modules.library.runtime.metadata.isbn_utils import equivalent_isbn_values
+from app.catalog.isbn import equivalent_isbn_values
 from app.catalog.contracts import integer
 from app.operational_state import configured_store
 from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
@@ -291,6 +291,16 @@ class DocumentCleanupRepository:
                     values,
                 ).scalar_one_or_none()
             if existing is not None:
+                # Preparation may refresh unexecuted automatic decisions after
+                # unrelated catalog edits; persisted targets remain immutable.
+                if values['scope'] == 'document' and values['reason'] in {'non_tatar', 'non_document'}:
+                    conn.execute(text("""UPDATE document_cleanup_queue SET
+                        evidence_json=evidence_json || CAST(:evidence_json AS JSONB),
+                        source_resource_id=:source_resource_id, status='planned',
+                        updated_at=CURRENT_TIMESTAMP
+                        WHERE cleanup_id=:cleanup_id AND phase='planned'
+                          AND reason=:reason AND action=:action AND source_path=:source_path
+                    """), {**values, 'cleanup_id': existing})
                 return int(existing), False
             cleanup_id = conn.execute(
                 text(
@@ -691,7 +701,7 @@ class DocumentCleanupRepository:
                     conn.execute(
                         text(
                             """
-                            SELECT cleanup_id, md5, status, evidence_json
+                            SELECT cleanup_id, md5, status, phase, evidence_json
                             FROM document_cleanup_queue
                             WHERE reason='duplicate_isbn' AND md5=ANY(:md5s)
                             FOR UPDATE
@@ -708,7 +718,7 @@ class DocumentCleanupRepository:
                 and str(plan["md5"]).strip().lower() not in shared_removed_md5s
             ]
             if any(
-                str(plan["status"]) in {"running", "completed", "recovered"}
+                str(plan["status"]) in {"running", "completed", "recovered"} or str(plan["phase"]) != "planned"
                 for plan in exclusive_plans
             ):
                 raise ValueError(

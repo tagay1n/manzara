@@ -41,7 +41,7 @@ from app.modules.library.corrupt_document import (  # noqa: E402
     CorruptDocumentError,
     build_corrupt_cleanup_plan,
 )
-from app.modules.library.document_cleanup_repository import (  # noqa: E402
+from app.repositories.document_cleanup import (  # noqa: E402
     DocumentCleanupRepository,
 )
 from app.modules.library.non_pdf_extraction import (  # noqa: E402

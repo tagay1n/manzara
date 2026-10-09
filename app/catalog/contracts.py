@@ -14,6 +14,12 @@ class CatalogNotFound(Exception):
     """The requested catalog record does not exist."""
 
 
+def document_md5(value: Any) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise ValueError("md5 must be 32 lowercase hexadecimal characters")
+    return value
+
+
 PUBLICATION_FIELDS = {
     "name", "work_type", "description", "edition", "date_published",
     "page_count", "inclusion", "classification_id", "collection_id", "languages",

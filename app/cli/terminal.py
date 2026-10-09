@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timezone
 import os
 import signal
+import termios
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.document import Document
@@ -65,6 +66,7 @@ class Terminal:
         self.ready = False
         self.startup_finished = False
         self.closing = False
+        self._terminal_attributes = None
         self.pending = False
         self.message = "Initializing local runtime…"
         self.event_cursor = 0
@@ -98,7 +100,7 @@ class Terminal:
             Window(FormattedTextControl(self._active_text), height=3),
             normal, settings,
             Window(FormattedTextControl(lambda: [("class:message", redact(self.message))]), height=2, wrap_lines=True),
-            Label("↑↓ navigate  Enter actions  Tab focus  Esc back  q/Ctrl-C stop and exit"),
+            Label("↑↓ navigate  Enter actions  Tab focus  Esc back  q/Ctrl-C stop and exit  Ctrl-C again: force exit"),
         ]), focused_element=self.tasks_control)
         self.app = Application(
             layout=self.layout, key_bindings=self._keys(), full_screen=False,
@@ -142,6 +144,18 @@ class Terminal:
 
     def _progress_text(self, run):
         progress = run.get("progress") or {}
+        if run.get('task_id') == 'maintenance.monocorpus_sync':
+            stage = progress.get('stage', 'starting')
+            if stage == 'scanning':
+                return (f"Scanning · {progress.get('discovered', 0)} resources · "
+                        f"{progress.get('catalog_planned', 0)} catalog changes buffered")
+            if stage == 'applying':
+                return (f"Applying · {progress.get('current', 0)}/{progress.get('total', 0)} examined · "
+                        f"{progress.get('catalog_applied', 0)} committed")
+            if stage == 'finished':
+                return (f"Finished · {progress.get('catalog_applied', 0)} catalog changes committed · "
+                        f"{progress.get('catalog_pending', 0)} pending")
+            return f"{stage.capitalize()} · {progress.get('current', 0)}/{progress.get('total', 0)}"
         if progress.get("phase") == "discovering":
             if run.get("status") not in TASK_RUN_ACTIVE_STATUSES:
                 return "Candidate discovery did not finish."
@@ -225,17 +239,37 @@ class Terminal:
             self.logs = []
 
         @keys.add("q", filter=~editing)
-        @keys.add("c-c")
         def quit_(event):
             self._request_exit()
 
+        @keys.add("c-c")
+        def interrupt(event):
+            self._request_interrupt()
+
         return keys
+
+    def _request_interrupt(self):
+        if self.closing:
+            self._force_exit()
+        else:
+            self._request_exit()
+
+    def _force_exit(self):
+        # Worker threads and executor shutdown can block indefinitely. Restore
+        # terminal state, then let process exit release connections and the lock.
+        # Leave active runs for startup recovery rather than claiming completion.
+        try:
+            if self._terminal_attributes is not None:
+                termios.tcsetattr(self.app.input.fileno(), termios.TCSANOW, self._terminal_attributes)
+            self.app.renderer.reset()
+        finally:
+            os._exit(130)
 
     def _request_exit(self):
         if self.closing:
             return
         self.closing = True
-        self.message = "Stopping safely; waiting for active requests and checkpoint persistence…"
+        self.message = "Stopping safely; waiting for active requests and checkpoints. Press Ctrl-C again to force exit."
         self.app.create_background_task(self._stop_for_exit())
 
     async def _stop_for_exit(self):
@@ -243,7 +277,7 @@ class Terminal:
             try:
                 await asyncio.to_thread(self.runner.request_shutdown)
             except Exception as exc:
-                self.message = redact(exc)
+                self.message = redact(exc) + " · Ctrl-C again to force exit"
 
     def _save_settings(self):
         try:
@@ -357,6 +391,14 @@ class Terminal:
                 lines.append(f"{label}: {summary.get(key, 0)}")
             lines.append("Inspect ISBN reviews: python -m app cleanup reviews")
             lines.append("Inspect queued plans: python -m app cleanup queue")
+        if summary.get('kind') == 'maintenance.monocorpus_sync_summary':
+            for label, key in (('Resources scanned', 'discovered'), ('Filtered', 'filtered'),
+                               ('Catalog changes planned', 'catalog_planned'), ('Catalog changes committed', 'catalog_applied'),
+                               ('Catalog changes pending', 'catalog_pending'), ('Created', 'created'), ('Updated', 'updated'),
+                               ('Unchanged', 'unchanged'), ('Published', 'published'), ('Publications pending', 'publications_pending'),
+                               ('Cleanups completed', 'cleanups_completed'), ('Cleanups failed', 'cleanups_failed'),
+                               ('Failed', 'failed')):
+                lines.append(f'{label}: {summary.get(key, 0)}')
         error = summary.get("error") or run.get("error_text")
         if error:
             lines.append("Error: " + str(error))
@@ -385,8 +427,10 @@ class Terminal:
             if run:
                 progress = run.get("progress") or {}
                 text += f"Run {run['run_id']}: {_status(run)} · elapsed {_elapsed(run)}\n{self._progress_text(run)}\n"
-                text += "  ".join(f"{name}: {progress.get(name, 0)}" for name in
-                                  ("succeeded", "not_person", "unusable", "failed", "deferred", "retry_pending", "skipped"))
+                names = (('created', 'updated', 'unchanged', 'published', 'cleanups_completed', 'failed')
+                         if run.get('task_id') == 'maintenance.monocorpus_sync'
+                         else ('succeeded', 'not_person', 'unusable', 'failed', 'deferred', 'retry_pending', 'skipped'))
+                text += "  ".join(f"{name}: {progress.get(name, 0)}" for name in names)
                 waiting = self.waiting.get(run["run_id"])
                 if waiting and run["status"] in TASK_RUN_ACTIVE_STATUSES:
                     text += f"\nProvider: {waiting}"
@@ -479,12 +523,14 @@ class Terminal:
 
     async def run(self):
         loop = asyncio.get_running_loop()
-        previous_handler = signal.getsignal(signal.SIGTERM)
+        self._terminal_attributes = termios.tcgetattr(self.app.input.fileno())
+        previous_handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
+        loop.add_signal_handler(signal.SIGINT, self._request_interrupt)
         loop.add_signal_handler(signal.SIGTERM, self._request_exit)
         startup = asyncio.create_task(self._startup())
         refresh = asyncio.create_task(self._refresh())
         try:
-            await self.app.run_async()
+            await self.app.run_async(handle_sigint=False)
         finally:
             refresh.cancel()
             await asyncio.gather(refresh, return_exceptions=True)
@@ -500,5 +546,6 @@ class Terminal:
                 finally:
                     if self.session is not None:
                         self.session.close()
-                    loop.remove_signal_handler(signal.SIGTERM)
-                    signal.signal(signal.SIGTERM, previous_handler)
+                    for signum, handler in previous_handlers.items():
+                        loop.remove_signal_handler(signum)
+                        signal.signal(signum, handler)

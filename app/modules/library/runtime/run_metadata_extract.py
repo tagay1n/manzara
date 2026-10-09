@@ -48,7 +48,7 @@ from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     build_corrupt_cleanup_plan,
 )
-from app.modules.library.document_cleanup_repository import DocumentCleanupRepository
+from app.repositories.document_cleanup import DocumentCleanupRepository
 from app.modules.library.metadata_extraction import (
     ExtractedMetadata,
     MetadataExtractionRepository,

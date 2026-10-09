@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from app.document_sync_filter import classify_document
-from app.modules.library.runtime.metadata.isbn_utils import (
+from app.catalog.isbn import (
     canonicalize_isbn_values,
     isbn_comparison_values,
 )

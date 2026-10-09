@@ -20,8 +20,13 @@ def build_descriptors(settings):
         from app.modules.library.runtime.run_prepare_document_cleanup import execute
         return execute(context)
 
+    def sync(context):
+        from app.modules.maintenance.runtime.sync_monocorpus import execute
+        return execute(context)
+
     handlers = {"library.normalize_personalities": normalize,
-                "library.prepare_document_cleanup": cleanup}
+                "library.prepare_document_cleanup": cleanup,
+                "maintenance.monocorpus_sync": sync}
     definitions = [*library_task_definitions(), *collection_task_definitions(),
                    *maintenance_task_definitions(settings.maintenance)]
     return [TaskDescriptor(

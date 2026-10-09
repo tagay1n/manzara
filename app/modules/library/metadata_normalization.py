@@ -11,7 +11,7 @@ from app.modules.library.metadata_contract import (
     SUPPORTED_TYPES,
     reshape_english_contributor_roles,
 )
-from app.modules.library.runtime.metadata.isbn_utils import canonicalize_isbn_values
+from app.catalog.isbn import canonicalize_isbn_values
 from app.modules.library.runtime.metadata.url_utils import normalize_url_list
 
 UNKNOWN_VALUES = {"", "unknown", "неизвестно", "none", "null", "n/a"}

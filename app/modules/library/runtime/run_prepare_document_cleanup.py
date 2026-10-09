@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from app.modules.library.document_cleanup_repository import DocumentCleanupRepository
+from app.repositories.document_cleanup import DocumentCleanupRepository
 from app.modules.library.document_cleanup_service import prepare_document_cleanup
 from app.runtime_config import load_runtime_config
 from app.settings import load_settings

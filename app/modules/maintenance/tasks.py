@@ -13,7 +13,7 @@ MAINTENANCE_MONOCORPUS_SYNC_TASK_ID = "maintenance.monocorpus_sync"
 
 
 def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str, Any]]:
-    """Return Maintenance task definitions for dashboard and runtime."""
+    """Return retained Maintenance definitions for CLI registration."""
     app_root = Path(__file__).resolve().parents[3]
     meta_eval_runner = (
         app_root / "app" / "modules" / "library" / "runtime" / "run_meta_evaluate.py"

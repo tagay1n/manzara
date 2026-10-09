@@ -2,7 +2,7 @@
 
 These rules apply to `app/modules/maintenance/`.
 
-Catalog-dependent sync, cleanup, and export code needs adaptation/verification against the migrated PostgreSQL model. Guidance preserves required safety behavior; legacy SQL names do not establish current compatibility. See `docs/catalog-model.md` from the repo root.
+Yandex Sync and its cleanup executor use the normalized catalog and inline CLI runtime. Backblaze upload and export remain pending catalog adaptation/verification. Static inspection does not establish remote execution readiness; legacy SQL names do not establish current compatibility. See `docs/catalog-model.md` from the repo root.
 
 Read only the guidance matching the changed behavior:
 

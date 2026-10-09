@@ -2,7 +2,7 @@
 
 Read the matching owner and nearest `AGENTS.md`, then search symbols. Do not preload all guidance.
 
-The inline CLI supports personality normalization and cleanup preparation, with explicit cleanup review commands. Web pages and all HTTP APIs are retired. Other tasks remain disabled pending catalog adaptation and runtime verification; [catalog model](catalog-model.md) records the current boundary.
+The inline CLI supports personality normalization, cleanup preparation, and Yandex catalog sync, with explicit cleanup review commands. Web pages and all HTTP APIs are retired. Other tasks remain disabled pending catalog adaptation and runtime verification; [catalog model](catalog-model.md) records the current boundary.
 
 | Concern | Start here |
 | --- | --- |
@@ -14,8 +14,9 @@ The inline CLI supports personality normalization and cleanup preparation, with 
 | Task execution, logs, artifacts | `app/tasks.py`, `app/task_runtime/`, `app/run_log_store.py`, `app/run_artifact_channel.py`, `app/run_summary.py`; [task rules](../app/task_runtime/AGENTS.md) |
 | Retained conveyor state and shared workflow states | `app/repositories/conveyor.py`, `app/runtime_states.py`; conveyor execution is unavailable |
 | Gemini config, pool, quota, transport, pacing | `app/gemini_*.py`, `app/repositories/gemini*.py`; [Gemini contract](gemini-runtime.md) |
-| Cleanup planning and CLI review | `app/modules/library/document_cleanup*.py`, `app/modules/library/cleanup_cli.py`; [cleanup contract](document-cleanup.md) |
+| Cleanup planning and CLI review | `app/modules/library/document_cleanup*.py`, `app/modules/library/cleanup_cli.py`, shared persistence: `app/repositories/document_cleanup.py`; [cleanup contract](document-cleanup.md) |
 | Library | [Library rules](../app/modules/library/AGENTS.md), [owner lookup](../app/modules/library/guidance/navigation.md) |
+| Catalog sync commands | `app/catalog/document_sync.py`; set-based writes: `app/catalog/document_sync_bulk.py`; inline execution: `app/modules/maintenance/runtime/sync_monocorpus.py` |
 | Maintenance | [Maintenance rules](../app/modules/maintenance/AGENTS.md) |
 | Source storage and eligibility | `app/document_storage.py`, `app/document_sync_filter.py`, `app/document_cleanup_paths.py` |
 | Durable schema baseline and future migrations | `alembic/versions/`, `alembic/sql/baseline_0062.sql`; [bootstrap and historical recovery policy](operations.md) |
@@ -25,8 +26,8 @@ The inline CLI supports personality normalization and cleanup preparation, with 
 
 PostgreSQL owns durable domain data and workflow checkpoints. SQLite owns disposable orchestration and provider/retry state; see root rules for exact boundaries.
 
-`app/postgres_engine.py` owns the bounded SQLAlchemy pools. Repositories share its engine per database/schema within a process; do not create independent engines. CLI tasks run in background threads and share the same pool, default size 4. Retained standalone scripts have separate process-local budgets; publisher analysis reserves 2 for its advisory-lock session and short transactions. Local task/event/Gemini reads do not use PostgreSQL.
+`app/postgres_engine.py` owns the bounded SQLAlchemy pools. Repositories share its engine per database/schema within a process; do not create independent engines. CLI tasks run in background threads and share the same pool, default size 4. Sync holds one pool connection for its schema-wide advisory lock and requires at least two connections so short mutation transactions can proceed. Retained standalone scripts have separate process-local budgets; publisher analysis reserves 2 for its advisory-lock session and short transactions. Local task/event/Gemini reads do not use PostgreSQL.
 
-CLI startup initializes only SQLite; normalization checks the catalog read-only before work. Alembic owns durable schema changes and runs separately. `app/local_state.py` owns the disposable SQLite schema. Never infer the deployed schema from Alembic files alone.
+CLI startup initializes only SQLite; normalization and Sync check the catalog read-only before work. Alembic owns durable schema changes and runs separately. `app/local_state.py` owns the disposable SQLite schema. Never infer the deployed schema from Alembic files alone.
 
 Validation policy and coverage limits: [verification](verification.md). Update this map when ownership moves.

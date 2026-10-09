@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from app.modules.library.metadata_contract import is_english_facet
-from app.modules.library.runtime.metadata.isbn_utils import canonicalize_isbn_values
+from app.catalog.isbn import canonicalize_isbn_values
 from app.modules.library.runtime.metadata.schema import MetadataPatch
 from app.modules.library.runtime.metadata.url_utils import normalize_url_list
 
