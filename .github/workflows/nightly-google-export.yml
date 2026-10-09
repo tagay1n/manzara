@@ -1,4 +1,4 @@
-name: 'Nightly Google Sheets Export'
+name: 'Google Sheets export'
 
 on:
   schedule:

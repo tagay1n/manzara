@@ -8,32 +8,29 @@ import sys
 
 def build_descriptors(settings):
     from app.modules.library.collection_tasks import collection_task_definitions
-    from app.modules.library.tasks import library_task_definitions
-    from app.modules.maintenance.tasks import maintenance_task_definitions
+    from app.modules.library.tasks import (
+        LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID,
+        library_task_definitions,
+    )
+    from app.modules.maintenance.tasks import (
+        MAINTENANCE_MONOCORPUS_SYNC_TASK_ID,
+        maintenance_task_definitions,
+    )
     from app.task_runtime.contracts import TaskDescriptor
 
     def normalize(context):
         from app.modules.library.runtime.run_normalize_personalities import execute
         return execute(context)
 
-    def cleanup(context):
-        from app.modules.library.runtime.run_prepare_document_cleanup import execute
-        return execute(context)
-
-    def sync(context):
-        from app.modules.maintenance.runtime.sync_monocorpus import execute
-        return execute(context)
-
-    handlers = {"library.normalize_personalities": normalize,
-                "library.prepare_document_cleanup": cleanup,
-                "maintenance.monocorpus_sync": sync}
+    handlers = {"library.normalize_personalities": normalize}
+    scheduled = {LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID, MAINTENANCE_MONOCORPUS_SYNC_TASK_ID}
     definitions = [*library_task_definitions(), *collection_task_definitions(),
                    *maintenance_task_definitions(settings.maintenance)]
     return [TaskDescriptor(
         task_id=item["task_id"], title=item["title"], definition=item,
         group="Maintenance" if item["task_id"].startswith("maintenance.") else "Library",
         execute=handlers.get(item["task_id"]),
-    ) for item in definitions]
+    ) for item in definitions if item["task_id"] not in scheduled]
 
 
 def _positive(value: str) -> int:

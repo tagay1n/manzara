@@ -2,7 +2,7 @@
 
 These rules apply to `app/modules/library/`.
 
-The PostgreSQL catalog is migrated. Personality normalization and cleanup preparation have catalog-native CLI handlers; explicit cleanup review commands replace HTTP controls. Other workflows remain disabled pending adaptation. Guidance below preserves workflow requirements; legacy table/field names in remaining code need verification against the catalog. See `docs/catalog-model.md` from the repo root. Web pages and HTTP APIs are removed.
+The PostgreSQL catalog is migrated. Personality normalization has a catalog-native interactive CLI handler. Cleanup preparation runs through daily maintenance using the shared task runtime; explicit cleanup review commands remain in the CLI. Other workflows remain disabled pending adaptation. Guidance below preserves workflow requirements; legacy table/field names in remaining code need verification against the catalog. See `docs/catalog-model.md` from the repo root. Web pages and HTTP APIs are removed.
 
 Read only the guidance matching the files or behavior being changed:
 

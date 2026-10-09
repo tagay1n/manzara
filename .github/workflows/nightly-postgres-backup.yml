@@ -1,4 +1,4 @@
-name: 'Nightly PostgreSQL Logical Backup'
+name: 'Aiven PostgreSQL backup'
 
 on:
   schedule:

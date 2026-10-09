@@ -4,7 +4,7 @@ Manzara runs Tatar-language content workflows through an inline terminal CLI and
 
 ## Current status
 
-**Normalize personalities**, **Cleanup plan**, and **Sync** are enabled CLI tasks. They use the normalized PostgreSQL catalog and resumable checkpoints; personality normalization uses the shared Gemini runtime. Other tasks remain visible but disabled pending catalog adaptation. Operational readiness must be assessed for each task and execution path; static inspection alone does not establish it.
+**Normalize personalities** is the enabled interactive CLI task and uses the shared Gemini runtime. Cleanup preparation and Sync run together through standalone daily maintenance; cleanup review commands remain in the CLI. These workflows use the normalized PostgreSQL catalog and resumable checkpoints. Other tasks remain visible but disabled pending catalog adaptation. Operational readiness must be assessed for each execution path; static inspection alone does not establish it.
 
 ## Setup and launch
 
@@ -18,7 +18,9 @@ python3 -m venv .venv
 
 Copy the masked structure of `config.example.yaml` to a gitignored `config.local.yaml` or `config.yaml`. Runtime configuration resolves `MANZARA_CONFIG_PATH`, then local configuration; never load the example at runtime.
 
-Optional `--workers N`, `--limit N`, and `--task TASK_ID` select next-run settings and the initial task. Launching never starts a task automatically. Select Sync directly with `python -m app --task maintenance.monocorpus_sync`; use one worker and no limit. Sync executes persisted cleanup plans, scans Yandex, then applies catalog changes in batches. Discovered cleanup remains immediate; [Maintenance guidance](app/modules/maintenance/guidance/storage.md) describes stop/restart behavior. Backblaze upload remains disabled. Execution requires an interactive terminal; `--help` works without configuration.
+Optional `--workers N`, `--limit N`, and `--task TASK_ID` select next-run settings and the initial interactive task. Launching never starts a task automatically. Interactive execution requires a terminal; `--help` works without configuration. Backblaze upload remains disabled.
+
+Run daily maintenance without a terminal using `python scripts/run_daily_maintenance.py`. It prepares cleanup plans/reviews, then executes persisted cleanup and Yandex Sync with one worker and no limit. Sync and Cleanup plan are absent from the interactive task list. [Operations](docs/operations.md#scheduled-sync-and-cleanup) owns the daily schedule, Actions secrets, retention, and failure behavior; [cleanup review](docs/document-cleanup.md) explains explicit ISBN decisions.
 
 ## Controls and lifecycle
 
@@ -28,7 +30,7 @@ Optional `--workers N`, `--limit N`, and `--task TASK_ID` select next-run settin
 - `q` or the first Ctrl-C requests safe stop and waits for active requests to reach their checkpoints before exiting. Press Ctrl-C again during shutdown to force the entire CLI process to exit immediately with code 130, including while startup or finalization is waiting. The terminal is restored; interrupted runs are recovered on the next launch and resume from persisted checkpoints. Force exit can skip final logs, summaries, and unfinished checkpoint writes. Provider requests have a 60-second I/O timeout, not a hard total-duration limit.
 - Reopening preserves compatible completed decisions and resumes eligible work. One CLI session owns each local runtime store; a second session reports the conflict.
 
-CLI startup initializes local SQLite, seeds definitions without pruning history, and recovers interrupted local runs. It does **not** apply PostgreSQL migrations. Normalization and Sync check the catalog read-only before processing; incompatible schemas must be migrated separately.
+CLI and maintenance startup initialize local SQLite, seed definitions without pruning history, and recover interrupted local runs. They do **not** apply PostgreSQL migrations. Normalization and daily maintenance check the catalog read-only before processing; incompatible schemas must be migrated separately.
 
 | Setting | Purpose / default |
 | --- | --- |

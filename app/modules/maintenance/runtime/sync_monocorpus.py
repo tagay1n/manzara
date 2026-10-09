@@ -1,4 +1,4 @@
-"""Inline CLI Yandex discovery and resumable, guarded cleanup execution."""
+"""Yandex discovery and resumable, guarded cleanup for daily maintenance."""
 
 from __future__ import annotations
 
@@ -468,12 +468,3 @@ def execute(context: RunContext) -> dict[str, Any]:
             resources.callback(primary_s3.close)
             return run_monocorpus_sync(repository=repository, yadisk=yadisk, primary_s3=primary_s3,
                                       settings=settings, context=context)
-
-
-def main() -> None:
-    from app.cli import main as cli_main
-    cli_main(['--task', TASK_ID])
-
-
-if __name__ == '__main__':
-    main()

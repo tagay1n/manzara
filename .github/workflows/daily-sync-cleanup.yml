@@ -1,0 +1,80 @@
+name: 'Yadisk sync'
+
+on:
+  schedule:
+    # 12:37 Moscow; separated from overnight jobs and the 15:52 UTC link checker.
+    - cron: '37 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-sync-cleanup
+  cancel-in-progress: false
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      MANZARA_DATABASE_URL: ${{ secrets.MANZARA_DATABASE_URL }}
+      MANZARA_DB_SCHEMA: monocorpus
+      MANZARA_DB_POOL_SIZE: '4'
+    steps:
+      - name: Initialize runtime paths
+        shell: bash
+        run: |
+          printf '%s\n' \
+            "MANZARA_ARTIFACTS_ROOT=$RUNNER_TEMP/manzara" \
+            "MANZARA_LOCAL_STATE_PATH=$RUNNER_TEMP/manzara/state/runtime.sqlite3" \
+            "MANZARA_CONFIG_PATH=$RUNNER_TEMP/manzara/private/credentials/maintenance/config.yaml" \
+            >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install maintenance dependencies
+        shell: bash
+        run: |
+          mapfile -t packages < <(
+            sed -n -E '/^(alembic|boto3|cryptography|isbnlib|psycopg2-binary|pyyaml|sqlalchemy)==/p; /^yadisk_client @ /p' requirements.txt
+          )
+          test "${#packages[@]}" -eq 8
+          python -m pip install "${packages[@]}"
+
+      - name: Prepare private maintenance configuration
+        env:
+          MANZARA_MAINTENANCE_CONFIG_BASE64: ${{ secrets.MANZARA_MAINTENANCE_CONFIG_BASE64 }}
+          MANZARA_AIVEN_CA_CERT_BASE64: ${{ secrets.MANZARA_AIVEN_CA_CERT_BASE64 }}
+        run: python scripts/prepare_maintenance_config.py
+
+      - name: Prepare cleanup and run Sync
+        run: python scripts/run_daily_maintenance.py
+
+      - name: Retain maintenance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-sync-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/manzara/logs/task-runs/**/*.log
+            ${{ runner.temp }}/manzara/logs/task-runs/**/*.artifact.json
+            ${{ runner.temp }}/manzara/state/runtime.sqlite3*
+
+      - name: Summarize workflow outcome
+        if: always()
+        env:
+          MAINTENANCE_JOB_STATUS: ${{ job.status }}
+        run: |
+          printf '\nWorkflow job status: %s\n' "$MAINTENANCE_JOB_STATUS" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove private configuration
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/manzara/private"

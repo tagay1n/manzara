@@ -1,4 +1,4 @@
-"""Flow-owned cleanup preparation for the inline task runtime."""
+"""Flow-owned cleanup preparation for the shared task runtime."""
 
 from __future__ import annotations
 
@@ -51,12 +51,3 @@ def execute(context: RunContext) -> dict[str, Any]:
         return {**summary, "outcome": "stopped" if summary["stopped"] else "completed"}
     finally:
         repository.dispose()
-
-
-def main() -> None:
-    from app.cli import main as cli_main
-    cli_main(["--task", TASK_ID])
-
-
-if __name__ == "__main__":
-    main()

@@ -8,9 +8,40 @@ The shared source cache is `cache/source-documents`, MD5-verified and bounded by
 
 Local SQLite state is disposable but may be removed only with all Manzara processes stopped. It is never reconstructed from PostgreSQL. Domain checkpoints remain durable in PostgreSQL.
 
+## Scheduled sync and cleanup
+
+`.github/workflows/daily-sync-cleanup.yml` (Yadisk sync) runs daily at **09:37 UTC / 12:37 Europe/Moscow**, separated from the overnight export/backup and 15:52 UTC link checker. Exact start time is unimportant; delayed schedules can still overlap. Scheduled and manual runs share a concurrency group without canceling an executing run. Sync also retains its PostgreSQL advisory lock for clients on other machines.
+
+The workflow calls `python scripts/run_daily_maintenance.py`: cleanup preparation first, then guarded cleanup execution and Yandex Sync. Both stages use one worker and no candidate limit. Preparation failures/stops prevent Sync from starting; failed, stopped, or unfinalized runs return nonzero. ISBN duplicate groups always require an explicit persisted decision via the [cleanup review commands](document-cleanup.md). Newly discovered documents join the next daily preparation cohort.
+
+The command uses the shared `TaskRunner`, a local session lock, run recovery, structured logs, and persisted `task.artifact` events. Read-only catalog/configuration preflight precedes preparation. SIGINT/SIGTERM request safe stop; the command also requests stop after a five-hour execution budget. The Actions job allows six hours, including setup and final diagnostics; forced termination can interrupt finalization. PostgreSQL checkpoints preserve completed cleanup phases, while uncommitted discovery buffers are rebuilt on the next run. No migrations run automatically.
+
+Add these Actions secrets manually:
+
+| Secret | Value |
+| --- | --- |
+| `MANZARA_DATABASE_URL` | Existing primary PostgreSQL URL, with the intended TLS settings |
+| `MANZARA_MAINTENANCE_CONFIG_BASE64` | Single-line base64 of maintenance-only YAML described below |
+| `MANZARA_AIVEN_CA_CERT_BASE64` | Optional existing base64 PEM CA when the database requires a provider certificate |
+
+Build the maintenance-only YAML from the corresponding sections of [config.example.yaml](../config.example.yaml), replacing masked values with actual values. Retain `documents.primary_storage` (endpoint, region, access key, secret key, and all five bucket names: `public`, `private`, `book_previews`, `content`, `content_images`), `yandex.disk` (OAuth token and `documents.source_path`, `restricted_path`, `filtered_out_path`), and `encryption_key`. Use document-storage credentials authorized for the managed cleanup objects; the logical-backup bucket credentials are a separate role. Exclude Gemini keys, Codex settings, and unrelated credentials. Base64 is encoding, not encryption; keep the source and encoded file under the private artifact root with restrictive permissions, never in git or logs.
+
+For example, after creating `~/.manzara/private/credentials/maintenance/actions.yaml` with that subset:
+
+```bash
+umask 077
+base64 -w 0 < ~/.manzara/private/credentials/maintenance/actions.yaml > ~/.manzara/private/credentials/maintenance/actions.base64
+```
+
+Paste the encoded file into `MANZARA_MAINTENANCE_CONFIG_BASE64`. No additional repository variables are required. `scripts/prepare_maintenance_config.py` selects only the maintenance fields, masks decoded credentials in Actions output, writes a private YAML file, and overrides the cache path/budget for the temporary runner. Missing/masked credentials or bucket names fail setup. When a CA is supplied, it writes the certificate privately and replaces the URL's `sslrootcert` path for the runner, preserving other TLS settings.
+
+The runner initializes artifact/cache/configuration/local SQLite paths under `$RUNNER_TEMP/manzara` through `$GITHUB_ENV`, with schema `monocorpus` and pool size 4. Every run starts with fresh orchestration state; cleanup plans/reviews/phases stay in PostgreSQL. The workflow installs only its dependencies selected from `requirements.txt`, without document-inference packages.
+
+GitHub summaries show stage outcomes/counters and overall job status. Logs, structured task artifacts, and local SQLite diagnostics are uploaded with seven-day retention, including available files after failure. Configuration, credentials, and document caches are excluded; SQLite is never restored from Actions artifacts/caches. Setup failures may have no task artifacts; inspect the Actions step output. Private configuration is removed at the final workflow boundary. Static inspection does not establish connectivity, duration, recovery behavior, or daily operational readiness; a credential-backed manual run requires explicit owner authorization.
+
 ## Scheduled Google export
 
-`.github/workflows/nightly-google-export.yml` (Nightly Google Sheets Export) runs daily at 00:07 UTC and supports manual dispatch. Exact start time is not required; check successful daily runs. It calls `python -m app.modules.maintenance.runtime.dump_state --validate-sharing` to publish the catalog to the established spreadsheet's `documents` worksheet. The former `tt` worksheet is renamed in place on the first publication. No Drive archive is created or uploaded; PostgreSQL recovery dumps remain the separate [backup workflow](postgres-backup-recovery.md).
+`.github/workflows/nightly-google-export.yml` (Google Sheets export) runs daily at 00:07 UTC and supports manual dispatch. Exact start time is not required; check successful daily runs. It calls `python -m app.modules.maintenance.runtime.dump_state --validate-sharing` to publish the catalog to the established spreadsheet's `documents` worksheet. The former `tt` worksheet is renamed in place on the first publication. No Drive archive is created or uploaded; PostgreSQL recovery dumps remain the separate [backup workflow](postgres-backup-recovery.md).
 
 Actions secrets: `MANZARA_DATABASE_URL` and `GOOGLE_OAUTH_TOKEN_JSON_BASE64` (base64 OAuth token JSON with Sheets refresh authorization). The existing token path remains `private/credentials/google-drive/personal_token.json`; no Drive API scope is requested by this exporter. Keep tokens out of git and logs.
 

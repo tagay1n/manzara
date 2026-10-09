@@ -9,6 +9,7 @@ These rules apply to `app/task_runtime/`. Shared contracts also cover `app/tasks
 - Log start, per-item, decision, failure, and final-summary boundaries. Include stable identifiers for successful mutations.
 - Never derive structured artifacts by parsing logs. Persist compact `task.artifact` events in local SQLite and save large details in run artifacts. The CLI reads bounded log pages; HTTP/SSE transport is retired.
 - CLI tasks run in background threads with explicit run contexts and cooperative cancellation. Share one bounded PostgreSQL engine; never mutate per-task process environment or redirect global stdout. Propagate the run log context into worker threads.
+- Noninteractive batches use the same `TaskRunner` and persisted task/artifact contracts. `batch.py` owns local session locking, recovery, sequential stages, signals, and cooperative time budgets; command boundaries supply flow descriptors and read-only preflight checks. Inspect terminal state only after worker finalization completes, and return nonzero for incomplete or failed runs.
 - CLI startup initializes only SQLite and checks the catalog read-only. PostgreSQL migrations remain a separate operation. Hold the local session lock before recovery and retain disabled-task history.
 - Preserve graceful stop boundaries, restartable checkpoints, redaction, and actionable error context in run state, logs, and events.
 - Use `after_log_id` for follow and `before_log_id` for backfill. Keep reads bounded.

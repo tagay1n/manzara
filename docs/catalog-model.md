@@ -2,7 +2,7 @@
 
 ## Status and adaptation gap
 
-Alembic revision `20261008_0062` is applied in the owner's PostgreSQL catalog. Deployed relations, constraints, derived keys, audit revisions, and sampled read envelopes were inspected. The CLI personality task, cleanup planner/review commands, and Yandex Sync use catalog-native reads/writes; other workflows remain disabled pending adaptation. Credential-backed execution has not established task readiness. The active Alembic history is a single baseline at that same revision. `alembic/sql/baseline_0062.sql` freezes the current schema; bootstrap and historical upgrade policy live in [operations](operations.md).
+Alembic revision `20261008_0062` is applied in the owner's PostgreSQL catalog. Deployed relations, constraints, derived keys, audit revisions, and sampled read envelopes were inspected. The CLI personality task and cleanup review commands, and standalone daily cleanup preparation/Yandex Sync use catalog-native reads/writes; other workflows remain disabled pending adaptation. Credential-backed execution has not established task readiness. The active Alembic history is a single baseline at that same revision. `alembic/sql/baseline_0062.sql` freezes the current schema; bootstrap and historical upgrade policy live in [operations](operations.md).
 
 The retired physical relations are `document`, `metadata`, `classification`, `normalization_canonicals`, `normalization_aliases`, `library_collections`, and `library_collection_items`. Their names are adapter views over normalized catalog relations. Views store no duplicate domain rows. Legacy upserts use the strict `catalog_upsert` command because views lack unique indexes.
 
@@ -67,7 +67,7 @@ Read projections `catalog_publication_metadata`, `catalog_document_metadata`, `c
 
 - Schema: Alembic versions and frozen SQL under `alembic/`; Python table metadata in `app/catalog/schema.py`.
 - Shared domain API: `app/catalog/document_sync.py` for file discovery/deletion, `app/catalog/repository.py`, `contracts.py`, `metadata_store.py`, `identities.py`, `grouping.py`, and `previews.py`.
-- HTTP operations and the independent catalog admin API are retired. Shared catalog commands remain in `app/catalog/`; the CLI exposes normalization, cleanup planning/review, and run inspection, and Yandex Sync, with other operations awaiting later slices.
+- HTTP operations and the independent catalog admin API are retired. Shared catalog commands remain in `app/catalog/`; the CLI exposes normalization, cleanup review, and run inspection. Standalone daily maintenance owns cleanup preparation and Yandex Sync, with other operations awaiting later slices.
 - Mutations check reviewed revisions and write audit records transactionally; stale commands raise `CatalogConflict`. Metadata updates need publication and document revisions. Identity/alias commands verify affected identities and mentions.
 - Admin edits protect fields from later automation. Protected publication changes enter metadata review; file/privacy and collection conflicts fail for explicit resolution. Deleting aliases preserves source names and explicitly resolved mentions.
 

@@ -109,7 +109,7 @@ def library_task_definitions(*, app_root: Path | None = None) -> list[dict[str, 
             "command": {
                 "mode": "shell",
                 "value": py_bootstrap
-                + '"$PY_BIN" -m app.modules.library.runtime.run_prepare_document_cleanup',
+                + '"$PY_BIN" scripts/run_daily_maintenance.py',
             },
         },
         {

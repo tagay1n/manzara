@@ -13,7 +13,7 @@ MAINTENANCE_MONOCORPUS_SYNC_TASK_ID = "maintenance.monocorpus_sync"
 
 
 def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str, Any]]:
-    """Return retained Maintenance definitions for CLI registration."""
+    """Return retained Maintenance definitions for runtime registration."""
     app_root = Path(__file__).resolve().parents[3]
     meta_eval_runner = (
         app_root / "app" / "modules" / "library" / "runtime" / "run_meta_evaluate.py"
@@ -24,7 +24,7 @@ def maintenance_task_definitions(settings: MaintenanceSettings) -> list[dict[str
         py_bootstrap + '"$PY_BIN" -m app.modules.maintenance.runtime.sync_documents_s3'
     )
     monocorpus_sync_cmd = (
-        py_bootstrap + '"$PY_BIN" -m app.modules.maintenance.runtime.sync_monocorpus'
+        py_bootstrap + '"$PY_BIN" scripts/run_daily_maintenance.py'
     )
     return [
         {
