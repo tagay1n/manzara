@@ -75,6 +75,10 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
             if summary.get("kind") == "library.personality_normalization_summary"
             else ("cluster_count", "singleton_count", "unresolved_count", "conflicting_groups", "new_proposals")
             if summary.get("kind") == "library.publisher_merge_summary"
+            else ("scanned", "eligible", "excluded", "new_collection_proposals", "attachment_proposals",
+                  "proposals_created", "proposals_updated", "proposals_reused", "proposals_superseded",
+                  "reviewed_proposals_preserved")
+            if summary.get("kind") == "library.collection_discovery_summary"
             else ("total", "processed", "ready", "failed", "skipped", "selected_pages", "uploaded_objects")
             if summary.get("kind") == "library.catalog_preview_summary"
             else ("total", "processed", "ready", "failed", "deferred", "unsupported", "corrupted", "checkpoint_raced"))
@@ -84,6 +88,8 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
                   if isinstance(value, int) and not isinstance(value, bool) and key != "percent"]
     if counts:
         lines.append(" · ".join(counts))
+    if summary.get("kind") == "library.collection_discovery_summary" and outcome == "completed":
+        lines.append("Collection proposals saved for later explicit review.")
     if summary.get("kind") == "library.publisher_merge_summary":
         if summary.get("analysis_id") is not None:
             lines.append(f"Analysis: {summary['analysis_id']} · scope: {summary.get('scope', 'unknown')}")

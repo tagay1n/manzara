@@ -80,7 +80,7 @@ class TaskRunner:
                     artifact=lambda payload: self._publish_artifact(task_id, descriptor.group_id, run_id, payload),
                 )
                 self.db.update_run_summary(run_id, {"options": options.as_dict(), **self._log_location(log)})
-                self.db.insert_event("task.started", task_id, run_id, descriptor.group_id, {"status": TASK_RUN_STATUS_STARTING})
+                self._publish_lifecycle("task.started", task_id, run_id, descriptor.group_id, {"status": TASK_RUN_STATUS_STARTING})
                 run = self.db.get_run(run_id)
                 if run is None:
                     raise RuntimeError(f"Run {run_id} is missing before execution")
@@ -98,6 +98,11 @@ class TaskRunner:
                 self.db.finish_run(run_id, TASK_RUN_STATUS_FAILED, 1, redact(exc))
                 raise
             return {"action": "start", "run": run}
+
+    def _publish_lifecycle(self, event_type: str, task_id: str, run_id: int,
+                           group_id: str, payload: dict) -> None:
+        if self.descriptors[task_id].emit_lifecycle_events:
+            self.db.insert_event(event_type, task_id, run_id, group_id, payload)
 
     @staticmethod
     def _log_location(log: RunLogSink) -> dict[str, str]:
@@ -129,7 +134,7 @@ class TaskRunner:
                 return
             handle.context.stop_event.set()
             self.db.set_stop_mode(handle.context.run_id, "graceful")
-            self.db.insert_event("task.stop_requested", task_id, handle.context.run_id,
+            self._publish_lifecycle("task.stop_requested", task_id, handle.context.run_id,
                                  handle.context.panel_id, {"mode": "graceful"})
 
     def request_shutdown(self) -> None:
@@ -221,7 +226,7 @@ class TaskRunner:
                 summary["artifact_path"] = str(self._artifact_path(context.task_id, context.run_id))
                 self.db.update_run_summary(context.run_id, summary)
                 self.db.finish_run(context.run_id, status, 1 if status == TASK_RUN_STATUS_FAILED else 0, error)
-                self.db.insert_event(task_terminal_event_type(status), context.task_id, context.run_id,
+                self._publish_lifecycle(task_terminal_event_type(status), context.task_id, context.run_id,
                                      context.panel_id, {"status": status, "exit_code": 1 if status == TASK_RUN_STATUS_FAILED else 0,
                                                         **({"error": error} if error else {})})
                 log(f"task final status={status} summary={json.dumps(summary, ensure_ascii=False)}")
@@ -241,7 +246,7 @@ class TaskRunner:
                     pass
                 try:
                     self.db.finish_run(context.run_id, TASK_RUN_STATUS_FAILED, 1, error)
-                    self.db.insert_event("task.failed", context.task_id, context.run_id,
+                    self._publish_lifecycle("task.failed", context.task_id, context.run_id,
                                          context.panel_id, {"status": TASK_RUN_STATUS_FAILED,
                                                             "exit_code": 1, "error": error})
                 except Exception as final_error:
