@@ -1,38 +1,46 @@
 """Workflow-only sequential transfer into verified primary Backblaze storage."""
 
+import json
+import shutil
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
-import json
 from pathlib import Path
-import shutil
 from tempfile import TemporaryDirectory
 from typing import Any, Mapping
 
 from boto3 import Session
-from botocore.config import Config
 from botocore.exceptions import ClientError
 from yadisk_client import YaDisk
 
-from app.s3_transfer import sequential_transfer_config
 from app.artifacts import workspace_dir
 from app.catalog.contracts import CatalogConflict, document_md5, integer
 from app.catalog.document_transfer import pending
 from app.document_cleanup_paths import source_path
-from app.document_operation_lock import DocumentOperationBusy, check_document_operation, document_operation
+from app.document_operation_lock import (
+    DocumentOperationBusy,
+    check_document_operation,
+    document_operation,
+)
 from app.document_resources import resource_meta, resource_value, verify_resource
 from app.document_storage import (
-    build_cache_index, calculate_md5, document_object_key,
-    find_valid_cache_entry, load_document_storage_settings, object_url,
+    build_cache_index,
+    calculate_md5,
+    document_object_key,
+    find_valid_cache_entry,
+    load_document_storage_settings,
+    object_url,
     resolve_document_object_location,
 )
-from app.modules.maintenance.document_sync_repository import PostgresDocumentSyncRepository
+from app.modules.maintenance.document_sync_repository import (
+    PostgresDocumentSyncRepository,
+)
 from app.modules.runtime_shared_utils import encrypt
-from app.runtime_config import load_runtime_config
+from app.runtime_config import config_integer, load_runtime_config
+from app.s3_transfer import s3_client_config, sequential_transfer_config
 from app.task_runtime.contracts import RunContext
 from app.task_runtime.logging import redact
 
 TASK_ID = "maintenance.sync_documents_s3"
-_DISK_RESERVE_BYTES = 1024**3
 
 
 class YandexDownloadUnavailable(RuntimeError):
@@ -169,7 +177,7 @@ def _acquire_source(row, *, cache_index, yadisk, workspace, log):
     size = integer(resource_value(meta, 'size'), 'Yandex source size', minimum=0)
     if row['source_size'] is not None and size != row['source_size']:
         raise CatalogConflict('Yandex source size changed; refresh catalog discovery')
-    if shutil.disk_usage(workspace).free < size + _DISK_RESERVE_BYTES:
+    if shutil.disk_usage(workspace).free < size + config_integer("maintenance", "disk_reserve_bytes"):
         raise RuntimeError(f'Insufficient runner disk space for document bytes={size}; retry on a larger runner')
     with TemporaryDirectory(prefix=row['md5'] + '-', dir=workspace) as directory:
         destination = Path(directory) / 'document.download'
@@ -370,12 +378,7 @@ def _create_s3_client(connection: Any) -> Any:
         aws_secret_access_key=connection.secret_access_key,
         endpoint_url=connection.endpoint_url,
         region_name=connection.region_name,
-        config=Config(
-            signature_version="s3v4",
-            connect_timeout=10, read_timeout=60,
-            retries={"mode": "standard", "total_max_attempts": 3},
-            s3={"addressing_style": "path"},
-        ),
+        config=s3_client_config("transfer"),
     )
 
 
@@ -424,7 +427,7 @@ def execute(context: RunContext):
                                        settings=settings, context=context)
         yadisk = YaDisk(settings.yadisk_token)
         resources.callback(yadisk.close)
-        yadisk.default_args.update(timeout=(10, 30), poll_timeout=60, n_retries=2)
+        yadisk.default_args.update(timeout=(config_integer("network", "yandex", "connect_timeout_seconds"), config_integer("network", "yandex", "read_timeout_seconds")), poll_timeout=config_integer("network", "yandex", "poll_timeout_seconds"), n_retries=config_integer("network", "yandex", "retries", minimum=0))
         primary_s3 = _create_s3_client(settings.primary)
         resources.callback(primary_s3.close)
         _validate_primary_buckets(primary_s3, settings.public_bucket, settings.private_bucket)

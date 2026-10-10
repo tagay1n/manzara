@@ -1,17 +1,22 @@
 """Run-scoped evaluation evidence using verified primary storage only."""
 
-from app.document_storage import download_cached_primary_document, verify_primary_document_object
+from app.document_storage import (
+    download_cached_primary_document,
+    verify_primary_document_object,
+)
 from app.modules.library.djvu_slicing import create_djvu_slice
 from app.modules.library.metadata_extraction import create_pdf_slice, load_text_slice
 from app.modules.library.runtime.metadata.evaluation_patch import _collect_patch_fields
-from app.modules.library.runtime.metadata.evaluation_text import _build_content_excerpt, _drop_none_values
+from app.modules.library.runtime.metadata.evaluation_text import (
+    _build_content_excerpt,
+    _drop_none_values,
+)
 from app.modules.library.runtime.metadata.fields import extract_flat_fields
-from app.modules.library.runtime.prompts.metadata_evaluation import build_library_applicability_prompt
+from app.modules.library.runtime.prompts.metadata_evaluation import (
+    build_library_applicability_prompt,
+)
 from app.modules.library.upstream_metadata import sanitize_upstream_metadata
-
-
-EXCERPT_CHARS = 500
-EDGE_PAGES = 2
+from app.runtime_config import config_integer
 
 
 def prepare_evaluation_request(candidate, schema_org, *, workspace, storage, primary_s3, known, log):
@@ -23,7 +28,7 @@ def prepare_evaluation_request(candidate, schema_org, *, workspace, storage, pri
             verify_primary_document_object(settings=storage, s3=primary_s3,
                 document_url=candidate.document_url, expected_size=candidate.primary_storage_size)
             text = load_text_slice(candidate, workspace=workspace)
-            excerpt = _build_content_excerpt(text, EXCERPT_CHARS)
+            excerpt = _build_content_excerpt(text, config_integer("metadata", "evaluation_excerpt_chars"))
         except Exception as exc:
             if candidate.mime_type != 'application/pdf':
                 raise
@@ -36,9 +41,9 @@ def prepare_evaluation_request(candidate, schema_org, *, workspace, storage, pri
             expected_size=candidate.primary_storage_size, extension='.djvu' if is_djvu else '.pdf')
         slice_path = workspace / candidate.md5 / 'slice-for-eval.pdf'
         if is_djvu:
-            create_djvu_slice(source, slice_path, edge_pages=EDGE_PAGES)
+            create_djvu_slice(source, slice_path, edge_pages=config_integer("metadata", "evaluation_edge_pages"))
         else:
-            create_pdf_slice(source, slice_path, edge_pages=EDGE_PAGES)
+            create_pdf_slice(source, slice_path, edge_pages=config_integer("metadata", "evaluation_edge_pages"))
         files[slice_path] = 'application/pdf'
     flat = extract_flat_fields(schema_org)
     payload = _drop_none_values({

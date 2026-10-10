@@ -17,17 +17,11 @@ jobs:
   maintenance:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    env:
-      MANZARA_DATABASE_URL: ${{ secrets.MANZARA_DATABASE_URL }}
-      MANZARA_DB_SCHEMA: monocorpus
-      MANZARA_DB_POOL_SIZE: '4'
     steps:
       - name: Initialize runtime paths
         shell: bash
         run: |
           printf '%s\n' \
-            "MANZARA_ARTIFACTS_ROOT=$RUNNER_TEMP/manzara" \
-            "MANZARA_LOCAL_STATE_PATH=$RUNNER_TEMP/manzara/state/runtime.sqlite3" \
             "MANZARA_CONFIG_PATH=$RUNNER_TEMP/manzara/private/credentials/maintenance/config.yaml" \
             >> "$GITHUB_ENV"
 
@@ -49,9 +43,8 @@ jobs:
 
       - name: Prepare private maintenance configuration
         env:
-          MANZARA_MAINTENANCE_CONFIG_BASE64: ${{ secrets.MANZARA_MAINTENANCE_CONFIG_BASE64 }}
-          MANZARA_AIVEN_CA_CERT_BASE64: ${{ secrets.MANZARA_AIVEN_CA_CERT_BASE64 }}
-        run: python scripts/prepare_maintenance_config.py
+          MANZARA_CONFIG_BASE64: ${{ secrets.MANZARA_MAINTENANCE_CONFIG_BASE64 }}
+        run: python scripts/prepare_workflow_config.py
 
       - name: Prepare cleanup and run Sync
         run: python scripts/run_daily_maintenance.py

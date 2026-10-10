@@ -3,30 +3,47 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 import os
 import signal
 import sys
 import termios
 import time
+from dataclasses import replace
 
-from prompt_toolkit.output import ColorDepth
-from prompt_toolkit.utils import get_bell_environment_variable, get_term_environment_variable
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
-from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, VSplit, Window
+from prompt_toolkit.layout.containers import (
+    ConditionalContainer,
+    HSplit,
+    VSplit,
+    Window,
+)
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import (
+    get_bell_environment_variable,
+    get_term_environment_variable,
+)
 from prompt_toolkit.widgets import Button, Label, TextArea
 
-from app.cli.commands import COMMANDS, COMMAND_BY_NAME, help_text
+from app.cli.commands import COMMAND_BY_NAME, COMMANDS, help_text
 from app.cli.display import InlineApplication, TerminalDisplay, emergency_notice
 from app.cli.output import OutputFailure, TerminalOutput
-from app.cli.presentation import duration, elapsed, progress_text, provider_wait, restrictions, status, summary_text
+from app.cli.presentation import (
+    duration,
+    elapsed,
+    progress_text,
+    provider_wait,
+    restrictions,
+    status,
+    summary_text,
+)
 from app.db import Database
+from app.runtime_config import config_integer, config_number
 from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTING
 from app.settings import load_settings
 from app.task_runtime.contracts import RunOptions
@@ -459,7 +476,7 @@ class Terminal:
         self._picker_generation += 1
         generation = self._picker_generation
         task_id = self.selected_id
-        rows = await asyncio.to_thread(self.db.list_recent_runs_for_task, task_id, limit=20)
+        rows = await asyncio.to_thread(self.db.list_recent_runs_for_task, task_id, limit=config_integer("terminal", "history_rows"))
         if self.mode == "history" and self._picker_generation == generation:
             self.history_rows = rows
 
@@ -633,7 +650,7 @@ class Terminal:
                     self.app.exit()
                 return
             self.app.invalidate()
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(config_number("terminal", "status_poll_seconds", minimum=0.01))
 
     async def _show_emergency_notice(self, text):
         emergency_notice(text)
@@ -650,7 +667,7 @@ class Terminal:
                     self.app.print_transcript(batch)
                     await self.display.drain()
                 else:
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(config_number("terminal", "output_poll_seconds", minimum=0.001))
             except Exception as exc:
                 self.output.fail(exc)
                 self.message = self.output.failure

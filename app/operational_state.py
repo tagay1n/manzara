@@ -1,17 +1,17 @@
 """Local-only flow retry state and reproducible caches; never domain truth."""
 
+import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
-import json
 from pathlib import Path
 
 from app.local_state import LocalStateStore
 
 
 def configured_store():
-    from app.settings import _load_local_state_path
-    return _initialized_store(_load_local_state_path())
+    from app.runtime_config import config_text
+    return _initialized_store(Path(config_text("local_state_path")).expanduser())
 
 
 @lru_cache(maxsize=8)

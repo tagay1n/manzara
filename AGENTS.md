@@ -11,10 +11,10 @@ Owner: tans1q
 
 ## Invariants
 
-- Durable domain data and safety-critical workflow checkpoints use PostgreSQL (`MANZARA_DATABASE_URL`, schema `MANZARA_DB_SCHEMA`, default `monocorpus`). Runs, Gemini coordination, flow attempts/errors, AI retry exclusions, and reproducible caches use only local SQLite (`~/.manzara/state/runtime.sqlite3` or `MANZARA_LOCAL_STATE_PATH`). Task registrations are code-owned; dashboard definitions and conveyor state are retired. Never fall back between stores or dual-write.
+- Durable domain data and safety-critical workflow checkpoints use PostgreSQL (YAML `database_url` and `database_schema`). Runs, Gemini coordination, flow attempts/errors, AI retry exclusions, and reproducible caches use only local SQLite (YAML `local_state_path`). Task registrations are code-owned; dashboard definitions and conveyor state are retired. Never fall back between stores or dual-write.
 - The backend owns domain decisions and persisted truth. Clients own rendering, transport, interaction, and transient state.
-- Artifacts live under `~/.manzara` or `MANZARA_ARTIFACTS_ROOT`; never create repository-root runtime artifact directories.
-- Keep secrets out of git and logs. Local configuration is gitignored; keep `config.example.yaml` masked and structurally current, and never load it at runtime.
+- Artifacts live under the YAML `artifacts_root`; never create repository-root runtime artifact directories.
+- Keep secrets out of git and logs. Local configuration is gitignored; keep `config.example.yaml` masked and structurally current, and never load it at runtime. Operational values and processing policies come only from the selected YAML file; missing settings fail. `MANZARA_CONFIG_PATH` selects that file, without environment value overrides.
 - Keep `requirements.txt` as the single dependency file.
 - Prefer forward changes over compatibility branches. Ask the owner before choosing a persisted-data migration or compatibility policy.
 

@@ -12,8 +12,8 @@ from xml.etree import ElementTree as ET
 
 from app.modules.library.corrupt_document import CorruptDocumentError
 from app.modules.library.non_pdf_types import DeferredDocumentExtraction
+from app.runtime_config import config_integer
 
-MAX_XML_BYTES = 16 * 1024 * 1024
 _IMAGE_TAGS = {"pic", "blip", "blipFill", "imgLayer"}
 _VISUAL_TAGS = {
     "oleObj",
@@ -31,7 +31,7 @@ _VISUAL_TAGS = {
 
 def _xml(archive: zipfile.ZipFile, member: str) -> ET.Element:
     info = archive.getinfo(member)
-    if info.file_size > MAX_XML_BYTES:
+    if info.file_size > config_integer("non_pdf", "max_pptx_xml_bytes"):
         raise DeferredDocumentExtraction("pptx", "pptx_xml_limit")
     payload = archive.read(member)
     declaration = payload.replace(b"\x00", b"").upper()

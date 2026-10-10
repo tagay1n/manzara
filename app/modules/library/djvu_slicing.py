@@ -9,10 +9,7 @@ from tempfile import TemporaryDirectory
 import pymupdf
 
 from app.modules.library.corrupt_document import CorruptDocumentError
-
-DJVU_RENDER_SIZES = ("3000x3000", "2400x2400", "1800x1800")
-DJVU_COMMAND_TIMEOUT_SECONDS = 120
-MAX_DJVU_PDF_BYTES = 49_000_000
+from app.runtime_config import config_integer, config_text_list
 
 
 class DjvuToolError(RuntimeError):
@@ -32,13 +29,13 @@ def _run_djvu_command(command: list[str]) -> subprocess.CompletedProcess[str]:
             capture_output=True,
             text=True,
             check=False,
-            timeout=DJVU_COMMAND_TIMEOUT_SECONDS,
+            timeout=config_integer("djvu", "command_timeout_seconds"),
         )
     except FileNotFoundError as exc:
         raise DjvuToolError(f"Missing DjVuLibre command: {command[0]}") from exc
     except subprocess.TimeoutExpired as exc:
         raise DjvuToolError(
-            f"DjVuLibre command timed out after {DJVU_COMMAND_TIMEOUT_SECONDS}s: "
+            f"DjVuLibre command timed out after {config_integer("djvu", "command_timeout_seconds")}s: "
             f"{command[0]}"
         ) from exc
 
@@ -61,14 +58,14 @@ def create_djvu_slice(
     destination.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=destination.parent) as temporary:
         rendered_path = Path(temporary) / "slice.pdf"
-        for render_size in DJVU_RENDER_SIZES:
+        for render_size in config_text_list("djvu", "render_sizes"):
             _render_pages(source, rendered_path, pages, render_size)
-            if rendered_path.stat().st_size <= MAX_DJVU_PDF_BYTES:
+            if rendered_path.stat().st_size <= config_integer("djvu", "max_pdf_bytes"):
                 rendered_path.replace(destination)
                 return len(pages)
             rendered_path.unlink()
     raise DjvuToolError(
-        f"DjVu PDF slice exceeds {MAX_DJVU_PDF_BYTES} bytes "
+        f"DjVu PDF slice exceeds {config_integer("djvu", "max_pdf_bytes")} bytes "
         f"at the smallest render size: {source}"
     )
 

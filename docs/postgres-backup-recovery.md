@@ -2,7 +2,7 @@
 
 ## Backup contract
 
-`.github/workflows/nightly-postgres-backup.yml` runs at **01:27 UTC** and supports manual dispatch. `scripts/backup_postgres_to_b2.py` creates independent custom-format logical dumps using PostgreSQL 18 clients, covering `monocorpus`, `public`, and `pg_trgm`, without ownership/privileges.
+`.github/workflows/nightly-postgres-backup.yml` runs at **01:27 UTC** and supports manual dispatch. `scripts/backup_postgres_to_b2.py` creates independent custom-format logical dumps using YAML `backup.postgres_image`, covering `database_schema`, `public`, and `pg_trgm`, without ownership/privileges.
 
 S3 uploads run sequentially on the calling worker. It validates with `pg_restore --list`, records SHA-256 metadata, requests SSE-B2 AES-256, and verifies remote size/checksum/encryption. This documents workflow behavior; it does not confirm current remote configuration or successful runs.
 
@@ -15,18 +15,7 @@ Monthly retains the first successful complete dump of the UTC month; there is no
 
 ## Configuration
 
-Actions secrets:
-
-- `MANZARA_DATABASE_URL`
-- `MANZARA_AIVEN_CA_CERT_BASE64`: project PEM CA; workflow enforces `sslmode=verify-full`
-- `MANZARA_LOGICAL_BACKUP_S3_ACCESS_KEY_ID`
-- `MANZARA_LOGICAL_BACKUP_S3_SECRET_ACCESS_KEY`
-
-Repository variables:
-
-- `MANZARA_LOGICAL_BACKUP_S3_ENDPOINT`: `https://s3.eu-central-003.backblazeb2.com`
-- `MANZARA_LOGICAL_BACKUP_S3_REGION`: `eu-central-003`
-- `MANZARA_LOGICAL_BACKUP_S3_BUCKET`: `ttbackups`
+Provision `MANZARA_BACKUP_CONFIG_BASE64` with the backup subset described in [runtime configuration](operations.md#runtime-configuration). The image, connection deadline, storage endpoint/region/bucket, and dedicated credentials are required YAML settings. The workflow enforces `sslmode=verify-full`; supply its CA in YAML or, for local operations, explicitly select an existing certificate path in `database_url`.
 
 Keep the CA and credentials outside git under the artifacts root's `private/credentials/`. Scope the B2 key to `ttbackups`, prefix `logical/manzara/`, and `listFiles`/`readFiles`/`writeFiles`. Read access verifies uploads and preserves monthly objects; no delete/bucket-management permission is needed.
 

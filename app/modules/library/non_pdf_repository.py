@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import re
 import json
-from datetime import datetime, timezone
+import re
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from sqlalchemy.engine import Engine
@@ -13,9 +13,9 @@ from sqlalchemy.engine import Engine
 from app.catalog.non_pdf import NonPdfCatalogStore
 from app.operational_state import OperationalStateStore, configured_store
 from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
+from app.runtime_config import config_integer
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-MAX_AUTOMATIC_ATTEMPTS = 3
 NON_PDF_SCOPE = "library.non_pdf_extraction"
 _STATUSES = {"processing", "ready", "failed", "unsupported", "deferred"}
 
@@ -39,10 +39,10 @@ class NonPdfExtractionRepository:
     """Own candidate selection and compact extraction state."""
 
     def __init__(
-        self, database_url: str, *, schema: str = "monocorpus",
+        self, database_url: str, *, schema: str,
         runtime: OperationalStateStore | None = None,
     ) -> None:
-        normalized = str(schema or "monocorpus").strip() or "monocorpus"
+        normalized = schema.strip()
         if not _SCHEMA_RE.fullmatch(normalized):
             raise ValueError(f"Invalid database schema: {normalized!r}")
         self.runtime = runtime if runtime is not None else configured_store()
@@ -101,7 +101,7 @@ class NonPdfExtractionRepository:
             status = state.get("status")
             changed = state.get("extractor_version") != version
             eligible = status is None or changed or status in {"processing", "detected"} or (
-                status == "failed" and (retry_known_failures or int(local.get("attempt_count", 0)) < MAX_AUTOMATIC_ATTEMPTS)
+                status == "failed" and (retry_known_failures or int(local.get("attempt_count", 0)) < config_integer("non_pdf", "max_automatic_attempts"))
             ) or (retry_known_failures and status == "deferred")
             if not eligible:
                 continue
@@ -189,7 +189,6 @@ class NonPdfExtractionRepository:
 
 
 __all__ = [
-    "MAX_AUTOMATIC_ATTEMPTS",
     "NonPdfCandidate",
     "NonPdfExtractionRepository",
 ]

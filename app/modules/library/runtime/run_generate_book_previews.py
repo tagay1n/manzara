@@ -1,5 +1,6 @@
 """Generate missing book previews through the interactive operations CLI."""
 
+from app.s3_transfer import s3_client_config
 from app.task_runtime.contracts import RunContext
 
 
@@ -29,8 +30,11 @@ def execute(context: RunContext) -> dict:
                     "ready": 0, "failed": 0, "stopped": context.should_stop(),
                     "outcome": "stopped" if context.should_stop() else "completed"}
         from boto3 import Session
-        from botocore.config import Config
-        from app.document_storage import load_document_storage_settings, prune_document_cache
+
+        from app.document_storage import (
+            load_document_storage_settings,
+            prune_document_cache,
+        )
         from app.modules.library.catalog_preview_worker import run_previews
         from app.modules.library.preview_detection import DocLayNetPageDetector
         from app.modules.library.preview_runtime import resolved_settings
@@ -46,8 +50,7 @@ def execute(context: RunContext) -> dict:
             "s3", endpoint_url=storage.primary.endpoint_url, region_name=storage.primary.region_name,
             aws_access_key_id=storage.primary.access_key_id,
             aws_secret_access_key=storage.primary.secret_access_key,
-            config=Config(signature_version="s3v4", s3={"addressing_style": "path"},
-                          connect_timeout=30, read_timeout=60, retries={"mode": "standard", "total_max_attempts": 3}),
+            config=s3_client_config("previews"),
         )
         try:
             context.log("library previews: checking public preview storage")

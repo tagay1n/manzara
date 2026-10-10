@@ -10,6 +10,7 @@ from pathlib import Path
 
 from app.modules.library.non_pdf_converters import _run
 from app.modules.library.non_pdf_types import ConverterCommandError
+from app.runtime_config import config_integer
 
 
 def _convert_odt_to_html(source: Path, *, workspace: Path) -> Path:
@@ -31,7 +32,7 @@ def _convert_odt_to_html(source: Path, *, workspace: Path) -> Path:
         ],
         workspace=workspace,
         label="libreoffice",
-        timeout_seconds=900,
+        timeout_seconds=config_integer("non_pdf", "libreoffice_timeout_seconds"),
     )
     matches = sorted(converted.glob("*.html"))
     if len(matches) != 1 or matches[0].stat().st_size == 0:
@@ -57,7 +58,7 @@ def _convert_mobi_to_epub(source: Path, *, workspace: Path) -> Path:
         ["ebook-convert", str(staged_source), str(target)],
         workspace=workspace,
         label="calibre",
-        timeout_seconds=900,
+        timeout_seconds=config_integer("non_pdf", "calibre_timeout_seconds"),
         env=env,
     )
     return target

@@ -1,12 +1,14 @@
 """Bulk, read-only catalog snapshot for the scheduled Google export."""
 
-from collections import defaultdict
 import re
+from collections import defaultdict
 from typing import Any
 
 from sqlalchemy import Engine, text
 
 from app.catalog.metadata import SCALARS, compose_metadata
+from app.postgres_engine import configured_timeout_sql
+from app.runtime_config import config_integer
 
 
 def fetch_document_export(engine: Engine, *, schema: str) -> list[dict[str, Any]]:
@@ -17,12 +19,12 @@ def fetch_document_export(engine: Engine, *, schema: str) -> list[dict[str, Any]
     with engine.connect().execution_options(isolation_level="REPEATABLE READ") as conn:
         with conn.begin():
             conn.execute(text("SET TRANSACTION READ ONLY"))
-            conn.execute(text("SET LOCAL statement_timeout = '60s'"))
+            conn.execute(text(configured_timeout_sql("statement_timeout", "query_timeout_seconds")))
             conn.execute(text("SET LOCAL jit = off"))
 
             def rows(query):
                 with conn.execute(text(query.replace("{catalog}", prefix)),
-                                  execution_options={"yield_per": 1000}) as result:
+                                  execution_options={"yield_per": config_integer("postgres", "read_batch_size")}) as result:
                     yield from result.mappings()
 
             documents = [dict(row) for row in rows("""

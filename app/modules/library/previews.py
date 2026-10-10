@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from app.runtime_config import config_integer
 
 PREVIEW_RECIPE_VERSION = "webp-v2"
 PREVIEW_ROLE_ORDER = ("first", "second", "last")
-PREVIEW_EDGE_SEARCH_LIMIT = 3
 _ROLE_ALIASES = {"first": "1", "second": "2", "last": "l"}
 
 
@@ -25,13 +25,15 @@ def select_informative_preview_pages(
     page_count: int,
     *,
     is_useful: Callable[[int], bool],
-    edge_limit: int = PREVIEW_EDGE_SEARCH_LIMIT,
+    edge_limit: int | None = None,
 ) -> list[PreviewPage]:
     """Select distinct first/second/last roles from bounded useful edge pages."""
     count = int(page_count)
     if count < 1:
         raise ValueError("PDF must contain at least one page")
-    limit = max(1, int(edge_limit))
+    limit = config_integer("previews", "edge_search_limit") if edge_limit is None else edge_limit
+    if type(limit) is not int or limit < 1:
+        raise ValueError("edge_limit must be a positive integer")
     front = range(1, min(count, limit) + 1)
     back = range(count, max(0, count - limit), -1)
     decisions: dict[int, bool] = {}
@@ -82,7 +84,6 @@ def preview_object_key(md5: str, object_alias: str, variant: str) -> str:
 
 __all__ = [
     "PREVIEW_RECIPE_VERSION",
-    "PREVIEW_EDGE_SEARCH_LIMIT",
     "PREVIEW_ROLE_ORDER",
     "PreviewPage",
     "preview_object_key",

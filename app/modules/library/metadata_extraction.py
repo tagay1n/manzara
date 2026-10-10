@@ -36,10 +36,8 @@ from app.modules.library.metadata_prompt import (
 )
 from app.modules.library.runtime.metadata.schema import Book
 from app.modules.library.upstream_metadata import sanitize_upstream_metadata
+from app.runtime_config import config_integer
 
-TEXT_SLICE_CHARS = 20_000
-PDF_EDGE_PAGES = 4
-DJVU_EDGE_PAGES = 3
 PROMPT_VERSION = "prompt.v7"
 _SUPPORTING_METADATA_FIELDS = (
     "author",
@@ -111,9 +109,9 @@ class MetadataRequest:
     files: Mapping[Path, str]
 
 
-def select_pdf_pages(page_count: int, *, edge_pages: int = PDF_EDGE_PAGES) -> list[int]:
+def select_pdf_pages(page_count: int, *, edge_pages: int | None = None) -> list[int]:
     """Return unique first/last PDF page indexes in source order."""
-    return select_edge_pages(page_count, edge_pages=edge_pages)
+    return select_edge_pages(page_count, edge_pages=config_integer("metadata", "pdf_edge_pages") if edge_pages is None else edge_pages)
 
 
 def _filename_hint(source_filename: str | None) -> dict[str, str] | None:
@@ -205,18 +203,18 @@ def load_text_slice(
     doc_dir = workspace / candidate.md5
     doc_dir.mkdir(parents=True, exist_ok=True)
     archive_path = doc_dir / "content.zip"
-    with requests.get(candidate.content_url, stream=True, timeout=(15, 120)) as response:
+    with requests.get(candidate.content_url, stream=True, timeout=(config_integer("metadata", "content_connect_timeout_seconds"), config_integer("metadata", "content_read_timeout_seconds"))) as response:
         response.raise_for_status()
         with archive_path.open("wb") as payload:
-            for chunk in response.iter_content(chunk_size=64 * 1024):
+            for chunk in response.iter_content(chunk_size=config_integer("metadata", "content_chunk_bytes")):
                 payload.write(chunk)
     member = f"{candidate.md5}.md"
     with zipfile.ZipFile(archive_path) as archive:
         with archive.open(member) as raw, io.TextIOWrapper(raw, encoding="utf-8") as handle:
-            return handle.read(TEXT_SLICE_CHARS)
+            return handle.read(config_integer("metadata", "text_slice_chars"))
 
 
-def create_pdf_slice(source: Path, destination: Path, *, edge_pages: int = PDF_EDGE_PAGES) -> int:
+def create_pdf_slice(source: Path, destination: Path, *, edge_pages: int | None = None) -> int:
     """Create a first/last-page PDF slice and return its page count."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -284,7 +282,7 @@ def prepare_metadata_request(
     )
     slice_path = doc_dir / "slice-for-meta.pdf"
     page_count = (
-        create_djvu_slice(source, slice_path, edge_pages=DJVU_EDGE_PAGES)
+        create_djvu_slice(source, slice_path, edge_pages=config_integer("metadata", "djvu_edge_pages"))
         if is_djvu
         else create_pdf_slice(source, slice_path)
     )

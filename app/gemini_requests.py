@@ -12,6 +12,7 @@ from google.genai import types
 from pydantic import BaseModel
 
 from app.gemini_runtime import record_gemini_generation_start
+from app.runtime_config import config_integer, config_number
 
 
 def _state_name(file_state: Any) -> str:
@@ -70,9 +71,11 @@ def generate_structured_json(
     contents: Sequence[Any],
     response_schema: Any,
     files: Mapping[Path, str] | None = None,
-    timeout_seconds: int = 360,
+    timeout_seconds: int,
 ) -> str:
     """Run one structured request and always delete uploaded Gemini files."""
+    if type(timeout_seconds) is not int or timeout_seconds <= 0:
+        raise ValueError("Gemini timeout_seconds must be a positive integer")
     client = genai.Client(api_key=api_key)
     uploaded: list[Any] = []
     try:
@@ -82,11 +85,11 @@ def generate_structured_json(
                 config={"mime_type": str(mime_type)},
             )
             uploaded.append(item)
-            deadline = time.monotonic() + 60
+            deadline = time.monotonic() + config_integer("gemini", "request", "file_activation_timeout_seconds")
             while _state_name(item) != "ACTIVE":
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f"Gemini file did not become active: {path}")
-                time.sleep(0.3)
+                time.sleep(config_number("gemini", "request", "file_poll_seconds", minimum=0.01))
                 item = client.files.get(name=item.name)
                 uploaded[-1] = item
 
@@ -95,13 +98,13 @@ def generate_structured_json(
             model=model_name,
             contents=[*contents, *uploaded],
             config=types.GenerateContentConfig(
-                temperature=0.1,
+                temperature=config_number("gemini", "request", "temperature", maximum=2),
                 response_mime_type="application/json",
                 response_schema=_transport_response_schema(response_schema),
                 candidate_count=1,
-                seed=1552,
+                seed=config_integer("gemini", "request", "seed", minimum=0),
                 http_options=types.HttpOptions(
-                    timeout=max(1, int(timeout_seconds)) * 1000
+                    timeout=timeout_seconds * 1000
                 ),
             ),
         )

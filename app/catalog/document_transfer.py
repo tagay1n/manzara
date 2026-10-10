@@ -7,9 +7,9 @@ from app.catalog.document_sync import DocumentSyncStore
 from app.catalog.document_sync_bulk import update_records
 from app.document_cleanup_paths import source_path
 from app.document_operation_lock import check_document_operation
+from app.postgres_engine import configured_timeout_sql
+from app.runtime_config import config_integer
 
-
-TRANSFER_BATCH_SIZE = 250
 _SNAPSHOT = """
     SELECT d.md5, d.publication_id, d.revision AS document_revision,
            d.mime_type, d.restricted AS sharing_restricted,
@@ -50,13 +50,13 @@ class DocumentTransferStore:
     def preflight(self):
         self.catalog.preflight()
         if self.engine.pool.size() < 2:
-            raise ValueError('Transfer requires MANZARA_DB_POOL_SIZE >= 2')
+            raise ValueError('Transfer requires database_pool_size >= 2')
 
     def list_pending_documents(self, *, after=''):
         with self.engine.connect() as conn:
             rows = conn.execute(text(_SNAPSHOT + f" WHERE {_PENDING} AND {_AVAILABLE} "
                                      "AND d.md5>:after ORDER BY d.md5 LIMIT :limit"),
-                                {'after': after, 'limit': TRANSFER_BATCH_SIZE}).mappings()
+                                {'after': after, 'limit': config_integer("maintenance", "transfer_batch_size")}).mappings()
             return [dict(row) for row in rows]
 
     def count_pending_documents(self):
@@ -113,7 +113,7 @@ class DocumentTransferStore:
         check_document_operation(conn)
         with conn.begin():
             conn.execute(text('SET TRANSACTION READ WRITE'))
-            conn.execute(text("SET LOCAL lock_timeout='5s'"))
+            conn.execute(text(configured_timeout_sql("lock_timeout", "lock_timeout_seconds")))
             self.catalog._lock(conn, expected['md5'])
             self.validate(conn, expected, payload=payload)
             before = conn.execute(text("""SELECT * FROM catalog_locations

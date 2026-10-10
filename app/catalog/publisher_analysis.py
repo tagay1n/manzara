@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
 import json
-import os
 import re
+from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, Column, MetaData, Table, Text, or_, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.catalog.contracts import CatalogConflict, integer
+from app.postgres_engine import configured_timeout_sql
+from app.settings import configured_schema
 
 PUBLISHER_ANALYSIS_CONTRACT = "catalog.publisher-clusters.v1"
 
@@ -54,7 +55,7 @@ class PublisherCatalogStore:
         }
         with self.engine.begin() as conn:
             conn.execute(text("SET TRANSACTION READ ONLY"))
-            conn.execute(text("SET LOCAL statement_timeout = '5s'"))
+            conn.execute(text(configured_timeout_sql("statement_timeout", "preflight_timeout_seconds")))
             rows = conn.execute(text("""SELECT table_name,column_name FROM information_schema.columns
                 WHERE table_schema=:schema AND table_name=ANY(:tables)"""),
                 {"schema": self.schema, "tables": list(required)}).mappings()
@@ -65,7 +66,7 @@ class PublisherCatalogStore:
                              for column in columns - present.get(table, set()))
             if missing:
                 raise RuntimeError("Catalog is incompatible with publisher clustering; missing: " + ", ".join(missing))
-            version_schema = os.environ.get("MANZARA_ALEMBIC_VERSION_SCHEMA") or self.schema
+            version_schema = configured_schema("migration_version_schema")
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", version_schema):
                 raise ValueError("Invalid migration version schema")
             revision = conn.execute(text(

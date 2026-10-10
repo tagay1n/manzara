@@ -8,7 +8,6 @@ owns the connection budget for a database/schema pair.
 from __future__ import annotations
 
 import json
-import os
 import re
 import threading
 import time
@@ -19,7 +18,9 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
 
-DEFAULT_POSTGRES_POOL_SIZE = 4
+from app.runtime_config import config_integer
+from app.settings import configured_schema
+
 MAX_POSTGRES_POOL_SIZE = 8
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -52,14 +53,16 @@ def _normalize_url(database_url: str) -> str:
 
 
 def _normalize_schema(schema: str) -> str:
-    value = str(schema or "monocorpus").strip() or "monocorpus"
+    value = schema.strip()
     if not _SCHEMA_RE.fullmatch(value):
         raise ValueError(f"Invalid database schema: {value!r}")
     return value
 
 
 def _normalize_pool_size(pool_size: int) -> int:
-    value = int(pool_size)
+    if type(pool_size) is not int:
+        raise ValueError("pool_size must be an integer")
+    value = pool_size
     if not 1 <= value <= MAX_POSTGRES_POOL_SIZE:
         raise ValueError(
             f"pool_size must be between 1 and {MAX_POSTGRES_POOL_SIZE}"
@@ -69,43 +72,49 @@ def _normalize_pool_size(pool_size: int) -> int:
 
 def configured_postgres_pool_size() -> int:
     """Resolve the pool bound inherited by the current process."""
-    raw = str(os.environ.get("MANZARA_DB_POOL_SIZE") or "").strip()
-    return _normalize_pool_size(int(raw)) if raw else DEFAULT_POSTGRES_POOL_SIZE
+    return config_integer("database_pool_size", maximum=MAX_POSTGRES_POOL_SIZE)
+
+
+def configured_timeout_sql(setting: str, field: str) -> str:
+    if setting not in {"statement_timeout", "lock_timeout"}:
+        raise ValueError("Unsupported PostgreSQL timeout setting")
+    milliseconds = config_integer("postgres", field) * 1000
+    return f"SET LOCAL {setting} = '{milliseconds}ms'"
 
 
 def get_postgres_engine(
     database_url: str,
     *,
-    schema: str = "monocorpus",
+    schema: str | None = None,
     pool_size: int | None = None,
 ) -> Engine:
     """Return the sole bounded engine for this process/database/schema."""
     normalized_url = _normalize_url(database_url)
-    normalized_schema = _normalize_schema(schema)
-    requested_size = None if pool_size is None else _normalize_pool_size(pool_size)
+    normalized_schema = _normalize_schema(configured_schema("database_schema") if schema is None else schema)
+    requested_size = configured_postgres_pool_size() if pool_size is None else _normalize_pool_size(pool_size)
     key = (normalized_url, normalized_schema)
     with _lock:
         entry = _engines.get(key)
         if entry is not None:
-            if requested_size is not None and entry.pool_size != requested_size:
+            if entry.pool_size != requested_size:
                 raise RuntimeError(
                     "PostgreSQL engine is already configured with "
                     f"pool_size={entry.pool_size} for schema={normalized_schema}; "
                     f"requested pool_size={requested_size}"
                 )
             return entry.engine
-        normalized_size = requested_size or configured_postgres_pool_size()
+        normalized_size = requested_size
         engine = create_engine(
             normalized_url,
             pool_size=normalized_size,
             max_overflow=0,
             pool_pre_ping=True,
-            pool_recycle=300,
+            pool_recycle=config_integer("postgres", "pool_recycle_seconds"),
             pool_use_lifo=True,
             json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
             connect_args={
                 "options": f"-csearch_path={normalized_schema},public",
-                "connect_timeout": 10,
+                "connect_timeout": config_integer("postgres", "connect_timeout_seconds"),
             },
         )
         entry = _EngineEntry(engine=engine, pool_size=normalized_size)
@@ -132,7 +141,7 @@ def get_postgres_engine(
 def acquire_postgres_engine(
     database_url: str,
     *,
-    schema: str = "monocorpus",
+    schema: str | None = None,
     pool_size: int | None = None,
 ) -> Engine:
     """Acquire an owned reference to a process-shared engine."""
@@ -234,7 +243,6 @@ def is_transient_postgres_error(exc: BaseException) -> bool:
 
 
 __all__ = [
-    "DEFAULT_POSTGRES_POOL_SIZE",
     "MAX_POSTGRES_POOL_SIZE",
     "acquire_postgres_engine",
     "configured_postgres_pool_size",

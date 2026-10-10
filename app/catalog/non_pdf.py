@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager, nullcontext
-import os
 import re
+from contextlib import contextmanager, nullcontext
 
 from sqlalchemy import inspect, text
 
 from app.catalog.contracts import CatalogConflict
 from app.catalog.repository import CatalogRepository
 from app.document_operation_lock import lock_document_transaction
-
+from app.postgres_engine import configured_timeout_sql
+from app.settings import configured_schema
 
 SOURCES = """
     SELECT d.md5, d.mime_type, d.revision AS document_revision,
@@ -58,7 +58,7 @@ class NonPdfCatalogStore:
         }
         with self.engine.begin() as conn:
             conn.execute(text("SET TRANSACTION READ ONLY"))
-            conn.execute(text("SET LOCAL statement_timeout = '5s'"))
+            conn.execute(text(configured_timeout_sql("statement_timeout", "preflight_timeout_seconds")))
             inspector = inspect(conn)
             tables = set(inspector.get_table_names(schema=self.schema))
             for relation, columns in required.items():
@@ -67,7 +67,7 @@ class NonPdfCatalogStore:
                 present = {column['name'] for column in inspector.get_columns(relation, schema=self.schema)}
                 if columns - present:
                     raise RuntimeError(f"Non-PDF catalog is missing {relation} columns: {sorted(columns - present)}")
-            version_schema = os.environ.get("MANZARA_ALEMBIC_VERSION_SCHEMA", self.schema)
+            version_schema = configured_schema("migration_version_schema")
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", version_schema):
                 raise ValueError("Invalid migration version schema")
             revision = str(conn.execute(text(f'SELECT version_num FROM "{version_schema}".alembic_version_manzara')).scalar_one())
@@ -128,7 +128,7 @@ class NonPdfCatalogStore:
         with nullcontext(conn) if conn is not None else self.engine.begin() as connection:
             if conn is None:
                 connection.execute(text("SET TRANSACTION READ WRITE"))
-                connection.execute(text("SET LOCAL lock_timeout = '5s'"))
+                connection.execute(text(configured_timeout_sql("lock_timeout", "lock_timeout_seconds")))
             self._lock(connection, expected['md5'])
             self._check(connection, expected)
             yield connection

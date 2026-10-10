@@ -1,18 +1,17 @@
 """Durable preview intent, leases, and immutable successful generations."""
 
-from datetime import datetime, timedelta, timezone
-from contextlib import nullcontext
 import uuid
+from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select
-from sqlalchemy import text
+from sqlalchemy import or_, select, text
 
 from app.catalog.contracts import CatalogConflict, CatalogNotFound, integer, nonblank
 
 
 class PreviewStore:
 
-    def claim_preview(self, worker, *, lease_seconds=300, request_id=None):
+    def claim_preview(self, worker, *, lease_seconds, request_id=None):
         nonblank(worker, "worker")
         if request_id is not None:
             integer(request_id, "request_id")
@@ -85,7 +84,7 @@ class PreviewStore:
             self._audit(conn, "preview", request_id, dict(row), after, actor)
         return after
 
-    def renew_preview(self, request_id, claim_token, *, lease_seconds=300):
+    def renew_preview(self, request_id, claim_token, *, lease_seconds):
         integer(request_id, "request_id")
         integer(lease_seconds, "lease_seconds")
         if lease_seconds > 3600:

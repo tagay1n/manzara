@@ -13,14 +13,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote, unquote, urlparse
 
+from app.runtime_config import config_integer, required_integer
 from app.s3_transfer import sequential_transfer_config
 
-
-DEFAULT_MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024
-DEFAULT_DOCUMENT_CACHE_MAX_BYTES = 50 * 1024**3
-DOCUMENT_CACHE_TARGET_NUMERATOR = 9
-DOCUMENT_CACHE_TARGET_DENOMINATOR = 10
-ABANDONED_CACHE_DOWNLOAD_SECONDS = 24 * 60 * 60
 _PARTIAL_SUFFIXES = {".crdownload", ".download", ".part", ".partial", ".tmp"}
 _SAFE_EXTENSION = re.compile(r"^\.[a-z0-9]{1,12}$")
 _CACHE_ENTRY_NAME = re.compile(r"^[a-f0-9]{32}\.[a-z0-9]{1,12}$")
@@ -65,11 +60,11 @@ class DocumentStorageSettings:
     public_bucket: str
     private_bucket: str
     encryption_key: str
-    cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES
-    yadisk_token: str = ""
-    preview_bucket: str = ""
-    content_bucket: str = ""
-    content_images_bucket: str = ""
+    cache_max_bytes: int
+    yadisk_token: str
+    preview_bucket: str
+    content_bucket: str
+    content_images_bucket: str
 
 
 @dataclass(frozen=True)
@@ -88,17 +83,14 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 
 
 def _required(mapping: Mapping[str, Any], key: str, path: str) -> str:
-    value = str(mapping.get(key) or "").strip()
-    if not value:
-        raise RuntimeError(f"Missing required config value: {path}.{key}")
-    return value
+    value = mapping.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"Configure a nonblank string for {path}.{key}")
+    return value.strip()
 
 
 def _cache_max_bytes(documents: Mapping[str, Any]) -> int:
-    value = documents.get("cache_max_gib", 50)
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise RuntimeError("documents.cache_max_gib must be a positive integer")
-    return value * 1024**3
+    return required_integer({"documents": documents}, "documents", "cache_max_gib") * 1024**3
 
 
 def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorageSettings:
@@ -141,11 +133,9 @@ def load_document_storage_settings(payload: Mapping[str, Any]) -> DocumentStorag
         encryption_key=_required(payload, "encryption_key", "config"),
         cache_max_bytes=_cache_max_bytes(documents),
         yadisk_token=_required(disk, "oauth_token", "yandex.disk"),
-        preview_bucket=str(primary_buckets.get("book_previews") or "").strip(),
-        content_bucket=str(primary_buckets.get("content") or "").strip(),
-        content_images_bucket=str(
-            primary_buckets.get("content_images") or ""
-        ).strip(),
+        preview_bucket=_required(primary_buckets, "book_previews", "documents.primary_storage.bucket"),
+        content_bucket=_required(primary_buckets, "content", "documents.primary_storage.bucket"),
+        content_images_bucket=_required(primary_buckets, "content_images", "documents.primary_storage.bucket"),
     )
 
 
@@ -153,7 +143,7 @@ def calculate_md5(path: Path) -> str:
     """Return the MD5 content identity used by monocorpus."""
     digest = hashlib.md5()  # noqa: S324 - existing document identity is MD5.
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        for chunk in iter(lambda: handle.read(config_integer("documents", "md5_chunk_bytes")), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -161,9 +151,13 @@ def calculate_md5(path: Path) -> str:
 def calculate_integrity(
     path: Path,
     *,
-    chunk_size: int = DEFAULT_MULTIPART_CHUNK_SIZE,
+    chunk_size: int | None = None,
 ) -> tuple[str, str]:
     """Calculate content MD5 and boto3 multipart ETag in one file pass."""
+    if chunk_size is None:
+        chunk_size = config_integer("documents", "integrity_chunk_bytes")
+    if type(chunk_size) is not int or chunk_size < 1:
+        raise ValueError("chunk_size must be a positive integer")
     full_digest = hashlib.md5()  # noqa: S324 - existing document identity is MD5.
     part_digests: list[bytes] = []
     with path.open("rb") as handle:
@@ -200,7 +194,7 @@ def build_cache_index(cache_path: Path) -> dict[str, list[Path]]:
 def prune_document_cache(
     cache_path: Path,
     *,
-    max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
+    max_bytes: int,
     target_bytes: int | None = None,
     protected_paths: Iterable[Path] = (),
 ) -> CachePruneResult:
@@ -212,8 +206,8 @@ def prune_document_cache(
         int(target_bytes)
         if target_bytes is not None
         else maximum
-        * DOCUMENT_CACHE_TARGET_NUMERATOR
-        // DOCUMENT_CACHE_TARGET_DENOMINATOR
+        * config_integer("documents", "cache_target_percent", maximum=100)
+        // 100
     )
     if target < 0 or target > maximum:
         raise ValueError("target_bytes must be between zero and max_bytes")
@@ -224,7 +218,7 @@ def prune_document_cache(
     protected = {Path(path).resolve(strict=False) for path in protected_paths}
     total = 0
     candidates: list[tuple[int, str, int, Path]] = []
-    abandoned_before_ns = time.time_ns() - ABANDONED_CACHE_DOWNLOAD_SECONDS * 10**9
+    abandoned_before_ns = time.time_ns() - config_integer("documents", "abandoned_download_seconds") * 10**9
     try:
         entries = os.scandir(root)
     except OSError:
@@ -339,7 +333,7 @@ def materialize_cached_document(
     expected_md5: str,
     extension: str,
     download: Callable[[Path], None],
-    cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
+    cache_max_bytes: int,
 ) -> Path:
     """Reuse or atomically populate one MD5-verified shared cache file."""
     digest = str(expected_md5 or "").strip().lower()
@@ -507,8 +501,6 @@ def verify_primary_document_object(
 
 __all__ = [
     "CachePruneResult",
-    "DEFAULT_DOCUMENT_CACHE_MAX_BYTES",
-    "DEFAULT_MULTIPART_CHUNK_SIZE",
     "DocumentStorageSettings",
     "S3ConnectionSettings",
     "build_cache_index",

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
-from functools import partial
-from importlib import import_module
 import re
 import sys
+from functools import partial
+from importlib import import_module
+
+from app.runtime_config import config_text
 
 
 def build_descriptors():
@@ -67,16 +69,16 @@ def main(arguments: list[str] | None = None) -> None:
     cleanup_commands = cleanup.add_subparsers(dest="cleanup_command", required=True)
     reviews = cleanup_commands.add_parser("reviews", help="Print reviewed candidates as JSON")
     reviews.add_argument("--status", choices=("pending", "decided", "superseded"), default="pending")
-    reviews.add_argument("--limit", type=_positive, default=100)
+    reviews.add_argument("--limit", type=_positive)
     queue = cleanup_commands.add_parser("queue", help="Print persisted cleanup plans as JSON")
-    queue.add_argument("--limit", type=_positive, default=100)
+    queue.add_argument("--limit", type=_positive)
     decide = cleanup_commands.add_parser("decide", help="Keep explicit MD5s and queue the other reviewed files")
     decide.add_argument("review_id", type=_positive)
     decide.add_argument("--snapshot", required=True, help="review_snapshot from cleanup reviews")
     decide.add_argument("--keep", nargs="+", required=True, metavar="MD5")
     undo = cleanup_commands.add_parser("undo", help="Undo a decision before cleanup starts")
     undo.add_argument("review_id", type=_positive)
-    parser.add_argument("--task", default="library.normalize_personalities", help="Initially selected task ID")
+    parser.add_argument("--task", help="Initially selected task ID")
     parser.add_argument("--limit", type=_positive, help="Optional candidate limit; metadata tasks count publications")
     parser.add_argument("--per-mime-limit", type=_positive, help="Non-PDF extraction: deterministic cohort cap per MIME")
     parser.add_argument("--only-md5", action="append", type=_md5, default=[], metavar="MD5",
@@ -84,6 +86,8 @@ def main(arguments: list[str] | None = None) -> None:
     parser.add_argument("--retry-known-failures", action="store_true",
                         help="Extraction/previews: explicitly retry known failures; extraction also retries deferred results")
     args = parser.parse_args(arguments)
+    if args.command is None and args.task is None:
+        args.task = config_text("terminal", "initial_task")
     if args.per_mime_limit is not None and (
         args.command is not None or args.task != "library.extract_non_pdf"
     ):
@@ -110,9 +114,10 @@ def main(arguments: list[str] | None = None) -> None:
         parser.exit(2, "Manzara execution requires an interactive terminal. Use --help for options.\n")
     try:
         import asyncio
+
         from app.artifacts import cache_dir
-        from app.modules.library.preview_detection import configure_detector_environment
         from app.cli.terminal import Terminal
+        from app.modules.library.preview_detection import configure_detector_environment
         configure_detector_environment(cache_dir("downloaded-models", "huggingface"))
         exit_code = asyncio.run(Terminal(args, build_descriptors).run())
         if exit_code:

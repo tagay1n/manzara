@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
 import json
+import zipfile
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Callable, Mapping
-import zipfile
 from uuid import uuid4
-
 
 import requests
 from boto3 import Session
-from botocore.config import Config
 
-from app.s3_transfer import sequential_transfer_config
 from app.artifacts import workspace_dir
+from app.catalog.contracts import CatalogConflict
 from app.db import Database
 from app.document_storage import (
     DocumentStorageSettings,
@@ -30,8 +28,11 @@ from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     build_corrupt_cleanup_plan,
 )
-from app.repositories.document_cleanup import (
-    DocumentCleanupRepository,
+from app.modules.library.google_doc_conversion import (
+    GoogleDriveDocxConverter,
+)
+from app.modules.library.google_presentation_conversion import (
+    GoogleDrivePptxConverter,
 )
 from app.modules.library.non_pdf_extraction import (
     EXTRACTOR_VERSION,
@@ -42,30 +43,25 @@ from app.modules.library.non_pdf_extraction import (
     require_converter_binaries,
     validate_rendered_markdown,
 )
-from app.modules.library.google_doc_conversion import (
-    GoogleDriveDocxConverter,
-)
-from app.modules.library.google_presentation_conversion import (
-    GoogleDrivePptxConverter,
-)
 from app.modules.library.non_pdf_repository import (
-    MAX_AUTOMATIC_ATTEMPTS,
     NonPdfExtractionRepository,
 )
-from app.modules.library.non_pdf_types import DeferredDocumentExtraction
 from app.modules.library.non_pdf_types import (
+    HTML_EXTRACTOR_VERSION,
+    MOBI_EXTRACTOR_VERSION,
+    ODT_EXTRACTOR_VERSION,
     POWERPOINT_EXTRACTOR_VERSION,
     SPREADSHEET_EXTRACTOR_VERSION,
-    ODT_EXTRACTOR_VERSION,
-    MOBI_EXTRACTOR_VERSION,
-    HTML_EXTRACTOR_VERSION,
+    DeferredDocumentExtraction,
     extractor_version_for_format,
 )
-from app.runtime_config import load_runtime_config
 from app.operational_state import OperationalStateStore
+from app.repositories.document_cleanup import (
+    DocumentCleanupRepository,
+)
+from app.runtime_config import config_integer, config_text, load_runtime_config
+from app.s3_transfer import s3_client_config, sequential_transfer_config
 from app.task_runtime.contracts import RunContext
-from app.catalog.contracts import CatalogConflict
-
 
 TASK_ID = "library.extract_non_pdf"
 
@@ -129,13 +125,7 @@ def _s3_client(storage: DocumentStorageSettings) -> Any:
         aws_secret_access_key=storage.primary.secret_access_key,
         endpoint_url=storage.primary.endpoint_url,
         region_name=storage.primary.region_name,
-        config=Config(
-            signature_version="s3v4",
-            connect_timeout=10,
-            read_timeout=120,
-            retries={"mode": "standard", "total_max_attempts": 3},
-            s3={"addressing_style": "path"},
-        ),
+        config=s3_client_config("extraction"),
     )
 
 
@@ -171,7 +161,7 @@ def _matching_object(
 
 def _public_object_available(url: str) -> bool:
     try:
-        response = requests.head(url, allow_redirects=True, timeout=(10, 30))
+        response = requests.head(url, allow_redirects=True, timeout=(config_integer("non_pdf", "link_connect_timeout_seconds"), config_integer("non_pdf", "link_read_timeout_seconds")))
         return response.status_code == 200
     except requests.RequestException:
         return False
@@ -238,7 +228,7 @@ def _upload_assets(
                 key,
                 ExtraArgs={
                     "ContentType": _image_content_type(asset.path.suffix),
-                    "CacheControl": "public, max-age=3600",
+                    "CacheControl": config_text("non_pdf", "cache_control"),
                     "Metadata": {
                         "source-md5": md5,
                         "extractor-version": extractor_version,
@@ -680,7 +670,7 @@ def run_extraction(
         "mobi_extractor_version": MOBI_EXTRACTOR_VERSION,
         "html_extractor_version": HTML_EXTRACTOR_VERSION,
         "per_mime_limit": per_mime_limit,
-        "max_automatic_attempts": MAX_AUTOMATIC_ATTEMPTS,
+        "max_automatic_attempts": config_integer("non_pdf", "max_automatic_attempts"),
         "retry_known_failures": bool(retry_known_failures),
         "processed": processed,
         "total": total,

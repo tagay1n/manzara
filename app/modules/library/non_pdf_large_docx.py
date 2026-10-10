@@ -9,8 +9,8 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from app.modules.library.non_pdf_types import ConverterCommandError
+from app.runtime_config import config_integer
 
-LARGE_DOCX_XML_BYTES = 64 * 1024 * 1024
 _WORD = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _DRAWING = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _RELATIONSHIP_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
@@ -81,7 +81,7 @@ def maybe_convert_large_docx_to_html(source: Path, *, workspace: Path) -> Path |
             xml_size = archive.getinfo("word/document.xml").file_size
         except KeyError:
             return None
-        if xml_size < LARGE_DOCX_XML_BYTES:
+        if xml_size < config_integer("non_pdf", "large_docx_xml_bytes"):
             return None
         targets = _image_targets(archive)
         converted = workspace / "large-docx-html"

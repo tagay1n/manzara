@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable, Mapping
 
-RESTRICTED_PATH = (
-    "/neurotatarlar/kitaplar/monocorpus/__ТАРАТМАСКА_DONT_SHARE_НЕ_ДЕЛИТЬСЯ"
-)
+from app.runtime_config import config_text
 
 
 class SharingValidationError(RuntimeError):
@@ -20,10 +18,13 @@ def validate_catalog_sharing(records: Iterable[Mapping[str, Any]]) -> None:
     Encryption is identified by the application's enc: storage marker. This
     check does not decrypt links or require access to the encryption key.
     """
+    restricted_path = config_text("yandex", "disk", "documents", "restricted_path").removeprefix("disk:").rstrip("/")
+    if not restricted_path or restricted_path == "/":
+        raise ValueError("Configure a non-root yandex.disk.documents.restricted_path")
     violations = []
     for row in records:
         path = str(row.get("ya_path") or "").strip().removeprefix("disk:").rstrip("/")
-        restricted = path == RESTRICTED_PATH or path.startswith(RESTRICTED_PATH + "/")
+        restricted = path == restricted_path or path.startswith(restricted_path + "/")
         document_url = str(row.get("document_url") or "").strip()
         public_url = str(row.get("ya_public_url") or "").strip()
         encrypted = document_url.startswith("enc:")

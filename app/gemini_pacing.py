@@ -1,7 +1,10 @@
 """Opt-in run pacing policy and pure adaptive state transitions."""
+
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal
+
+from app.runtime_config import config_integer, config_value
 
 PacingOutcome = Literal["success", "quota", "service", "transient", "neutral"]
 
@@ -9,10 +12,24 @@ PacingOutcome = Literal["success", "quota", "service", "transient", "neutral"]
 @dataclass(frozen=True)
 class GeminiPacingPolicy:
     scope_id: str
-    intervals_seconds: tuple[int, ...] = (5, 10, 20, 40, 60)
-    cooldowns_seconds: tuple[int, ...] = (60, 120, 240, 480, 600)
-    quota_failures_to_pause: int = 3
-    successes_to_recover: int = 5
+    intervals_seconds: tuple[int, ...]
+    cooldowns_seconds: tuple[int, ...]
+    quota_failures_to_pause: int
+    successes_to_recover: int
+
+    @classmethod
+    def from_config(cls, scope_id: str):
+        values = {}
+        for field in ("intervals_seconds", "cooldowns_seconds"):
+            sequence = config_value("gemini", "personality_pacing", field)
+            if (not isinstance(sequence, list) or len(sequence) < 2
+                    or any(type(value) is not int or value <= 0 for value in sequence)
+                    or any(a >= b for a, b in zip(sequence, sequence[1:]))):
+                raise ValueError(f"gemini.personality_pacing.{field} must be increasing positive integers")
+            values[field] = tuple(sequence)
+        return cls(scope_id=scope_id, **values,
+                   quota_failures_to_pause=config_integer("gemini", "personality_pacing", "quota_failures_to_pause"),
+                   successes_to_recover=config_integer("gemini", "personality_pacing", "successes_to_recover"))
 
 
 @dataclass(frozen=True)

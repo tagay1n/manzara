@@ -8,14 +8,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Iterable
 
+from app.runtime_config import config_integer, config_number, config_text
 
-DOCLAYNET_REPO_ID = "hantian/yolo-doclaynet"
-DOCLAYNET_REVISION = "49b97586dbd3bdae169e8f5e165710d0facf5f1e"
-DOCLAYNET_CHECKPOINT = "yolov12l-doclaynet.pt"
-DOCLAYNET_IMAGE_SIZE = 1024
-DOCLAYNET_CONFIDENCE = 0.25
-DOCLAYNET_IOU = 0.45
-DOCLAYNET_MAX_DETECTIONS = 300
 _NON_RELEVANT_CLASSES = {"page-header", "page-footer", "picture"}
 
 
@@ -56,10 +50,10 @@ def configure_detector_environment(cache_dir: Path) -> None:
     for variable, directory in (("YOLO_CONFIG_DIR", "ultralytics"), ("MPLCONFIGDIR", "matplotlib")):
         path = runtime_config_dir / directory
         path.mkdir(parents=True, exist_ok=True)
-        os.environ.setdefault(variable, str(path))
-    os.environ.setdefault("YOLO_AUTOINSTALL", "false")
-    os.environ.setdefault("YOLO_VERBOSE", "false")
-    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        os.environ[variable] = str(path)
+    os.environ["YOLO_AUTOINSTALL"] = "false"
+    os.environ["YOLO_VERBOSE"] = "false"
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 
 class DocLayNetPageDetector:
@@ -81,9 +75,9 @@ class DocLayNetPageDetector:
         cache_dir.mkdir(parents=True, exist_ok=True)
         try:
             checkpoint_path = hf_hub_download(
-                repo_id=DOCLAYNET_REPO_ID,
-                filename=DOCLAYNET_CHECKPOINT,
-                revision=DOCLAYNET_REVISION,
+                repo_id=config_text("previews", "detector", "repo_id"),
+                filename=config_text("previews", "detector", "checkpoint"),
+                revision=config_text("previews", "detector", "revision"),
                 cache_dir=str(cache_dir),
             )
             model = YOLO(checkpoint_path, verbose=False)
@@ -102,11 +96,11 @@ class DocLayNetPageDetector:
                 save_crop=False,
                 visualize=False,
                 show=False,
-                imgsz=DOCLAYNET_IMAGE_SIZE,
+                imgsz=config_integer("previews", "detector", "image_size"),
                 device="cpu",
-                conf=DOCLAYNET_CONFIDENCE,
-                iou=DOCLAYNET_IOU,
-                max_det=DOCLAYNET_MAX_DETECTIONS,
+                conf=config_number("previews", "detector", "confidence", maximum=1),
+                iou=config_number("previews", "detector", "iou", maximum=1),
+                max_det=config_integer("previews", "detector", "max_detections"),
                 agnostic_nms=False,
             )
             if not predictions:
@@ -141,13 +135,6 @@ class DocLayNetPageDetector:
 
 
 __all__ = [
-    "DOCLAYNET_CHECKPOINT",
-    "DOCLAYNET_CONFIDENCE",
-    "DOCLAYNET_IMAGE_SIZE",
-    "DOCLAYNET_IOU",
-    "DOCLAYNET_MAX_DETECTIONS",
-    "DOCLAYNET_REPO_ID",
-    "DOCLAYNET_REVISION",
     "DocLayNetPageDetector",
     "PageAssessment",
     "PreviewModelError",

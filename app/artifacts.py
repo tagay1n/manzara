@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
+from app.runtime_config import load_runtime_config, required_text
 
 _STORAGE_GUIDE = """Manzara local storage layout
 
@@ -43,8 +44,8 @@ def _ensure_storage_guide(root: Path) -> None:
 
 
 def artifacts_root() -> Path:
-    """Return global local-storage root directory (default: ~/.manzara)."""
-    raw = str(os.environ.get("MANZARA_ARTIFACTS_ROOT") or "~/.manzara").strip() or "~/.manzara"
+    """Return the required configured local-storage root directory."""
+    raw = required_text(load_runtime_config(), "artifacts_root")
     path = Path(raw).expanduser()
     path.mkdir(parents=True, exist_ok=True)
     _ensure_storage_guide(path)
@@ -106,11 +107,10 @@ def private_credentials_dir(scope: object) -> Path:
 
 def local_state_path() -> Path:
     """Return the sole machine-local runtime database path."""
-    root = artifacts_root()
-    state = root / "state"
-    state.mkdir(parents=True, exist_ok=True)
-    state.chmod(0o700)
-    return state / "runtime.sqlite3"
+    path = Path(required_text(load_runtime_config(), "local_state_path")).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+    return path
 
 
 __all__ = [

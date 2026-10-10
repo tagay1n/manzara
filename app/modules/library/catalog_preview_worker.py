@@ -5,11 +5,16 @@ from dataclasses import replace
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.catalog.contracts import CatalogConflict, CatalogNotFound
-from app.document_operation_lock import check_document_operation, document_operation, DocumentOperationBusy
+from app.document_operation_lock import (
+    DocumentOperationBusy,
+    check_document_operation,
+    document_operation,
+)
 from app.document_storage import verify_primary_document_object
 from app.modules.library.preview_detection import PreviewModelError
 from app.modules.library.preview_generation import _is_storage_fatal, process_book
 from app.modules.library.previews import PREVIEW_RECIPE_VERSION
+from app.runtime_config import config_integer
 from app.task_runtime.logging import redact
 
 
@@ -43,7 +48,7 @@ def run_previews(store, candidates, *, runtime, storage, settings, s3, detector,
                     summary["skipped"] += 1
                     context.log(f"library previews: skip md5={md5} reason=cohort changed")
                     continue
-                request = store.catalog.claim_preview(actor, lease_seconds=3600, request_id=request_id)
+                request = store.catalog.claim_preview(actor, lease_seconds=config_integer("previews", "lease_seconds", maximum=3600), request_id=request_id)
                 if request is None:
                     summary["skipped"] += 1
                     context.log(f"library previews: skip md5={md5} reason=request already claimed")
@@ -57,7 +62,7 @@ def run_previews(store, candidates, *, runtime, storage, settings, s3, detector,
                 def boundary():
                     check_document_operation(operation)
                     store.check_source(source, recipe=PREVIEW_RECIPE_VERSION)
-                    store.catalog.renew_preview(request_id, request["claim_token"], lease_seconds=3600)
+                    store.catalog.renew_preview(request_id, request["claim_token"], lease_seconds=config_integer("previews", "lease_seconds", maximum=3600))
 
                 boundary()
                 location = verify_primary_document_object(

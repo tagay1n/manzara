@@ -18,7 +18,7 @@ from app.gemini_runtime import (
     GeminiStopRequestedError,
     GeminiTransportError,
 )
-
+from app.runtime_config import config_integer
 
 T = TypeVar("T")
 
@@ -150,7 +150,7 @@ def run_ordered_model_pool(
                 failed.add(selected)
             else:
                 transient_attempts[selected] = transient_attempts.get(selected, 0) + 1
-                if transient_attempts[selected] >= 2:
+                if transient_attempts[selected] >= config_integer("gemini", "runtime", "transient_attempts_per_model"):
                     raise GeminiModelPoolOperationalError(
                         str(exc), retryable=True
                     ) from exc

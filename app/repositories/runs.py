@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from app.repositories.core import utc_now
+from app.runtime_config import config_integer, config_number
 from app.runtime_states import (
     TASK_RUN_ACTIVE_STATUSES as ACTIVE_STATUSES,
 )
@@ -94,11 +95,13 @@ class RunRepository:
         run_id: int,
         progress: Dict[str, Any],
         force: bool = False,
-        minimum_interval_seconds: float = 1.0,
+        minimum_interval_seconds: float | None = None,
     ) -> bool:
         """Persist the latest coalesced progress snapshot without event duplication."""
         if not isinstance(progress, dict):
             raise ValueError("progress must be an object")
+        if minimum_interval_seconds is None:
+            minimum_interval_seconds = config_number("runtime", "progress_interval_seconds")
         resolved_run_id = int(run_id)
         now_monotonic = time.monotonic()
         with self._lock:
@@ -217,8 +220,10 @@ class RunRepository:
         return self._row_to_run(row) if row else None
 
 
-    def list_recent_runs_for_task(self, task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def list_recent_runs_for_task(self, task_id: str, limit: int | None = None) -> List[Dict[str, Any]]:
         """Return recent runs for one task."""
+        if limit is None:
+            limit = config_integer("runtime", "list_page_size")
         with self._runtime_connect() as conn:
             rows = conn.execute(
                 """

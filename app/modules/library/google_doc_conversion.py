@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import os
 from typing import Any
 
 from google.oauth2.credentials import Credentials
@@ -11,10 +10,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from app.artifacts import private_credentials_dir
-
+from app.runtime_config import config_text
 
 DRIVE_SCOPES = ("https://www.googleapis.com/auth/drive",)
-OPERATIVE_FOLDER_ID = "1WFYCcbrtKGv3KTwyKdcKHKxXwmr9iFHE"
 
 
 def _load_credentials() -> Credentials:
@@ -62,13 +60,7 @@ class GoogleDriveDocxConverter:
                 "name": Path(source).name,
                 "mimeType": "application/vnd.google-apps.document",
                 "parents": [
-                    str(
-                        os.environ.get(
-                            "GOOGLE_DRIVE_CONVERSION_FOLDER_ID",
-                            OPERATIVE_FOLDER_ID,
-                        )
-                    ).strip()
-                    or OPERATIVE_FOLDER_ID
+                    config_text("google", "conversion_folder_id")
                 ],
             },
             media_body=MediaFileUpload(

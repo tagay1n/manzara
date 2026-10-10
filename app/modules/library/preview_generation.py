@@ -7,22 +7,19 @@ from pathlib import Path
 from typing import Any, Callable
 
 import fitz
-from PIL import Image
 from botocore.exceptions import (
     ClientError,
-    ConnectTimeoutError,
     ConnectionClosedError,
+    ConnectTimeoutError,
     EndpointConnectionError,
     ReadTimeoutError,
 )
+from PIL import Image
 
-from app.s3_transfer import sequential_transfer_config
 from app.document_storage import (
-    DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
     find_valid_cache_file,
     materialize_cached_document,
 )
-
 from app.modules.library.preview_detection import PageAssessment
 from app.modules.library.previews import (
     PREVIEW_RECIPE_VERSION,
@@ -30,6 +27,8 @@ from app.modules.library.previews import (
     preview_object_key,
     select_informative_preview_pages,
 )
+from app.runtime_config import config_integer, config_text
+from app.s3_transfer import sequential_transfer_config
 
 
 @dataclass(frozen=True)
@@ -49,8 +48,8 @@ class PreviewGenerationSettings:
     target_bucket: str
     cache_dir: Path
     workspace: Path
-    model_cache_dir: Path | None = None
-    cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES
+    model_cache_dir: Path
+    cache_max_bytes: int
 
 
 @dataclass(frozen=True)
@@ -83,8 +82,8 @@ def _render_page_image(document: fitz.Document, page_number: int) -> Image.Image
     large_width, large_height = _target_size(
         max(1, round(rect.width)),
         max(1, round(rect.height)),
-        1000,
-        1500,
+        config_integer("previews", "large", "max_width"),
+        config_integer("previews", "large", "max_height"),
     )
     scale = min(large_width / rect.width, large_height / rect.height)
     pixmap = page.get_pixmap(
@@ -107,24 +106,24 @@ def render_page_variants(
     with fitz.open(pdf_path) as document:
         large_image = _render_page_image(document, page_number)
 
-    small_size = _target_size(large_image.width, large_image.height, 400, 600)
+    small_size = _target_size(large_image.width, large_image.height, config_integer("previews", "small", "max_width"), config_integer("previews", "small", "max_height"))
     small_image = large_image.resize(small_size, Image.Resampling.LANCZOS)
     small_path = output_dir / f"{object_alias}s.webp"
     large_path = output_dir / f"{object_alias}l.webp"
-    small_image.save(small_path, format="WEBP", quality=80, method=6)
-    large_image.save(large_path, format="WEBP", quality=85, method=6)
+    small_image.save(small_path, format="WEBP", quality=config_integer("previews", "small", "quality", maximum=100), method=config_integer("previews", "webp_method", minimum=0, maximum=6))
+    large_image.save(large_path, format="WEBP", quality=config_integer("previews", "large", "quality", maximum=100), method=config_integer("previews", "webp_method", minimum=0, maximum=6))
     return {
         "small": RenderedVariant(
             path=small_path,
             width=small_image.width,
             height=small_image.height,
-            quality=80,
+            quality=config_integer("previews", "small", "quality", maximum=100),
         ),
         "large": RenderedVariant(
             path=large_path,
             width=large_image.width,
             height=large_image.height,
-            quality=85,
+            quality=config_integer("previews", "large", "quality", maximum=100),
         ),
     }
 
@@ -136,7 +135,7 @@ def ensure_cached_pdf(
     source_bucket: str,
     source_key: str | None = None,
     s3: Any,
-    cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
+    cache_max_bytes: int,
 ) -> tuple[Path, bool]:
     """Return a hash-verified cached PDF, atomically downloading when absent."""
     digest = str(md5 or "").strip().lower()
@@ -321,7 +320,7 @@ def process_book(
                 str(output.path), settings.target_bucket, key,
                 ExtraArgs={
                     "ContentType": "image/webp",
-                    "CacheControl": "public, max-age=31536000, immutable",
+                    "CacheControl": config_text("previews", "cache_control"),
                     "Metadata": {**metadata, "width": str(output.width),
                                  "height": str(output.height), "quality": str(output.quality)},
                 },

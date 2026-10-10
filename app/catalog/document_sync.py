@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any, Mapping
 
 from sqlalchemy import inspect, text
 
 from app.catalog.contracts import CatalogConflict, boolean, document_md5, integer
-from app.catalog.document_sync_bulk import insert_records, reserve_publications, update_records
+from app.catalog.document_sync_bulk import (
+    insert_records,
+    reserve_publications,
+    update_records,
+)
 from app.document_cleanup_paths import source_path
-from app.document_storage import normalized_extension
 from app.document_operation_lock import DocumentOperationBusy, lock_document_transaction
-
+from app.document_storage import normalized_extension
+from app.postgres_engine import configured_timeout_sql
+from app.runtime_config import config_integer
+from app.settings import configured_schema
 
 _DOCUMENTS = """
     SELECT d.md5, d.publication_id, d.revision AS document_revision,
@@ -33,7 +38,6 @@ _DOCUMENTS = """
     LEFT JOIN library_non_pdf_extraction_state state ON state.md5=d.md5
 """
 _SNAPSHOT_FIELDS = ("publication_id", "document_revision", "source_revision")
-SYNC_BATCH_SIZE = 250
 
 
 def _json(value: Any) -> str:
@@ -95,7 +99,7 @@ class DocumentSyncStore:
         }
         with self.engine.begin() as conn:
             conn.execute(text("SET TRANSACTION READ ONLY"))
-            conn.execute(text("SET LOCAL statement_timeout = '5s'"))
+            conn.execute(text(configured_timeout_sql("statement_timeout", "preflight_timeout_seconds")))
             inspector = inspect(conn)
             for relation, columns in required.items():
                 if not inspector.has_table(relation, schema=self.schema):
@@ -103,7 +107,7 @@ class DocumentSyncStore:
                 present = {item['name'] for item in inspector.get_columns(relation, schema=self.schema)}
                 if columns - present:
                     raise RuntimeError(f"Sync catalog is missing {relation} columns: {sorted(columns - present)}")
-            version_schema = os.environ.get("MANZARA_ALEMBIC_VERSION_SCHEMA", self.schema)
+            version_schema = configured_schema("migration_version_schema")
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", version_schema):
                 raise ValueError("Invalid migration version schema")
             revision = str(conn.execute(text(f'SELECT version_num FROM "{version_schema}".alembic_version_manzara')).scalar_one())
@@ -169,8 +173,8 @@ class DocumentSyncStore:
 
     def sync_documents(self, conn, commands):
         """Revalidate and apply one bounded batch with set-based writes and audits."""
-        if len(commands) > SYNC_BATCH_SIZE:
-            raise ValueError(f'Sync batch must contain at most {SYNC_BATCH_SIZE} documents')
+        if len(commands) > config_integer("maintenance", "sync_batch_size"):
+            raise ValueError(f'Sync batch must contain at most {config_integer("maintenance", "sync_batch_size")} documents')
         prepared = {}
         for item in commands:
             md5, values, source = discovery_values(item['payload'])
@@ -179,8 +183,8 @@ class DocumentSyncStore:
             raise ValueError('Sync batch contains repeated MD5 identities')
         if not prepared:
             return {'results': {}, 'conflicts': {}}
-        conn.execute(text("SELECT set_config('lock_timeout','5s',true), "
-                          "set_config('statement_timeout','30s',true)"))
+        conn.execute(text(configured_timeout_sql("lock_timeout", "lock_timeout_seconds")))
+        conn.execute(text(configured_timeout_sql("statement_timeout", "sync_timeout_seconds")))
         conflicts = {}
         for md5 in sorted(prepared):
             try:

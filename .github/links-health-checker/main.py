@@ -5,10 +5,18 @@ This script parses README file, collects all URLs, checks their availability and
 Unavailability means status code of the response was not 200.
 """
 
-import mistletoe
-from bs4 import BeautifulSoup
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from urllib.parse import urlparse
+
+import mistletoe
 import requests
+from bs4 import BeautifulSoup
+
+from app.runtime_config import config_integer
 
 if __name__ == "__main__":
     print("Checking README's outer links are available")
@@ -26,7 +34,7 @@ if __name__ == "__main__":
         href = a['href']
         url = urlparse(href)
         if url.scheme:
-            response = requests.get(href, allow_redirects=True, timeout=30)
+            response = requests.get(href, allow_redirects=True, timeout=config_integer("link_checker", "timeout_seconds"))
             if response.status_code == 200:
                 print(f"URL `{href}` is accessible")
             else:
@@ -41,4 +49,4 @@ if __name__ == "__main__":
             for bl in broken_links:
                 file.write(f"{bl}\n")
     else:
-        print(f"No broken links was found")
+        print("No broken links were found")

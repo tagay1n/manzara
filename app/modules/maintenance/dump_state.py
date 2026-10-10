@@ -5,21 +5,19 @@ from __future__ import annotations
 import csv
 import json
 import os
-from pathlib import Path
 import time
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from sqlalchemy import Engine
 
 from app.catalog.export import fetch_document_export, flatten_export_metadata
 from app.modules.maintenance.catalog_sharing import validate_catalog_sharing
-
+from app.runtime_config import config_integer, config_number, config_text
+from app.task_runtime.logging import log_message
 
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
-SPREADSHEET_ID = "1qDm6iHJu44wN78YvYRbn44oFd28UfRs9HT-7UAzeZZ8"
-WORKSHEET_NAME = "documents"
 PREVIOUS_WORKSHEET_NAME = "tt"
-SHEETS_WRITE_INTERVAL_SECONDS = 1.1
 
 DOCUMENT_EXPORT_COLUMN_ORDER = [
     "md5",
@@ -56,7 +54,7 @@ class StopRequested(RuntimeError):
     """Raised when a graceful stop is observed at an export boundary."""
 
 
-def fetch_document_rows(engine: Engine, *, schema: str = "monocorpus") -> tuple[list[str], list[dict[str, Any]]]:
+def fetch_document_rows(engine: Engine, *, schema: str) -> tuple[list[str], list[dict[str, Any]]]:
     """Read document rows and their normalized schema.org metadata."""
     rows = fetch_document_export(engine, schema=schema)
     return list(rows[0]) if rows else [*DOCUMENT_EXPORT_COLUMN_ORDER, "schema_org"], rows
@@ -139,10 +137,14 @@ def upload_csv_to_sheets(
     csv_path: Path,
     credentials: Any,
     *,
-    chunk_size: int = 1000,
+    chunk_size: int | None = None,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> int:
     """Replace the target worksheet contents with raw CSV values in chunks."""
+    if chunk_size is None:
+        chunk_size = config_integer("google", "sheets", "chunk_rows")
+    if type(chunk_size) is not int or chunk_size < 1:
+        raise ValueError("chunk_size must be a positive integer")
     import gspread
     from gspread.exceptions import WorksheetNotFound
 
@@ -151,33 +153,33 @@ def upload_csv_to_sheets(
     for row_number, row in enumerate(data, start=1):
         if any(len(value.encode("utf-16-le")) // 2 > 50000 for value in row):
             raise ValueError(f"Sheets row {row_number} exceeds the 50,000-character cell limit")
-    required_rows = max(40000, len(data))
-    required_columns = max(25, len(data[0]) if data else 1)
+    required_rows = max(config_integer("google", "sheets", "minimum_rows"), len(data))
+    required_columns = max(config_integer("google", "sheets", "minimum_columns"), len(data[0]) if data else 1)
 
     write_started = False
 
     def pace_write() -> None:
         nonlocal write_started
         if write_started:
-            time.sleep(SHEETS_WRITE_INTERVAL_SECONDS)
+            time.sleep(config_number("google", "sheets", "write_interval_seconds", minimum=0.01))
         write_started = True
 
     if should_stop():
         raise StopRequested("graceful stop requested before Sheets replacement")
-    spreadsheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID)
+    spreadsheet = gspread.authorize(credentials).open_by_key(config_text("google", "sheets", "spreadsheet_id"))
     try:
-        worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
+        worksheet = spreadsheet.worksheet(config_text("google", "sheets", "worksheet_name"))
     except WorksheetNotFound:
         try:
             worksheet = spreadsheet.worksheet(PREVIOUS_WORKSHEET_NAME)
         except WorksheetNotFound:
             pace_write()
             worksheet = spreadsheet.add_worksheet(
-                title=WORKSHEET_NAME, rows=required_rows, cols=required_columns,
+                title=config_text("google", "sheets", "worksheet_name"), rows=required_rows, cols=required_columns,
             )
         else:
             pace_write()
-            worksheet.update_title(WORKSHEET_NAME)
+            worksheet.update_title(config_text("google", "sheets", "worksheet_name"))
 
     if should_stop():
         raise StopRequested("graceful stop requested before Sheets replacement")
@@ -217,7 +219,7 @@ def run_dump(
     engine: Engine,
     workspace: Path,
     credentials_dir: Path,
-    schema: str = "monocorpus",
+    schema: str,
     validate_sharing: bool = False,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> dict[str, Any]:
@@ -245,8 +247,8 @@ def run_dump(
         raise
     _github_progress(f"- Sheets published: {sheet_rows} documents, {len(columns)} columns.")
     summary = {
-        "spreadsheet_id": SPREADSHEET_ID,
-        "worksheet": WORKSHEET_NAME,
+        "spreadsheet_id": config_text("google", "sheets", "spreadsheet_id"),
+        "worksheet": config_text("google", "sheets", "worksheet_name"),
         "rows_exported": len(rows),
         "rows_uploaded": sheet_rows,
         "columns_exported": len(columns),
@@ -265,7 +267,6 @@ def _github_progress(message: str) -> None:
 
 __all__ = [
     "DOCUMENT_EXPORT_COLUMN_ORDER",
-    "SPREADSHEET_ID",
     "StopRequested",
     "prepare_document_export",
     "run_dump",

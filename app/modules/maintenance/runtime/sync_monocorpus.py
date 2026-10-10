@@ -8,22 +8,44 @@ from pathlib import PurePosixPath
 from typing import Any, Iterable, Mapping
 
 from boto3 import Session
-from botocore.config import Config
-from yadisk_client import YaDisk
 from yadisk.exceptions import PathExistsError, PathNotFoundError
+from yadisk_client import YaDisk
 
 from app.catalog.contracts import document_md5, integer
-from app.catalog.document_sync import SYNC_BATCH_SIZE, discovery_values
-from app.document_cleanup_contracts import CLEANUP_PHASE_DATABASE, CLEANUP_PHASE_STORAGE, CLEANUP_PHASE_YANDEX
-from app.document_cleanup_paths import cleanup_source_path, cleanup_target_path, source_path
-from app.document_resources import EMPTY_MD5, cleanup_source_meta, resource_meta, resource_value, verify_resource
-from app.document_storage import DocumentStorageSettings, load_document_storage_settings, remove_cached_document
+from app.catalog.document_sync import discovery_values
+from app.document_cleanup_contracts import (
+    CLEANUP_PHASE_DATABASE,
+    CLEANUP_PHASE_STORAGE,
+    CLEANUP_PHASE_YANDEX,
+)
+from app.document_cleanup_paths import (
+    cleanup_source_path,
+    cleanup_target_path,
+    source_path,
+)
+from app.document_operation_lock import (
+    DocumentOperationBusy,
+    check_document_operation,
+    document_operation,
+)
+from app.document_resources import (
+    EMPTY_MD5,
+    cleanup_source_meta,
+    resource_meta,
+    resource_value,
+    verify_resource,
+)
+from app.document_storage import (
+    DocumentStorageSettings,
+    load_document_storage_settings,
+    remove_cached_document,
+)
 from app.document_sync_filter import classify_document, normalize_document_mime
-from app.document_operation_lock import DocumentOperationBusy, check_document_operation, document_operation
 from app.modules.maintenance.document_cleanup_executor import execute_yandex_cleanup
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
 from app.postgres_engine import is_transient_postgres_error
-from app.runtime_config import load_runtime_config
+from app.runtime_config import config_integer, load_runtime_config
+from app.s3_transfer import s3_client_config
 from app.task_runtime.contracts import RunContext
 from app.task_runtime.logging import redact
 
@@ -99,8 +121,7 @@ def _s3_client(connection: Any) -> Any:
     return Session().client(
         's3', aws_access_key_id=connection.access_key_id, aws_secret_access_key=connection.secret_access_key,
         endpoint_url=connection.endpoint_url, region_name=connection.region_name,
-        config=Config(signature_version='s3v4', s3={'addressing_style': 'path'},
-                      connect_timeout=10, read_timeout=30, retries={'max_attempts': 2}),
+        config=s3_client_config("sync"),
     )
 
 
@@ -117,7 +138,7 @@ def _ensure_yandex_directory(yadisk: Any, directory: str) -> None:
 
 
 def _managed_keys(s3: Any, bucket: str, prefix: str) -> tuple[str, ...]:
-    parameters = {'Bucket': bucket, 'Prefix': prefix, 'MaxKeys': 1000}
+    parameters = {'Bucket': bucket, 'Prefix': prefix, 'MaxKeys': config_integer("maintenance", "s3_listing_page_size", maximum=1000)}
     while True:
         page = s3.list_objects_v2(**parameters)
         keys = tuple(item['Key'] for item in page.get('Contents', [])
@@ -379,10 +400,10 @@ def _apply_catalog(planned, *, repository, yadisk, context, counters):
     commands = list(planned.values())
     total = len(commands)
     _progress(context, counters, stage='applying', current=0, total=total)
-    for start in range(0, total, SYNC_BATCH_SIZE):
+    for start in range(0, total, config_integer("maintenance", "sync_batch_size")):
         if context.should_stop():
             break
-        batch = repository.save_discovered_documents(commands[start:start + SYNC_BATCH_SIZE])
+        batch = repository.save_discovered_documents(commands[start:start + config_integer("maintenance", "sync_batch_size")])
         _record_batch_conflicts(batch, context=context, counters=counters)
         counters['catalog_applied'] += len(batch['results'])
         for md5, result in batch['results'].items():
@@ -390,9 +411,9 @@ def _apply_catalog(planned, *, repository, yadisk, context, counters):
             current = result['document']
             context.log(f"sync catalog success md5={md5} publication_id={current['publication_id']} "
                         f"path={current['ya_path']} state={result['outcome']}")
-        _progress(context, counters, stage='applying', current=min(start + SYNC_BATCH_SIZE, total), total=total)
+        _progress(context, counters, stage='applying', current=min(start + config_integer("maintenance", "sync_batch_size"), total), total=total)
         _publish_batch(batch['results'], repository=repository, yadisk=yadisk, context=context, counters=counters)
-        _progress(context, counters, stage='applying', current=min(start + SYNC_BATCH_SIZE, total), total=total)
+        _progress(context, counters, stage='applying', current=min(start + config_integer("maintenance", "sync_batch_size"), total), total=total)
     counters['catalog_pending'] = total - counters['catalog_applied']
 
 
@@ -496,7 +517,7 @@ def execute(context: RunContext) -> dict[str, Any]:
             context.log('sync setup catalog lock acquired; validating Yandex token')
             yadisk = YaDisk(settings.yadisk_token)
             resources.callback(yadisk.close)
-            yadisk.default_args.update(timeout=(10, 30), poll_timeout=60, n_retries=2)
+            yadisk.default_args.update(timeout=(config_integer("network", "yandex", "connect_timeout_seconds"), config_integer("network", "yandex", "read_timeout_seconds")), poll_timeout=config_integer("network", "yandex", "poll_timeout_seconds"), n_retries=config_integer("network", "yandex", "retries", minimum=0))
             if yadisk.check_token() is not True:
                 raise RuntimeError('Yandex Disk token validation failed')
             context.log('sync setup Yandex token valid; initializing primary storage client')

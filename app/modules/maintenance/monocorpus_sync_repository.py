@@ -8,17 +8,19 @@ from typing import Any, Mapping
 
 from sqlalchemy import text
 
-from app.repositories.document_cleanup import DocumentCleanupRepository
-from app.operational_state import configured_store
+from app.catalog.contracts import CatalogConflict, document_md5, integer
 from app.catalog.document_sync import DocumentSyncStore
 from app.catalog.document_sync_bulk import update_records
-from app.catalog.contracts import CatalogConflict, document_md5, integer
 from app.document_cleanup_contracts import (
-    CLEANUP_ACTIONS_BY_SCOPE, CLEANUP_EXECUTION_PHASES,
-    CLEANUP_PHASE_DATABASE, CLEANUP_PHASE_YANDEX,
+    CLEANUP_ACTIONS_BY_SCOPE,
+    CLEANUP_EXECUTION_PHASES,
+    CLEANUP_PHASE_DATABASE,
+    CLEANUP_PHASE_YANDEX,
 )
 from app.document_cleanup_paths import cleanup_source_path, source_path
 from app.document_operation_lock import document_operation
+from app.operational_state import configured_store
+from app.repositories.document_cleanup import DocumentCleanupRepository
 
 
 class MonocorpusSyncRepository(DocumentCleanupRepository):
@@ -32,7 +34,7 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
     def sync_lock(self):
         """One sync writer per schema, including clients with other local stores."""
         if self.engine.pool.size() < 3:
-            raise RuntimeError('Sync requires MANZARA_DB_POOL_SIZE >= 3 for schema/document locks and short transactions')
+            raise RuntimeError('Sync requires database_pool_size >= 3 for schema/document locks and short transactions')
         with self.engine.connect() as conn:
             locked = conn.execute(text("SELECT pg_try_advisory_lock(hashtext(current_schema()), hashtext('maintenance.monocorpus_sync'))")).scalar_one()
             conn.rollback()

@@ -18,32 +18,43 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.modules.library.publisher_merge_contract import ClusteringWireResponse
-from app.runtime_config import load_runtime_config
+from app.runtime_config import (
+    config_integer,
+    config_number,
+    config_text,
+    load_runtime_config,
+    required_text,
+    required_value,
+)
 from app.task_runtime.logging import redact
 
 
 @dataclass(frozen=True)
 class CodexSettings:
-    executable: str = "codex"
-    model: str = "gpt-6.1-sol"
-    reasoning_effort: str = "medium"
-    scope: str = "auto"
-    web_search: bool = True
-    timeout_seconds: int = 3600
-    context_window_tokens: int | None = None
+    executable: str
+    model: str
+    reasoning_effort: str
+    scope: str
+    web_search: bool
+    timeout_seconds: int
+    context_window_tokens: int | None
 
     @classmethod
     def from_config(cls, config=None):
         config = load_runtime_config() if config is None else config
-        codex = config.get("codex", {})
-        if not isinstance(codex, dict) or not isinstance(
-            codex.get("publisher_merges", {}), dict
-        ):
+        codex = required_value(config, "codex")
+        publisher_merges = required_value(config, "codex", "publisher_merges")
+        if not isinstance(codex, dict) or not isinstance(publisher_merges, dict):
             raise ValueError("codex and publisher_merges must be objects")
-        values = dict(codex.get("publisher_merges", {}))
-        values["executable"] = codex.get("executable", "codex")
+        if "executable" in publisher_merges:
+            raise ValueError("Configure executable only in codex.executable")
+        values = dict(publisher_merges)
+        values["executable"] = required_text(config, "codex", "executable")
         if set(values) - set(cls.__dataclass_fields__):
             raise ValueError("unsupported publisher_merges configuration")
+        for field in cls.__dataclass_fields__:
+            if field not in values:
+                raise ValueError(f"Missing required config value: codex.publisher_merges.{field}")
         for key in ("model", "executable", "reasoning_effort", "scope"):
             if key in values and (
                 not isinstance(values[key], str) or not values[key].strip()
@@ -53,6 +64,8 @@ class CodexSettings:
             if key not in values:
                 continue
             value = values[key]
+            if key == "context_window_tokens" and value is None:
+                continue
             if isinstance(value, str) and value.isascii() and value.isdecimal():
                 value = int(value)
             if type(value) is not int or value <= 0:
@@ -86,7 +99,7 @@ def isolated_environment(workspace):
     """Only CLI auth and model metadata enter the isolated home; never user config."""
     home = workspace / "codex-home"
     home.mkdir(mode=0o700, exist_ok=True)
-    source = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+    source = Path(config_text("codex", "home")).expanduser()
     try:
         for name in ("auth.json", "models_cache.json"):
             path = source / name
@@ -109,13 +122,13 @@ def stop_process(process):
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
-        process.wait(timeout=3)
+        process.wait(timeout=config_integer("codex", "transport", "terminate_timeout_seconds"))
         return
     try:
-        process.wait(timeout=3)
+        process.wait(timeout=config_integer("codex", "transport", "terminate_timeout_seconds"))
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=3)
+        process.wait(timeout=config_integer("codex", "transport", "terminate_timeout_seconds"))
 
 
 def estimate_prompt_tokens(prompt, workspace):
@@ -127,8 +140,8 @@ def estimate_prompt_tokens(prompt, workspace):
         result = subprocess.run([
             sys.executable, "-c",
             "import sys,tiktoken; print(len(tiktoken.get_encoding('o200k_base').encode(sys.stdin.read(), disallowed_special=())))",
-        ], input=prompt, capture_output=True, text=True, encoding="utf-8", env=env, timeout=30, check=True)
-        return math.ceil(int(result.stdout.strip()) * 1.15)
+        ], input=prompt, capture_output=True, text=True, encoding="utf-8", env=env, timeout=config_integer("codex", "transport", "tokenizer_timeout_seconds"), check=True)
+        return math.ceil(int(result.stdout.strip()) * config_number("codex", "transport", "token_estimate_multiplier", minimum=1))
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise RuntimeError(
             "Local tokenizer unavailable; initialize the o200k_base tokenizer cache before analysis."
@@ -141,7 +154,7 @@ class _AnalysisOutput:
     def __init__(self, log):
         self.log = log
         self.buffers = {"stdout": b"", "stderr": b""}
-        self.stderr_tail = deque(maxlen=20)
+        self.stderr_tail = deque(maxlen=config_integer("codex", "transport", "diagnostic_lines"))
         self.terminal = None
         self.reported_model = None
 
@@ -152,18 +165,18 @@ class _AnalysisOutput:
         lines = buffered.split(b"\n")
         self.buffers[channel] = lines.pop()
         for raw in lines:
-            if channel == "stdout" and len(raw) > 8 * 1024 * 1024:
-                raise ValueError("Codex lifecycle event exceeds the supported 8 MiB bound")
+            if channel == "stdout" and len(raw) > config_integer("codex", "transport", "max_event_bytes"):
+                raise ValueError("Codex lifecycle event exceeds the configured byte bound")
             self._line(channel, raw.decode("utf-8", errors="replace"))
-        if channel == "stderr" and len(self.buffers[channel]) > 8192:
-            self._diagnostic(self.buffers[channel][-4096:].decode("utf-8", errors="replace"))
+        if channel == "stderr" and len(self.buffers[channel]) > config_integer("codex", "transport", "stderr_buffer_bytes"):
+            self._diagnostic(self.buffers[channel][-config_integer("codex", "transport", "diagnostic_chars"):].decode("utf-8", errors="replace"))
             self.buffers[channel] = b""
-        elif len(self.buffers[channel]) > 8 * 1024 * 1024:
-            raise ValueError("Codex lifecycle event exceeds the supported 8 MiB bound")
+        elif len(self.buffers[channel]) > config_integer("codex", "transport", "max_event_bytes"):
+            raise ValueError("Codex lifecycle event exceeds the configured byte bound")
 
     def _diagnostic(self, line):
         if line.strip():
-            safe = redact(line[:4096])
+            safe = redact(line[:config_integer("codex", "transport", "diagnostic_chars")])
             self.stderr_tail.append(safe)
             self.log("Codex diagnostic: " + safe)
 
@@ -199,7 +212,7 @@ class CodexAdapter:
                 env=self.env,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=config_integer("codex", "transport", "preflight_timeout_seconds"),
                 check=True,
             )
             self.version = result.stdout.strip()
@@ -208,7 +221,7 @@ class CodexAdapter:
                 env=self.env,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=config_integer("codex", "transport", "preflight_timeout_seconds"),
                 check=True,
             )
             for option in (
@@ -227,7 +240,7 @@ class CodexAdapter:
                 env=self.env,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=config_integer("codex", "transport", "preflight_timeout_seconds"),
                 check=True,
             )
             required = {
@@ -253,7 +266,7 @@ class CodexAdapter:
                 env=self.env,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=config_integer("codex", "transport", "preflight_timeout_seconds"),
             )
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             raise RuntimeError(
@@ -288,7 +301,7 @@ class CodexAdapter:
             )
         # Reserve includes research, reasoning, output and CLI instruction overhead.
         estimate = estimate_prompt_tokens(prompt, self.workspace)
-        reserve = max(32000, capacity // 3)
+        reserve = max(config_integer("codex", "transport", "minimum_reserved_tokens"), capacity // config_integer("codex", "transport", "reserve_capacity_divisor"))
         if estimate + reserve > capacity:
             raise RuntimeError(
                 f"Complete inventory exceeds context budget: local reference-tokenizer estimate {estimate}, reserve {reserve}, capacity {capacity}. Choose a model with sufficient capacity; inventory will not be truncated."
@@ -297,7 +310,7 @@ class CodexAdapter:
             "local_input_token_estimate": estimate,
             "context_capacity": capacity,
             "reserved_tokens": reserve,
-            "local_estimate_method": "o200k_base tokens plus 15% margin; not service-reported usage",
+            "local_estimate_method": f"o200k_base tokens times {config_number("codex", "transport", "token_estimate_multiplier", minimum=1)}; not service-reported usage",
         }
 
     def analyze(self, prompt, should_stop, *, log):
@@ -382,9 +395,9 @@ class CodexAdapter:
                     if time.monotonic() - started > self.settings.timeout_seconds:
                         diagnostics["timed_out"] = True
                         raise TimeoutError("Publisher analysis timed out. Increase timeout_seconds or retry manually.")
-                    for key, _mask in selector.select(timeout=0.1):
+                    for key, _mask in selector.select(timeout=config_number("codex", "transport", "poll_seconds", minimum=0.001)):
                         channel = key.data
-                        chunk = os.read(key.fileobj.fileno(), 65536)
+                        chunk = os.read(key.fileobj.fileno(), config_integer("codex", "transport", "read_chunk_bytes"))
                         if not chunk:
                             selector.unregister(key.fileobj)
                         capture.feed(channel, chunk)
@@ -425,10 +438,10 @@ class CodexAdapter:
                 text=True,
                 start_new_session=True,
             )
-            lines = queue.Queue(maxsize=64)
+            lines = queue.Queue(maxsize=config_integer("codex", "transport", "telemetry_queue_entries"))
 
             def read():
-                while line := process.stdout.readline(65536):
+                while line := process.stdout.readline(config_integer("codex", "transport", "read_chunk_bytes")):
                     if not line.endswith("\n"):
                         return
                     try:
@@ -445,7 +458,7 @@ class CodexAdapter:
                     + "\n"
                 )
                 process.stdin.flush()
-                deadline = time.monotonic() + 10
+                deadline = time.monotonic() + config_integer("codex", "transport", "telemetry_timeout_seconds")
                 while time.monotonic() < deadline:
                     response = json.loads(
                         lines.get(timeout=max(0.01, deadline - time.monotonic()))

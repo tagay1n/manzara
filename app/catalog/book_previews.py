@@ -1,13 +1,15 @@
+
+from app.postgres_engine import configured_timeout_sql
+from app.settings import configured_schema
+
 """Catalog-native eligibility and guarded publication for automatic PDF previews."""
 
-import os
 import re
 
 from sqlalchemy import inspect, select, text
 
 from app.catalog.contracts import CatalogConflict, document_md5, integer
 from app.catalog.repository import CatalogRepository
-
 
 SOURCES = """
     SELECT d.md5, d.publication_id, d.revision AS document_revision,
@@ -63,10 +65,10 @@ class BookPreviewCatalogStore:
             "document_cleanup_queue": {"md5", "scope", "status"},
         }
         if self.engine.pool.size() < 2:
-            raise RuntimeError("Book previews require MANZARA_DB_POOL_SIZE of at least 2")
+            raise RuntimeError("Book previews require database_pool_size of at least 2")
         with self.engine.begin() as conn:
             conn.execute(text("SET TRANSACTION READ ONLY"))
-            conn.execute(text("SET LOCAL statement_timeout = '5s'"))
+            conn.execute(text(configured_timeout_sql("statement_timeout", "preflight_timeout_seconds")))
             inspector = inspect(conn)
             tables = set(inspector.get_table_names(schema=self.schema))
             for relation, columns in required.items():
@@ -75,7 +77,7 @@ class BookPreviewCatalogStore:
                 present = {item['name'] for item in inspector.get_columns(relation, schema=self.schema)}
                 if columns - present:
                     raise RuntimeError(f"Book previews require {relation} columns: {sorted(columns - present)}")
-            version_schema = os.environ.get("MANZARA_ALEMBIC_VERSION_SCHEMA", self.schema)
+            version_schema = configured_schema("migration_version_schema")
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", version_schema):
                 raise ValueError("Invalid migration version schema")
             revision = str(conn.execute(text(

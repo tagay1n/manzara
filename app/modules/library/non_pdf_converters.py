@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import Mapping
 from xml.etree import ElementTree
 
-from app.task_runtime.logging import log_message
-
 from app.modules.library.non_pdf_types import (
     ConverterCommandError,
     ConverterTimeoutError,
 )
+from app.runtime_config import config_integer
+from app.task_runtime.logging import log_message
 
 
 def require_converter_binaries() -> None:
@@ -37,8 +37,10 @@ def _run(
     label: str,
     stdin: str | None = None,
     env: Mapping[str, str] | None = None,
-    timeout_seconds: int = 300,
+    timeout_seconds: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    if timeout_seconds is None:
+        timeout_seconds = config_integer("non_pdf", "converter_timeout_seconds")
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE if stdin is not None else None,
@@ -82,7 +84,7 @@ def _terminate_process_group(process: subprocess.Popen[str]) -> None:
     except ProcessLookupError:
         return
     try:
-        process.wait(timeout=5)
+        process.wait(timeout=config_integer("non_pdf", "terminate_timeout_seconds"))
     except subprocess.TimeoutExpired:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -110,7 +112,7 @@ def _convert_to_docx(
         ],
         workspace=workspace,
         label="libreoffice",
-        timeout_seconds=900,
+        timeout_seconds=config_integer("non_pdf", "libreoffice_timeout_seconds"),
     )
     matches = sorted(converted.glob("*.docx"))
     if len(matches) != 1:
@@ -137,7 +139,7 @@ def _convert_to_pptx(source: Path, *, workspace: Path) -> Path:
         ],
         workspace=workspace,
         label="libreoffice",
-        timeout_seconds=900,
+        timeout_seconds=config_integer("non_pdf", "libreoffice_timeout_seconds"),
     )
     matches = sorted(converted.glob("*.pptx"))
     if len(matches) != 1:
@@ -168,7 +170,7 @@ def _convert_spreadsheet_to_html(source: Path, *, workspace: Path) -> Path:
         ],
         workspace=workspace,
         label="libreoffice",
-        timeout_seconds=900,
+        timeout_seconds=config_integer("non_pdf", "libreoffice_timeout_seconds"),
     )
     matches = sorted(converted.glob("*.html"))
     if len(matches) != 1 or matches[0].stat().st_size == 0:

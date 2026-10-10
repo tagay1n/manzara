@@ -1,23 +1,43 @@
-# Runtime persistence
+# Required runtime configuration. MANZARA_CONFIG_PATH selects this file; values have no environment overrides.
 database_url: "<REDACTED>"
-
+database_schema: monocorpus
+migration_version_schema: monocorpus
 database_pool_size: 4
+# Explicit null uses the TLS certificate path already present in database_url.
+database_ca_certificate_base64: null
+artifacts_root: ~/.manzara
 
-# Optional; defaults to ~/.manzara/state/runtime.sqlite3.
+# Every runtime setting is explicit; missing fields fail instead of using code defaults.
 local_state_path: ~/.manzara/state/runtime.sqlite3
 
 # Subscription-only publisher identity research (requires codex login with ChatGPT).
 codex:
   # Use an absolute path if Codex is outside the task service PATH.
   executable: codex
+  home: ~/.codex
   publisher_merges:
     model: gpt-6.1-sol
     reasoning_effort: medium
     scope: auto
     web_search: true
     timeout_seconds: 3600
-    # Optional verified capacity if the exact model is absent from local CLI metadata.
-    # context_window_tokens: 272000
+    # Explicit null reads exact-model capacity from CLI metadata; an integer supplies verified capacity.
+    context_window_tokens: null
+  transport:
+    terminate_timeout_seconds: 3
+    tokenizer_timeout_seconds: 30
+    preflight_timeout_seconds: 15
+    telemetry_timeout_seconds: 10
+    token_estimate_multiplier: 1.15
+    minimum_reserved_tokens: 32000
+    reserve_capacity_divisor: 3
+    diagnostic_lines: 20
+    max_event_bytes: 8388608
+    stderr_buffer_bytes: 8192
+    diagnostic_chars: 4096
+    read_chunk_bytes: 65536
+    poll_seconds: 0.1
+    telemetry_queue_entries: 64
 
 # AI models and quota accounts (tasks process sequentially with one worker)
 gemini:
@@ -28,6 +48,29 @@ gemini:
     generic_429_circuit_breaker_threshold: 3
     generic_429_window_seconds: 60
     generic_429_pause_seconds: 60
+    project_model_spacing_seconds: 60
+    model_server_pause_seconds: 60
+    quota_cooldown_base_seconds: 60
+    quota_cooldown_max_seconds: 600
+    project_lease_ttl_seconds: 90
+    project_lease_heartbeat_seconds: 30
+    max_wait_slice_seconds: 10
+    capacity_poll_seconds: 1
+    reset_blackout_seconds: 3600
+    transient_attempts_per_model: 2
+  request:
+    personality_timeout_seconds: 60
+    metadata_timeout_seconds: 180
+    file_activation_timeout_seconds: 60
+    file_poll_seconds: 0.3
+    temperature: 0.1
+    seed: 1552
+    response_log_max_chars: 8000
+  personality_pacing:
+    intervals_seconds: [5, 10, 20, 40, 60]
+    cooldowns_seconds: [60, 120, 240, 480, 600]
+    quota_failures_to_pause: 3
+    successes_to_recover: 5
   model_pool:
     - "gemini-3.7-flash"
     - "gemini-3.6-flash"
@@ -49,6 +92,16 @@ gemini:
 documents:
   cache_path: ~/.manzara/cache/source-documents
   cache_max_gib: 50
+  cache_target_percent: 90
+  abandoned_download_seconds: 86400
+  md5_chunk_bytes: 1048576
+  integrity_chunk_bytes: 8388608
+  transfer:
+    multipart_threshold_bytes: 8388608
+    multipart_chunk_bytes: 8388608
+    download_attempts: 5
+    max_io_queue: 100
+    io_chunk_bytes: 262144
   primary_storage:
     endpoint_url: https://s3.eu-central-003.backblazeb2.com
     region_name: eu-central-003
@@ -75,3 +128,120 @@ yandex:
 sup_langs:
   tt:
     codes: ['tt-Latn-x-zamanalif', 'tt-Cyrl', 'tt-Latn-x-yanalif', 'tt-Arab', 'tt-Latn']
+
+# Database and local orchestration policies.
+postgres:
+  pool_recycle_seconds: 300
+  connect_timeout_seconds: 10
+  preflight_timeout_seconds: 5
+  query_timeout_seconds: 60
+  lock_timeout_seconds: 5
+  sync_timeout_seconds: 30
+  read_batch_size: 1000
+runtime:
+  heartbeat_seconds: 5
+  status_interval_seconds: 30
+  batch_poll_seconds: 0.5
+  sqlite_busy_timeout_seconds: 5
+  progress_interval_seconds: 1
+  list_page_size: 100
+terminal:
+  initial_task: library.normalize_personalities
+  render_buffer_bytes: 1048576
+  output_chunk_chars: 4096
+  output_queue_entries: 256
+  history_rows: 20
+  status_poll_seconds: 0.3
+  output_poll_seconds: 0.05
+
+# Network policies per operation; retries count the initial S3 attempt.
+network:
+  s3:
+    extraction: {connect_timeout_seconds: 10, read_timeout_seconds: 120, total_attempts: 3, retry_mode: standard}
+    metadata: {connect_timeout_seconds: 10, read_timeout_seconds: 30, total_attempts: 2, retry_mode: standard}
+    previews: {connect_timeout_seconds: 30, read_timeout_seconds: 60, total_attempts: 3, retry_mode: standard}
+    sync: {connect_timeout_seconds: 10, read_timeout_seconds: 30, total_attempts: 3, retry_mode: legacy}
+    transfer: {connect_timeout_seconds: 10, read_timeout_seconds: 60, total_attempts: 3, retry_mode: standard}
+    backup: {connect_timeout_seconds: 60, read_timeout_seconds: 60, total_attempts: 5, retry_mode: legacy}
+  yandex:
+    connect_timeout_seconds: 10
+    read_timeout_seconds: 30
+    poll_timeout_seconds: 60
+    retries: 2
+maintenance:
+  daily_budget_seconds: 18000
+  transfer_budget_seconds: 18000
+  disk_reserve_bytes: 1073741824
+  sync_batch_size: 250
+  transfer_batch_size: 250
+  s3_listing_page_size: 1000
+
+# Source conversion and AI evidence policies.
+non_pdf:
+  max_automatic_attempts: 3
+  converter_timeout_seconds: 300
+  libreoffice_timeout_seconds: 900
+  calibre_timeout_seconds: 900
+  terminate_timeout_seconds: 5
+  large_docx_xml_bytes: 67108864
+  max_pptx_xml_bytes: 16777216
+  link_connect_timeout_seconds: 10
+  link_read_timeout_seconds: 30
+  cache_control: "public, max-age=3600"
+djvu:
+  render_sizes: [3000x3000, 2400x2400, 1800x1800]
+  command_timeout_seconds: 120
+  max_pdf_bytes: 49000000
+metadata:
+  text_slice_chars: 20000
+  pdf_edge_pages: 4
+  djvu_edge_pages: 3
+  evaluation_excerpt_chars: 500
+  evaluation_excerpt_parts: 3
+  evaluation_edge_pages: 2
+  content_connect_timeout_seconds: 15
+  content_read_timeout_seconds: 120
+  content_chunk_bytes: 65536
+  known_classification_limit: 500
+
+# Preview generation policies; output roles/format and recipe identity are code-owned contracts.
+previews:
+  edge_search_limit: 3
+  lease_seconds: 3600
+  webp_method: 6
+  cache_control: "public, max-age=31536000, immutable"
+  small: {max_width: 400, max_height: 600, quality: 80}
+  large: {max_width: 1000, max_height: 1500, quality: 85}
+  detector:
+    repo_id: hantian/yolo-doclaynet
+    revision: 49b97586dbd3bdae169e8f5e165710d0facf5f1e
+    checkpoint: yolov12l-doclaynet.pt
+    image_size: 1024
+    confidence: 0.25
+    iou: 0.45
+    max_detections: 300
+
+# Google integration targets; OAuth tokens stay under artifacts_root/private/credentials/google-drive/.
+google:
+  conversion_folder_id: 1WFYCcbrtKGv3KTwyKdcKHKxXwmr9iFHE
+  sheets:
+    spreadsheet_id: 1qDm6iHJu44wN78YvYRbn44oFd28UfRs9HT-7UAzeZZ8
+    worksheet_name: documents
+    chunk_rows: 1000
+    minimum_rows: 40000
+    minimum_columns: 25
+    write_interval_seconds: 1.1
+
+# Separately scheduled logical backups use dedicated credentials, never document-storage credentials.
+backup:
+  postgres_image: postgres:18
+  connect_timeout_seconds: 20
+  hash_chunk_bytes: 1048576
+  endpoint_url: "<REDACTED>"
+  region_name: "<REDACTED>"
+  bucket: "<REDACTED>"
+  access_key_id: "<REDACTED>"
+  secret_access_key: "<REDACTED>"
+
+link_checker:
+  timeout_seconds: 30

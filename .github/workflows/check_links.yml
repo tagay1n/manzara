@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      MANZARA_CONFIG_PATH: ${{ runner.temp }}/manzara/private/config.yaml
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
@@ -18,12 +20,19 @@ jobs:
         shell: bash
         run: |
           mapfile -t packages < <(
-            sed -n -E '/^(mistletoe|beautifulsoup4|requests)==/p' requirements.txt
+            sed -n -E '/^(mistletoe|beautifulsoup4|requests|pyyaml)==/p' requirements.txt
           )
-          test "${#packages[@]}" -eq 3
+          test "${#packages[@]}" -eq 4
           python -m pip install "${packages[@]}"
+      - name: Prepare private runtime configuration
+        env:
+          MANZARA_CONFIG_BASE64: ${{ secrets.MANZARA_LINK_CHECKER_CONFIG_BASE64 }}
+        run: python scripts/prepare_workflow_config.py
       - name: Call script
         run: python .github/links-health-checker/main.py
+      - name: Remove private configuration
+        if: always()
+        run: rm -rf "${{ runner.temp }}/manzara/private"
       - name: Prepare creds
         run: |
           git config user.email "no-reply@github.com"

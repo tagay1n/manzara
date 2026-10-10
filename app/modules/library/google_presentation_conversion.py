@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -10,9 +9,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from app.modules.library.google_doc_conversion import (
-    OPERATIVE_FOLDER_ID,
     _load_credentials,
 )
+from app.runtime_config import config_text
 
 
 class GoogleDrivePptxConverter:
@@ -38,12 +37,7 @@ class GoogleDrivePptxConverter:
                 "name": "source.ppt",
                 "mimeType": "application/vnd.google-apps.presentation",
                 "parents": [
-                    str(
-                        os.environ.get(
-                            "GOOGLE_DRIVE_CONVERSION_FOLDER_ID", OPERATIVE_FOLDER_ID
-                        )
-                    ).strip()
-                    or OPERATIVE_FOLDER_ID
+                    config_text("google", "conversion_folder_id")
                 ],
             },
             media_body=MediaFileUpload(

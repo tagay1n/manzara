@@ -5,8 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-EXCERPT_PARTS = 3
-
+from app.runtime_config import config_integer
 
 EXCERPT_SEPARATOR = "\n\n[...]\n\n"
 
@@ -32,12 +31,11 @@ def _build_content_excerpt(text: str, max_chars: int) -> str | None:
     if len(normalized) <= max_chars:
         return normalized
 
-    chunk = max_chars // EXCERPT_PARTS
-    head = normalized[:chunk]
-    mid_start = max(0, (len(normalized) // 2) - (chunk // 2))
-    middle = normalized[mid_start : mid_start + chunk]
-    tail = normalized[-chunk:]
-    excerpt = EXCERPT_SEPARATOR.join([head, middle, tail])
+    parts = config_integer("metadata", "evaluation_excerpt_parts", minimum=2, maximum=10)
+    chunk = max(1, max_chars // parts)
+    starts = [0, *[max(0, (len(normalized) * index // (parts - 1)) - (chunk // 2))
+                   for index in range(1, parts - 1)], len(normalized) - chunk]
+    excerpt = EXCERPT_SEPARATOR.join(normalized[start:start + chunk] for start in starts)
     return excerpt[:max_chars]
 
 

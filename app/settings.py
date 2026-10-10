@@ -1,132 +1,41 @@
-"""Runtime settings for Manzara MVP."""
+"""Required runtime settings from the single local YAML configuration."""
 
 from __future__ import annotations
 
-import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-import yaml
-
-from app.artifacts import local_state_path
+from app.runtime_config import load_runtime_config, required_integer, required_text
 
 
 @dataclass(frozen=True)
 class Settings:
-    """Typed settings with safe defaults for local development."""
-
     database_url: str
     database_schema: str
-    database_pool_size: int = 4
-    local_state_path: Path | None = None
+    database_pool_size: int
+    local_state_path: Path
 
 
 def normalize_database_url(value: str) -> str:
-    """Normalize provider-style PostgreSQL URLs for every runtime client."""
-    text = str(value or "").strip()
+    text = value.strip()
     if text.startswith("postgres://"):
         return "postgresql://" + text[len("postgres://") :]
     return text
 
 
-def _contains_redacted(node: Any) -> bool:
-    if isinstance(node, str):
-        return "<REDACTED>" in node
-    if isinstance(node, dict):
-        return any(_contains_redacted(value) for value in node.values())
-    if isinstance(node, list):
-        return any(_contains_redacted(value) for value in node)
-    return False
-
-
-def _load_database_url() -> str:
-    env_url = str(os.environ.get("MANZARA_DATABASE_URL") or "").strip()
-    if env_url:
-        return normalize_database_url(env_url)
-
-    config_override = os.environ.get("MANZARA_CONFIG_PATH")
-    candidates: list[Path]
-    if config_override:
-        candidates = [Path(config_override).expanduser()]
-    else:
-        candidates = [
-            Path("config.local.yaml"),
-            Path("config.yaml"),
-        ]
-
-    for candidate in candidates:
-        if not candidate.exists():
-            continue
-        data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-        if not isinstance(data, dict):
-            continue
-        if _contains_redacted(data):
-            continue
-        db_url = str(data.get("database_url") or "").strip()
-        if db_url:
-            return normalize_database_url(db_url)
-
-    raise RuntimeError(
-        "Database URL is not configured. Set MANZARA_DATABASE_URL or provide an unmasked "
-        "database_url in config.local.yaml/config.yaml."
-    )
-
-
-def _load_database_pool_size() -> int:
-    """Load a conservative per-process PostgreSQL connection bound."""
-    raw_value = str(os.environ.get("MANZARA_DB_POOL_SIZE") or "").strip()
-    if not raw_value:
-        config_override = os.environ.get("MANZARA_CONFIG_PATH")
-        candidates = (
-            [Path(config_override).expanduser()]
-            if config_override
-            else [Path("config.local.yaml"), Path("config.yaml")]
-        )
-        for candidate in candidates:
-            if not candidate.exists():
-                continue
-            data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-            if isinstance(data, dict) and data.get("database_pool_size") is not None:
-                raw_value = str(data["database_pool_size"]).strip()
-                break
-    raw_value = raw_value or "4"
-    try:
-        value = int(raw_value)
-    except ValueError as exc:
-        raise RuntimeError("MANZARA_DB_POOL_SIZE must be an integer from 1 to 8") from exc
-    if not 1 <= value <= 8:
-        raise RuntimeError("MANZARA_DB_POOL_SIZE must be an integer from 1 to 8")
+def configured_schema(field: str) -> str:
+    value = required_text(load_runtime_config(), field)
+    if len(value) > 63 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise ValueError(f"Invalid schema identifier: {field}")
     return value
 
 
-def _load_local_state_path() -> Path:
-    """Resolve the sole local SQLite path without legacy-location fallbacks."""
-    raw_value = str(os.environ.get("MANZARA_LOCAL_STATE_PATH") or "").strip()
-    if not raw_value:
-        config_override = os.environ.get("MANZARA_CONFIG_PATH")
-        candidates = (
-            [Path(config_override).expanduser()]
-            if config_override
-            else [Path("config.local.yaml"), Path("config.yaml")]
-        )
-        for candidate in candidates:
-            if not candidate.exists():
-                continue
-            data = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-            if isinstance(data, dict) and data.get("local_state_path") is not None:
-                raw_value = str(data["local_state_path"]).strip()
-                break
-    return Path(raw_value).expanduser() if raw_value else local_state_path()
-
-
 def load_settings() -> Settings:
-    """Load runtime settings from env with practical local defaults."""
-    database_url = _load_database_url()
-    database_schema = str(os.environ.get("MANZARA_DB_SCHEMA", "monocorpus")).strip() or "monocorpus"
+    payload = load_runtime_config()
     return Settings(
-        database_url=database_url,
-        database_schema=database_schema,
-        database_pool_size=_load_database_pool_size(),
-        local_state_path=_load_local_state_path(),
+        database_url=normalize_database_url(required_text(payload, "database_url")),
+        database_schema=configured_schema("database_schema"),
+        database_pool_size=required_integer(payload, "database_pool_size", maximum=8),
+        local_state_path=Path(required_text(payload, "local_state_path")).expanduser(),
     )

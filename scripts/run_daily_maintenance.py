@@ -5,20 +5,27 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 # Direct script execution puts scripts/, rather than the repository, on sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.runtime_config import config_integer
 from app.task_runtime.logging import log_message
 
 
 def _descriptors():
-    from app.modules.library.runtime.run_prepare_document_cleanup import TASK_ID as cleanup_id, execute as prepare
+    from app.modules.library.runtime.run_prepare_document_cleanup import (
+        TASK_ID as cleanup_id,
+    )
+    from app.modules.library.runtime.run_prepare_document_cleanup import (
+        execute as prepare,
+    )
     from app.modules.library.tasks import library_task_definitions
-    from app.modules.maintenance.runtime.sync_monocorpus import TASK_ID as sync_id, execute as sync
+    from app.modules.maintenance.runtime.sync_monocorpus import TASK_ID as sync_id
+    from app.modules.maintenance.runtime.sync_monocorpus import execute as sync
     from app.modules.maintenance.tasks import maintenance_task_definitions
     from app.task_runtime.contracts import TaskDescriptor
 
@@ -32,7 +39,9 @@ def _descriptors():
 def _preflight(db) -> None:
     from app.document_cleanup_paths import cleanup_target_path, source_path
     from app.document_storage import load_document_storage_settings
-    from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
+    from app.modules.maintenance.monocorpus_sync_repository import (
+        MonocorpusSyncRepository,
+    )
     from app.runtime_config import load_runtime_config
 
     storage = load_document_storage_settings(load_runtime_config())
@@ -46,7 +55,7 @@ def _preflight(db) -> None:
         if not bucket:
             raise ValueError(f"Configure documents.primary_storage.bucket.{name}")
     if db.get_pool_metrics()["max_size"] < 3:
-        raise ValueError("Maintenance requires MANZARA_DB_POOL_SIZE >= 3 for sync and document operation locks")
+        raise ValueError("Maintenance requires database_pool_size >= 3 for sync and document operation locks")
     repository = MonocorpusSyncRepository(db.database_url, schema=db.schema)
     try:
         repository.catalog.preflight()
@@ -89,11 +98,13 @@ def main() -> int:
     exit_code = 1
     try:
         import yaml
+
         from app.settings import load_settings
         from app.task_runtime.batch import run_batch
 
         settings = load_settings()
         exit_code = run_batch(settings, _descriptors(), preflight=_preflight,
+            budget_seconds=config_integer("maintenance", "daily_budget_seconds"),
                               on_result=lambda run: _report_run(run, results))
     except Exception as exc:
         if "yaml" in locals() and isinstance(exc, yaml.YAMLError):

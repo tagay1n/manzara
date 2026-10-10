@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager, nullcontext
 from typing import Any
 
 from sqlalchemy import text
 
-from app.catalog.isbn import equivalent_isbn_values
 from app.catalog.contracts import integer
+from app.catalog.isbn import equivalent_isbn_values
+from app.document_operation_lock import lock_document_transaction
 from app.operational_state import configured_store
 from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
-from app.document_operation_lock import lock_document_transaction
-
+from app.runtime_config import config_integer
 
 _ISBN_REVIEW_LOCK = text(
     "SELECT pg_advisory_xact_lock(hashtext(current_schema()), "
@@ -467,7 +467,10 @@ class DocumentCleanupRepository:
         """Reconcile reviews after the caller acquires the review mutation lock."""
         return _reconcile_pending_reviews(conn)
 
-    def list_queue(self, *, status: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    def list_queue(self, *, status: str = "", limit: int | None = None) -> list[dict[str, Any]]:
+        limit = config_integer("runtime", "list_page_size", maximum=500) if limit is None else limit
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise ValueError("limit must be an integer from 1 to 500")
         where = "WHERE status = :status" if status else ""
         with self.engine.connect() as conn:
             rows = conn.execute(
@@ -482,13 +485,16 @@ class DocumentCleanupRepository:
                     ORDER BY cleanup_id DESC LIMIT :limit
                     """
                 ),
-                {"status": status, "limit": max(1, min(int(limit), 500))},
+                {"status": status, "limit": limit},
             ).mappings()
             runtime = configured_store().list("maintenance.cleanup")
             return [{**dict(row), **runtime.get(str(row["cleanup_id"]), {})} for row in rows]
 
 
-    def list_reviews(self, *, status: str = "pending", limit: int = 100) -> list[dict[str, Any]]:
+    def list_reviews(self, *, status: str = "pending", limit: int | None = None) -> list[dict[str, Any]]:
+        limit = config_integer("runtime", "list_page_size", maximum=500) if limit is None else limit
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise ValueError("limit must be an integer from 1 to 500")
         with self.engine.connect() as conn:
             reviews = [
                 dict(row)
@@ -502,7 +508,7 @@ class DocumentCleanupRepository:
                         ORDER BY review_id DESC LIMIT :limit
                         """
                     ),
-                    {"status": status, "limit": max(1, min(int(limit), 500))},
+                    {"status": status, "limit": limit},
                 ).mappings()
             ]
             for review in reviews:

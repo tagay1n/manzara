@@ -1,14 +1,17 @@
+
+from app.runtime_config import config_integer
+from app.settings import configured_schema
+
 """Read-only normalized catalog snapshot for the static Library bundle."""
 
-from collections import defaultdict
-import os
 import re
+from collections import defaultdict
 
 from sqlalchemy import text
 
 from app.catalog.metadata import SCALARS, compose_metadata
-from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 from app.modules.library.site_export import ExportStopped
+from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _COHORT = """
@@ -116,9 +119,9 @@ class _SnapshotReader:
         if self.should_stop():
             raise ExportStopped("Static Library export stopped during snapshot")
         query = (_COHORT + query).replace("{catalog}", self.prefix)
-        with self.conn.execute(text(query), execution_options={"yield_per": 1000}) as result:
+        with self.conn.execute(text(query), execution_options={"yield_per": config_integer("postgres", "read_batch_size")}) as result:
             for index, row in enumerate(result.mappings()):
-                if index % 1000 == 0 and self.should_stop():
+                if index % config_integer("postgres", "read_batch_size") == 0 and self.should_stop():
                     raise ExportStopped("Static Library export stopped during snapshot")
                 yield dict(row)
 
@@ -231,7 +234,7 @@ def _attach_metadata(document, lists, previews):
 class LibrarySiteExportRepository:
     """Use one shared pool connection and one consistent, read-only transaction."""
 
-    def __init__(self, database_url: str, *, schema: str = "monocorpus") -> None:
+    def __init__(self, database_url: str, *, schema: str) -> None:
         if not _SCHEMA_RE.fullmatch(schema):
             raise ValueError("Invalid catalog schema")
         self.schema = schema
@@ -251,7 +254,7 @@ class LibrarySiteExportRepository:
                    for column in sorted(columns - present[table])]
         if missing:
             raise RuntimeError("Static Library export requires migrated catalog columns: " + ", ".join(missing))
-        version_schema = os.environ.get("MANZARA_ALEMBIC_VERSION_SCHEMA") or self.schema
+        version_schema = configured_schema("migration_version_schema")
         if not _SCHEMA_RE.fullmatch(version_schema):
             raise ValueError("Invalid migration version schema")
         revision = str(conn.execute(text(

@@ -1,11 +1,15 @@
+
+from app.postgres_engine import configured_timeout_sql
+from app.runtime_config import config_integer
+from app.settings import configured_schema
+
 """Publication metadata snapshots and audited, catalog-native task commands."""
 
-from contextlib import contextmanager
-from copy import deepcopy
 import hashlib
 import json
-import os
 import re
+from contextlib import contextmanager
+from copy import deepcopy
 
 from sqlalchemy import func, inspect, select, text
 
@@ -14,7 +18,6 @@ from app.catalog.metadata import compose_metadata, decompose_metadata
 from app.catalog.metadata_store import unmanaged_subjects
 from app.catalog.repository import CatalogRepository
 from app.catalog.schema_org import is_english_facet, metadata_contract_issues
-
 
 SOURCES = """
  SELECT d.*, s.locator AS document_url, s.size AS primary_storage_size,
@@ -62,7 +65,7 @@ class MetadataProcessingStore:
                  'evidence', 'classifications', 'classification_nodes')
         with self.engine.begin() as conn:
             conn.execute(text('SET TRANSACTION READ ONLY'))
-            conn.execute(text("SET LOCAL statement_timeout = '5s'"))
+            conn.execute(text(configured_timeout_sql("statement_timeout", "preflight_timeout_seconds")))
             inspector = inspect(conn)
             tables = set(inspector.get_table_names(schema=self.schema))
             required = {self.catalog.table(name).name: set(self.catalog.table(name).c.keys()) for name in names}
@@ -74,7 +77,7 @@ class MetadataProcessingStore:
                 actual = {column['name'] for column in inspector.get_columns(name, schema=self.schema)}
                 if columns - actual:
                     raise RuntimeError(f'Metadata catalog is missing {name} columns: {sorted(columns - actual)}')
-            version_schema = os.environ.get('MANZARA_ALEMBIC_VERSION_SCHEMA', self.schema)
+            version_schema = configured_schema("migration_version_schema")
             if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', version_schema):
                 raise ValueError('Invalid migration version schema')
             revision = str(conn.execute(text(f'SELECT version_num FROM "{version_schema}".alembic_version_manzara')).scalar_one())
@@ -148,7 +151,9 @@ class MetadataProcessingStore:
                     by_id[row['publication_id']]['awaiting_review'] = True
             return list(by_id.values())
 
-    def known_classifications(self, limit=500):
+    def known_classifications(self, limit=None):
+        if limit is None:
+            limit = config_integer("metadata", "known_classification_limit")
         with self.engine.begin() as conn:
             conn.execute(text('SET TRANSACTION READ ONLY'))
             return [dict(row) for row in conn.execute(text('''
@@ -163,7 +168,7 @@ class MetadataProcessingStore:
     def mutation(self, publication, source, *, taxonomy=False):
         with self.engine.begin() as conn:
             conn.execute(text('SET TRANSACTION READ WRITE'))
-            conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+            conn.execute(text(configured_timeout_sql("lock_timeout", "lock_timeout_seconds")))
             if taxonomy:
                 conn.execute(text('SELECT pg_advisory_xact_lock(hashtext(:key))'),
                              {'key': f'catalog-taxonomy:{self.schema}'})

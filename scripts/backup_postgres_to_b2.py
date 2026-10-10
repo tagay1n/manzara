@@ -10,8 +10,8 @@ import json
 import os
 import re
 import stat
-import sys
 import subprocess
+import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -25,24 +25,23 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.s3_transfer import sequential_transfer_config
+from app.artifacts import workspace_dir
+from app.runtime_config import (
+    config_integer,
+    config_text,
+    load_runtime_config,
+    required_text,
+    required_value,
+)
+from app.s3_transfer import s3_client_config, sequential_transfer_config
+from app.settings import configured_schema
 from app.task_runtime.logging import log_message
 
 BACKUP_PREFIX = "logical/manzara"
-DEFAULT_POSTGRES_IMAGE = "postgres:18"
 CONTAINER_SERVICE_FILE = "/backup/service.conf"
 CONTAINER_CA_FILE = "/backup/aiven-ca.pem"
 CONTAINER_DUMP_FILE = "/backup/manzara.dump"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-REQUIRED_ENVIRONMENT = (
-    "MANZARA_DATABASE_URL",
-    "MANZARA_AIVEN_CA_CERT_BASE64",
-    "MANZARA_LOGICAL_BACKUP_S3_ENDPOINT",
-    "MANZARA_LOGICAL_BACKUP_S3_REGION",
-    "MANZARA_LOGICAL_BACKUP_S3_BUCKET",
-    "MANZARA_LOGICAL_BACKUP_S3_ACCESS_KEY_ID",
-    "MANZARA_LOGICAL_BACKUP_S3_SECRET_ACCESS_KEY",
-)
 
 
 @dataclass(frozen=True)
@@ -71,47 +70,33 @@ class BackupConfig:
     secret_access_key: str
 
     @classmethod
-    def from_environment(cls, environ: Mapping[str, str] | None = None) -> BackupConfig:
-        values = os.environ if environ is None else environ
-
-        missing = [
-            name for name in REQUIRED_ENVIRONMENT if not str(values.get(name) or "").strip()
-        ]
-        if missing:
-            raise RuntimeError(
-                "Missing required backup settings: " + ", ".join(missing)
-            )
-
-        def required(name: str) -> str:
-            return str(values[name]).strip()
-
-        database_url = normalize_postgres_url(required("MANZARA_DATABASE_URL"))
-        encoded_ca = required("MANZARA_AIVEN_CA_CERT_BASE64")
-        try:
-            ca_certificate = base64.b64decode(encoded_ca, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise RuntimeError(
-                "MANZARA_AIVEN_CA_CERT_BASE64 must be valid base64"
-            ) from exc
+    def from_config(cls) -> BackupConfig:
+        payload = load_runtime_config()
+        database_url = normalize_postgres_url(required_text(payload, "database_url"))
+        encoded_ca = required_value(payload, "database_ca_certificate_base64")
+        if encoded_ca is None:
+            ca_path = dict(parse_qsl(urlsplit(database_url).query)).get("sslrootcert")
+            if not ca_path:
+                raise ValueError("Configure database_ca_certificate_base64 or database_url sslrootcert for backup")
+            ca_certificate = Path(ca_path).expanduser().read_bytes()
+        else:
+            if not isinstance(encoded_ca, str):
+                raise ValueError("database_ca_certificate_base64 must be a string or null")
+            try:
+                ca_certificate = base64.b64decode(encoded_ca, validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError("database_ca_certificate_base64 must be valid base64") from None
         if b"BEGIN CERTIFICATE" not in ca_certificate:
-            raise RuntimeError(
-                "MANZARA_AIVEN_CA_CERT_BASE64 does not contain a PEM certificate"
-            )
-
-        endpoint_url = required("MANZARA_LOGICAL_BACKUP_S3_ENDPOINT")
+            raise ValueError("Configured database CA must contain a PEM certificate")
+        endpoint_url = required_text(payload, "backup", "endpoint_url")
         if not endpoint_url.startswith("https://"):
-            raise RuntimeError("MANZARA_LOGICAL_BACKUP_S3_ENDPOINT must use HTTPS")
-
+            raise ValueError("backup.endpoint_url must use HTTPS")
         return cls(
             database_url=database_url,
             ca_certificate=ca_certificate,
             endpoint_url=endpoint_url.rstrip("/"),
-            region_name=required("MANZARA_LOGICAL_BACKUP_S3_REGION"),
-            bucket=required("MANZARA_LOGICAL_BACKUP_S3_BUCKET"),
-            access_key_id=required("MANZARA_LOGICAL_BACKUP_S3_ACCESS_KEY_ID"),
-            secret_access_key=required(
-                "MANZARA_LOGICAL_BACKUP_S3_SECRET_ACCESS_KEY"
-            ),
+            **{field: required_text(payload, "backup", field)
+               for field in ("region_name", "bucket", "access_key_id", "secret_access_key")},
         )
 
 
@@ -135,7 +120,7 @@ def normalize_postgres_url(value: str) -> str:
         or split.password is None
     ):
         raise ValueError(
-            "MANZARA_DATABASE_URL must contain a PostgreSQL host, database, user, and password"
+            "database_url must contain a PostgreSQL host, database, user, and password"
         )
     return text
 
@@ -149,7 +134,6 @@ def _safe_service_value(value: str, field: str) -> str:
 def render_service_entry(database_url: str, *, container_ca_path: str) -> str:
     """Render a libpq service entry that always verifies the Aiven certificate."""
     split = urlsplit(normalize_postgres_url(database_url))
-    query = dict(parse_qsl(split.query, keep_blank_values=True))
     values = {
         "host": split.hostname or "",
         "port": str(split.port or 5432),
@@ -158,7 +142,7 @@ def render_service_entry(database_url: str, *, container_ca_path: str) -> str:
         "password": unquote(split.password or ""),
         "sslmode": "verify-full",
         "sslrootcert": container_ca_path,
-        "connect_timeout": query.get("connect_timeout", "20"),
+        "connect_timeout": str(config_integer("backup", "connect_timeout_seconds")),
         "application_name": "manzara-github-logical-backup",
     }
     lines = ["[source]"]
@@ -187,7 +171,7 @@ def backup_keys(now: datetime) -> BackupKeys:
 def postgres_commands(
     workdir: Path,
     *,
-    image: str = DEFAULT_POSTGRES_IMAGE,
+    image: str,
     user: str,
 ) -> tuple[list[str], list[str]]:
     docker_prefix = [
@@ -206,7 +190,7 @@ def postgres_commands(
         "--format=custom",
         "--no-owner",
         "--no-privileges",
-        "--schema=monocorpus",
+        f"--schema={configured_schema("database_schema")}",
         "--schema=public",
         "--extension=pg_trgm",
         f"--file={CONTAINER_DUMP_FILE}",
@@ -237,7 +221,7 @@ def create_dump(
     config: BackupConfig,
     workdir: Path,
     *,
-    postgres_image: str = DEFAULT_POSTGRES_IMAGE,
+    postgres_image: str,
 ) -> Path:
     workdir.mkdir(mode=0o700, parents=True, exist_ok=False)
     service_path = workdir / "service.conf"
@@ -272,7 +256,7 @@ def create_dump(
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        for chunk in iter(lambda: handle.read(config_integer("backup", "hash_chunk_bytes")), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -318,7 +302,7 @@ def _upload_one(
         "created-at": created_at,
         "git-sha": git_sha or "unknown",
         "format": "pg_dump-custom",
-        "schemas": "monocorpus,public",
+        "schemas": f"{configured_schema("database_schema")},public",
     }
     client.upload_file(
         str(dump_path),
@@ -401,6 +385,7 @@ def _s3_client(config: BackupConfig) -> Any:
         aws_secret_access_key=config.secret_access_key,
         endpoint_url=config.endpoint_url,
         region_name=config.region_name,
+        config=s3_client_config("backup"),
     )
 
 
@@ -418,10 +403,11 @@ def _write_github_summary(result: UploadResult) -> None:
         handle.write("- Storage encryption: `AES256 (SSE-B2)`\n")
 
 
-def run_backup(*, postgres_image: str = DEFAULT_POSTGRES_IMAGE) -> UploadResult:
-    config = BackupConfig.from_environment()
+def run_backup() -> UploadResult:
+    config = BackupConfig.from_config()
+    postgres_image = config_text("backup", "postgres_image")
     now = datetime.now(timezone.utc)
-    with tempfile.TemporaryDirectory(prefix="manzara-logical-backup-") as parent:
+    with tempfile.TemporaryDirectory(prefix="manzara-logical-backup-", dir=workspace_dir("maintenance", "logical-backup")) as parent:
         dump_path = create_dump(
             config,
             Path(parent) / "work",
@@ -440,14 +426,13 @@ def run_backup(*, postgres_image: str = DEFAULT_POSTGRES_IMAGE) -> UploadResult:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--postgres-image", default=DEFAULT_POSTGRES_IMAGE)
     return parser
 
 
 def main() -> int:
-    args = build_parser().parse_args()
+    build_parser().parse_args()
     try:
-        result = run_backup(postgres_image=args.postgres_image)
+        result = run_backup()
     except (BotoCoreError, ClientError, OSError, RuntimeError, ValueError) as exc:
         log_message(f"PostgreSQL logical backup failed: {exc}", level="ERROR")
         return 1

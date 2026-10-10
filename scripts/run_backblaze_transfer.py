@@ -1,12 +1,14 @@
 """Internal GitHub workflow runner for catalog-native Backblaze transfer."""
 
+
 import json
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.runtime_config import config_integer
 from app.task_runtime.logging import log_message
 
 
@@ -22,7 +24,9 @@ def _descriptor():
 
 def _preflight(db):
     from app.document_storage import load_document_storage_settings
-    from app.modules.maintenance.document_sync_repository import PostgresDocumentSyncRepository
+    from app.modules.maintenance.document_sync_repository import (
+        PostgresDocumentSyncRepository,
+    )
     from app.runtime_config import load_runtime_config
 
     load_document_storage_settings(load_runtime_config())
@@ -68,10 +72,12 @@ def main():
         if os.environ.get('GITHUB_ACTIONS') != 'true' or sys.argv[1:]:
             raise ValueError('Start Backblaze transfer through its GitHub workflow')
         import yaml
+
         from app.settings import load_settings
         from app.task_runtime.batch import run_batch
 
         exit_code = run_batch(load_settings(), [_descriptor()], preflight=_preflight,
+            budget_seconds=config_integer("maintenance", "transfer_budget_seconds"),
                               on_result=lambda run: _report(run, results))
     except Exception as exc:
         if "yaml" in locals() and isinstance(exc, yaml.YAMLError):

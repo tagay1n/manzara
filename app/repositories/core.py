@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import threading
 from contextlib import contextmanager
@@ -15,13 +14,16 @@ import psycopg2
 from psycopg2.extensions import TRANSACTION_STATUS_UNKNOWN
 from psycopg2.extras import RealDictCursor
 
+from app.artifacts import local_state_path as configured_local_state_path
 from app.local_state import LocalStateStore
 from app.postgres_engine import (
     acquire_postgres_engine,
     configured_postgres_pool_size,
+    configured_timeout_sql,
     get_postgres_engine_metrics,
     release_postgres_engine,
 )
+from app.settings import configured_schema
 
 MAX_POOL_SIZE = 8
 
@@ -124,7 +126,7 @@ class CoreRepository:
     def __init__(
         self,
         database_url: str,
-        schema: str = "monocorpus",
+        schema: str | None = None,
         *,
         pool_size: int | None = None,
         local_state_path: Path | str | None = None,
@@ -136,13 +138,13 @@ class CoreRepository:
             self.database_url = "postgresql://" + self.database_url.split("://", 1)[1]
         if self.database_url.startswith("postgresql+psycopg://"):
             self.database_url = "postgresql://" + self.database_url.split("://", 1)[1]
-        self.schema = str(schema or "monocorpus").strip() or "monocorpus"
+        self.schema = configured_schema("database_schema") if schema is None else schema.strip()
         requested_pool_size = (
             configured_postgres_pool_size()
             if pool_size is None
-            else int(pool_size)
+            else pool_size
         )
-        if not 1 <= requested_pool_size <= MAX_POOL_SIZE:
+        if type(requested_pool_size) is not int or not 1 <= requested_pool_size <= MAX_POOL_SIZE:
             raise ValueError(f"pool_size must be between 1 and {MAX_POOL_SIZE}")
         self.pool_size = requested_pool_size
         self._engine = acquire_postgres_engine(
@@ -156,12 +158,7 @@ class CoreRepository:
         self._local_state = LocalStateStore(
             local_state_path
             if local_state_path is not None
-            else Path(
-                str(
-                    os.environ.get("MANZARA_LOCAL_STATE_PATH")
-                    or "~/.manzara/state/runtime.sqlite3"
-                )
-            ).expanduser()
+            else configured_local_state_path()
         )
 
 
@@ -232,7 +229,7 @@ class CoreRepository:
         }
         with self._connect() as conn:
             conn.execute("SET TRANSACTION READ ONLY")
-            conn.execute("SET LOCAL statement_timeout = '5s'")
+            conn.execute(configured_timeout_sql("statement_timeout", "preflight_timeout_seconds"))
             rows = conn.execute(
                 "SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=? AND table_name=ANY(?)",
                 (self.schema, list(required)),
@@ -244,7 +241,7 @@ class CoreRepository:
                        for column in sorted(columns - present.get(table, set()))]
             if missing:
                 raise RuntimeError("Catalog is incompatible with personality normalization; missing: " + ", ".join(missing))
-            version_schema = str(os.environ.get("MANZARA_ALEMBIC_VERSION_SCHEMA") or self.schema)
+            version_schema = str(configured_schema("migration_version_schema"))
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", version_schema):
                 raise ValueError("Invalid migration version schema")
             revision = conn.execute(f'SELECT version_num FROM "{version_schema}".alembic_version_manzara').scalar()

@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, List
 
-from app.runtime_config import load_runtime_config
-
+from app.runtime_config import load_runtime_config, required_integer, required_value
 
 _REDACTED_SENTINEL = "<REDACTED>"
 
@@ -27,10 +26,20 @@ class GeminiKey:
 class GeminiRuntimeLimits:
     """Shared request and quota-circuit limits for every Gemini workflow."""
 
-    max_quota_rotations_per_model: int = 3
-    generic_429_circuit_breaker_threshold: int = 3
-    generic_429_window_seconds: int = 60
-    generic_429_pause_seconds: int = 60
+    max_quota_rotations_per_model: int
+    project_model_spacing_seconds: int
+    model_server_pause_seconds: int
+    quota_cooldown_base_seconds: int
+    quota_cooldown_max_seconds: int
+    project_lease_ttl_seconds: int
+    project_lease_heartbeat_seconds: int
+    max_wait_slice_seconds: int
+    capacity_poll_seconds: int
+    reset_blackout_seconds: int
+    transient_attempts_per_model: int
+    generic_429_circuit_breaker_threshold: int
+    generic_429_window_seconds: int
+    generic_429_pause_seconds: int
 
 
 def _clean_key(value: Any) -> str:
@@ -82,10 +91,10 @@ def _configured_key(account_id: str, raw_value: Any) -> GeminiKey | None:
 
 def load_gemini_keys() -> List[GeminiKey]:
     """Read the account-to-key-list mapping documented in config.example.yaml."""
-    gemini = load_runtime_config().get("gemini", {})
+    gemini = required_value(load_runtime_config(), "gemini")
     if not isinstance(gemini, dict):
         raise ValueError("gemini must be a mapping")
-    accounts = gemini.get("accounts", {})
+    accounts = required_value(gemini, "accounts")
     if not isinstance(accounts, dict):
         raise ValueError("gemini.accounts must map account IDs to key lists")
     rows = []
@@ -103,58 +112,26 @@ def load_gemini_keys() -> List[GeminiKey]:
     return rows
 
 
-def _positive_runtime_integer(
-    runtime: Dict[str, Any], field: str, default: int
-) -> int:
-    value = runtime.get(field, default)
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"gemini.runtime.{field} must be a positive integer")
-    return value
-
-
 def load_gemini_runtime_limits() -> GeminiRuntimeLimits:
-    """Load strict shared limits, retaining safe defaults when omitted."""
+    """Load every shared limit explicitly from YAML."""
     payload = load_runtime_config()
-    gemini = payload.get("gemini")
-    raw_runtime = gemini.get("runtime") if isinstance(gemini, dict) else None
-    if raw_runtime is None:
-        runtime: Dict[str, Any] = {}
-    elif isinstance(raw_runtime, dict):
-        runtime = raw_runtime
-    else:
-        raise ValueError("gemini.runtime must be a mapping")
-    defaults = GeminiRuntimeLimits()
-    return GeminiRuntimeLimits(
-        max_quota_rotations_per_model=_positive_runtime_integer(
-            runtime,
-            "max_quota_rotations_per_model",
-            defaults.max_quota_rotations_per_model,
-        ),
-        generic_429_circuit_breaker_threshold=_positive_runtime_integer(
-            runtime,
-            "generic_429_circuit_breaker_threshold",
-            defaults.generic_429_circuit_breaker_threshold,
-        ),
-        generic_429_window_seconds=_positive_runtime_integer(
-            runtime,
-            "generic_429_window_seconds",
-            defaults.generic_429_window_seconds,
-        ),
-        generic_429_pause_seconds=_positive_runtime_integer(
-            runtime,
-            "generic_429_pause_seconds",
-            defaults.generic_429_pause_seconds,
-        ),
+    limits = GeminiRuntimeLimits(
+        **{field: required_integer(payload, "gemini", "runtime", field)
+           for field in GeminiRuntimeLimits.__dataclass_fields__}
     )
+    if limits.project_lease_heartbeat_seconds >= limits.project_lease_ttl_seconds:
+        raise ValueError("gemini.runtime.project_lease_heartbeat_seconds must be less than project_lease_ttl_seconds")
+    if limits.quota_cooldown_base_seconds > limits.quota_cooldown_max_seconds:
+        raise ValueError("gemini.runtime.quota_cooldown_base_seconds must not exceed quota_cooldown_max_seconds")
+    return limits
 
 
 def load_configured_gemini_model_names() -> List[str]:
     """Return the shared configured runtime model pool without defaults."""
     payload = load_runtime_config()
-    gemini = payload.get("gemini")
-    raw_models = gemini.get("model_pool") if isinstance(gemini, dict) else None
+    raw_models = required_value(payload, "gemini", "model_pool")
     if not isinstance(raw_models, list):
-        return []
+        raise ValueError("gemini.model_pool must be a list")
     if any(not isinstance(value, str) or not value.strip() for value in raw_models):
         raise ValueError("gemini.model_pool requires nonblank model names")
     models = [value.strip() for value in raw_models]

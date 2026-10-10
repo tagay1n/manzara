@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from datetime import datetime, timezone
 import hashlib
 import json
-import os
 import re
+from collections import defaultdict
+from datetime import datetime, timezone
 
 from sqlalchemy import select, text
 
 from app.catalog.contracts import CatalogConflict
 from app.catalog.repository import snapshot
+from app.postgres_engine import configured_timeout_sql
+from app.settings import configured_schema
 
 COLLECTION_DISCOVERY_CONTRACT = "catalog.collection-discovery.v1"
 _SOURCE = "catalog.collection_discovery"
@@ -49,7 +50,7 @@ class CollectionDiscoveryStore:
         required = {"catalog_" + name: columns for name, columns in _REQUIRED.items()}
         with self.engine.begin() as conn:
             conn.execute(text("SET TRANSACTION READ ONLY"))
-            conn.execute(text("SET LOCAL statement_timeout = '5s'"))
+            conn.execute(text(configured_timeout_sql("statement_timeout", "preflight_timeout_seconds")))
             rows = conn.execute(text("""SELECT table_name,column_name FROM information_schema.columns
                 WHERE table_schema=:schema AND table_name=ANY(:tables)"""),
                 {"schema": self.schema, "tables": list(required)}).mappings()
@@ -60,7 +61,7 @@ class CollectionDiscoveryStore:
                              for column in columns - present[name])
             if missing:
                 raise RuntimeError("Catalog is incompatible with collection discovery; missing: " + ", ".join(missing))
-            version_schema = os.environ.get("MANZARA_ALEMBIC_VERSION_SCHEMA") or self.schema
+            version_schema = configured_schema("migration_version_schema")
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", version_schema):
                 raise ValueError("Invalid migration version schema")
             revision = conn.execute(text(f'SELECT version_num FROM "{version_schema}".alembic_version')).scalar_one()
@@ -112,7 +113,7 @@ class CollectionDiscoveryStore:
         with self.engine.connect().execution_options(isolation_level="REPEATABLE READ") as conn:
             with conn.begin():
                 conn.execute(text("SET TRANSACTION READ ONLY"))
-                conn.execute(text("SET LOCAL statement_timeout = '60s'"))
+                conn.execute(text(configured_timeout_sql("statement_timeout", "query_timeout_seconds")))
                 return self._inventory(conn, should_stop)
 
     def match_collections(self, features, signatures, should_stop):
@@ -123,7 +124,7 @@ class CollectionDiscoveryStore:
             return matches
         with self.engine.begin() as conn:
             conn.execute(text("SET TRANSACTION READ ONLY"))
-            conn.execute(text("SET LOCAL statement_timeout = '60s'"))
+            conn.execute(text(configured_timeout_sql("statement_timeout", "query_timeout_seconds")))
             for start in range(0, len(candidates), 1000):
                 should_stop()
                 rows = conn.execute(text("""
@@ -188,8 +189,8 @@ class CollectionDiscoveryStore:
                   "proposal_ids": [], "superseded_proposal_ids": []}
         with self.engine.begin() as conn:
             conn.execute(text("SET TRANSACTION READ WRITE"))
-            conn.execute(text("SET LOCAL lock_timeout = '5s'"))
-            conn.execute(text("SET LOCAL statement_timeout = '60s'"))
+            conn.execute(text(configured_timeout_sql("lock_timeout", "lock_timeout_seconds")))
+            conn.execute(text(configured_timeout_sql("statement_timeout", "query_timeout_seconds")))
             conn.execute(text("SELECT set_config('manzara.catalog_actor','task',true)"))
             acquired = conn.execute(text("SELECT pg_try_advisory_xact_lock(hashtext(:scope))"),
                                     {"scope": "collection-discovery:" + self.schema}).scalar_one()

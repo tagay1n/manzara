@@ -1,21 +1,23 @@
 """Shared transactional primitives for CLI and workflow catalog operations."""
 
-from datetime import datetime, timezone
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.catalog.contracts import (
-    CatalogConflict, CatalogNotFound, integer, nonblank,
+    CatalogConflict,
+    CatalogNotFound,
+    integer,
+    nonblank,
 )
-from app.catalog.schema import build_metadata
 from app.catalog.metadata_store import MetadataStore
-from app.catalog.previews import PreviewStore
 from app.catalog.personality_normalization import PersonalityNormalizationStore
+from app.catalog.previews import PreviewStore
+from app.catalog.schema import build_metadata
 from app.document_operation_lock import lock_document_transaction
-
 
 RECORDS = {
     "publication": ("publications", "publication_id"),
@@ -33,7 +35,7 @@ def snapshot(value: Any) -> Any:
 
 
 class CatalogRepository(MetadataStore, PreviewStore, PersonalityNormalizationStore):
-    def __init__(self, engine, *, schema="monocorpus"):
+    def __init__(self, engine, *, schema):
         self.engine = engine
         self.schema = schema
         self.tables = {table.name.removeprefix("catalog_"): table for table in build_metadata(schema).tables.values()}

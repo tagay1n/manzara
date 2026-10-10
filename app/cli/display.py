@@ -10,6 +10,7 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.output.vt100 import Vt100_Output
 
 from app.cli.output import OutputFailure
+from app.runtime_config import config_integer
 from app.task_runtime.logging import redact
 
 
@@ -54,7 +55,7 @@ class TerminalDisplay(Vt100_Output):
         data = text.encode(self.encoding() or "utf-8", "replace")
         # Redraws are coalesced while a frame is pending. This additional cap
         # also bounds exceptional renderer output, such as an enormous paste.
-        if len(self._pending) + len(data) > 1024 * 1024:
+        if len(self._pending) + len(data) > config_integer("terminal", "render_buffer_bytes"):
             self.failure = "Terminal rendering exceeded the output buffer limit"
             self._pending.clear()
             return

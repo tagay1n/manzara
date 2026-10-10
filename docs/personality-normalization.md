@@ -34,7 +34,7 @@ Untouched names precede checkpointed names before applying the candidate limit. 
 
 Yield on 429, service 5xx, transport failures, and local deadlines without content-excluding the model. Record shared provider state first. Wait stoppably when no capacity is ready; total daily exhaustion preserves untouched work. A second transient failure leaves local deferral; stopping preserves local pending retry state.
 
-Personality-only pacing and the 60-second HTTP I/O timeout are defined in [Gemini runtime](gemini-runtime.md). An I/O timeout is not a total streaming deadline.
+Personality-only pacing and the configured HTTP I/O timeout are defined in [Gemini runtime](gemini-runtime.md). An I/O timeout is not a total streaming deadline.
 
 Count unique people separately from physical `model_attempts`; distinguish negative outcomes, failures, final deferrals, and pending retries. Write shared stdout logs and explicit summary artifacts.
 

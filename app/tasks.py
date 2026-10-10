@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
 import threading
+from dataclasses import dataclass
 from typing import Any, Callable
 
-from app.task_runtime.artifacts import save_run_artifact
 from app.db import Database
+from app.runtime_config import config_number
 from app.runtime_states import (
     TASK_RUN_STATUS_COMPLETED,
     TASK_RUN_STATUS_FAILED,
     TASK_RUN_STATUS_STOPPED,
 )
+from app.task_runtime.artifacts import save_run_artifact
 from app.task_runtime.contracts import RunContext, RunOptions, TaskDescriptor
 from app.task_runtime.logging import RunLogSink, bind_run_log, redact
 
@@ -223,7 +224,7 @@ class TaskRunner:
             pass
 
     def _heartbeat(self, run_id: int, stop: threading.Event) -> None:
-        while not stop.wait(5):
+        while not stop.wait(config_number("runtime", "heartbeat_seconds", minimum=0.01)):
             try:
                 self.db.heartbeat(run_id)
             except Exception:

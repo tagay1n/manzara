@@ -1,8 +1,36 @@
 # Operations
 
+## Runtime configuration
+
+`config.yaml` is the sole local settings source. `MANZARA_CONFIG_PATH` selects another explicit file; there is no search through alternative files and no environment override of YAML values. `config.example.yaml` documents the required structure and is never runtime input. Duplicate YAML keys, masked values, missing consumed fields, and invalid setting types fail with configuration paths and without printing values. Parsing caches refresh when the selected file is edited or replaced. Stop active work and restart the process after changing settings: open pools, provider clients, and running policies retain their initialization snapshot.
+
+Database connection/schema/version-table schema and pool size, artifact/SQLite paths, provider retry/pacing/request policies, conversion limits/deadlines, preview rendering/detection, network settings, integration targets, batch budgets, and terminal/runtime timing are explicit YAML values. Code retains domain/schema identities, formats, safety bounds, and state-machine initialization; these are implementation contracts. CLI task/cohort/retry flags are deliberate per-run controls. Policy changes govern newly performed work; they do not automatically reopen completed checkpoints or regenerate cached artifacts. Change the corresponding recipe/contract through its owner when cached output semantics must change.
+
+`codex.publisher_merges.context_window_tokens: null` explicitly selects exact-model CLI capacity metadata; a positive integer supplies verified capacity. `database_ca_certificate_base64: null` uses the certificate path already present in `database_url`; a base64 PEM value is materialized privately by workflow setup. Dedicated backup credentials must be filled for backup work; an unconfigured integration may have explicit null fields locally and fails if invoked.
+
+Each Actions workflow decodes its own private YAML from the following secret using `scripts/prepare_workflow_config.py`. Existing separate database/pool/path/credential environment settings and repository variables no longer supply runtime values. Update these YAML secrets before pushing or dispatching the changed workflows.
+
+| Workflow | YAML secret | Sections consumed |
+| --- | --- | --- |
+| Sync/cleanup and document transfer | `MANZARA_MAINTENANCE_CONFIG_BASE64` | `database_url`, `database_schema`, `migration_version_schema`, `database_pool_size`, `database_ca_certificate_base64`, `artifacts_root`, `local_state_path`, `postgres`, `runtime`, `documents`, `yandex`, `encryption_key`, `network`, `maintenance` |
+| Google export | `MANZARA_EXPORT_CONFIG_BASE64` | `database_url`, `database_schema`, `database_pool_size`, `database_ca_certificate_base64`, `artifacts_root`, `local_state_path`, `postgres`, `google.sheets`, `yandex.disk.documents.restricted_path` |
+| Logical backup | `MANZARA_BACKUP_CONFIG_BASE64` | `database_url`, `database_schema`, `database_ca_certificate_base64`, `artifacts_root`, `backup`, `network.s3.backup`, `documents.transfer` |
+| README link checker | `MANZARA_LINK_CHECKER_CONFIG_BASE64` | `link_checker` |
+
+Use only each workflow's required sections, replacing masked values. Preserve dedicated backup credentials rather than reusing document-storage credentials. Store plaintext and encoded YAML under the artifact root's private credentials directory with restrictive permissions. Base64 is encoding, not encryption. Do not include Gemini/Codex credentials in these scheduled subsets.
+
+For Actions, explicitly set `artifacts_root: "${RUNNER_TEMP}/manzara"`, `local_state_path: "${RUNNER_TEMP}/manzara/state/runtime.sqlite3"`, and, where consumed, `documents.cache_path: "${RUNNER_TEMP}/manzara/cache/source-documents"`. Setup expands only this supported placeholder in those paths; cache budgets and all other policies remain exactly as supplied in YAML. Supply `database_ca_certificate_base64` for a certificate-backed database in Actions, since local certificate paths are not present on the runner. Setup writes the certificate and updates that YAML URL's `sslrootcert` while preserving its other TLS settings. Configuration and certificates are written with mode 0600 and removed at the workflow boundary. Google OAuth token provisioning remains the separate `GOOGLE_OAUTH_TOKEN_JSON_BASE64` secret.
+
+For example, after saving the private maintenance subset:
+
+```bash
+umask 077
+base64 -w 0 < ~/.manzara/private/credentials/maintenance/actions.yaml > ~/.manzara/private/credentials/maintenance/actions.base64
+```
+
 ## Local storage
 
-Artifacts use `MANZARA_ARTIFACTS_ROOT` (default `~/.manzara`). Retention groups are `cache/`, `workspaces/`, `logs/`, `state/`, `durable/`, and `private/`; `app/artifacts.py` generates `STORAGE_LAYOUT.txt` with removal guidance.
+Artifacts use the explicit YAML `artifacts_root`. Retention groups are `cache/`, `workspaces/`, `logs/`, `state/`, `durable/`, and `private/`; `app/artifacts.py` generates `STORAGE_LAYOUT.txt` with removal guidance.
 
 The shared source cache is `cache/source-documents`, MD5-verified and bounded by `documents.cache_max_gib`. Retained task outputs live in dedicated workspaces. All task logs use the shared redacted stdout formatter, with immediate flushing for scheduled runs and terminal scrollback for interactive runs. No task creates log files or emits events. Existing artifact/log files are left on disk. Structured artifacts live at `workspaces/task-runs/<task_id>/run-<run_id>/artifact-<sequence>.json`; the local run summary links every artifact and the final result. Interactive controls and lifecycle are documented in [README](../README.md#controls-and-lifecycle).
 
@@ -14,30 +42,11 @@ Local SQLite state is disposable but may be removed only with all Manzara proces
 
 The workflow calls `python scripts/run_daily_maintenance.py`: cleanup preparation first, then guarded cleanup execution and Yandex Sync. Both stages use one worker and no candidate limit. Preparation failures/stops prevent Sync from starting; failed, stopped, or unfinalized runs return nonzero. ISBN duplicate groups always require an explicit persisted decision via the [cleanup review commands](document-cleanup.md). Newly discovered documents join the next daily preparation cohort.
 
-The command uses the shared `TaskRunner`, a local session lock, run recovery, stdout logs, and directly saved structured artifacts. Read-only catalog/configuration preflight precedes preparation. SIGINT/SIGTERM request safe stop; the command also requests stop after a five-hour execution budget. The Actions job allows six hours, including setup and final diagnostics; forced termination can interrupt finalization. PostgreSQL checkpoints preserve completed cleanup phases, while uncommitted discovery buffers are rebuilt on the next run. No migrations run automatically.
+The command uses the shared `TaskRunner`, a local session lock, run recovery, stdout logs, and directly saved structured artifacts. Read-only catalog/configuration preflight precedes preparation. SIGINT/SIGTERM request safe stop; the command also requests stop after `maintenance.daily_budget_seconds`. The Actions job allows six hours, including setup and final diagnostics; forced termination can interrupt finalization. PostgreSQL checkpoints preserve completed cleanup phases, while uncommitted discovery buffers are rebuilt on the next run. No migrations run automatically.
 
-Add these Actions secrets manually:
+Provision the maintenance YAML secret using [runtime configuration](#runtime-configuration). Every run starts with fresh orchestration state at its configured runner path; cleanup plans/reviews/phases stay in PostgreSQL. The workflow installs only its dependencies selected from `requirements.txt`, without document-inference packages.
 
-| Secret | Value |
-| --- | --- |
-| `MANZARA_DATABASE_URL` | Existing primary PostgreSQL URL, with the intended TLS settings |
-| `MANZARA_MAINTENANCE_CONFIG_BASE64` | Single-line base64 of maintenance-only YAML described below |
-| `MANZARA_AIVEN_CA_CERT_BASE64` | Optional existing base64 PEM CA when the database requires a provider certificate |
-
-Build the maintenance-only YAML from the corresponding sections of [config.example.yaml](../config.example.yaml), replacing masked values with actual values. Retain `documents.primary_storage` (endpoint, region, access key, secret key, and all five bucket names: `public`, `private`, `book_previews`, `content`, `content_images`), `yandex.disk` (OAuth token and `documents.source_path`, `restricted_path`, `filtered_out_path`), and `encryption_key`. Use document-storage credentials authorized for the managed cleanup objects; the logical-backup bucket credentials are a separate role. Exclude Gemini keys, Codex settings, and unrelated credentials. Base64 is encoding, not encryption; keep the source and encoded file under the private artifact root with restrictive permissions, never in git or logs.
-
-For example, after creating `~/.manzara/private/credentials/maintenance/actions.yaml` with that subset:
-
-```bash
-umask 077
-base64 -w 0 < ~/.manzara/private/credentials/maintenance/actions.yaml > ~/.manzara/private/credentials/maintenance/actions.base64
-```
-
-Paste the encoded file into `MANZARA_MAINTENANCE_CONFIG_BASE64`. No additional repository variables are required. `scripts/prepare_maintenance_config.py` selects only the maintenance fields, masks decoded credentials in Actions output, writes a private YAML file, and overrides the cache path/budget for the temporary runner. Missing/masked credentials or bucket names fail setup. When a CA is supplied, it writes the certificate privately and replaces the URL's `sslrootcert` path for the runner, preserving other TLS settings.
-
-The runner initializes artifact/cache/configuration/local SQLite paths under `$RUNNER_TEMP/manzara` through `$GITHUB_ENV`, with schema `monocorpus` and pool size 4. Every run starts with fresh orchestration state; cleanup plans/reviews/phases stay in PostgreSQL. The workflow installs only its dependencies selected from `requirements.txt`, without document-inference packages.
-
-Scheduled task messages use the shared stdout formatter and flush immediately, including setup, directory listings, file visits, and per-file outcomes. Every 30 seconds, a stdout `task.status` snapshot reports run state, elapsed time, time since the last task log, progress/counters, and current provider wait. A status snapshot indicates observation; advancing item/counter messages establish progress. Task artifacts contain structured results, never captured log streams.
+Scheduled task messages use the shared stdout formatter and flush immediately, including setup, directory listings, file visits, and per-file outcomes. At `runtime.status_interval_seconds`, a stdout `task.status` snapshot reports run state, elapsed time, time since the last task log, progress/counters, and current provider wait. A status snapshot indicates observation; advancing item/counter messages establish progress. Task artifacts contain structured results, never captured log streams.
 
 GitHub summaries show stage outcomes/counters and overall job status. Structured task artifacts and local SQLite diagnostics are uploaded with seven-day retention, including available files after failure. Configuration, credentials, and document caches are excluded; SQLite is never restored from Actions artifacts/caches. Setup failures may have no task artifacts; inspect the Actions step output. Private configuration is removed at the final workflow boundary. Static inspection does not establish connectivity, duration, recovery behavior, or daily operational readiness; a credential-backed manual run requires explicit owner authorization.
 
@@ -45,9 +54,9 @@ GitHub summaries show stage outcomes/counters and overall job status. Structured
 
 `.github/workflows/backblaze-document-transfer.yml` runs after each successful `Yadisk sync` from this repository's default branch, including syncs that discover no new files. Manual dispatch from the default branch retries/backfills independently. Both paths execute trusted default-branch code. The workflow must be present on that branch before automatic chaining works; no deployment or live execution was performed during implementation.
 
-Upload is absent from all CLI task lists and selectors. `scripts/run_backblaze_transfer.py` is an internal Actions runner, not a supported local command. It runs `maintenance.sync_documents_s3` using the shared task runner, local session ownership/recovery, cooperative signals, and a five-hour budget within a six-hour Actions timeout. Long files may still be interrupted by the hard timeout; unfinished documents remain pending. Provider I/O/retries are bounded, and free disk space is checked before each download.
+Upload is absent from all CLI task lists and selectors. `scripts/run_backblaze_transfer.py` is an internal Actions runner, not a supported local command. It runs `maintenance.sync_documents_s3` using the shared task runner, local session ownership/recovery, cooperative signals, and `maintenance.transfer_budget_seconds` within a six-hour Actions timeout. Long files may still be interrupted by the hard timeout; unfinished documents remain pending. Provider I/O/retries are bounded, and free disk space is checked before each download.
 
-Reuse the maintenance secrets, private configuration preparation, primary document-storage credentials, minimal dependencies, schema, and temporary paths described above. The backup bucket role is not used. Transfer's concurrency group does not cancel an active run; shared PostgreSQL document operation locks also coordinate with sync/cleanup and clients on other machines. Different documents may proceed concurrently. Sync now requires pool size at least 3; transfer requires at least 2; both workflows use 4.
+Use the same private maintenance YAML, primary document-storage credentials, minimal dependencies, schema, and temporary paths described above. The backup bucket role is not used. Transfer's concurrency group does not cancel an active run; shared PostgreSQL document operation locks also coordinate with sync/cleanup and clients on other machines. Different documents may proceed concurrently. Sync now requires pool size at least 3; transfer requires at least 2; both workflows use the YAML pool bound.
 
 PostgreSQL supplies bounded missing/incomplete primary checkpoints directly, without an ID artifact from discovery. Existing complete checkpoints are excluded. The transfer verifies B2 before downloading, processes one document at a time, repairs valid incomplete checkpoints without changing their destinations, and removes owned temporary bytes at each item boundary. Invalid/protected/privacy-inconsistent checkpoints require review. The detailed catalog, integrity, and cleanup contracts live in [Maintenance storage guidance](../app/modules/maintenance/guidance/storage.md).
 
@@ -57,9 +66,9 @@ A failed download, upload, cleanup, or checkpoint leaves the item unresolved; in
 
 ## Scheduled Google export
 
-`.github/workflows/nightly-google-export.yml` (Google Sheets export) runs daily at 00:07 UTC and supports manual dispatch. Exact start time is not required; check successful daily runs. It calls `python -m app.modules.maintenance.runtime.dump_state --validate-sharing` to publish the catalog to the established spreadsheet's `documents` worksheet. The former `tt` worksheet is renamed in place on the first publication. No Drive archive is created or uploaded; PostgreSQL recovery dumps remain the separate [backup workflow](postgres-backup-recovery.md).
+`.github/workflows/nightly-google-export.yml` (Google Sheets export) runs daily at 00:07 UTC and supports manual dispatch. Exact start time is not required; check successful daily runs. It calls `python -m app.modules.maintenance.runtime.dump_state --validate-sharing` to publish the catalog to the YAML `google.sheets` spreadsheet/worksheet target. The former `tt` worksheet is renamed in place on the first publication. No Drive archive is created or uploaded; PostgreSQL recovery dumps remain the separate [backup workflow](postgres-backup-recovery.md).
 
-Actions secrets: `MANZARA_DATABASE_URL` and `GOOGLE_OAUTH_TOKEN_JSON_BASE64` (base64 OAuth token JSON with Sheets refresh authorization). The existing token path remains `private/credentials/google-drive/personal_token.json`; no Drive API scope is requested by this exporter. Keep tokens out of git and logs.
+Provision `MANZARA_EXPORT_CONFIG_BASE64` using [runtime configuration](#runtime-configuration), plus `GOOGLE_OAUTH_TOKEN_JSON_BASE64` (base64 OAuth token JSON with Sheets refresh authorization). The existing token path remains `private/credentials/google-drive/personal_token.json`; no Drive API scope is requested by this exporter. Keep tokens out of git and logs.
 
 The sharing gate checks the same database snapshot used for export. Restricted-folder documents, including descendants, require `sharing_restricted=true`, an `enc:` document link when present, and blank/null `ya_public_url`. Failures report MD5/rules without links. The check uses the encryption marker and does not decrypt links.
 
@@ -90,3 +99,7 @@ Existing storage-cutover recovery artifacts remain under `durable/postgres-stora
 Historical import, migration, and manual SQL tools are absent from this checkout. Retrieve the corresponding historical code only for explicitly planned recovery after reviewing its schema assumptions and target state.
 
 Nightly logical dumps and restore drills: [backup and recovery](postgres-backup-recovery.md). The current backend adaptation gap is tracked in [catalog model](catalog-model.md).
+
+## Scheduled README link checker
+
+The checker uses `link_checker.timeout_seconds` from `MANZARA_LINK_CHECKER_CONFIG_BASE64`, materialized through the same private YAML setup. Its secret needs only the `link_checker` section. The workflow schedule and broken-link branch behavior remain code-owned infrastructure.

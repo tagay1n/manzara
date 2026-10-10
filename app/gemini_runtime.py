@@ -13,25 +13,17 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from app.db import Database
-from app.task_runtime.logging import log_message
-from app.gemini_pacing import GeminiPacingPolicy, PacingOutcome
-from app.repositories.gemini_pacing import GeminiPacingAdmissionLost
 from app.gemini_config import (
     GeminiKey,
     load_gemini_keys,
     load_gemini_runtime_limits,
 )
-
+from app.gemini_pacing import GeminiPacingPolicy, PacingOutcome
+from app.repositories.gemini_pacing import GeminiPacingAdmissionLost
+from app.task_runtime.logging import log_message
 
 _PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 _UTC = timezone.utc
-_PROJECT_MODEL_SPACING_SECONDS = 60
-_MODEL_SERVER_PAUSE_SECONDS = 60
-_QUOTA_COOLDOWN_BASE_SECONDS = 60
-_QUOTA_COOLDOWN_MAX_SECONDS = 600
-_PROJECT_LEASE_TTL_SECONDS = 90
-_PROJECT_LEASE_HEARTBEAT_SECONDS = 30
-_MAX_WAIT_SLICE_SECONDS = 10
 
 
 _GENERATION_START: ContextVar[Callable[[], None] | None] = ContextVar(
@@ -335,18 +327,17 @@ class GeminiRuntimeManager:
     def _cycle_label(now_utc: datetime) -> str:
         return now_utc.astimezone(_PACIFIC_TZ).date().isoformat()
 
-    @staticmethod
-    def _blackout_window(now_utc: datetime) -> Dict[str, Any]:
+    def _blackout_window(self, now_utc: datetime) -> Dict[str, Any]:
         pt_now = now_utc.astimezone(_PACIFIC_TZ)
         midnight_today = datetime(
             pt_now.year, pt_now.month, pt_now.day, tzinfo=_PACIFIC_TZ
         )
         midnight_next = midnight_today + timedelta(days=1)
 
-        prev_start = midnight_today - timedelta(hours=1)
-        prev_end = midnight_today + timedelta(hours=1)
-        next_start = midnight_next - timedelta(hours=1)
-        next_end = midnight_next + timedelta(hours=1)
+        prev_start = midnight_today - timedelta(seconds=self._limits.reset_blackout_seconds)
+        prev_end = midnight_today + timedelta(seconds=self._limits.reset_blackout_seconds)
+        next_start = midnight_next - timedelta(seconds=self._limits.reset_blackout_seconds)
+        next_end = midnight_next + timedelta(seconds=self._limits.reset_blackout_seconds)
 
         active = False
         reset_at = midnight_next
@@ -389,7 +380,7 @@ class GeminiRuntimeManager:
                 raise GeminiStopRequestedError(
                     "Gemini wait interrupted by graceful stop"
                 )
-            time.sleep(1.0)
+            time.sleep(self._limits.capacity_poll_seconds)
             return
         while True:
             if self.should_stop():
@@ -400,7 +391,7 @@ class GeminiRuntimeManager:
             remaining = (wait_until - now_utc).total_seconds()
             if remaining <= 0:
                 return
-            time.sleep(min(float(remaining), _MAX_WAIT_SLICE_SECONDS))
+            time.sleep(min(float(remaining), self._limits.max_wait_slice_seconds))
 
 
     def acquire_available_key(
@@ -432,13 +423,13 @@ class GeminiRuntimeManager:
                 continue
             for model in pool_models or models:
                 self._ensure_model_rows(keys, model)
-            cooldown = _iso_utc(now + timedelta(seconds=_PROJECT_MODEL_SPACING_SECONDS))
+            cooldown = _iso_utc(now + timedelta(seconds=self._limits.project_model_spacing_seconds))
             claim_args = dict(
                 key_ids=[key.key_id for key in keys],
                 now_ts=_iso_utc(now),
                 cooldown_until=cooldown,
                 expires_at=_iso_utc(
-                    now + timedelta(seconds=_PROJECT_LEASE_TTL_SECONDS)
+                    now + timedelta(seconds=self._limits.project_lease_ttl_seconds)
                 ),
                 lease_token=uuid.uuid4().hex,
                 task_id=self.task_id,
@@ -450,7 +441,7 @@ class GeminiRuntimeManager:
             if decision.get("wait_reason") == "pacing":
                 wait_until = _parse_ts(decision["retry_at"])
                 self._set_wait(run_id, {"mode": "pacing", "wait_until": decision["retry_at"]})
-                self._sleep_until(min(wait_until, now + timedelta(seconds=1)))
+                self._sleep_until(min(wait_until, now + timedelta(seconds=self._limits.capacity_poll_seconds)))
                 continue
             if "key_id" not in decision:
                 retry_at = _parse_ts(decision.get("retry_at"))
@@ -485,7 +476,7 @@ class GeminiRuntimeManager:
                     last_wait = wait_until
                 # A peer may release its project before the lease expiry or clear
                 # a pause. Recheck SQLite without sleeping through that capacity.
-                self._sleep_until(min(wait_until, now + timedelta(seconds=1)))
+                self._sleep_until(min(wait_until, now + timedelta(seconds=self._limits.capacity_poll_seconds)))
                 continue
             key = next(key for key in keys if key.key_id == decision["key_id"])
             model = decision["model_name"]
@@ -560,15 +551,15 @@ class GeminiRuntimeManager:
                 lease.quota_domain_id, lease.model_name,
                 key_id=lease.key_id, lease_token=lease.project_lease_token,
                 now_ts=_iso_utc(now),
-                next_request_at=_iso_utc(now + timedelta(seconds=_PROJECT_MODEL_SPACING_SECONDS)),
-                expires_at=_iso_utc(now + timedelta(seconds=_PROJECT_LEASE_TTL_SECONDS)),
+                next_request_at=_iso_utc(now + timedelta(seconds=self._limits.project_model_spacing_seconds)),
+                expires_at=_iso_utc(now + timedelta(seconds=self._limits.project_lease_ttl_seconds)),
                 **pacing,
             )
             if decision is False:
                 raise GeminiRuntimeError("Gemini project lease lost before generation; request cancelled")
             if isinstance(decision, str):
                 self._set_wait(run_id, {"mode": "spacing", "wait_until": decision})
-                self._sleep_until(min(_parse_ts(decision), now + timedelta(seconds=1)))
+                self._sleep_until(min(_parse_ts(decision), now + timedelta(seconds=self._limits.capacity_poll_seconds)))
                 continue
             self._set_wait(run_id, {})
             return
@@ -610,14 +601,14 @@ class GeminiRuntimeManager:
         return "neutral"
 
     def _lease_heartbeat(self, lease: GeminiLease, stop: threading.Event) -> None:
-        while not stop.wait(_PROJECT_LEASE_HEARTBEAT_SECONDS):
+        while not stop.wait(self._limits.project_lease_heartbeat_seconds):
             now_utc = _utc_now()
             try:
                 renewed = self.db.renew_gemini_project_lease(
                     lease.quota_domain_id,
                     lease.project_lease_token,
                     expires_at=_iso_utc(
-                        now_utc + timedelta(seconds=_PROJECT_LEASE_TTL_SECONDS)
+                        now_utc + timedelta(seconds=self._limits.project_lease_ttl_seconds)
                     ),
                     now_ts=_iso_utc(now_utc),
                 )
@@ -657,8 +648,8 @@ class GeminiRuntimeManager:
                 current = self.db.get_gemini_quota_domain_model_state(quota_domain_id, lease.model_name) or {}
                 failure_count = int(current.get("failure_count") or 0) + 1
                 exponential_delay = min(
-                    _QUOTA_COOLDOWN_MAX_SECONDS,
-                    _QUOTA_COOLDOWN_BASE_SECONDS * (2 ** min(failure_count - 1, 8)),
+                    self._limits.quota_cooldown_max_seconds,
+                    self._limits.quota_cooldown_base_seconds * (2 ** min(failure_count - 1, 8)),
                 )
                 delay_seconds = max(
                     exponential_delay,
@@ -710,7 +701,7 @@ class GeminiRuntimeManager:
             ) from error
 
         if status_code is not None and 500 <= status_code <= 599:
-            pause_until = now_utc + timedelta(seconds=_MODEL_SERVER_PAUSE_SECONDS)
+            pause_until = now_utc + timedelta(seconds=self._limits.model_server_pause_seconds)
             self.db.mark_gemini_error(
                 lease.key_id,
                 lease.model_name,

@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack
 import json
 import signal
+import sys
 import threading
 import time
-import sys
+from contextlib import ExitStack
 from typing import Any, Callable
 
 from app.db import Database
+from app.runtime_config import config_number
 from app.runtime_states import TASK_RUN_STATUS_COMPLETED, TASK_RUN_STATUS_STOPPED
 from app.task_runtime.contracts import RunOptions, TaskDescriptor
 from app.task_runtime.logging import RunLog, log_message, write_stdout
 from app.task_runtime.session import SessionLock
 from app.tasks import TaskRunner
-
-
-_STATUS_INTERVAL_SECONDS = 30
 
 
 class _ConsoleLogs:
@@ -54,19 +52,19 @@ def _run_stages(db, runner, descriptors, stop, deadline, on_result, console) -> 
         log_message(f"Starting {descriptor.task_id} run_id={run_id}")
         started_at = time.monotonic()
         console.last_output = started_at
-        next_status = started_at + _STATUS_INTERVAL_SECONDS
+        next_status = started_at + config_number("runtime", "status_interval_seconds", minimum=0.01)
         stopping = False
         while not runner.is_idle():
             now = time.monotonic()
             if now >= next_status:
                 _print_status(db, run_id, started_at, console.last_output)
-                next_status = now + _STATUS_INTERVAL_SECONDS
+                next_status = now + config_number("runtime", "status_interval_seconds", minimum=0.01)
             if not stopping and (stop.is_set() or time.monotonic() >= deadline):
                 stop.set()
                 stopping = True
                 log_message("Safe stop requested; finishing the current operation")
                 runner.request_shutdown()
-            time.sleep(0.5)
+            time.sleep(config_number("runtime", "batch_poll_seconds", minimum=0.01))
         # Read after the worker exits, including artifact finalization.
         run = db.get_run(run_id)
         if run is None:
@@ -84,7 +82,7 @@ def run_batch(
     *,
     on_result: Callable[[dict[str, Any]], None],
     preflight: Callable[[Database], None],
-    budget_seconds: int = 5 * 60 * 60,
+    budget_seconds: int,
 ) -> int:
     """Own local state and stop cooperatively between sequential task stages."""
     stop = threading.Event()

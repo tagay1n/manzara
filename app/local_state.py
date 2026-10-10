@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
+from app.runtime_config import config_number
+
 LOCAL_STATE_SCHEMA_VERSION = 8
 _FOR_UPDATE_RE = re.compile(r"\s+FOR\s+UPDATE\b", re.IGNORECASE)
 
@@ -104,14 +106,14 @@ class LocalStateStore:
     def connect(self, *, immediate: bool = False) -> Iterable[_SQLiteConnection]:
         try:
             connection = sqlite3.connect(
-                str(self.path), timeout=5.0, isolation_level="DEFERRED"
+                str(self.path), timeout=config_number("runtime", "sqlite_busy_timeout_seconds", minimum=0.001), isolation_level="DEFERRED"
             )
         except sqlite3.Error as exc:
             raise RuntimeError(f"Cannot open local runtime database: {exc}") from exc
         connection.row_factory = sqlite3.Row
         try:
             connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute(f"PRAGMA busy_timeout = {round(config_number("runtime", "sqlite_busy_timeout_seconds", minimum=0.001) * 1000)}")
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute("PRAGMA synchronous = NORMAL")
             if immediate:

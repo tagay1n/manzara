@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections import Counter, deque
 import json
 import uuid
+from collections import Counter, deque
 from typing import Any, Callable, Sequence
-
 
 from app.catalog.contracts import CatalogConflict
 from app.gemini_config import load_required_gemini_model_pool
@@ -18,14 +17,12 @@ from app.gemini_model_pool import (
     GeminiModelResponseError,
     run_ordered_model_pool,
 )
-from app.gemini_requests import generate_structured_json
 from app.gemini_pacing import GeminiPacingPolicy
+from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
-from app.task_runtime.logging import log_message
-from app.task_runtime.contracts import RunContext, RunOptions
 from app.modules.library.personality_normalization import (
-    PersonalityResponse,
     PersonalityCandidate,
+    PersonalityResponse,
     build_canonical_name,
     extract_personality_candidates,
     personality_identity_key,
@@ -37,11 +34,12 @@ from app.modules.library.personality_normalization_prompt import (
     PERSONALITY_NORMALIZATION_PROMPT_VERSION,
     build_personality_normalization_prompt,
 )
-
+from app.runtime_config import config_integer
+from app.task_runtime.contracts import RunContext, RunOptions
+from app.task_runtime.logging import log_message
 
 TASK_ID = "library.normalize_personalities"
 SCHEMA_VERSION = "person-outcomes-v2"
-_RESPONSE_LOG_MAX_CHARS = 8_000
 
 
 def _checkpoint_attempts(checkpoint: dict[str, Any] | None) -> dict[str, Any]:
@@ -76,11 +74,11 @@ def _excluded_models(attempts: dict[str, Any]) -> set[str]:
 def format_personality_response_for_log(response: Any) -> str:
     """Render one bounded model response for the task log."""
     raw = str(response or "")
-    if len(raw) > _RESPONSE_LOG_MAX_CHARS:
+    if len(raw) > config_integer("gemini", "request", "response_log_max_chars"):
         return json.dumps(
             {
                 "response_truncated": True,
-                "invalid_response": raw[:_RESPONSE_LOG_MAX_CHARS],
+                "invalid_response": raw[:config_integer("gemini", "request", "response_log_max_chars")],
             },
             ensure_ascii=False,
             indent=2,
@@ -194,7 +192,7 @@ def run_personality_normalization(
         eligible = eligible[:limit]
     queue = _WorkQueue(eligible, should_stop)
     # Each new run starts with fresh pacing.
-    pacing_policy = GeminiPacingPolicy(f"{TASK_ID}:{run_id if run_id is not None else uuid.uuid4().hex}")
+    pacing_policy = GeminiPacingPolicy.from_config(f"{TASK_ID}:{run_id if run_id is not None else uuid.uuid4().hex}")
 
     def publish(*, force: bool = False) -> None:
         if run_id is not None or progress_sink is not None:
@@ -222,7 +220,7 @@ def run_personality_normalization(
             log_message(f"library personalities: model attempt raw_name={candidate.raw_name} model={model_name}")
             raw = request_json(api_key=api_key, model_name=model_name,
                                contents=[build_personality_normalization_prompt(model_input, document_languages=candidate.document_languages)],
-                               response_schema=PersonalityResponse, timeout_seconds=60)
+                               response_schema=PersonalityResponse, timeout_seconds=config_integer("gemini", "request", "personality_timeout_seconds"))
             log_message(f"library personalities: model response raw_name={candidate.raw_name} model={model_name}\n"
                                   + format_personality_response_for_log(raw))
             return raw

@@ -1,12 +1,11 @@
 """Explicit CLI orchestration for publication metadata extraction/evaluation."""
 
-from collections import Counter
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 
 from boto3 import Session
-from botocore.config import Config
 
 from app.artifacts import workspace_dir
 from app.catalog.contracts import CatalogConflict
@@ -14,41 +13,60 @@ from app.catalog.metadata_processing import MetadataProcessingStore
 from app.document_storage import load_document_storage_settings, prune_document_cache
 from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_model_pool import (
-    GeminiModelPoolExhaustedError, GeminiModelPoolItemRejectedError,
-    GeminiModelPoolOperationalError, GeminiModelPoolUnavailableError, run_ordered_model_pool,
+    GeminiModelPoolExhaustedError,
+    GeminiModelPoolItemRejectedError,
+    GeminiModelPoolOperationalError,
+    GeminiModelPoolUnavailableError,
+    run_ordered_model_pool,
 )
 from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
 from app.local_state import AIItemCheckpointStore
-from app.modules.library.corrupt_document import CorruptDocumentError, build_corrupt_cleanup_plan
-from app.modules.library.metadata_contract import CONTRACT_VERSION, metadata_contract_issues
-from app.modules.library.metadata_extraction import (
-    ExtractedMetadata, MetadataExtractionCandidate, PROMPT_VERSION,
-    metadata_quality_issue, parse_metadata_response, prepare_metadata_request,
+from app.modules.library.corrupt_document import (
+    CorruptDocumentError,
+    build_corrupt_cleanup_plan,
 )
-from app.modules.library.runtime.metadata.evaluation_evidence import prepare_evaluation_request
-from app.modules.library.runtime.metadata.evaluation_response import _parse_evaluation_response, _schema_after_evaluation
-from app.modules.library.runtime.metadata.evaluation_types import Evaluation, EvaluationTask
+from app.modules.library.metadata_contract import (
+    CONTRACT_VERSION,
+    metadata_contract_issues,
+)
+from app.modules.library.metadata_extraction import (
+    PROMPT_VERSION,
+    ExtractedMetadata,
+    MetadataExtractionCandidate,
+    metadata_quality_issue,
+    parse_metadata_response,
+    prepare_metadata_request,
+)
+from app.modules.library.runtime.metadata.evaluation_evidence import (
+    prepare_evaluation_request,
+)
+from app.modules.library.runtime.metadata.evaluation_response import (
+    _parse_evaluation_response,
+    _schema_after_evaluation,
+)
+from app.modules.library.runtime.metadata.evaluation_types import (
+    Evaluation,
+    EvaluationTask,
+)
 from app.operational_state import OperationalStateStore
 from app.postgres_engine import get_postgres_engine, is_transient_postgres_error
 from app.repositories.document_cleanup import DocumentCleanupRepository
-from app.runtime_config import load_runtime_config
+from app.runtime_config import (
+    config_integer,
+    load_runtime_config,
+    required_integer,
+)
+from app.s3_transfer import s3_client_config
 from app.task_runtime.logging import redact
-
 
 EVALUATION_PROMPT_VERSION = 'prompt.v4'
 FLOWS = {'extract': 'library.metadata_extract.catalog.v1', 'evaluate': 'library.metadata_evaluate.catalog.v1'}
-DEFAULT_OPERATIONAL_RETRY_COOLDOWN_SECONDS = 21_600
 
 
 def _cooldown(config):
-    gemini = config.get('gemini', {})
-    if not isinstance(gemini, dict):
-        raise ValueError('gemini config must be an object')
-    value = gemini.get('metadata_extraction_operational_retry_cooldown_seconds', DEFAULT_OPERATIONAL_RETRY_COOLDOWN_SECONDS)
-    if isinstance(value, bool) or not isinstance(value, int) or not 60 <= value <= 604_800:
-        raise ValueError('gemini.metadata_extraction_operational_retry_cooldown_seconds must be an integer between 60 and 604800')
-    return value
+    return required_integer(config, 'gemini', 'metadata_extraction_operational_retry_cooldown_seconds',
+                            minimum=60, maximum=604_800)
 
 
 def _needs_extraction(schema):
@@ -149,8 +167,7 @@ class Processor:
         return Session().client('s3', endpoint_url=primary.endpoint_url,
             region_name=primary.region_name,
             aws_access_key_id=primary.access_key_id, aws_secret_access_key=primary.secret_access_key,
-            config=Config(signature_version='s3v4', connect_timeout=10, read_timeout=30,
-                          retries={'mode': 'standard', 'total_max_attempts': 2}, s3={'addressing_style': 'path'}))
+            config=s3_client_config("metadata"))
 
     def _prepare(self, candidate, source, primary_s3):
         if self.mode == 'extract':
@@ -241,7 +258,7 @@ class Processor:
                 self.log(f'Gemini request publication_id={publication["publication_id"]} md5={source["md5"]} model={model}')
                 self.progress.attempt(model)
                 return generate_structured_json(api_key=api_key, model_name=model, contents=prompt,
-                    response_schema=response_schema, files=files, timeout_seconds=180)
+                    response_schema=response_schema, files=files, timeout_seconds=config_integer("gemini", "request", "metadata_timeout_seconds"))
 
             def failure(model_name, kind, error):
                 self.checkpoints.record_failure(**self._checkpoint_args(source), model_name=model_name,

@@ -16,7 +16,7 @@ python3 -m venv .venv
 .venv/bin/python -m app
 ```
 
-Copy the masked structure of `config.example.yaml` to a gitignored `config.local.yaml` or `config.yaml`. Runtime configuration resolves `MANZARA_CONFIG_PATH`, then local configuration; never load the example at runtime.
+Copy the masked structure of `config.example.yaml` to gitignored `config.yaml` and replace masked values. `MANZARA_CONFIG_PATH` can select another explicit YAML file. Every operational setting comes from that file; missing settings fail and environment variables do not override values. Never load the example at runtime. [Runtime configuration](docs/operations.md#runtime-configuration) covers policy fields and workflow provisioning.
 
 Optional `--limit N` and `--task TASK_ID` select next-run settings and the initial interactive task. Launching never starts a task automatically. Interactive execution requires a terminal; `--help` works without configuration. Backblaze upload is available only through its [GitHub workflow](docs/operations.md#backblaze-document-transfer).
 
@@ -63,15 +63,7 @@ Reopening preserves compatible completed decisions and resumes eligible work. On
 
 CLI and maintenance startup initialize local SQLite and recover interrupted local runs. Python task registrations own task titles, grouping, inventory requirements, and handlers. Older local runtime databases are recreated once for schema version 8 under the owner-approved [fresh-state policy](docs/operations.md#local-runtime-state). They do **not** apply PostgreSQL migrations. All interactive tasks, daily maintenance, and Backblaze transfer check the catalog read-only before processing; incompatible schemas must be migrated separately.
 
-| Setting | Purpose / default |
-| --- | --- |
-| `MANZARA_DATABASE_URL` | Durable PostgreSQL URL; may also come from local YAML |
-| `MANZARA_DB_SCHEMA` | Domain schema; `monocorpus` |
-| `MANZARA_ALEMBIC_VERSION_SCHEMA` | Migration version-table schema; defaults to the domain schema |
-| `MANZARA_CONFIG_PATH` | Explicit configuration path |
-| `MANZARA_DB_POOL_SIZE` | Shared CLI PostgreSQL pool bound; default 4 |
-| `MANZARA_ARTIFACTS_ROOT` | Artifact root; `~/.manzara` |
-| `MANZARA_LOCAL_STATE_PATH` | Disposable SQLite runtime; `~/.manzara/state/runtime.sqlite3` |
+Operational settings, including database schema/pool, paths, Gemini retry/pacing, conversion deadlines, previews, and integration targets, are explicit in [config.example.yaml](config.example.yaml). `MANZARA_CONFIG_PATH` selects the file; it supplies no setting values. Task selection, cohort limits, and explicit retry flags remain per-run controls.
 
 Every enabled task shares the process's bounded PostgreSQL engine. Task definitions are code-owned. Runs, Gemini coordination, and AI retry exclusions remain in local SQLite; domain data and safety-critical checkpoints remain in PostgreSQL.
 
