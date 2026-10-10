@@ -22,7 +22,7 @@ Execution requires a terminal; `--help` needs no configuration. `--task TASK_ID`
 | `library.site_export` | [Static export](app/modules/library/guidance/site-export.md); complete inventory |
 | `library.suggest_publisher_merges` | [Publisher proposals](app/modules/library/guidance/publisher-merges.md); complete inventory, subscription-authenticated Codex |
 | `library.collection_detect` | [Collection proposals](app/modules/library/guidance/collections.md); complete inventory, deterministic |
-| `library.metadata_extract` | [Metadata](app/modules/library/guidance/metadata.md); limit counts publications |
+| `library.metadata_extract` | [Metadata](app/modules/library/guidance/metadata.md); missing metadata only, one SQL query per batch of up to 200 publications; limit counts publications |
 | `maintenance.monocorpus_meta_evaluate` | [Metadata](app/modules/library/guidance/metadata.md); limit counts publications |
 
 Complete-inventory tasks reject candidate limits. Publisher and collection tasks generate proposals; review/apply commands are unavailable.

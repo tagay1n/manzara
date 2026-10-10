@@ -32,6 +32,11 @@ def status(run: dict) -> str:
 def progress_text(run: dict, width: int) -> str:
     progress = run.get("progress") or {}
     if progress.get("phase") == "discovering":
+        scanned = progress.get("scanned")
+        eligible = progress.get("eligible")
+        if type(scanned) is int and scanned >= 0 and type(eligible) is int and eligible >= 0:
+            return (f"discovering · {scanned} checked · {eligible} eligible" if width >= 70
+                    else f"discovering · {scanned}")
         return "discovering candidates"
     total = progress.get("total")
     current = progress.get("current", 0) if run.get("task_id") == "library.extract_non_pdf" else progress.get("resolved", progress.get("current", 0))

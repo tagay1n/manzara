@@ -10,25 +10,22 @@ import json
 import re
 from contextlib import contextmanager
 from copy import deepcopy
+from pathlib import Path
 
 from sqlalchemy import func, inspect, select, text
 
-from app.catalog.contracts import CatalogConflict, boolean
+from app.catalog.contracts import CatalogConflict, boolean, integer
 from app.catalog.metadata import compose_metadata, decompose_metadata
 from app.catalog.metadata_store import unmanaged_subjects
 from app.catalog.repository import CatalogRepository
 from app.catalog.schema_org import is_english_facet, metadata_contract_issues
 
-SOURCES = """
- SELECT d.*, s.locator AS document_url, s.size AS primary_storage_size,
-        s.revision AS primary_revision, y.source_path,
-        y.revision AS source_revision, c.locator AS content_url,
-        c.revision AS content_revision, u.payload_json AS upstream_metadata
+SOURCE_FROM = """
  FROM catalog_documents d
  JOIN catalog_locations s ON s.md5=d.md5 AND s.provider='s3' AND s.purpose='primary'
- LEFT JOIN catalog_locations y ON y.md5=d.md5 AND y.provider='yandex' AND y.purpose='source'
  LEFT JOIN catalog_locations c ON c.md5=d.md5 AND c.provider='s3' AND c.purpose='content'
- LEFT JOIN library_upstream_metadata u ON u.md5=d.md5
+"""
+SOURCE_WHERE = """
  WHERE d.complete IS TRUE AND d.restricted IS FALSE
    AND NULLIF(BTRIM(s.locator),'') IS NOT NULL
    AND s.size IS NOT NULL AND s.verified_at IS NOT NULL
@@ -37,6 +34,32 @@ SOURCES = """
    AND NOT EXISTS (SELECT 1 FROM document_cleanup_queue q
        WHERE q.md5=d.md5 AND q.scope='document' AND q.status IN ('planned','running','failed'))
 """
+SOURCES = """
+ SELECT d.*, s.locator AS document_url, s.size AS primary_storage_size,
+        s.revision AS primary_revision, y.source_path,
+        y.revision AS source_revision, c.locator AS content_url,
+        c.revision AS content_revision, u.payload_json AS upstream_metadata
+""" + SOURCE_FROM + """
+ LEFT JOIN catalog_locations y ON y.md5=d.md5 AND y.provider='yandex' AND y.purpose='source'
+ LEFT JOIN library_upstream_metadata u ON u.md5=d.md5
+""" + SOURCE_WHERE
+METADATA_TASK_ACTORS = ('library.metadata_extract', 'maintenance.monocorpus_meta_evaluate')
+EXTRACTION_PUBLICATIONS = """
+ SELECT p.* FROM catalog_publications p
+ WHERE p.merged_into_id IS NULL AND p.metadata_present IS FALSE
+   AND p.publication_id > :after_id
+   AND EXISTS (SELECT 1
+""" + SOURCE_FROM + SOURCE_WHERE + """
+       AND d.publication_id=p.publication_id)
+   AND NOT EXISTS (
+       SELECT 1 FROM catalog_proposals q WHERE q.publication_id=p.publication_id
+       AND q.kind='metadata' AND q.status IN ('pending','deferred')
+       AND q.evidence->>'actor'=ANY(:actors))
+ ORDER BY p.publication_id LIMIT :batch_size
+"""
+EXTRACTION_BATCH_SIZE = 200
+EXTRACTION_BATCH_QUERY = (Path(__file__).with_name('metadata_extraction.sql').read_text(encoding='utf-8')
+    .replace('{{publications}}', EXTRACTION_PUBLICATIONS).replace('{{sources}}', SOURCES))
 SOURCE_FIELDS = (
     'md5', 'publication_id', 'revision', 'mime_type', 'selected',
     'primary_revision', 'source_revision', 'content_revision', 'document_url',
@@ -49,6 +72,17 @@ def checkpoint_identity(publication, source):
                'schema_org': source['schema_org'], **{key: source[key] for key in SOURCE_FIELDS}}
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     return f"{publication['publication_id']}:{digest}"
+
+
+def _compose_schema(record, path=None):
+    if path is not None:
+        record['subjects'] = unmanaged_subjects(record['subjects']) + [
+            {'@type': 'DefinedTerm', 'termCode': value,
+             'inDefinedTermSet': {'@type': 'DefinedTermSet', 'name': termset}}
+            for termset, value in (('DDC', path['ddc']), ('CategoryPath', ' > '.join(path['path_en'])))
+        ]
+    # Automation reads observed spellings, not an inferred canonical identity.
+    return compose_metadata(record)
 
 
 class MetadataProcessingStore:
@@ -96,17 +130,37 @@ class MetadataProcessingStore:
         publication = self.catalog.table('publications')
         classification = conn.execute(select(publication.c.classification_id).where(
             publication.c.publication_id == source['publication_id'])).scalar_one()
+        path = None
         if classification is not None:
             table = self.catalog.table('classifications')
             node = conn.execute(select(table.c.node_id).where(table.c.classification_id == classification)).scalar_one()
             path = conn.execute(text('SELECT catalog_path(:node)'), {'node': node}).scalar_one()
-            record['subjects'] = unmanaged_subjects(record['subjects']) + [
-                {'@type': 'DefinedTerm', 'termCode': value,
-                 'inDefinedTermSet': {'@type': 'DefinedTermSet', 'name': termset}}
-                for termset, value in (('DDC', path['ddc']), ('CategoryPath', ' > '.join(path['path_en'])))
-            ]
-        # Automation reads observed spellings, not an inferred canonical identity.
-        return compose_metadata(record)
+        return _compose_schema(record, path)
+
+    def extraction_batch(self, should_stop, *, after_id=0, batch_size=EXTRACTION_BATCH_SIZE):
+        """Fetch a bounded candidate/source/metadata envelope in one PostgreSQL statement."""
+        integer(after_id, 'after_id', minimum=0)
+        integer(batch_size, 'batch_size')
+        if batch_size > EXTRACTION_BATCH_SIZE:
+            raise ValueError(f'batch_size must not exceed {EXTRACTION_BATCH_SIZE}')
+        if should_stop():
+            raise InterruptedError('Metadata discovery stopped')
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(EXTRACTION_BATCH_QUERY), {
+                'after_id': after_id, 'batch_size': batch_size, 'actors': list(METADATA_TASK_ACTORS),
+            }).mappings().all()
+        publications = []
+        for row in rows:
+            if should_stop():
+                raise InterruptedError('Metadata discovery stopped')
+            publication = dict(row)
+            for source in publication['sources']:
+                record = source.pop('metadata_record')
+                source['schema_org'] = _compose_schema(record, source.pop('classification_path'))
+                source['checkpoint_id'] = checkpoint_identity(publication, source)
+            publication['schema_org'] = publication['sources'][0]['schema_org']
+            publications.append(publication)
+        return publications
 
     def inventory(self, should_stop):
         publications = self.catalog.table('publications')
@@ -146,8 +200,7 @@ class MetadataProcessingStore:
             proposals = self.catalog.table('proposals')
             for row in conn.execute(select(proposals).where(proposals.c.kind == 'metadata',
                     proposals.c.status.in_(('pending', 'deferred')))).mappings():
-                if row['publication_id'] in by_id and row['evidence'].get('actor') in {
-                        'library.metadata_extract', 'maintenance.monocorpus_meta_evaluate'}:
+                if row['publication_id'] in by_id and row['evidence'].get('actor') in METADATA_TASK_ACTORS:
                     by_id[row['publication_id']]['awaiting_review'] = True
             return list(by_id.values())
 
@@ -209,9 +262,11 @@ class MetadataProcessingStore:
         incoming = decompose_metadata(deepcopy(schema_org))
         incoming['subjects'] = unmanaged_subjects(incoming['subjects'])
         with self.mutation(publication, source, taxonomy=evaluation is not None) as (conn, current):
+            if evaluation is None and current['metadata_present']:
+                raise CatalogConflict('Publication already has metadata; extraction only fills missing metadata')
             before_proposals = self._proposal_ids(conn, publication['publication_id'])
             if evaluation is None:
-                # An earlier automatically derived decision no longer describes repaired evidence.
+                # An earlier automatically derived decision no longer describes the new metadata.
                 if current['evaluation_method'] is not None:
                     self._decision(conn, current, source, {'inclusion': 'pending', 'classification_id': None,
                         'evaluation_method': None}, actor)

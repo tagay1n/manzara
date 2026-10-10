@@ -11,7 +11,7 @@ Paths are relative to the repo root; all implementation rows below live in `app/
 | Non-PDF orchestration / detection / checkpoints | `non_pdf_extraction.py`, `non_pdf_formats.py`, `non_pdf_types.py`, `non_pdf_repository.py`; durable catalog commands: `app/catalog/non_pdf.py`; [document rules](documents.md) |
 | Converters and rendering | Matching `non_pdf_*.py`; Google fallbacks: `google_doc_conversion.py`, `google_presentation_conversion.py`; shared Drive lifecycle: `google_drive_conversion.py` |
 | Source storage / previews | `app/catalog/book_previews.py`, `app/catalog/previews.py`, `runtime/run_generate_book_previews.py`, `app/document_storage.py`, `preview_generation.py`, `preview_detection.py`, `catalog_preview_worker.py` |
-| Metadata extraction and contract | `runtime/run_metadata_processing.py`, `app/catalog/metadata_processing.py`, `app/catalog/metadata_store.py`, `metadata_extraction.py`, `metadata_prompt.py`, `metadata_contract.py`, `djvu_slicing.py`; [rules](metadata.md) |
+| Metadata extraction and contract | `runtime/run_metadata_processing.py`, `app/catalog/metadata_processing.py`, `app/catalog/metadata_extraction.sql`, `app/catalog/metadata_store.py`, `metadata_extraction.py`, `metadata_prompt.py`, `metadata_contract.py`, `djvu_slicing.py`; [rules](metadata.md) |
 | Metadata evaluation | [focused owner lookup](evaluation-navigation.md) |
 | Collections | `collection_detection.py`, `runtime/run_collection_detect.py`; catalog: `app/catalog/collection_discovery.py`; [rules](collections.md) |
 | Static publishing export | `site_export.py`, `site_export_repository.py`, `runtime/run_site_export.py`; [contract](site-export.md) |

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.artifacts import workspace_dir
 from app.catalog.contracts import CatalogConflict
-from app.catalog.metadata_processing import MetadataProcessingStore
+from app.catalog.metadata_processing import EXTRACTION_BATCH_SIZE, MetadataProcessingStore
 from app.document_storage import load_document_storage_settings, prune_document_cache
 from app.gemini_config import load_required_gemini_model_pool
 from app.gemini_model_pool import (
@@ -269,6 +269,10 @@ class Processor:
                     schema = _schema_after_evaluation(source['schema_org'], result.value)
                     evaluation = {'applicable': result.value.applicable, 'reason': result.value.reason,
                                   'ddc': result.value.library_ddc, 'path': result.value.library_path}
+                if self.mode == 'extract':
+                    self.log(f'Extracted metadata publication_id={publication["publication_id"]} '
+                             f'md5={source["md5"]} model={result.model_name}\n'
+                             + json.dumps(schema, ensure_ascii=False, indent=2))
                 proposals = self.store.save(publication, source, schema, actor=self.context.task_id,
                     method=f'{result.model_name}/{self.version}', evaluation=evaluation)
                 for prior in publication['sources']:
@@ -310,6 +314,89 @@ class Processor:
         self.finish(publication, 'terminal' if terminal == len(publication['sources']) and terminal else 'source_deferred', error=last_error)
 
 
+def _retry_eligible(publication, *, mode, checkpoints, version, models):
+    if not publication['sources']:
+        return True
+    states = checkpoints.get_many(FLOWS[mode], [source['checkpoint_id'] for source in publication['sources']])
+    return any(_can_retry(states.get(source['checkpoint_id']), version=version, models=models)
+               for source in publication['sources'])
+
+
+def _evaluation_candidates(context, inventory, *, config, checkpoints, quality, version, models):
+    languages = set(config['sup_langs']['tt']['codes'])
+    candidates = []
+    skipped = Counter()
+    for publication in inventory:
+        if context.should_stop():
+            raise InterruptedError('Metadata discovery stopped')
+        if publication.get('awaiting_review'):
+            skipped['awaiting_review'] += 1
+            continue
+        if not languages.intersection(publication.get('languages', [])):
+            continue
+        if publication['inclusion'] != 'pending' and ((publication['inclusion'] == 'included') == (publication['classification_id'] is not None)):
+            skipped['already_complete'] += 1
+            continue
+        schema = publication.get('schema_org', {})
+        invalid = not publication['metadata_present'] or _needs_extraction(schema)
+        if schema:
+            fingerprint = hashlib.sha256(json.dumps({'schema_org': schema, 'metadata_present': publication['metadata_present']},
+                                                     sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            cache = quality.get('library.metadata_quality.catalog.v1', publication['publication_id'])
+            if not cache or cache.get('input_hash') != fingerprint or cache.get('contract_version') != CONTRACT_VERSION:
+                quality.put('library.metadata_quality.catalog.v1', publication['publication_id'], {
+                    'contract_version': CONTRACT_VERSION, 'input_hash': fingerprint,
+                    'status': 'invalid' if invalid else 'resolved',
+                    'issues': metadata_contract_issues(schema), 'quality_issue': metadata_quality_issue(schema)})
+        if invalid:
+            skipped['unusable_metadata' if publication['metadata_present'] else 'needs_extraction'] += 1
+            continue
+        if not _retry_eligible(publication, mode='evaluate', checkpoints=checkpoints, version=version, models=models):
+            skipped['retry_excluded'] += 1
+            continue
+        candidates.append(publication)
+        if context.options.limit is not None and len(candidates) >= context.options.limit:
+            break
+    return candidates, skipped
+
+
+def _process_extraction_batches(processor, skipped, discovery):
+    after_id = 0
+    limit = processor.context.options.limit
+    while not processor.stopped():
+        remaining = limit - processor.progress.total if limit is not None else EXTRACTION_BATCH_SIZE
+        if remaining <= 0:
+            return
+        processor.context.progress({'phase': 'discovering', 'scanned': discovery['scanned'],
+            'eligible': processor.progress.total, 'current': processor.progress.current,
+            'total': processor.progress.total}, force=True)
+        batch = processor.store.extraction_batch(processor.stopped, after_id=after_id,
+            batch_size=min(remaining, EXTRACTION_BATCH_SIZE))
+        if not batch:
+            discovery['inventory_exhausted'] = True
+            processor.log('Metadata extraction: no further candidates returned; finishing run')
+            return
+        # Advance even when every item is deferred locally, so a run cannot cycle on one batch.
+        after_id = batch[-1]['publication_id']
+        discovery['scanned'] += len(batch)
+        candidates = []
+        for publication in batch:
+            if processor.stopped():
+                return
+            if not _retry_eligible(publication, mode='extract', checkpoints=processor.checkpoints,
+                                  version=processor.version, models=processor.models):
+                skipped['retry_excluded'] += 1
+                continue
+            candidates.append(publication)
+        processor.progress.total += len(candidates)
+        processor.log(f'Metadata batch: fetched={len(batch)} eligible={len(candidates)} scanned={discovery["scanned"]}')
+        processor.progress.publish(force=True)
+        for publication in candidates:
+            if processor.stopped():
+                return
+            processor.process(publication)
+
+
 def execute(context, *, mode):
     if context.options.per_mime_limit is not None or context.options.only_md5s or context.options.retry_known_failures:
         raise ValueError('Metadata tasks support a publication limit; clear MIME/source/retry options')
@@ -325,67 +412,38 @@ def execute(context, *, mode):
     version = PROMPT_VERSION if mode == 'extract' else EVALUATION_PROMPT_VERSION
     storage = load_document_storage_settings(config)
     checkpoints = AIItemCheckpointStore(context.db.local_state_path)
-    quality = OperationalStateStore(context.db.local_state_path)
-    context.log('Metadata processing: reading publication inventory')
-    try:
-        inventory = store.inventory(context.should_stop)
-    except InterruptedError:
-        return {**summary, 'outcome': 'stopped', 'stopped': True}
-    languages = set(config['sup_langs']['tt']['codes']) if mode == 'evaluate' else set()
-    candidates = []
     skipped = Counter()
-    for publication in inventory:
-        if context.should_stop():
+    discovery = {'scanned': 0, 'inventory_exhausted': False}
+    candidates = []
+    if mode == 'evaluate':
+        context.log('Metadata processing: reading publication inventory')
+        try:
+            candidates, skipped = _evaluation_candidates(context, store.inventory(context.should_stop),
+                config=config, checkpoints=checkpoints, quality=OperationalStateStore(context.db.local_state_path),
+                version=version, models=models)
+        except InterruptedError:
             return {**summary, 'outcome': 'stopped', 'stopped': True}
-        if publication.get('awaiting_review'):
-            skipped['awaiting_review'] += 1
-            continue
-        if mode == 'evaluate':
-            if not languages.intersection(publication.get('languages', [])):
-                continue
-            if publication['inclusion'] != 'pending' and ((publication['inclusion'] == 'included') == (publication['classification_id'] is not None)):
-                skipped['already_complete'] += 1
-                continue
-        schema = publication.get('schema_org', {})
-        invalid = not publication['metadata_present'] or _needs_extraction(schema)
-        if schema:
-            fingerprint = hashlib.sha256(json.dumps({'schema_org': schema, 'metadata_present': publication['metadata_present']},
-                                                     sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-            cache = quality.get('library.metadata_quality.catalog.v1', publication['publication_id'])
-            if not cache or cache.get('input_hash') != fingerprint or cache.get('contract_version') != CONTRACT_VERSION:
-                quality.put('library.metadata_quality.catalog.v1', publication['publication_id'], {
-                'contract_version': CONTRACT_VERSION, 'input_hash': fingerprint,
-                'status': 'invalid' if invalid else 'resolved',
-                'issues': metadata_contract_issues(schema), 'quality_issue': metadata_quality_issue(schema)})
-        if mode == 'extract' and not invalid:
-            skipped['already_complete'] += 1
-            continue
-        if mode == 'evaluate' and invalid:
-            skipped['needs_extraction'] += 1
-            continue
-        if publication['sources']:
-            states = checkpoints.get_many(FLOWS[mode], [source['checkpoint_id'] for source in publication['sources']])
-            if not any(_can_retry(states.get(source['checkpoint_id']), version=version, models=models) for source in publication['sources']):
-                skipped['retry_excluded'] += 1
-                continue
-        candidates.append(publication)
-        if context.options.limit is not None and len(candidates) >= context.options.limit:
-            break
     progress = Progress(context, len(candidates))
-    progress.publish()
     known = store.known_classifications() if mode == 'evaluate' and candidates else []
     prune_document_cache(storage.cache_path, max_bytes=storage.cache_max_bytes)
     processor = Processor(context, mode, store, config, storage, models, version, checkpoints, progress, cooldown, known)
-    context.log(f'Metadata processing: mode={mode} publications={len(candidates)}')
     fatal = None
-    for publication in candidates:
-        if processor.stopped():
-            break
-        try:
-            processor.process(publication)
-        except Exception as exc:
+    try:
+        if mode == 'extract':
+            context.log(f'Metadata processing: missing metadata only; fetching batches of up to {EXTRACTION_BATCH_SIZE} publications')
+            _process_extraction_batches(processor, skipped, discovery)
+        else:
+            progress.publish()
+            context.log(f'Metadata processing: mode={mode} publications={len(candidates)}')
+            for publication in candidates:
+                if processor.stopped():
+                    break
+                processor.process(publication)
+    except InterruptedError as exc:
+        if not processor.stopped():
             fatal = exc
-            break
+    except Exception as exc:
+        fatal = exc
     progress.publish(force=True)
     items_path = processor.workspace / 'items.json'
     items_path.write_text(json.dumps(sorted(processor.results, key=lambda row: row['publication_id']),
@@ -393,15 +451,17 @@ def execute(context, *, mode):
     context.artifact({'kind': 'library.metadata_item_results', 'items_path': str(items_path), 'processed': progress.current})
     counters = dict(progress.counters)
     deferred = (any(counters.get(key, 0) for key in ('source_deferred', 'quota_deferred', 'service_deferred', 'review_required', 'terminal'))
-                or bool(skipped['awaiting_review']) or bool(skipped['retry_excluded']) or bool(skipped['needs_extraction']))
+                or bool(skipped['awaiting_review']) or bool(skipped['retry_excluded'])
+                or bool(skipped['needs_extraction']) or bool(skipped['unusable_metadata']))
     outcome = 'failed' if fatal or counters.get('checkpoint_raced') else (
         'stopped' if context.should_stop() else 'deferred' if deferred or processor.global_unavailable else 'completed')
     error = redact(fatal) if fatal else ('Metadata snapshots changed; inspect items and resume with a fresh inventory'
                                        if counters.get('checkpoint_raced') else None)
     return {**summary, 'outcome': outcome, 'stopped': context.should_stop(), 'processed': progress.current,
-            'total': len(candidates), 'eligible': len(candidates),
-            'remaining': max(0, len(candidates) - counters['succeeded'] - counters['review_required'] - counters['terminal']),
-            'already_complete': skipped['already_complete'], 'unprocessed': len(candidates) - progress.current, **counters,
+            'total': progress.total, 'eligible': progress.total,
+            'remaining': max(0, progress.total - counters['succeeded'] - counters['review_required'] - counters['terminal']),
+            'already_complete': skipped['already_complete'], 'unprocessed': progress.total - progress.current, **counters,
             'skipped': dict(skipped), 'model_attempts': dict(progress.attempts), 'model_successes': dict(progress.successes),
             'items_path': str(items_path), 'workspace_path': str(processor.workspace),
+            **(discovery if mode == 'extract' else {}),
             **({'error': error} if error else {})}
