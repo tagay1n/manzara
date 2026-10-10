@@ -11,6 +11,10 @@ from app.catalog.schema_org import (
 )
 
 __all__ = [
-    "ACCESS_MODES", "CONTRACT_VERSION", "SCHEMA_CONTEXT", "SUPPORTED_TYPES",
-    "is_english_facet", "metadata_contract_issues", "reshape_english_contributor_roles",
+    "ACCESS_MODES",
+    "CONTRACT_VERSION",
+    "SUPPORTED_TYPES",
+    "is_english_facet",
+    "metadata_contract_issues",
+    "reshape_english_contributor_roles",
 ]

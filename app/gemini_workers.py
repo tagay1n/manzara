@@ -13,13 +13,6 @@ from app.task_runtime.logging import LOG_SINK
 GEMINI_WORKERS_ENV = "MANZARA_GEMINI_WORKERS"
 GEMINI_WORKERS_DEFAULT = 1
 _WORKER_LOG_LOCK = threading.Lock()
-GEMINI_TASK_IDS = frozenset(
-    {
-        "library.metadata_extract",
-        "maintenance.monocorpus_meta_evaluate",
-        "library.normalize_personalities",
-    }
-)
 
 
 def validate_gemini_workers(value: Any) -> int:
@@ -81,7 +74,6 @@ def emit_gemini_worker_log(
 
 
 __all__ = [
-    "GEMINI_TASK_IDS",
     "GEMINI_WORKERS_DEFAULT",
     "GEMINI_WORKERS_ENV",
     "current_gemini_worker_id",

@@ -90,23 +90,6 @@ class RunRepository:
                 )
 
 
-    def update_run_progress(self, run_id: int, progress: Dict[str, Any]) -> None:
-        """Persist the latest authoritative progress snapshot for a run."""
-        if not isinstance(progress, dict):
-            raise ValueError("progress must be an object")
-        now = utc_now()
-        with self._lock:
-            with self._runtime_connect() as conn:
-                conn.execute(
-                    """
-                    UPDATE runs
-                    SET progress_json = ?, heartbeat_at = ?, updated_at = ?
-                    WHERE run_id = ?
-                    """,
-                    (json.dumps(progress, ensure_ascii=False), now, now, int(run_id)),
-                )
-
-
     def publish_run_progress(
         self,
         *,
@@ -285,21 +268,6 @@ class RunRepository:
         with self._runtime_connect() as conn:
             row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
         return self._row_to_run(row) if row else None
-
-
-    def list_active_runs(self) -> List[Dict[str, Any]]:
-        """Return active runs across all tasks."""
-        with self._runtime_connect() as conn:
-            placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
-            rows = conn.execute(
-                f"""
-                SELECT * FROM runs
-                WHERE status IN ({placeholders})
-                ORDER BY started_at DESC
-                """,
-                ACTIVE_STATUSES,
-            ).fetchall()
-        return [self._row_to_run(row) for row in rows]
 
 
     def get_active_run_for_task(self, task_id: str) -> Optional[Dict[str, Any]]:

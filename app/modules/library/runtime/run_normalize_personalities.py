@@ -1,28 +1,16 @@
 """Normalize exact raw bibliographic people into canonical personality records."""
 
-# ruff: noqa: E402
 from __future__ import annotations
 
-import argparse
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 import json
 import re
-from pathlib import Path
-import sys
 import threading
 import uuid
 from typing import Any, Callable, Sequence
 
-
-def _bootstrap_repo_root() -> None:
-    root = Path(__file__).resolve().parents[4]
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-
-
-_bootstrap_repo_root()
 
 from app.catalog.contracts import CatalogConflict
 from app.gemini_config import load_required_gemini_model_pool
@@ -37,7 +25,7 @@ from app.gemini_model_pool import (
 from app.gemini_requests import generate_structured_json
 from app.gemini_pacing import GeminiPacingPolicy
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
-from app.gemini_workers import current_gemini_worker_id, emit_gemini_worker_log, resolve_gemini_workers
+from app.gemini_workers import current_gemini_worker_id, emit_gemini_worker_log
 from app.task_runtime.contracts import RunContext, RunOptions
 from app.modules.library.personality_normalization import (
     PersonalityResponse,
@@ -62,13 +50,6 @@ _LEGACY_SCHEMA_VERSION = "person-components-v1"
 _LEGACY_PROMPT_VERSION = "personality-components-v8"
 _RESPONSE_LOG_MAX_CHARS = 8_000
 _PREPROCESSING_COMPATIBLE_PROMPT_VERSION = "personality-components-v7"
-
-
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Normalize Library personalities")
-    parser.add_argument("--limit", type=int, default=None, help="Optional candidate cap")
-    parser.add_argument("--workers", type=int, default=None)
-    return parser.parse_args()
 
 
 def _checkpoint_attempts(checkpoint: dict[str, Any] | None) -> dict[str, Any]:
@@ -440,17 +421,3 @@ def execute(context: RunContext) -> dict[str, Any]:
     )
     emit_gemini_worker_log(f"library personalities: final {json.dumps(summary, ensure_ascii=False, sort_keys=True)}", worker_id="coordinator")
     return summary
-
-
-def main() -> None:
-    args = _parse_args()
-    from app.cli import main as cli_main
-
-    arguments = ["--task", TASK_ID, "--workers", str(resolve_gemini_workers(args.workers))]
-    if args.limit is not None:
-        arguments += ["--limit", str(args.limit)]
-    cli_main(arguments)
-
-
-if __name__ == "__main__":
-    main()

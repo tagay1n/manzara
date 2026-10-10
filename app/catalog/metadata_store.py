@@ -5,8 +5,7 @@ import re
 from sqlalchemy import and_, select
 from sqlalchemy.dialects.postgresql import insert
 
-from app.catalog.metadata import SCALARS, compose_metadata, decompose_metadata, items
-from app.catalog.contracts import CatalogConflict, integer, nonblank
+from app.catalog.metadata import SCALARS, items
 
 
 RELATIONAL_FIELDS = {"credits", "identifiers", "genres", "subjects", "audiences", "based_on"}
@@ -29,39 +28,6 @@ def credit_signature(credit):
 
 
 class MetadataStore:
-    def decide_metadata(self, proposal_id, *, revision, publication_revision, decision, actor, document_revision=None):
-        if not isinstance(decision, str) or decision not in {"apply", "reject", "defer"}:
-            raise ValueError("unsupported metadata decision")
-        with self.engine.begin() as conn:
-            proposal = self._record(conn, "proposal", proposal_id, revision=revision)
-            if proposal["kind"] != "metadata" or proposal["status"] not in {"pending", "deferred"}:
-                raise CatalogConflict("proposal is no longer open")
-            publication = self._record(conn, "publication", proposal["publication_id"], revision=publication_revision)
-            if decision == "apply":
-                md5 = proposal["evidence"]["md5"]
-                if proposal["field_changes"].keys() & {"access_modes", "sufficient_modes"}:
-                    self._record(conn, "document", md5, revision=integer(document_revision, "document_revision"))
-                current = self._metadata(conn, md5)
-                if current["publication_id"] != publication["publication_id"]:
-                    raise CatalogConflict("document publication changed; review a new proposal")
-                for field, value in proposal["field_changes"].items():
-                    if field in SCALARS.values():
-                        current["scalars"][field] = value
-                    elif field in RELATIONAL_FIELDS | {"languages", "access_modes", "sufficient_modes", "audience_array"}:
-                        current[field] = value
-                    elif field in {"inclusion", "evaluation_method", "classification_id", "collection_id"}:
-                        continue
-                    else:
-                        raise ValueError("unsupported proposed metadata field")
-                self._apply_metadata(conn, md5, current, compose_metadata(current), actor, False, publication_revision)
-                changes = {field: value for field, value in proposal["field_changes"].items()
-                           if field in {"inclusion", "evaluation_method", "classification_id", "collection_id"}}
-                if changes:
-                    publication = self._record(conn, "publication", publication["publication_id"])
-                    self._protect(conn, "publication", publication["publication_id"], changes, actor)
-                    self._update(conn, "publication", publication["publication_id"], publication, changes, actor)
-            return self._update(conn, "proposal", proposal_id, proposal,
-                {"status": {"apply": "applied", "reject": "rejected", "defer": "deferred"}[decision]}, actor)
 
     def _name(self, conn, kind, raw_name):
         table = self.table("names")
@@ -154,27 +120,6 @@ class MetadataStore:
             "based_on": based_on,
         }
 
-    def metadata(self, md5):
-        with self.engine.begin() as conn:
-            return self._metadata(conn, md5)
-
-    def schema_org(self, md5):
-        with self.engine.begin() as conn:
-            record = self._metadata(conn, md5)
-            for credit in record["credits"]:
-                if credit.get("display_name") is not None:
-                    credit["raw_name"] = credit["display_name"]
-            pub = self._record(conn, "publication", record["publication_id"])
-            if pub["classification_id"] is not None:
-                classifications = self.table("classifications")
-                node_id = conn.execute(select(classifications.c.node_id).where(
-                    classifications.c.classification_id == pub["classification_id"])).scalar_one()
-                path = self._classification_path(conn, node_id)
-                record["subjects"] = unmanaged_subjects(record["subjects"]) + [
-                    {"@type": "DefinedTerm", "termCode": value,
-                     "inDefinedTermSet": {"@type": "DefinedTermSet", "name": termset}}
-                    for termset, value in (("DDC", path["ddc"]), ("CategoryPath", " > ".join(path["path_en"])))]
-            return compose_metadata(record)
 
     def _replace_relations(self, conn, publication_id, fields, record):
         for field in fields:
@@ -239,12 +184,6 @@ class MetadataStore:
                                       min_age=item.get("suggestedMinAge"), max_age=item.get("suggestedMaxAge"))
                     conn.execute(table.insert().values(**values))
 
-    def apply_metadata(self, md5, schema_org, *, actor, automated=False, revision=None, document_revision=None):
-        incoming = decompose_metadata(schema_org)
-        with self.engine.begin() as conn:
-            if document_revision is not None:
-                self._record(conn, "document", md5, revision=document_revision)
-            return self._apply_metadata(conn, md5, incoming, schema_org, actor, automated, revision)
 
     def _apply_metadata(self, conn, md5, incoming, source, actor, automated, revision):
         doc = self._record(conn, "document", md5)
@@ -316,40 +255,3 @@ class MetadataStore:
         after = self._metadata(conn, md5)
         self._audit(conn, "metadata", key, before, after, actor)
         return after
-
-    def evidence(self, md5, *, after_id=0, limit=25):
-        integer(after_id, "after_id", minimum=0)
-        integer(limit, "limit")
-        if limit > 100:
-            raise ValueError("limit must not exceed 100")
-        table = self.table("evidence")
-        with self.engine.begin() as conn:
-            self._record(conn, "document", md5)
-            rows = [dict(row) for row in conn.execute(select(table).where(table.c.md5 == md5,
-                table.c.evidence_id > after_id).order_by(table.c.evidence_id).limit(limit)).mappings()]
-            return {"items": rows, "next_cursor": rows[-1]["evidence_id"] if rows else after_id}
-
-    def set_location(self, md5, *, provider, purpose, actor, **values):
-        nonblank(provider, "provider")
-        nonblank(purpose, "purpose")
-        allowed = {"locator", "source_path", "resource_id", "public_url", "public_key", "size", "etag", "verified_at"}
-        if set(values) - allowed:
-            raise ValueError("unsupported storage location fields")
-        if values.get("size") is not None:
-            integer(values["size"], "size", minimum=0)
-        for field in allowed - {"size", "verified_at"}:
-            if values.get(field) is not None and not isinstance(values[field], str):
-                raise ValueError(f"{field} must be text or null")
-        with self.engine.begin() as conn:
-            doc = self._record(conn, "document", md5)
-            if doc["restricted"] and provider == "yandex":
-                values.update(public_url=None, public_key=None)
-            table = self.table("locations")
-            before = conn.execute(select(table).where(table.c.md5 == md5, table.c.provider == provider, table.c.purpose == purpose).with_for_update()).mappings().first()
-            statement = insert(table).values(md5=md5, provider=provider, purpose=purpose, **values)
-            changes = {**values, "revision": table.c.revision + 1}
-            row = dict(conn.execute(statement.on_conflict_do_update(
-                index_elements=[table.c.md5, table.c.provider, table.c.purpose], set_=changes,
-            ).returning(table)).mappings().one())
-            self._audit(conn, "location", row["location_id"], dict(before) if before else None, row, actor)
-            return row

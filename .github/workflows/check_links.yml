@@ -15,7 +15,13 @@ jobs:
         with:
           python-version: '3.x'
       - name: Install dependencies
-        run: pip install -r .github/links-health-checker/requirements.txt
+        shell: bash
+        run: |
+          mapfile -t packages < <(
+            sed -n -E '/^(mistletoe|beautifulsoup4|requests)==/p' requirements.txt
+          )
+          test "${#packages[@]}" -eq 3
+          python -m pip install "${packages[@]}"
       - name: Call script
         run: python .github/links-health-checker/main.py
       - name: Prepare creds

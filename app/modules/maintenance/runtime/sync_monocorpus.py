@@ -28,7 +28,6 @@ from app.task_runtime.contracts import RunContext
 from app.task_runtime.logging import redact
 
 TASK_ID = 'maintenance.monocorpus_sync'
-PANEL_ID = 'maintenance'
 SYNC_FIELDS = ('mime_type', 'ya_path', 'ya_resource_id', 'ya_public_url', 'ya_public_key',
                'source_size', 'full', 'sharing_restricted')
 

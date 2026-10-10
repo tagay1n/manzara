@@ -30,12 +30,6 @@ class DetectedDocumentFormat:
     verified_mime_type: str | None = None
 
 
-def detect_document_format(path: Path, *, mime_type: str = "", source_path: str = "") -> str:
-    return inspect_document_format(
-        path, mime_type=mime_type, source_path=source_path
-    ).format
-
-
 def inspect_document_format(
     path: Path, *, mime_type: str = "", source_path: str = ""
 ) -> DetectedDocumentFormat:

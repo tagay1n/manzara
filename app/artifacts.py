@@ -94,11 +94,6 @@ def workspace_dir(
     return _area_dir("workspaces", *parts)
 
 
-def durable_dir(*parts: object) -> Path:
-    """Return a directory for user-retained or operational evidence."""
-    return _area_dir("durable", *parts)
-
-
 def durable_path(*parts: object) -> Path:
     """Resolve a durable path without creating its leaf directory."""
     return artifacts_root().joinpath("durable", *_safe_parts(parts))
@@ -126,7 +121,6 @@ def local_state_path() -> Path:
 __all__ = [
     "artifacts_root",
     "cache_dir",
-    "durable_dir",
     "durable_path",
     "private_credentials_dir",
     "task_runs_dir",

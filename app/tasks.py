@@ -10,7 +10,6 @@ from typing import Any, Callable
 
 from app.artifacts import task_runs_dir
 from app.db import Database
-from app.run_log_store import read_run_log
 from app.runtime_states import (
     TASK_RUN_STATUS_COMPLETED,
     TASK_RUN_STATUS_FAILED,
@@ -55,8 +54,6 @@ class TaskRunner:
             ) >= self._max_active_runs:
                 raise ValueError("A foreground run is still active or finalizing; wait for its result")
             descriptor = self.descriptors[task_id]
-            if not descriptor.available:
-                raise ValueError(descriptor.unavailable_reason)
             if descriptor.workers_max is not None and options.workers > descriptor.workers_max:
                 raise ValueError(f"{descriptor.title} supports at most {descriptor.workers_max} worker(s)")
             if descriptor.requires_full_inventory and options.limit is not None:
@@ -272,6 +269,3 @@ class TaskRunner:
                 self.db.heartbeat(run_id)
             except Exception:
                 return
-
-    def get_run_logs(self, *, task_id: str, run_id: int, **options) -> list[dict]:
-        return read_run_log(self._root, task_id, run_id, **options)

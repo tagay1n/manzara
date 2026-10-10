@@ -6,7 +6,7 @@ Owner: tans1q
 
 - Use English with the owner unless another language is explicitly requested. Never use Russian in owner-facing replies, UI copy, artifacts, or summaries without an explicit request.
 - Manzara is a monorepo for Tatar-language content operations. Flows live in `app/modules/<flow>/`; shared backend code lives in `app/`. Flows may import shared core; shared core must not import flow internals. Cross-flow imports go through shared core.
-- The web frontend and HTTP APIs are removed. The inline operations CLI supports personality normalization, non-PDF extraction, book preview generation, static Library export, publisher clustering proposals, collection discovery proposals, metadata extraction/evaluation, and explicit cleanup review commands. Cleanup preparation and Yandex catalog sync run through `scripts/run_daily_maintenance.py` and the daily Actions workflow. Backblaze document transfer is a separate GitHub workflow and is absent from the CLI; the interactive CLI has no remaining disabled tasks. PostgreSQL catalog migration is complete according to the owner. Static inspection does not establish operational readiness.
+- The web frontend and HTTP APIs are removed. The inline operations CLI supports personality normalization, non-PDF extraction, book preview generation, static Library export, publisher clustering proposals, collection discovery proposals, metadata extraction/evaluation, and explicit cleanup review commands. Cleanup preparation and Yandex catalog sync run through `scripts/run_daily_maintenance.py` and the daily Actions workflow. Backblaze document transfer is a separate GitHub workflow and is absent from the CLI; every interactive task requires a Python handler. Repository code is limited to the operations CLI, GitHub workflow dependencies, and the separately invoked Alembic bootstrap. PostgreSQL catalog migration is complete according to the owner. Static inspection does not establish operational readiness.
 - Read [docs/architecture.md](docs/architecture.md) to locate owners, then only matching guidance. Before editing, read the nearest `AGENTS.md`. For `app/gemini_*.py`, also read [docs/gemini-runtime.md](docs/gemini-runtime.md).
 
 ## Invariants
@@ -25,6 +25,6 @@ Owner: tans1q
 - Prefer declarative registries and shared contracts; small functions, shallow nesting, side effects at boundaries.
 - Define shared workflow states once. Preserve retained task/event payload schemas; HTTP/SSE transport has been retired by owner decision.
 - Tasks stop at safe boundaries, resume from persisted checkpoints, surface actionable failures, and keep dedicated structured artifact logs.
-- Structured artifacts require persisted `task.artifact` events, never log parsing. Log reads use bounded cursor pagination.
+- Structured artifacts require persisted `task.artifact` events, never log parsing. Saved log paths remain in run summaries; the CLI has no log-reading API.
 - Deliver small slices, verify runtime/dependency assumptions, and update stale guidance in the same change. Nearest instructions win.
 - Document current contracts, operations, and unresolved work once. Use code for implementation detail and git history for completed handoffs; avoid duplicated setup, frozen test counts, benchmark snapshots, and nonexistent path references.

@@ -6,23 +6,11 @@ import uuid
 
 from sqlalchemy import or_, select
 from sqlalchemy import text
-from sqlalchemy.dialects.postgresql import insert
 
 from app.catalog.contracts import CatalogConflict, CatalogNotFound, integer, nonblank
 
 
 class PreviewStore:
-    def request_preview(self, md5, *, actor, idempotency_key, recipe="webp-v2"):
-        with self.engine.begin() as conn:
-            conn.execute(text("SET TRANSACTION READ WRITE"))
-            doc = self._record(conn, "document", md5)
-            if doc["mime_type"] != "application/pdf":
-                raise ValueError("preview generation currently supports PDF documents")
-            table = self.table("preview_requests")
-            statement = insert(table).values(md5=md5, actor=nonblank(actor, "actor"),
-                idempotency_key=nonblank(idempotency_key, "idempotency_key"), recipe=nonblank(recipe, "recipe"), private=doc["restricted"])
-            conn.execute(statement.on_conflict_do_nothing(index_elements=[table.c.md5, table.c.idempotency_key]))
-            return dict(conn.execute(select(table).where(table.c.md5 == md5, table.c.idempotency_key == idempotency_key)).mappings().one())
 
     def claim_preview(self, worker, *, lease_seconds=300, request_id=None):
         nonblank(worker, "worker")
@@ -112,18 +100,3 @@ class PreviewStore:
             if row is None:
                 raise CatalogConflict("preview claim expired or was replaced")
             return dict(row)
-
-    def preview(self, md5):
-        table, pages = self.table("preview_requests"), self.table("preview_pages")
-        with self.engine.begin() as conn:
-            doc = self._record(conn, "document", md5)
-            row = conn.execute(select(table).where(table.c.md5 == md5, table.c.status == "ready").order_by(table.c.request_id.desc()).limit(1)).mappings().first()
-            if row is None:
-                return None
-            if doc["restricted"] and not row["private"]:
-                return None
-            result = dict(row)
-            result["private"] = bool(row["private"] or doc["restricted"])
-            result["pages"] = [dict(item) for item in conn.execute(select(pages).where(pages.c.request_id == row["request_id"]).order_by(pages.c.page_number)).mappings()]
-            # Private object locators require authenticated delivery by consumers.
-            return result

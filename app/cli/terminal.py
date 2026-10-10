@@ -70,7 +70,6 @@ class Terminal:
         self._stop_pending = False
         self.mode = ""
         self.picker_index = 0
-        self.include_disabled = False
         self.history_rows = []
         self._picker_generation = 0
         self.message = "Initializing local runtime…"
@@ -157,16 +156,15 @@ class Terminal:
     def _picker_items(self):
         if self.mode == "commands":
             query = self.prompt.text.removeprefix("/").lower()
-            return [(command, f"/{command.name}  {command.description}", True)
+            return [(command, f"/{command.name}  {command.description}")
                     for command in COMMANDS if command.name.startswith(query)]
         query = self.search.text.casefold()
         if self.mode == "task":
-            return [(task, f"{task.title} · {task.group}" +
-                     (f" · disabled: {task.unavailable_reason}" if not task.available else ""), task.available)
-                    for task in self.descriptors if (task.available or self.include_disabled)
-                    and query in f"{task.title} {task.task_id} {task.group}".casefold()]
+            return [(task, f"{task.title} · {task.group}")
+                    for task in self.descriptors
+                    if query in f"{task.title} {task.task_id} {task.group}".casefold()]
         if self.mode == "history":
-            return [(run, f"Run {run['run_id']} · {status(run)} · {elapsed(run)} · {run['started_at']}", True)
+            return [(run, f"Run {run['run_id']} · {status(run)} · {elapsed(run)} · {run['started_at']}")
                     for run in self.history_rows
                     if query in f"{run['run_id']} {status(run)} {run['started_at']}".casefold()]
         return []
@@ -185,8 +183,8 @@ class Terminal:
         first = self.picker_index
         rows = []
         for index in range(first, min(len(items), first + 5)):
-            _, label, enabled = items[index]
-            style = "class:selected" if index == self.picker_index else ("" if enabled else "class:disabled")
+            _, label = items[index]
+            style = "class:selected" if index == self.picker_index else ""
             rows.append((style, f"{'›' if index == self.picker_index else ' '} {redact(label)}\n"))
         return rows
 
@@ -310,11 +308,7 @@ class Terminal:
         items = self._picker_items()
         if not items:
             return
-        value, _, enabled = items[min(self.picker_index, len(items) - 1)]
-        if not enabled:
-            self.message = value.unavailable_reason
-            self._spawn(self._say("Disabled · " + value.title + ": " + value.unavailable_reason))
-            return
+        value, _ = items[min(self.picker_index, len(items) - 1)]
         mode = self.mode
         self._dismiss()
         if mode == "commands":
@@ -347,7 +341,7 @@ class Terminal:
         command = COMMAND_BY_NAME.get(parts[0][1:]) if parts[0].startswith("/") else None
         argument = parts[1].strip() if len(parts) > 1 else ""
         if command is None or argument not in command.arguments:
-            await self._say("Use / to choose a command, or /help for guidance. Task selection: /task or /task all.")
+            await self._say("Use / to choose a command, or /help for guidance. Task selection: /task.")
             return
         if not self.ready and command.name not in ("help", "quit"):
             await self._say("Runtime is not ready. See the startup message; /help and /quit are available.")
@@ -357,19 +351,18 @@ class Terminal:
         except Exception as exc:
             await self._say(f"/{command.name} failed: {redact(exc)}")
 
-    async def _select_task(self, argument):
+    async def _select_task(self, _argument):
         if self.locked:
             await self._say("Task selection is locked until the foreground run finishes.")
             return
-        self.include_disabled = argument == "all"
         self.mode = "task"
         self.search.text = ""
         self.picker_index = 0
         self.layout.focus(self.search)
 
     async def _settings(self, _argument):
-        if self.locked or not self.task.available:
-            await self._say("Settings require an idle, runnable task.")
+        if self.locked:
+            await self._say("Settings require an idle task.")
             return
         options = self.options[self.task.task_id]
         self.workers_input.text = str(options.workers)
@@ -407,9 +400,6 @@ class Terminal:
             await self._say("A foreground run is still active or finalizing; wait for its result.")
             return
         task = self.task
-        if not task.available:
-            await self._say(task.unavailable_reason + " Use /task to select a runnable task.")
-            return
         # Claim the slot before any await, including printing or start_task I/O.
         self.foreground = task
         self.starting = True
@@ -723,7 +713,7 @@ class Terminal:
     async def _startup(self):
         try:
             self.descriptors = await asyncio.to_thread(self._initialize)
-            self.descriptors.sort(key=lambda item: (item.group, not item.available, item.title))
+            self.descriptors.sort(key=lambda item: (item.group, item.title))
             if self.task is None:
                 raise ValueError(f"Unknown task ID: {self.arguments.task}")
             for task in self.descriptors:
@@ -745,8 +735,6 @@ class Terminal:
             self.ready = True
             self.message = ""
             await self._say(f"Manzara · {self.task.title} selected. /task to change, /settings to edit, /run to start.")
-            if not self.task.available:
-                await self._say("Selected task disabled: " + self.task.unavailable_reason)
             if self.closing:
                 await asyncio.to_thread(self.runner.request_shutdown)
         except Exception as exc:

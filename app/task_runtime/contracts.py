@@ -64,13 +64,8 @@ class TaskDescriptor:
     title: str
     group: str
     group_id: str
+    execute: Callable[[RunContext], dict[str, Any]] = field(repr=False)
     workers_default: int = 1
     workers_max: int | None = None
     requires_full_inventory: bool = False
     emit_lifecycle_events: bool = True
-    execute: Callable[[RunContext], dict[str, Any]] | None = field(default=None, repr=False)
-    unavailable_reason: str = "Catalog adaptation and CLI execution are pending."
-
-    @property
-    def available(self) -> bool:
-        return self.execute is not None

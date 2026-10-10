@@ -1,6 +1,5 @@
 """Durable personality decisions composed with sole local retry ownership."""
 
-from collections import Counter
 import json
 
 from app.operational_state import OperationalStateStore, merge_personality_checkpoint
@@ -30,34 +29,6 @@ class PersonalityCheckpointRepository:
         return [merge_personality_checkpoint(durable.get(name), local.get(name))
                 for name in sorted(durable.keys() | local.keys())]
 
-    def get_personality_decision_counts(self):
-        return dict(Counter(row["state"] for row in self.list_personality_checkpoints()
-            if row["state"] in {"not_person", "unusable", "failed", "deferred", "retry_requested"}))
-
-    def list_personality_decisions(self, *, state="all", page=1):
-        states = {"not_person", "unusable", "failed", "deferred", "retry_requested"}
-        if state not in states | {"all"}:
-            raise ValueError("unsupported personality decision state")
-        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
-            raise ValueError("page must be a positive integer")
-        rows = [row for row in self.list_personality_checkpoints()
-                if row["state"] in states and (state == "all" or row["state"] == state)]
-        rows.sort(key=lambda row: row["raw_name"])
-        rows.sort(key=lambda row: row["updated_at"], reverse=True)
-        selected = rows[(page - 1) * 40:page * 40 + 1]
-        return {"items": [{**row, "reason": row.get("failure_context")} for row in selected[:40]],
-                "page": page, "page_size": 40, "has_more": len(selected) > 40}
-
-    def retry_personality_decision(self, *, raw_name, updated_at):
-        with self._lock, self._connect() as conn:
-            conn.execute("SET TRANSACTION READ WRITE")
-            row = conn.execute("SELECT * FROM personality_normalization_checkpoints WHERE raw_name=? FOR UPDATE",
-                               (raw_name,)).fetchone()
-            if row is None or row["updated_at"] != updated_at or row["state"] not in {"not_person", "unusable"}:
-                raise ValueError("personality decision conflict; reload and try again")
-            conn.execute("""UPDATE personality_normalization_checkpoints
-                SET state='retry_requested',completed_at=NULL,updated_at=? WHERE raw_name=?""", (utc_now(), raw_name))
-        return {"raw_name": raw_name, "state": "retry_requested"}
 
     def save_personality_checkpoint(self, *, raw_name, source_fingerprint, document_count,
             mention_count, source_roles, prompt_version, schema_version, state,

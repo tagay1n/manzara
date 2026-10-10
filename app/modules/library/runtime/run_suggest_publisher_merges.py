@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import json
-import sys
 import time
 from pathlib import Path
 
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from app.artifacts import workspace_dir
 from app.catalog.contracts import CatalogConflict
@@ -20,8 +17,6 @@ from app.modules.library.publisher_merge_contract import (
 )
 from app.task_runtime.contracts import RunContext
 from app.task_runtime.logging import redact
-
-TASK_ID = "library.suggest_publisher_merges"
 
 
 def _import(catalog, analysis, separations):
@@ -117,53 +112,6 @@ def run_analysis(*, db, catalog, settings, workspace, should_stop, log, progress
         adapter.close()
 
 
-def recover_completed_response(*, db, analysis_id, workspace):
-    """Explicit internal recovery; no CLI review/apply command is exposed."""
-    catalog = db.publisher_catalog()
-    catalog.check()
-    with db.publisher_analysis_lock():
-        analysis = catalog.get_analysis(analysis_id)
-        state = catalog.state(analysis["inventory"])
-        metadata = dict(analysis["metadata"])
-        if metadata.get("prompt_version") != PROMPT_VERSION:
-            raise ValueError("Unsupported saved publisher prompt version")
-        if analysis["state"] == "generating":
-            workspace = Path(workspace)
-            snapshot = json.loads((workspace / "inventory.json").read_text(encoding="utf-8"))
-            if (snapshot.get("inventory") != analysis["inventory"]
-                    or snapshot.get("fingerprint") != analysis["fingerprint"]
-                    or inventory_fingerprint(snapshot["inventory"]) != analysis["fingerprint"]):
-                raise ValueError("Saved publisher inventory does not match the analysis")
-            terminal = None
-            with (workspace / "lifecycle.jsonl").open(encoding="utf-8") as handle:
-                for line in handle:
-                    event = json.loads(line)
-                    if not isinstance(event, dict):
-                        raise ValueError("Saved publisher lifecycle event must be a JSON object")
-                    if event.get("type") in {"turn.completed", "turn.failed", "error"}:
-                        terminal = event
-            diagnostics = json.loads((workspace / "diagnostics.json").read_text(encoding="utf-8"))
-            if (terminal is None or terminal["type"] != "turn.completed"
-                    or type(diagnostics.get("returncode")) is not int or diagnostics["returncode"] != 0
-                    or diagnostics.get("cancelled") is not False
-                    or diagnostics.get("timed_out") is not False or diagnostics.get("stream_error")):
-                raise ValueError("Saved Codex analysis did not complete successfully")
-            payload = json.loads((workspace / "response.json").read_text(encoding="utf-8"))
-            groups = validate_clustering_response(
-                restore_response_ids(payload, analysis["inventory"]), analysis["inventory"],
-                analysis["scope"], state["separations"],
-            )
-            usage = terminal.get("usage")
-            metadata.update(reported_token_usage=usage if isinstance(usage, dict) else None,
-                            recovered_from_workspace=str(workspace))
-            catalog.checkpoint(analysis_id, groups, metadata)
-            analysis = catalog.get_analysis(analysis_id)
-        elif analysis["state"] not in {"checkpointed", "imported"}:
-            raise ValueError("Publisher analysis is not recoverable")
-        groups, imported = _import(catalog, analysis, state["separations"])
-        return summary(groups, analysis["scope"], {**metadata, "analysis_id": analysis_id}, imported, recovered=True)
-
-
 def summary(groups, scope, metadata, imported, **flags):
     counts = {}
     for group in groups:
@@ -226,12 +174,3 @@ def execute(context: RunContext) -> dict:
         error = redact(exc)
         context.log(f"Publisher clustering failed: {error}", level="ERROR")
         return {**details, "outcome": "failed", "error": error}
-
-
-def main():
-    from app.cli import main as cli_main
-    cli_main(["--task", TASK_ID, *sys.argv[1:]])
-
-
-if __name__ == "__main__":
-    main()

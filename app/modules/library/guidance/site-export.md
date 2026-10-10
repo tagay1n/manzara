@@ -2,7 +2,7 @@
 
 The separate public static site is distinct from the removed Manzara web frontend. Its only supported database boundary is `library.site_export`: consume the versioned bundle, never query Manzara tables directly.
 
-Select `library.site_export` in the CLI, or launch `python -m app.modules.library.runtime.run_site_export`, then enter `/run`. Export runs with one worker and requires the complete inventory; candidate limits and source/retry controls are rejected. It reads the normalized catalog after a read-only column/revision preflight and makes no catalog or remote-storage mutations. Only the public endpoint/bucket configuration is needed; storage and Yandex credentials are not used.
+Launch `python -m app --task library.site_export`, then enter `/run`. Export runs with one worker and requires the complete inventory; candidate limits and source/retry controls are rejected. It reads the normalized catalog after a read-only column/revision preflight and makes no catalog or remote-storage mutations. Only the public endpoint/bucket configuration is needed; storage and Yandex credentials are not used.
 
 Logs use the shared terminal/stdout sink without a verbose `.log` file. Export emits no task-specific events or artifact notifications; progress uses the local run row, and the shared runner retains lifecycle events and its final summary. `/summary` includes the bundle path, checksum, revision, published counts and exclusion reasons. Live CLI execution and full bundle publication remain unverified.
 

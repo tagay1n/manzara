@@ -6,7 +6,7 @@ Alembic revision `20261008_0062` is applied in the owner's PostgreSQL catalog. D
 
 The retired physical relations are `document`, `metadata`, `classification`, `normalization_canonicals`, `normalization_aliases`, `library_collections`, and `library_collection_items`. Their names are adapter views over normalized catalog relations. Views store no duplicate domain rows. Legacy upserts use the strict `catalog_upsert` command because views lack unique indexes.
 
-Personality normalization reads normalized names/credits/languages and persists atomic identity hypotheses through `app/catalog/personality_normalization.py`. Backblaze transfer reads normalized document/source/primary snapshots and writes audited primary-location checkpoints through `app/catalog/document_transfer.py`, including repair of incomplete checkpoints. Its live execution remains unverified. Publisher clustering reads normalized entities, names, linked alias reviews, and publisher contributions, retaining the existing alias suppression rule. It writes catalog proposals and versioned response checkpoints without changing identities or credits; review/apply remains deferred. Metadata extraction/evaluation use normalized publication/document snapshots and audited metadata commands; remaining legacy helpers such as `app/modules/library/normalization_queries.py` and `app/modules/library/runtime/models/` still need auditing before reuse. A remaining legacy query is evidence to inspect, not proof that every such query fails.
+Personality normalization reads normalized names/credits/languages and persists atomic identity hypotheses through `app/catalog/personality_normalization.py`. Backblaze transfer reads normalized document/source/primary snapshots and writes audited primary-location checkpoints through `app/catalog/document_transfer.py`, including repair of incomplete checkpoints. Its live execution remains unverified. Publisher clustering reads normalized entities, names, linked alias reviews, and publisher contributions, retaining the existing alias suppression rule. It writes catalog proposals and versioned response checkpoints without changing identities or credits; review/apply remains deferred. Metadata extraction/evaluation use normalized publication/document snapshots and audited metadata commands. Unreachable legacy helpers, ORM models, workbenches, and admin commands are removed; retained workers still require operational verification.
 
 Do not rerun import or retirement to fix backend behavior. Verify the deployed relations, revisions, constraints, and import manifest read-only, then repair one backend operation at a time. Current catalog integration tests are absent; successful migration does not establish worker readiness. Testing follows the explicit-request policy in root instructions.
 
@@ -36,7 +36,7 @@ The current schema omits five retired physical PostgreSQL relations: `library_co
 
 Personality decisions, explicit reviewed retries, accepted identities, and identity conflicts remain durable. Their model exclusions and processing/failure/deferral checkpoints are local. Non-PDF results, unsupported reasons and verified MIME facts remain durable; attempts and errors are local. Cleanup plans/reviews/phases remain durable; counts/run IDs/errors are local. Preview generation intent/leases remain durable; errors are local. There is no ongoing dual write or store fallback.
 
-Fresh bootstrap does not replay the completed storage cutover. Older-schema transfers and recovery use the historical checkout under [operations](operations.md). Retained legacy import renderers refuse this catalog rather than recreate retired owners. Workflow enablement remains subject to the adaptation gap above.
+Fresh bootstrap does not replay the completed storage cutover. Older-schema transfers and recovery use the historical checkout under [operations](operations.md). Legacy import renderers are absent from this checkout. Workflow enablement remains subject to the adaptation gap above.
 
 Publication-based metadata processing and its retry/review boundaries are documented in the Library [metadata contract](../app/modules/library/guidance/metadata.md). Both CLI tasks use terminal-only logging and disable task lifecycle events while retaining local run/progress state and structured result artifacts. Live execution remains unverified.
 
@@ -70,11 +70,11 @@ Read projections `catalog_publication_metadata`, `catalog_document_metadata`, `c
 ## Owners and mutation rules
 
 - Schema: Alembic versions and frozen SQL under `alembic/`; Python table metadata in `app/catalog/schema.py`.
-- Shared domain API: `app/catalog/document_sync.py` for file discovery/deletion, `app/catalog/repository.py`, `contracts.py`, `metadata_store.py`, `identities.py`, `grouping.py`, `previews.py`, and `book_previews.py`.
+- Shared domain API: `app/catalog/document_sync.py` for file discovery/deletion, `app/catalog/repository.py`, `contracts.py`, `metadata_store.py`, `previews.py`, and `book_previews.py`.
 - HTTP operations and the independent catalog admin API are retired. Shared catalog commands remain in `app/catalog/`; the CLI exposes normalization, non-PDF extraction, book previews, static export, publisher proposal generation, collection discovery, metadata extraction/evaluation, cleanup review, and run inspection. Standalone daily maintenance owns cleanup preparation and Yandex Sync, with no remaining disabled interactive tasks.
 - Non-PDF extraction reads unrestricted files and verified primary locations through `app/catalog/non_pdf.py`. MIME corrections and content generations use document/location snapshots, row locks, field protections, and transactional revision audits; retry state remains local. See the Library [extraction contract](../app/modules/library/guidance/documents.md#extraction-and-publication).
-- Mutations check reviewed revisions and write audit records transactionally; stale commands raise `CatalogConflict`. Metadata updates need publication and document revisions. Identity/alias commands verify affected identities and mentions.
-- Admin edits protect fields from later automation. Protected publication changes enter metadata review; file/privacy and collection conflicts fail for explicit resolution. Deleting aliases preserves source names and explicitly resolved mentions.
+- Retained mutations check source and reviewed revisions and write audit records transactionally; stale commands raise `CatalogConflict`. Metadata updates need publication and document revisions.
+- Persisted field protections constrain automation. Protected publication changes enter metadata review; file/privacy and collection conflicts fail for explicit resolution. The CLI exposes no general admin or metadata-proposal review commands.
 
 ## Previews and export
 
@@ -84,6 +84,6 @@ The automatic book-preview CLI task reads normalized publications/documents/loca
 
 ## Recovery tooling
 
-`scripts/catalog_import.py`, `scripts/catalog_manual_*.py`, `app/catalog/importer.py`, and `app/catalog/cutover.py` describe historical import operations, not current bootstrap. Fresh baseline databases omit the migration-only adapter installers those operations used. Use the historical checkout and persisted manifests for an explicitly planned recovery under [operations](operations.md), with a restore-tested backup and writers paused. Never infer committed state from a client response. Preserve saved index definitions and verify restoration before restarting writers.
+Historical import, cutover, and manual catalog tools are absent from this checkout. Fresh baseline databases omit the migration-only adapter installers those operations used. Use the historical checkout and persisted manifests for an explicitly planned recovery under [operations](operations.md), with a restore-tested backup and writers paused. Never infer committed state from a client response. Preserve saved index definitions and verify restoration before restarting writers.
 
 [Backup and recovery](postgres-backup-recovery.md) covers portable dumps and isolated restore drills. Any new persisted-data migration or compatibility choice requires owner agreement.

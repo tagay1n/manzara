@@ -196,11 +196,6 @@ def _record_query_duration(entry: _EngineEntry, context: object) -> None:
         entry.max_query_time_ms = max(entry.max_query_time_ms, elapsed_ms)
 
 
-def record_postgres_query(engine: Engine) -> None:
-    """Compatibility no-op; SQLAlchemy events count every statement."""
-    del engine
-
-
 def get_postgres_engine_metrics(engine: Engine) -> dict[str, int]:
     """Return credential-free lifecycle counters for one shared engine."""
     with _lock:
@@ -238,24 +233,13 @@ def is_transient_postgres_error(exc: BaseException) -> bool:
     return False
 
 
-def dispose_all_postgres_engines() -> None:
-    """Dispose every process-local pool, normally during process shutdown."""
-    with _lock:
-        entries = list(_engines.values())
-        _engines.clear()
-    for entry in entries:
-        entry.engine.dispose()
-
-
 __all__ = [
     "DEFAULT_POSTGRES_POOL_SIZE",
     "MAX_POSTGRES_POOL_SIZE",
     "acquire_postgres_engine",
     "configured_postgres_pool_size",
-    "dispose_all_postgres_engines",
     "get_postgres_engine",
     "get_postgres_engine_metrics",
     "is_transient_postgres_error",
-    "record_postgres_query",
     "release_postgres_engine",
 ]

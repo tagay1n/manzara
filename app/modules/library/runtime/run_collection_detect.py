@@ -2,7 +2,6 @@
 
 from app.catalog.collection_discovery import COLLECTION_DISCOVERY_CONTRACT, CollectionDiscoveryStore
 from app.catalog.repository import CatalogRepository
-from app.modules.library.collection_constants import COLLECTION_DETECT_TASK_ID
 from app.modules.library.collection_detection import (
     build_publication_features, collection_signatures, discover_collections,
 )
@@ -52,14 +51,3 @@ def execute(context: RunContext) -> dict:
     except InterruptedError:
         context.log("Collection discovery stopped; previous proposals retained")
         return {**summary, "outcome": "stopped", "stopped": True}
-
-
-def main() -> None:
-    import sys
-    from app.cli import main as cli_main
-
-    cli_main(["--task", COLLECTION_DETECT_TASK_ID, "--workers", "1", *sys.argv[1:]])
-
-
-if __name__ == "__main__":
-    main()

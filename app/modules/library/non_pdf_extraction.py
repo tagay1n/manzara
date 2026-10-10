@@ -31,7 +31,6 @@ from app.modules.library.non_pdf_converters import (
 from app.modules.library.non_pdf_formats import (
     _SUPPORTED_FORMATS,
     _decode_text,
-    detect_document_format,
     DetectedDocumentFormat,
     inspect_document_format,
     validate_source_archive,
@@ -47,7 +46,6 @@ from app.modules.library.non_pdf_types import (
     EXTRACTOR_VERSION,
     ConverterCommandError,
     ConverterTimeoutError,
-    ExtractedAsset,
     PreparedExtraction,
     DeferredDocumentExtraction,
     UnsupportedDocumentFormat,
@@ -244,7 +242,11 @@ def _prepare_legacy_powerpoint(
         ) from exc
 
 __all__ = [
-    "EXTRACTOR_VERSION", "ExtractedAsset", "PreparedExtraction", "UnsupportedDocumentFormat",
-    "detect_document_format", "prepare_extraction", "render_markdown", "require_converter_binaries",
+    "EXTRACTOR_VERSION",
+    "PreparedExtraction",
+    "UnsupportedDocumentFormat",
+    "prepare_extraction",
+    "render_markdown",
+    "require_converter_binaries",
     "validate_rendered_markdown",
 ]

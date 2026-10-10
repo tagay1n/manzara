@@ -49,9 +49,9 @@ jobs:
         shell: bash
         run: |
           mapfile -t packages < <(
-            sed -n -E '/^(alembic|boto3|cryptography|isbnlib|psycopg2-binary|pyyaml|sqlalchemy)==/p; /^yadisk_client @ /p' requirements.txt
+            sed -n -E '/^(boto3|cryptography|isbnlib|psycopg2-binary|pyyaml|sqlalchemy)==/p; /^yadisk_client @ /p' requirements.txt
           )
-          test "${#packages[@]}" -eq 8
+          test "${#packages[@]}" -eq 7
           python -m pip install "${packages[@]}"
 
       - name: Prepare private maintenance configuration

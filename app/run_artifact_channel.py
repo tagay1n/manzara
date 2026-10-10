@@ -27,14 +27,3 @@ def emit_run_artifact(payload: Dict[str, Any]) -> bool:
     )
     tmp_path.replace(target)
     return True
-
-
-def read_run_artifact(path: Path) -> Dict[str, Any]:
-    """Read one artifact JSON payload from file path."""
-    try:
-        if not path.exists():
-            return {}
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else {}
-    except Exception:
-        return {}

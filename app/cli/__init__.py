@@ -68,7 +68,7 @@ def build_descriptors():
         requires_full_inventory=item.get("requires_full_inventory", False),
         emit_lifecycle_events=item.get("emit_lifecycle_events", True),
         group="Maintenance" if item["task_id"].startswith("maintenance.") else "Library",
-        execute=handlers.get(item["task_id"]),
+        execute=handlers[item["task_id"]],
     ) for item in definitions if item["task_id"] not in scheduled]
 
 

@@ -2,32 +2,21 @@
 
 from __future__ import annotations
 
-import argparse
-import re
 from collections import Counter, defaultdict
 import json
 from pathlib import Path
-import sys
 from typing import Any, Callable, Mapping
 import zipfile
 from uuid import uuid4
 
 
-def _bootstrap_repo_root() -> None:
-    root = Path(__file__).resolve().parents[4]
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+import requests
+from boto3 import Session
+from botocore.config import Config
 
-
-_bootstrap_repo_root()
-
-import requests  # noqa: E402
-from boto3 import Session  # noqa: E402
-from botocore.config import Config  # noqa: E402
-
-from app.artifacts import workspace_dir  # noqa: E402
-from app.db import Database  # noqa: E402
-from app.document_storage import (  # noqa: E402
+from app.artifacts import workspace_dir
+from app.db import Database
+from app.document_storage import (
     DocumentStorageSettings,
     download_cached_primary_document,
     find_valid_cache_file,
@@ -36,14 +25,14 @@ from app.document_storage import (  # noqa: E402
     object_url,
     prune_document_cache,
 )
-from app.modules.library.corrupt_document import (  # noqa: E402
+from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     build_corrupt_cleanup_plan,
 )
-from app.repositories.document_cleanup import (  # noqa: E402
+from app.repositories.document_cleanup import (
     DocumentCleanupRepository,
 )
-from app.modules.library.non_pdf_extraction import (  # noqa: E402
+from app.modules.library.non_pdf_extraction import (
     EXTRACTOR_VERSION,
     PreparedExtraction,
     UnsupportedDocumentFormat,
@@ -52,18 +41,18 @@ from app.modules.library.non_pdf_extraction import (  # noqa: E402
     require_converter_binaries,
     validate_rendered_markdown,
 )
-from app.modules.library.google_doc_conversion import (  # noqa: E402
+from app.modules.library.google_doc_conversion import (
     GoogleDriveDocxConverter,
 )
-from app.modules.library.google_presentation_conversion import (  # noqa: E402
+from app.modules.library.google_presentation_conversion import (
     GoogleDrivePptxConverter,
 )
-from app.modules.library.non_pdf_repository import (  # noqa: E402
+from app.modules.library.non_pdf_repository import (
     MAX_AUTOMATIC_ATTEMPTS,
     NonPdfExtractionRepository,
 )
-from app.modules.library.non_pdf_types import DeferredDocumentExtraction  # noqa: E402
-from app.modules.library.non_pdf_types import (  # noqa: E402
+from app.modules.library.non_pdf_types import DeferredDocumentExtraction
+from app.modules.library.non_pdf_types import (
     POWERPOINT_EXTRACTOR_VERSION,
     SPREADSHEET_EXTRACTOR_VERSION,
     ODT_EXTRACTOR_VERSION,
@@ -71,36 +60,13 @@ from app.modules.library.non_pdf_types import (  # noqa: E402
     HTML_EXTRACTOR_VERSION,
     extractor_version_for_format,
 )
-from app.runtime_config import load_runtime_config  # noqa: E402
-from app.operational_state import OperationalStateStore  # noqa: E402
-from app.task_runtime.contracts import RunContext  # noqa: E402
-from app.catalog.contracts import CatalogConflict  # noqa: E402
+from app.runtime_config import load_runtime_config
+from app.operational_state import OperationalStateStore
+from app.task_runtime.contracts import RunContext
+from app.catalog.contracts import CatalogConflict
 
 
 TASK_ID = "library.extract_non_pdf"
-PANEL_ID = "library"
-
-
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Extract rich non-PDF content")
-    parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--per-mime-limit", type=int, default=None)
-    parser.add_argument(
-        "--only-md5", action="append", type=_md5_arg, default=[], metavar="MD5",
-        help="Restrict this run to the specified source MD5; repeat for a cohort",
-    )
-    parser.add_argument(
-        "--retry-known-failures",
-        action="store_true",
-        help="Explicitly retry deferred and exhausted failures",
-    )
-    return parser.parse_args()
-
-
-def _md5_arg(value: str) -> str:
-    if re.fullmatch(r"[0-9a-fA-F]{32}", value) is None:
-        raise argparse.ArgumentTypeError("source MD5 must be 32 hexadecimal digits")
-    return value.lower()
 
 
 _DEFERRED_FAILURE_MARKERS = (
@@ -783,22 +749,3 @@ def execute(context: RunContext) -> dict[str, Any]:
         if cleanup_repository is not None:
             cleanup_repository.dispose()
         repository.dispose()
-
-
-def main() -> None:
-    args = _parse_args()
-    from app.cli import main as cli_main
-
-    arguments = ["--task", TASK_ID, "--workers", "1"]
-    for flag, value in (("--limit", args.limit), ("--per-mime-limit", args.per_mime_limit)):
-        if value is not None:
-            arguments += [flag, str(value)]
-    for md5 in args.only_md5:
-        arguments += ["--only-md5", md5]
-    if args.retry_known_failures:
-        arguments.append("--retry-known-failures")
-    cli_main(arguments)
-
-
-if __name__ == "__main__":
-    main()

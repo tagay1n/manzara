@@ -487,30 +487,6 @@ class DocumentCleanupRepository:
             runtime = configured_store().list("maintenance.cleanup")
             return [{**dict(row), **runtime.get(str(row["cleanup_id"]), {})} for row in rows]
 
-    def get_overview(self) -> dict[str, int]:
-        with self.engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    """
-                    SELECT
-                        COUNT(*) FILTER (WHERE status IN ('planned', 'running', 'failed')) AS active_plans,
-                        COUNT(*) FILTER (WHERE status = 'failed') AS failed_plans,
-                        COUNT(*) FILTER (WHERE status = 'completed') AS completed_plans
-                    FROM document_cleanup_queue
-                    """
-                )
-            ).mappings().one()
-            pending_reviews = conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM library_isbn_duplicate_reviews WHERE status='pending'"
-                )
-            ).scalar_one()
-        return {
-            "active_plans": int(row["active_plans"] or 0),
-            "failed_plans": int(row["failed_plans"] or 0),
-            "completed_plans": int(row["completed_plans"] or 0),
-            "pending_reviews": int(pending_reviews or 0),
-        }
 
     def list_reviews(self, *, status: str = "pending", limit: int = 100) -> list[dict[str, Any]]:
         with self.engine.connect() as conn:

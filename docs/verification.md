@@ -8,14 +8,14 @@ Review changed code and contracts, inspect relevant paths/configuration, and use
 
 ## Coverage available on request
 
-`tests/test_api_assembly.py` is retained but obsolete: its API factory was removed with the owner-authorized HTTP retirement. It has not been modified or run. There is no CLI or catalog integration suite; pytest is not a runtime dependency. Replacing this test requires an explicit request for test work.
+There is no retained test suite. The obsolete API assembly test was removed with explicit owner authorization. Creating tests or running runtime acceptance checks requires an explicit request; pytest is not a runtime dependency.
 
 Static CLI validation includes syntax inspection, retained import/reference checks, dependency inspection, and `git diff --check`. It does not establish terminal interaction, live provider behavior, transactional catalog mutations, checkpoint recovery, or safe-stop readiness.
 
 Terminal verification requires explicit owner authorization. The current CLI acceptance scope is:
 
 1. Launch idle with the requested task/options selected; task selection never starts work.
-2. Use command/task/history pickers, settings validation, disabled tasks, and narrow-terminal resizing without persistent clutter.
+2. Use command/task/history pickers, settings validation and narrow-terminal resizing without persistent clutter.
 3. Reject repeated starts and task/settings changes from the initial request through worker finalization and output drain.
 4. Stream every redacted run message into native scrollback while preserving partially typed commands and responsive controls.
 5. Distinguish starting, discovery, processing, provider backoff, safe stopping, and finalizing; animate quiet activity without fabricating progress, and visibly invalidate progress after runtime-read failure.

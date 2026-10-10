@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Mapping
 
-from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.catalog.non_pdf import NonPdfCatalogStore
@@ -58,20 +57,6 @@ class NonPdfExtractionRepository:
     def preflight(self) -> None:
         self.catalog.preflight()
 
-    def list_powerpoint_checkpoints(self, *, extractor_version: str) -> list[NonPdfCandidate]:
-        return [replace(self._candidate(row), prior_detected_format=row["detected_format"])
-                for row in self.catalog.list_sources(checkpoint_version=extractor_version)]
-
-    def backfill_verified_sources(self, items, *, previous_version: str) -> None:
-        """Record independently verified OLE roots without republishing content."""
-        with self.engine.begin() as conn:
-            conn.execute(text("SET TRANSACTION READ WRITE"))
-            conn.execute(text("SET LOCAL lock_timeout = '5s'"))
-            for candidate, detected_format, verified_mime in sorted(items, key=lambda item: item[0].md5):
-                self.catalog.record_verified_mime(
-                    asdict(candidate), detected_format=detected_format, version=previous_version,
-                    mime=verified_mime, previous_version=previous_version, conn=conn,
-                )
 
     def list_candidates(self, *, extractor_version, powerpoint_version=None, spreadsheet_version=None,
                         odt_version=None, mobi_version=None, html_version=None, limit=None,

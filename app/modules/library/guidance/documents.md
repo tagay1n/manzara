@@ -4,7 +4,7 @@ Non-PDF extraction and book preview generation have catalog-native CLI handlers.
 
 ## Sources and previews
 
-Select `library.generate_book_previews` in the CLI, or launch `python -m app.modules.library.runtime.run_generate_book_previews`. Launch selects the task and remains idle until `/run`. One worker processes the deterministic MD5-ordered cohort. `--limit` caps eligible documents before requests are created; repeated `--only-md5` restricts the cohort. These controls remain saved with run options.
+Select `library.generate_book_previews` with `python -m app --task library.generate_book_previews`. Launch selects the task and remains idle until `/run`. One worker processes the deterministic MD5-ordered cohort. `--limit` caps eligible documents before requests are created; repeated `--only-md5` restricts the cohort. These controls remain saved with run options.
 
 Generate for all `complete=true`, `restricted=false` PDFs of included, unmerged publications, without requiring `selected=true`. Completeness is the catalog's whole-publication flag, formerly `full`, rather than a download/integrity result. Require a verified `s3/primary` location with known size, configured primary storage, and no active document cleanup plan. A source or eligibility change prevents publication.
 
@@ -20,7 +20,7 @@ Logs use the shared terminal/stdout sink without a verbose `.log` file. Preview 
 
 ## Extraction and publication
 
-Select `library.extract_non_pdf` in the interactive CLI. The retained `python -m app.modules.library.runtime.run_extract_non_pdf` entry point opens the same CLI; it no longer relies on subprocess environment or signal handlers. One worker processes each document through a safe checkpoint boundary. Launch does not start work automatically.
+Select `library.extract_non_pdf` with `python -m app --task library.extract_non_pdf`. One worker processes each document through a safe checkpoint boundary. Launch does not start work automatically.
 
 Pandoc and LibreOffice (`soffice`) are required at launch; MOBI additionally needs Calibre's `ebook-convert`. DOC/RTF and legacy PowerPoint Google fallbacks use `credentials/google-drive/personal_token.json` under the configured artifacts root. Missing optional tools/credentials produce per-item operational failures. No legacy repository credential fallback is used.
 

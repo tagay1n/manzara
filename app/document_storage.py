@@ -14,7 +14,6 @@ from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote, unquote, urlparse
 
 
-DEFAULT_S3_ENDPOINT = "https://s3.eu-central-003.backblazeb2.com"
 DEFAULT_MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024
 DEFAULT_DOCUMENT_CACHE_MAX_BYTES = 50 * 1024**3
 DOCUMENT_CACHE_TARGET_NUMERATOR = 9
@@ -155,24 +154,6 @@ def calculate_md5(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def calculate_multipart_etag(
-    path: Path,
-    *,
-    chunk_size: int = DEFAULT_MULTIPART_CHUNK_SIZE,
-) -> str:
-    """Reproduce boto3's default multipart ETag for a local file."""
-    part_digests: list[bytes] = []
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(int(chunk_size)), b""):
-            part_digests.append(hashlib.md5(chunk).digest())  # noqa: S324
-    if not part_digests:
-        return hashlib.md5(b"").hexdigest()  # noqa: S324
-    if len(part_digests) == 1:
-        return part_digests[0].hex()
-    combined = hashlib.md5(b"".join(part_digests)).hexdigest()  # noqa: S324
-    return f"{combined}-{len(part_digests)}"
 
 
 def calculate_integrity(
@@ -482,36 +463,6 @@ def parse_object_url(url: str, endpoint_url: str) -> tuple[str, str] | None:
     return unquote(parts[0]), "/".join(unquote(part) for part in parts[1].split("/"))
 
 
-def resolve_document_download_url(
-    *,
-    document_url: str | None,
-    fallback_url: str | None,
-    encryption_key: str,
-    endpoint_url: str,
-    private_bucket: str,
-    s3: Any,
-    expires_seconds: int = 900,
-) -> str | None:
-    """Resolve a stored document locator, signing private S3 access on demand."""
-    source = str(document_url or fallback_url or "").strip()
-    if not source:
-        return None
-    if source.startswith("enc:"):
-        from app.modules.runtime_shared_utils import decrypt
-
-        source = decrypt(source, {"encryption_key": encryption_key})
-    location = parse_object_url(source, endpoint_url)
-    if not location or location[0] != str(private_bucket):
-        return source
-    return str(
-        s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": location[0], "Key": location[1]},
-            ExpiresIn=max(60, int(expires_seconds)),
-        )
-    )
-
-
 def resolve_document_object_location(
     *,
     document_url: str | None,
@@ -527,41 +478,6 @@ def resolve_document_object_location(
 
         source = decrypt(source, {"encryption_key": encryption_key})
     return parse_object_url(source, endpoint_url)
-
-
-def download_verified_primary_document(
-    *,
-    settings: DocumentStorageSettings,
-    s3: Any,
-    document_url: str,
-    expected_md5: str,
-    expected_size: int | None = None,
-    destination: Path,
-) -> Path:
-    """Download one document exclusively from configured primary storage."""
-    location = verify_primary_document_object(
-        settings=settings,
-        s3=s3,
-        document_url=document_url,
-        expected_size=expected_size,
-    )
-
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_suffix(destination.suffix + ".download")
-    temporary.unlink(missing_ok=True)
-    try:
-        s3.download_file(location[0], location[1], str(temporary))
-        actual_md5 = calculate_md5(temporary)
-        if actual_md5 != str(expected_md5 or "").strip().lower():
-            raise ValueError(
-                f"Primary document MD5 mismatch: expected={expected_md5} actual={actual_md5}"
-            )
-        temporary.replace(destination)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
-    return destination
 
 
 def verify_primary_document_object(
@@ -599,10 +515,8 @@ __all__ = [
     "S3ConnectionSettings",
     "build_cache_index",
     "calculate_md5",
-    "calculate_multipart_etag",
     "document_object_key",
     "download_cached_primary_document",
-    "download_verified_primary_document",
     "find_valid_cache_file",
     "find_valid_cache_entry",
     "load_document_storage_settings",
@@ -612,7 +526,6 @@ __all__ = [
     "prune_document_cache",
     "remove_cached_document",
     "parse_object_url",
-    "resolve_document_download_url",
     "resolve_document_object_location",
     "verify_primary_document_object",
 ]

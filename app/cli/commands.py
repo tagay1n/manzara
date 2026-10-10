@@ -12,7 +12,7 @@ class Command:
 
 
 COMMANDS = (
-    Command("task", "Select a task; /task all includes disabled tasks", "_select_task", ("", "all")),
+    Command("task", "Select a task", "_select_task"),
     Command("run", "Start/resume the selected task", "_start"),
     Command("stop", "Stop safely and keep Manzara open", "_stop"),
     Command("settings", "Edit workers and candidate limit", "_settings"),

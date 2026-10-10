@@ -2,6 +2,8 @@
 
 Read the matching owner and nearest `AGENTS.md`, then search symbols. Do not preload all guidance.
 
+Retained Python code must be reachable from `app/__main__.py`, a runner invoked by `.github/workflows/`, or the separately invoked Alembic bootstrap (`alembic/env.py`, its revision, and frozen SQL). Historical import/admin tools and alternate flow launchers are absent from this checkout; reviewed recovery uses the corresponding historical code.
+
 The inline CLI supports personality normalization, non-PDF extraction, book preview generation, static Library export, publisher clustering proposals, collection discovery proposals, metadata extraction/evaluation, and explicit cleanup review commands. Cleanup preparation and Yandex catalog sync run through standalone daily maintenance using the shared task runtime. Web pages and all HTTP APIs are retired. All registered interactive tasks have catalog-native handlers. Runtime verification remains pending; [catalog model](catalog-model.md) records the current boundary.
 
 | Concern | Start here |

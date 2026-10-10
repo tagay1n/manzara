@@ -5,14 +5,12 @@ Paths are relative to the repo root; all implementation rows below live in `app/
 | Concern | Owners |
 | --- | --- |
 | Task registration and launch | `tasks.py`, `collection_tasks.py`, `runtime/run_*.py` |
-| Normalization facade / durable writes | `normalization.py`, `app/repositories/normalization.py`, `app/catalog/personality_normalization.py` |
-| Normalization matching / mentions / views | `normalization_rules.py`, `normalization_queries.py`, `normalization_views.py` |
-| Canonicals / decisions / history / quality / suggestions | `normalization_canonicals.py`, `normalization_decisions.py`, `normalization_history.py`, `normalization_quality.py`, `normalization_suggestions.py` |
-| Personality extraction and review | `personality_normalization.py`, `personality_normalization_prompt.py`, `personality_workbench.py`, `runtime/run_normalize_personalities.py`; [contract](../../../../docs/personality-normalization.md) |
-| Publisher analysis / subprocess / deferred review | `runtime/run_suggest_publisher_merges.py`, `publisher_merge_contract.py`, `publisher_codex.py`; catalog: `app/catalog/publisher_analysis.py`; retained review: `publisher_workbench.py`, `publisher_merge_review.py`, `app/repositories/publisher_merges.py`; [contract](publisher-merges.md) |
+| Normalization source reads / durable writes | `app/repositories/normalization.py`, `app/catalog/personality_normalization.py` |
+| Personality extraction and checkpoints | `personality_normalization.py`, `personality_normalization_prompt.py`, `runtime/run_normalize_personalities.py`; [contract](../../../../docs/personality-normalization.md) |
+| Publisher analysis / subprocess / proposals | `runtime/run_suggest_publisher_merges.py`, `publisher_merge_contract.py`, `publisher_codex.py`; catalog: `app/catalog/publisher_analysis.py`; database composition: `app/repositories/publisher_merges.py`; [contract](publisher-merges.md) |
 | Non-PDF orchestration / detection / checkpoints | `non_pdf_extraction.py`, `non_pdf_formats.py`, `non_pdf_types.py`, `non_pdf_repository.py`; durable catalog commands: `app/catalog/non_pdf.py`; [document rules](documents.md) |
 | Converters and rendering | Matching `non_pdf_*.py`; Google fallbacks: `google_doc_conversion.py`, `google_presentation_conversion.py` |
-| Source storage / previews | `app/catalog/book_previews.py`, `app/catalog/previews.py`, `runtime/run_generate_book_previews.py`, `app/document_storage.py`, `preview_generation.py`, `preview_detection.py`, `preview_repository.py`, `catalog_preview_worker.py` |
+| Source storage / previews | `app/catalog/book_previews.py`, `app/catalog/previews.py`, `runtime/run_generate_book_previews.py`, `app/document_storage.py`, `preview_generation.py`, `preview_detection.py`, `catalog_preview_worker.py` |
 | Metadata extraction and contract | `runtime/run_metadata_processing.py`, `app/catalog/metadata_processing.py`, `app/catalog/metadata_store.py`, `metadata_extraction.py`, `metadata_prompt.py`, `metadata_contract.py`, `djvu_slicing.py`; [rules](metadata.md) |
 | Metadata evaluation | [focused owner lookup](evaluation-navigation.md) |
 | Collections | `collection_detection.py`, `runtime/run_collection_detect.py`; catalog: `app/catalog/collection_discovery.py`; [rules](collections.md) |

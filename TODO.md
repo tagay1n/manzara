@@ -4,7 +4,6 @@
 
 - Adapt backend reads, writes, and workers to the migrated PostgreSQL catalog. Audit legacy SQL/ORM assumptions before treating workflows as ready. See [catalog model](docs/catalog-model.md).
 - Assess operational readiness of the catalog-native CLI tasks through explicitly authorized execution. All registered interactive tasks now have handlers; static inspection does not establish runtime readiness.
-- Retire or replace the obsolete API assembly test only when test work is explicitly requested.
 
 ## Older requests needing owner reprioritization
 

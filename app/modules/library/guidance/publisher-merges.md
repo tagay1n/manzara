@@ -1,6 +1,6 @@
 # Publisher clustering proposals
 
-`library.suggest_publisher_merges` is an interactive CLI task that performs one subscription-authenticated Codex analysis of the complete publisher inventory. It saves proposals only. CLI review, editing, staging, separation, and apply commands remain deferred; the former web interface is removed. Retained workbench/review helpers are not execution dependencies of this task and still require separate catalog adaptation.
+`library.suggest_publisher_merges` is an interactive CLI task that performs one subscription-authenticated Codex analysis of the complete publisher inventory. It saves proposals only. CLI review, editing, staging, separation, and apply commands remain deferred; the former web interface is removed. The former workbench/review helpers are removed.
 
 ## Inventory and scope
 
@@ -30,7 +30,7 @@ Checkpoint a valid completed response before atomic, idempotent import. Recheck 
 
 Only analyses tagged `catalog.publisher-clusters.v1` are eligible for replay or `auto` history. Historical analyses, proposals, drafts, and decisions remain unchanged and are not translated or reused. Abandonment/rejection updates apply only to the current contract. No persisted-data migration is required.
 
-Cancellation stops Codex and returns a stopped task result without importing incomplete output. A committed valid checkpoint can be imported by the next user-started run. Timeouts, provider failures, and invalid responses fail visibly without automatic reinference. Explicit internal completed-response recovery verifies the analysis contract, prompt version, inventory fingerprint, successful lifecycle/diagnostics, response, and current catalog under the analysis lock; it never rewrites historical task status.
+Cancellation stops Codex and returns a stopped task result without importing incomplete output. A committed valid checkpoint can be imported by the next user-started run. Timeouts, provider failures, and invalid responses fail visibly without automatic reinference.
 
 Account telemetry is best effort: match reported bucket/duration/reset; resets, missing readings, and falling usage produce no delta. Five-hour/weekly labels require reported 300/10080-minute windows. Concurrent account activity may contribute to observed usage. Keep reported token usage unchanged; token counts do not determine subscription percentages.
 

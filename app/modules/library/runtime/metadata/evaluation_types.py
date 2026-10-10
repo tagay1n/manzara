@@ -21,10 +21,6 @@ class Evaluation(BaseModel):
     library_ddc: str | None = None
     library_path: list[str] | None = None
 
-    @classmethod
-    def nonapplicable(cls, reason: str) -> "Evaluation":
-        return cls(applicable=False, reason=reason)
-
 
 @dataclass(frozen=True)
 class EvaluationTask:

@@ -1,10 +1,10 @@
 # Manzara
 
-Manzara runs Tatar-language content workflows through an inline terminal CLI and operational scripts. Web pages, HTTP APIs, and SSE transport are retired.
+Manzara runs Tatar-language content workflows through an inline terminal CLI and GitHub workflow runners. Alembic provides separate schema bootstrap. Web pages, HTTP APIs, and SSE transport are retired.
 
 ## Current status
 
-**Normalize personalities**, **Extract non-PDF**, **Generate book previews**, **Export static library**, **Cluster publishers**, **Discover collections**, **Extract metadata**, and **Evaluate metadata** are enabled interactive CLI tasks. Publisher clustering generates proposals using subscription-authenticated Codex; review/apply remains deferred. Normalization uses the shared Gemini runtime; extraction uses local document converters and verified Backblaze sources. Cleanup preparation and Sync run together through standalone daily maintenance; cleanup review commands remain in the CLI. These workflows use the normalized PostgreSQL catalog; processing tasks retain resumable checkpoints, while export rebuilds a consistent snapshot. Backblaze document transfer has a separate automatic/manual GitHub workflow and is absent from the CLI. The interactive task list has no remaining disabled tasks. Operational readiness must be assessed for each execution path; static inspection alone does not establish it.
+**Normalize personalities**, **Extract non-PDF**, **Generate book previews**, **Export static library**, **Cluster publishers**, **Discover collections**, **Extract metadata**, and **Evaluate metadata** are enabled interactive CLI tasks. Publisher clustering generates proposals using subscription-authenticated Codex; review/apply remains deferred. Normalization uses the shared Gemini runtime; extraction uses local document converters and verified Backblaze sources. Cleanup preparation and Sync run together through standalone daily maintenance; cleanup review commands remain in the CLI. These workflows use the normalized PostgreSQL catalog; processing tasks retain resumable checkpoints, while export rebuilds a consistent snapshot. Backblaze document transfer has a separate automatic/manual GitHub workflow and is absent from the CLI. Operational readiness must be assessed for each execution path; static inspection alone does not establish it.
 
 ## Setup and launch
 
@@ -42,7 +42,7 @@ Outside pickers, Up recalls older submitted commands and Down moves toward newer
 
 | Command | Behavior |
 | --- | --- |
-| `/task`, `/task all` | Search and select a task; `all` includes disabled tasks and reasons. Selection never starts work. |
+| `/task` | Search and select a task. Selection never starts work. |
 | `/settings` | Edit workers and candidate limit with inline validation, Save, and Cancel. Tab changes focus; Enter/Ctrl-S saves; Esc cancels. Cohort/retry options are preserved. |
 | `/run` | Start/resume the selected task using current options. |
 | `/stop` | Request safe stop and keep Manzara open. |

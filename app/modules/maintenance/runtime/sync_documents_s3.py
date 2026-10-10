@@ -21,7 +21,7 @@ from app.document_cleanup_paths import source_path
 from app.document_operation_lock import DocumentOperationBusy, check_document_operation, document_operation
 from app.document_resources import resource_meta, resource_value, verify_resource
 from app.document_storage import (
-    DocumentStorageSettings, build_cache_index, calculate_md5, document_object_key,
+    build_cache_index, calculate_md5, document_object_key,
     find_valid_cache_entry, load_document_storage_settings, object_url,
     resolve_document_object_location,
 )

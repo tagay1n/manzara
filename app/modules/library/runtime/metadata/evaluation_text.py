@@ -1,8 +1,7 @@
-"""Bounded text cleanup, evidence excerpts, and response log formatting."""
+"""Bounded text cleanup and evidence excerpts."""
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -40,20 +39,6 @@ def _build_content_excerpt(text: str, max_chars: int) -> str | None:
     tail = normalized[-chunk:]
     excerpt = EXCERPT_SEPARATOR.join([head, middle, tail])
     return excerpt[:max_chars]
-
-
-def _format_response_for_log(response_text: str | None) -> str:
-    """Pretty-print JSON responses for readable logs, fallback to plain text."""
-    if response_text is None:
-        return ""
-    raw = response_text.strip()
-    if not raw:
-        return ""
-    try:
-        parsed = json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
-        return raw
-    return json.dumps(parsed, ensure_ascii=False, indent=2)
 
 
 def _extract_candidate_strings(

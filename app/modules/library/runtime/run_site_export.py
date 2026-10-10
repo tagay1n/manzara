@@ -12,8 +12,6 @@ from app.modules.library.site_export import (
 from app.modules.library.site_export_repository import LibrarySiteExportRepository
 from app.task_runtime.contracts import RunContext
 
-TASK_ID = "library.site_export"
-
 
 def _storage(configuration: Mapping[str, Any]) -> ExportStorage:
     # Export needs public URL configuration, never storage/Yandex credentials.
@@ -95,14 +93,3 @@ def execute(context: RunContext) -> dict:
         return stopped
     finally:
         repository.dispose()
-
-
-def main() -> None:
-    import sys
-    from app.cli import main as cli_main
-
-    cli_main(["--task", TASK_ID, "--workers", "1", *sys.argv[1:]])
-
-
-if __name__ == "__main__":
-    main()

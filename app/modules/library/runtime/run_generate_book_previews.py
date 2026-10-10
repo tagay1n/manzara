@@ -2,8 +2,6 @@
 
 from app.task_runtime.contracts import RunContext
 
-TASK_ID = "library.generate_book_previews"
-
 
 def execute(context: RunContext) -> dict:
     if context.options.workers != 1:
@@ -68,14 +66,3 @@ def execute(context: RunContext) -> dict:
             s3.close()
     finally:
         release_postgres_engine(engine)
-
-
-def main() -> None:
-    import sys
-    from app.cli import main as cli_main
-
-    cli_main(["--task", TASK_ID, "--workers", "1", *sys.argv[1:]])
-
-
-if __name__ == "__main__":
-    main()
