@@ -12,7 +12,7 @@ Paths are relative to the repo root; all implementation rows below live in `app/
 | Publisher analysis / subprocess / deferred review | `runtime/run_suggest_publisher_merges.py`, `publisher_merge_contract.py`, `publisher_codex.py`; catalog: `app/catalog/publisher_analysis.py`; retained review: `publisher_workbench.py`, `publisher_merge_review.py`, `app/repositories/publisher_merges.py`; [contract](publisher-merges.md) |
 | Non-PDF orchestration / detection / checkpoints | `non_pdf_extraction.py`, `non_pdf_formats.py`, `non_pdf_types.py`, `non_pdf_repository.py`; durable catalog commands: `app/catalog/non_pdf.py`; [document rules](documents.md) |
 | Converters and rendering | Matching `non_pdf_*.py`; Google fallbacks: `google_doc_conversion.py`, `google_presentation_conversion.py` |
-| Source storage / previews | `app/document_storage.py`, `preview_generation.py`, `preview_detection.py`, `preview_repository.py`, `catalog_preview_worker.py` |
+| Source storage / previews | `app/catalog/book_previews.py`, `app/catalog/previews.py`, `runtime/run_generate_book_previews.py`, `app/document_storage.py`, `preview_generation.py`, `preview_detection.py`, `preview_repository.py`, `catalog_preview_worker.py` |
 | Metadata extraction and contract | `metadata_extraction.py`, `metadata_prompt.py`, `metadata_contract.py`, `djvu_slicing.py`; [rules](metadata.md) |
 | Metadata evaluation | [focused owner lookup](evaluation-navigation.md) |
 | Collections | `collection_detection.py`, `collection_validation.py`, `collection_catalog.py`, `runtime/run_collection_apply.py`; [rules](collections.md) |

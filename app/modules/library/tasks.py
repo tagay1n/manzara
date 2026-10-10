@@ -15,11 +15,6 @@ def library_task_definitions() -> list[dict[str, Any]]:
     """Return registrations for Python task handlers."""
     return [
         {
-            "task_id": "library.catalog_preview_requests",
-            "group_id": "library",
-            "title": "Process admin preview requests",
-        },
-        {
             "task_id": "library.suggest_publisher_merges",
             "workers_max": 1,
             "group_id": "library",
@@ -55,6 +50,7 @@ def library_task_definitions() -> list[dict[str, Any]]:
         },
         {
             "task_id": LIBRARY_GENERATE_BOOK_PREVIEWS_TASK_ID,
+            "workers_max": 1,
             "group_id": "library",
             "title": "Generate book previews",
         },

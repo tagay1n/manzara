@@ -32,8 +32,13 @@ def build_descriptors():
         from app.modules.library.runtime.run_suggest_publisher_merges import execute
         return execute(context)
 
+    def generate_previews(context):
+        from app.modules.library.runtime.run_generate_book_previews import execute
+        return execute(context)
+
     handlers = {"library.normalize_personalities": normalize, "library.extract_non_pdf": extract_non_pdf,
-                "library.suggest_publisher_merges": cluster_publishers}
+                "library.suggest_publisher_merges": cluster_publishers,
+                "library.generate_book_previews": generate_previews}
     scheduled = {LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID, MAINTENANCE_MONOCORPUS_SYNC_TASK_ID,
                  MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID}
     definitions = [*library_task_definitions(), *collection_task_definitions(),
@@ -75,20 +80,26 @@ def main(arguments: list[str] | None = None) -> None:
     undo = cleanup_commands.add_parser("undo", help="Undo a decision before cleanup starts")
     undo.add_argument("review_id", type=_positive)
     parser.add_argument("--task", default="library.normalize_personalities", help="Initially selected task ID")
-    parser.add_argument("--workers", type=_positive, help="Worker count; non-PDF extraction and publisher clustering require 1")
+    parser.add_argument("--workers", type=_positive, help="Worker count; extraction, previews and publisher clustering require 1")
     parser.add_argument("--limit", type=_positive, help="Optional candidate limit")
     parser.add_argument("--per-mime-limit", type=_positive, help="Non-PDF extraction: deterministic cohort cap per MIME")
     parser.add_argument("--only-md5", action="append", type=_md5, default=[], metavar="MD5",
-                        help="Non-PDF extraction: restrict to these sources; repeat for a cohort")
+                        help="Extraction/previews: restrict to these sources; repeat for a cohort")
     parser.add_argument("--retry-known-failures", action="store_true",
-                        help="Non-PDF extraction: retry deferred and exhausted failures")
+                        help="Extraction/previews: explicitly retry known failures; extraction also retries deferred results")
     args = parser.parse_args(arguments)
-    if (args.per_mime_limit is not None or args.only_md5 or args.retry_known_failures) and (
+    if args.per_mime_limit is not None and (
         args.command is not None or args.task != "library.extract_non_pdf"
     ):
-        parser.error("Non-PDF cohort/retry options require --task library.extract_non_pdf")
+        parser.error("--per-mime-limit requires --task library.extract_non_pdf")
+    if (args.only_md5 or args.retry_known_failures) and (
+        args.command is not None or args.task not in {"library.extract_non_pdf", "library.generate_book_previews"}
+    ):
+        parser.error("Source cohort/retry options require --task library.extract_non_pdf or library.generate_book_previews")
     if args.task == "library.extract_non_pdf" and args.workers not in (None, 1):
         parser.error("Non-PDF extraction requires --workers 1")
+    if args.task == "library.generate_book_previews" and args.workers not in (None, 1):
+        parser.error("Book previews require --workers 1")
     if args.command is None and args.task == "library.suggest_publisher_merges":
         if args.workers not in (None, 1):
             parser.error("Cluster publishers requires --workers 1")
@@ -106,7 +117,10 @@ def main(arguments: list[str] | None = None) -> None:
         parser.exit(2, "Manzara execution requires an interactive terminal. Use --help for options.\n")
     try:
         import asyncio
+        from app.artifacts import cache_dir
+        from app.modules.library.preview_detection import configure_detector_environment
         from app.cli.terminal import Terminal
+        configure_detector_environment(cache_dir("downloaded-models", "huggingface"))
         exit_code = asyncio.run(Terminal(args, build_descriptors).run())
         if exit_code:
             parser.exit(exit_code)

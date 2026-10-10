@@ -1,8 +1,18 @@
 # Library document processing
 
-Non-PDF extraction has a catalog-native CLI handler. Other catalog-dependent document/preview workers still need adaptation and verification. Owners: [navigation](navigation.md).
+Non-PDF extraction and book preview generation have catalog-native CLI handlers. Other catalog-dependent document workers still need adaptation. Live execution remains unverified. Owners: [navigation](navigation.md).
 
 ## Sources and previews
+
+Select `library.generate_book_previews` in the CLI, or launch `python -m app.modules.library.runtime.run_generate_book_previews`. Launch selects the task and remains idle until `/run`. One worker processes the deterministic MD5-ordered cohort. `--limit` caps eligible documents before requests are created; repeated `--only-md5` restricts the cohort. These controls remain saved with run options.
+
+Generate for all `complete=true`, `restricted=false` PDFs of included, unmerged publications, without requiring `selected=true`. Completeness is the catalog's whole-publication flag, formerly `full`, rather than a download/integrity result. Require a verified `s3/primary` location with known size, configured primary storage, and no active document cleanup plan. A source or eligibility change prevents publication.
+
+Skip current-recipe successful public generations, including successes with zero selected pages. Skip known failed requests unless `--retry-known-failures` is supplied; retries create a new request and preserve existing generations. Pending requests and expired claims resume at the document boundary with a fresh claim token; live claims are skipped. Only requests for the selected cohort are claimed. The separate admin-request task is retired.
+
+Use `documents.primary_storage.bucket.book_previews` as a dedicated public preview bucket and the shared storage configuration/cache. The configured PostgreSQL pool needs at least two connections for the document operation lock and short catalog transactions. Detector packages are pinned in `requirements.txt`; the pinned Hugging Face checkpoint downloads on the first nonempty run. Empty cohorts do not initialize model or storage clients.
+
+Logs use the shared terminal/stdout sink without a verbose `.log` file. Preview code emits no task/artifact events; progress uses the local run row and the shared runner retains lifecycle events and its final summary artifact. Per-request operational errors remain in local SQLite. Item failures continue and make the run fail; shared storage, model, or database failures stop processing. Cooperative stop finishes the current document. Uploads use immutable request/claim keys and all objects must verify before the catalog publishes page roles. Keep previous outputs and abandoned generation objects for explicit maintenance review.
 
 - Use the shared persistent MD5-verified source cache. Populate processing misses from verified primary Backblaze storage. Enforce `documents.cache_max_gib` (default 50 GiB); evict least-recently-used completed sources to 90% when exceeded, protecting recent partial downloads and the current source.
 - Preview detection uses pinned `yolov12l-doclaynet.pt`, CPU `imgsz=1024`, first/last three pages. Ignore page-header/footer/picture-only layouts. Select first useful front, last useful back, then next distinct front; persist actual page numbers and distinct roles. Zero/fewer than three qualifying pages is a completed outcome.

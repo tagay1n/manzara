@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import fitz
 from PIL import Image
@@ -18,19 +18,15 @@ from botocore.exceptions import (
 
 from app.document_storage import (
     DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
-    DEFAULT_S3_ENDPOINT,
     find_valid_cache_file,
     materialize_cached_document,
-    resolve_document_object_location,
 )
 
-from app.modules.library.preview_detection import PageAssessment, PreviewModelError
+from app.modules.library.preview_detection import PageAssessment
 from app.modules.library.previews import (
     PREVIEW_RECIPE_VERSION,
     PreviewPage,
-    derive_preview_status,
     preview_object_key,
-    preview_pages_from_row,
     select_informative_preview_pages,
 )
 
@@ -49,14 +45,10 @@ class RenderedVariant:
 class PreviewGenerationSettings:
     """Resolved source, target, and local workspace settings."""
 
-    source_bucket: str
     target_bucket: str
     cache_dir: Path
     workspace: Path
     model_cache_dir: Path | None = None
-    source_endpoint_url: str = DEFAULT_S3_ENDPOINT
-    source_region_name: str = "eu-central-003"
-    encryption_key: str = ""
     cache_max_bytes: int = DEFAULT_DOCUMENT_CACHE_MAX_BYTES
 
 
@@ -65,7 +57,8 @@ class BookPreviewResult:
     """Structured outcome for one candidate document."""
 
     md5: str
-    status: str
+    source_page_count: int
+    pages: tuple[dict[str, Any], ...]
     uploaded_objects: int = 0
     reused_objects: int = 0
     downloaded_source: bool = False
@@ -73,7 +66,6 @@ class BookPreviewResult:
     rejected_pages: int = 0
     selected_pages: int = 0
     inference_seconds: float = 0.0
-    error: str | None = None
 
 
 def _target_size(width: int, height: int, max_width: int, max_height: int) -> tuple[int, int]:
@@ -183,7 +175,8 @@ def _is_storage_fatal(exc: Exception) -> bool:
         return True
     if isinstance(exc, ClientError):
         code = _error_code(exc)
-        return code in {"AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch"} or code.startswith("5")
+        return code in {"403", "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch",
+                       "ExpiredToken", "InvalidToken", "NoSuchBucket"} or code.startswith("5")
     return False
 
 
@@ -244,6 +237,7 @@ def _select_detected_pages(
     pdf_path: Path,
     *,
     page_detector: Any,
+    boundary: Callable[[], None],
 ) -> tuple[int, list[PreviewPage], dict[int, PageAssessment]]:
     assessments: dict[int, PageAssessment] = {}
     with fitz.open(pdf_path) as document:
@@ -252,6 +246,7 @@ def _select_detected_pages(
         def is_useful(page_number: int) -> bool:
             assessment = assessments.get(page_number)
             if assessment is None:
+                boundary()
                 image = _render_page_image(document, page_number)
                 assessment = page_detector.assess(image, page_number=page_number)
                 assessments[page_number] = assessment
@@ -265,207 +260,86 @@ def _select_detected_pages(
 
 
 def process_book(
-    candidate: dict[str, Any],
+    md5: str,
     *,
-    repository: Any,
+    source_location: tuple[str, str],
+    object_prefix: str,
     settings: PreviewGenerationSettings,
     source_s3: Any,
     target_s3: Any,
     page_detector: Any,
-    run_id: int | None,
-    log: Any,
+    boundary: Callable[[], None],
+    log: Callable[[str], None],
 ) -> BookPreviewResult:
-    """Generate and checkpoint all expected variants for one applicable PDF."""
-    md5 = str(candidate.get("md5") or "").strip().lower()
-    started = repository.start_attempt(
-        md5,
-        recipe_version=PREVIEW_RECIPE_VERSION,
-        run_id=run_id,
+    """Render one verified source; return explicit pages only after all uploads verify."""
+    boundary()
+    pdf_path, downloaded = ensure_cached_pdf(
+        md5, cache_dir=settings.cache_dir,
+        source_bucket=source_location[0], source_key=source_location[1],
+        s3=source_s3, cache_max_bytes=settings.cache_max_bytes,
     )
-    page_count = int(started.get("source_page_count") or 0)
-    uploaded = 0
-    reused = 0
-    downloaded = False
-    verified_objects = 0
-    selected_pages: list[PreviewPage] = []
-    assessments: dict[int, PageAssessment] = {}
-    book_workspace = settings.workspace / md5
-    book_workspace.mkdir(parents=True, exist_ok=True)
-    try:
-        source_bucket = settings.source_bucket
-        source_key = f"{md5}.pdf"
-        location = resolve_document_object_location(
-            document_url=str(candidate.get("document_url") or "") or None,
-            encryption_key=settings.encryption_key,
-            endpoint_url=settings.source_endpoint_url,
-        )
-        if location:
-            source_bucket, source_key = location
-        pdf_path, downloaded = ensure_cached_pdf(
-            md5,
-            cache_dir=settings.cache_dir,
-            source_bucket=source_bucket,
-            source_key=source_key,
-            s3=source_s3,
-            cache_max_bytes=settings.cache_max_bytes,
-        )
-        persisted_pages = preview_pages_from_row(started)
-        if persisted_pages:
-            with fitz.open(pdf_path) as document:
-                page_count = int(document.page_count)
-            selected_pages = persisted_pages
-            log(
-                f"library previews: reuse selection md5={md5} "
-                f"pages={[page.page_number for page in selected_pages]}"
-            )
-        else:
-            page_count, selected_pages, assessments = _select_detected_pages(
-                pdf_path,
-                page_detector=page_detector,
-            )
-            for page_number, assessment in assessments.items():
-                log(
-                    f"library previews: classify md5={md5} page={page_number} "
-                    f"useful={str(assessment.useful).lower()} "
-                    f"classes={list(assessment.detected_classes)} "
-                    f"seconds={assessment.inference_seconds:.3f}"
-                )
+    boundary()
+    page_count, selected_pages, assessments = _select_detected_pages(
+        pdf_path, page_detector=page_detector, boundary=boundary,
+    )
+    for page_number, assessment in assessments.items():
         log(
-            f"library previews: process md5={md5} pages={page_count} "
-            f"expected_previews={len(selected_pages)}"
+            f"library previews: classify md5={md5} page={page_number} "
+            f"useful={str(assessment.useful).lower()} "
+            f"classes={list(assessment.detected_classes)} "
+            f"seconds={assessment.inference_seconds:.3f}"
         )
-        repository.checkpoint(
-            md5,
-            recipe_version=PREVIEW_RECIPE_VERSION,
-            source_page_count=page_count,
-            selected_pages=selected_pages,
-            status="processing",
-            run_id=run_id,
-        )
-
-        for page in selected_pages:
-            rendered: dict[str, RenderedVariant] | None = None
-            for variant in ("small", "large"):
-                key = preview_object_key(md5, page.object_alias, variant)
-                expected_metadata = _expected_metadata(
-                    md5=md5,
-                    page_number=page.page_number,
-                    role=page.role,
-                    variant=variant,
+    log(f"library previews: process md5={md5} pages={page_count} expected_previews={len(selected_pages)}")
+    uploaded = reused = 0
+    pages = []
+    book_workspace = settings.workspace / md5
+    for page in selected_pages:
+        rendered = None
+        keys = {}
+        for variant in ("small", "large"):
+            boundary()
+            key = object_prefix + preview_object_key(md5, page.object_alias, variant)
+            keys[f"{variant}_key"] = key
+            metadata = _expected_metadata(
+                md5=md5, page_number=page.page_number, role=page.role, variant=variant,
+            )
+            head = _matching_remote(target_s3, bucket=settings.target_bucket, key=key, metadata=metadata)
+            if head is not None:
+                reused += 1
+                log(f"library previews: reuse md5={md5} role={page.role} variant={variant} key={key}")
+                continue
+            if rendered is None:
+                rendered = render_page_variants(
+                    pdf_path, page_number=page.page_number,
+                    object_alias=page.object_alias, output_dir=book_workspace,
                 )
-                head = _matching_remote(
-                    target_s3,
-                    bucket=settings.target_bucket,
-                    key=key,
-                    metadata=expected_metadata,
-                )
-                if head is not None:
-                    reused += 1
-                    log(
-                        f"library previews: reuse md5={md5} role={page.role} "
-                        f"page={page.page_number} variant={variant} key={key}"
-                    )
-                else:
-                    if rendered is None:
-                        rendered = render_page_variants(
-                            pdf_path,
-                            page_number=page.page_number,
-                            object_alias=page.object_alias,
-                            output_dir=book_workspace,
-                        )
-                    output = rendered[variant]
-                    upload_metadata = {
-                        **expected_metadata,
-                        "width": str(output.width),
-                        "height": str(output.height),
-                        "quality": str(output.quality),
-                    }
-                    target_s3.upload_file(
-                        str(output.path),
-                        settings.target_bucket,
-                        key,
-                        ExtraArgs={
-                            "ContentType": "image/webp",
-                            "CacheControl": "public, max-age=31536000, immutable",
-                            "Metadata": upload_metadata,
-                        },
-                    )
-                    head = _matching_remote(
-                        target_s3,
-                        bucket=settings.target_bucket,
-                        key=key,
-                        metadata=expected_metadata,
-                    )
-                    if head is None:
-                        raise RuntimeError(f"S3 verification failed after upload: {key}")
-                    uploaded += 1
-                    log(
-                        f"library previews: uploaded md5={md5} role={page.role} "
-                        f"page={page.page_number} variant={variant} key={key} "
-                        f"bytes={head.get('ContentLength') or 0}"
-                    )
+            output = rendered[variant]
+            boundary()
+            target_s3.upload_file(
+                str(output.path), settings.target_bucket, key,
+                ExtraArgs={
+                    "ContentType": "image/webp",
+                    "CacheControl": "public, max-age=31536000, immutable",
+                    "Metadata": {**metadata, "width": str(output.width),
+                                 "height": str(output.height), "quality": str(output.quality)},
+                },
+            )
+            head = _matching_remote(target_s3, bucket=settings.target_bucket, key=key, metadata=metadata)
+            if head is None:
+                raise RuntimeError(f"S3 verification failed after upload: {key}")
+            uploaded += 1
+            log(f"library previews: uploaded md5={md5} role={page.role} page={page.page_number} "
+                f"variant={variant} key={key} bytes={head.get('ContentLength') or 0}")
+        pages.append({"role": page.role, "page_number": page.page_number, **keys})
+    boundary()
+    return BookPreviewResult(
+        md5=md5, source_page_count=page_count, pages=tuple(pages),
+        uploaded_objects=uploaded, reused_objects=reused, downloaded_source=downloaded,
+        inspected_pages=len(assessments), rejected_pages=sum(not item.useful for item in assessments.values()),
+        selected_pages=len(selected_pages), inference_seconds=sum(item.inference_seconds for item in assessments.values()),
+    )
 
-                verified_objects += 1
-                current_status = derive_preview_status(len(selected_pages), verified_objects)
-                repository.checkpoint(
-                    md5,
-                    recipe_version=PREVIEW_RECIPE_VERSION,
-                    source_page_count=page_count,
-                    selected_pages=selected_pages,
-                    status=current_status,
-                    run_id=run_id,
-                )
 
-        status = derive_preview_status(len(selected_pages), verified_objects)
-        repository.checkpoint(
-            md5,
-            recipe_version=PREVIEW_RECIPE_VERSION,
-            source_page_count=page_count,
-            selected_pages=selected_pages,
-            status=status,
-            run_id=run_id,
-        )
-        return BookPreviewResult(
-            md5=md5,
-            status=status,
-            uploaded_objects=uploaded,
-            reused_objects=reused,
-            downloaded_source=downloaded,
-            inspected_pages=len(assessments),
-            rejected_pages=sum(not item.useful for item in assessments.values()),
-            selected_pages=len(selected_pages),
-            inference_seconds=sum(item.inference_seconds for item in assessments.values()),
-        )
-    except Exception as exc:
-        status = (
-            derive_preview_status(len(selected_pages), verified_objects)
-            if page_count > 0 and selected_pages
-            else "failed"
-        )
-        repository.checkpoint(
-            md5,
-            recipe_version=PREVIEW_RECIPE_VERSION,
-            source_page_count=page_count if page_count > 0 else None,
-            selected_pages=selected_pages,
-            status=status,
-            run_id=run_id,
-            error_text=str(exc),
-        )
-        log(f"library previews: failed md5={md5} status={status} error={exc}")
-        if _is_storage_fatal(exc) or isinstance(exc, PreviewModelError):
-            raise
-        return BookPreviewResult(
-            md5=md5,
-            status=status,
-            uploaded_objects=uploaded,
-            reused_objects=reused,
-            downloaded_source=downloaded,
-            inspected_pages=len(assessments),
-            rejected_pages=sum(not item.useful for item in assessments.values()),
-            selected_pages=len(selected_pages),
-            inference_seconds=sum(item.inference_seconds for item in assessments.values()),
-            error=str(exc),
-        )
 __all__ = [
     "RenderedVariant",
     "BookPreviewResult",

@@ -50,6 +50,18 @@ def qualifying_layout_classes(class_names: Iterable[object]) -> tuple[str, ...]:
     return tuple(selected)
 
 
+def configure_detector_environment(cache_dir: Path) -> None:
+    """Set process-wide dependency paths once at CLI bootstrap, before workers exist."""
+    runtime_config_dir = cache_dir.parent
+    for variable, directory in (("YOLO_CONFIG_DIR", "ultralytics"), ("MPLCONFIGDIR", "matplotlib")):
+        path = runtime_config_dir / directory
+        path.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault(variable, str(path))
+    os.environ.setdefault("YOLO_AUTOINSTALL", "false")
+    os.environ.setdefault("YOLO_VERBOSE", "false")
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
+
 class DocLayNetPageDetector:
     """Single-page CPU inference wrapper around the pinned DocLayNet checkpoint."""
 
@@ -58,13 +70,6 @@ class DocLayNetPageDetector:
 
     @classmethod
     def from_huggingface(cls, *, cache_dir: Path) -> "DocLayNetPageDetector":
-        runtime_config_dir = cache_dir.parent
-        ultralytics_config_dir = runtime_config_dir / "ultralytics"
-        matplotlib_config_dir = runtime_config_dir / "matplotlib"
-        ultralytics_config_dir.mkdir(parents=True, exist_ok=True)
-        matplotlib_config_dir.mkdir(parents=True, exist_ok=True)
-        os.environ.setdefault("YOLO_CONFIG_DIR", str(ultralytics_config_dir))
-        os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_config_dir))
         try:
             from huggingface_hub import hf_hub_download
             from ultralytics import YOLO
@@ -81,7 +86,7 @@ class DocLayNetPageDetector:
                 revision=DOCLAYNET_REVISION,
                 cache_dir=str(cache_dir),
             )
-            model = YOLO(checkpoint_path)
+            model = YOLO(checkpoint_path, verbose=False)
         except Exception as exc:
             raise PreviewModelError(f"Failed to initialize preview detector: {exc}") from exc
         return cls(model)
@@ -92,6 +97,11 @@ class DocLayNetPageDetector:
             predictions = self._model.predict(
                 image,
                 verbose=False,
+                save=False,
+                save_txt=False,
+                save_crop=False,
+                visualize=False,
+                show=False,
                 imgsz=DOCLAYNET_IMAGE_SIZE,
                 device="cpu",
                 conf=DOCLAYNET_CONFIDENCE,
@@ -142,4 +152,5 @@ __all__ = [
     "PageAssessment",
     "PreviewModelError",
     "qualifying_layout_classes",
+    "configure_detector_environment",
 ]

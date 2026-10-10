@@ -732,11 +732,14 @@ class Terminal:
                 if task.workers_max == 1:
                     workers = 1
                 extraction = task.task_id == "library.extract_non_pdf"
+                source_cohort = task.task_id == self.arguments.task and task.task_id in {
+                    "library.extract_non_pdf", "library.generate_book_previews",
+                }
                 self.options[task.task_id] = RunOptions(
                     workers, None if task.task_id == "library.suggest_publisher_merges" else self.arguments.limit,
                     per_mime_limit=self.arguments.per_mime_limit if extraction else None,
-                    retry_known_failures=self.arguments.retry_known_failures if extraction else False,
-                    only_md5s=tuple(dict.fromkeys(self.arguments.only_md5)) if extraction else (),
+                    retry_known_failures=self.arguments.retry_known_failures if source_cohort else False,
+                    only_md5s=tuple(dict.fromkeys(self.arguments.only_md5)) if source_cohort else (),
                 )
             self.event_cursor = await asyncio.to_thread(self.db.get_latest_event_id)
             self.ready = True
