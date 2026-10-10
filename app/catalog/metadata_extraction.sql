@@ -66,6 +66,7 @@ LEFT JOIN LATERAL (
 ) reference_metadata ON TRUE
 JOIN LATERAL (
     SELECT jsonb_agg(to_jsonb(source) || jsonb_build_object(
+        'publication_record', to_jsonb(p),
         'metadata_record', jsonb_build_object(
             'publication_id', p.publication_id, 'revision', p.revision,
             'scalars', jsonb_strip_nulls(jsonb_build_object(
@@ -81,7 +82,13 @@ JOIN LATERAL (
             'sufficient_modes', COALESCE(sufficient_modes.value, '[]'::jsonb),
             'based_on', reference_metadata.value),
         'classification_path', CASE WHEN classification.node_id IS NOT NULL
-            THEN catalog_path(classification.node_id) END)
+            THEN catalog_path(classification.node_id) END,
+        'publication_protections', COALESCE((
+            SELECT jsonb_agg(field ORDER BY field) FROM catalog_protections
+            WHERE record_kind='publication' AND record_key=p.publication_id::text), '[]'::jsonb),
+        'document_protections', COALESCE((
+            SELECT jsonb_agg(field ORDER BY field) FROM catalog_protections
+            WHERE record_kind='document' AND record_key=source.md5), '[]'::jsonb))
         ORDER BY source.selected DESC, source.md5) AS sources
     FROM eligible_sources source
     LEFT JOIN LATERAL (

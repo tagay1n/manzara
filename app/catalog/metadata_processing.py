@@ -58,7 +58,8 @@ EXTRACTION_PUBLICATIONS = """
  ORDER BY p.publication_id LIMIT :batch_size
 """
 EXTRACTION_BATCH_SIZE = 200
-EXTRACTION_BATCH_QUERY = (Path(__file__).with_name('metadata_extraction.sql').read_text(encoding='utf-8')
+METADATA_ENVELOPE_QUERY = Path(__file__).with_name('metadata_extraction.sql').read_text(encoding='utf-8')
+EXTRACTION_BATCH_QUERY = (METADATA_ENVELOPE_QUERY
     .replace('{{publications}}', EXTRACTION_PUBLICATIONS).replace('{{sources}}', SOURCES))
 SOURCE_FIELDS = (
     'md5', 'publication_id', 'revision', 'mime_type', 'selected',
@@ -155,8 +156,11 @@ class MetadataProcessingStore:
                 raise InterruptedError('Metadata discovery stopped')
             publication = dict(row)
             for source in publication['sources']:
-                record = source.pop('metadata_record')
-                source['schema_org'] = _compose_schema(record, source.pop('classification_path'))
+                source['save_snapshot'] = {
+                    'publication': deepcopy(source['publication_record']),
+                    'source': deepcopy(source),
+                }
+                source['schema_org'] = _compose_schema(deepcopy(source['metadata_record']), source['classification_path'])
                 source['checkpoint_id'] = checkpoint_identity(publication, source)
             publication['schema_org'] = publication['sources'][0]['schema_org']
             publications.append(publication)
@@ -259,30 +263,26 @@ class MetadataProcessingStore:
         return None
 
     def save(self, publication, source, schema_org, *, actor, method, evaluation=None):
+        if evaluation is None:
+            from app.catalog.metadata_extraction_save import save_extracted_metadata
+
+            snapshot_query = (METADATA_ENVELOPE_QUERY
+                .replace('{{publications}}', "SELECT * FROM catalog_publications WHERE publication_id=publication_key")
+                .replace('{{sources}}', SOURCES + ' AND d.md5=document_key'))
+            return save_extracted_metadata(self.engine, self.schema, source, schema_org,
+                                           actor=actor, method=method, snapshot_query=snapshot_query)
         incoming = decompose_metadata(deepcopy(schema_org))
         incoming['subjects'] = unmanaged_subjects(incoming['subjects'])
-        with self.mutation(publication, source, taxonomy=evaluation is not None) as (conn, current):
-            if evaluation is None and current['metadata_present']:
-                raise CatalogConflict('Publication already has metadata; extraction only fills missing metadata')
+        with self.mutation(publication, source, taxonomy=True) as (conn, current):
             before_proposals = self._proposal_ids(conn, publication['publication_id'])
-            if evaluation is None:
-                # An earlier automatically derived decision no longer describes the new metadata.
-                if current['evaluation_method'] is not None:
-                    self._decision(conn, current, source, {'inclusion': 'pending', 'classification_id': None,
-                        'evaluation_method': None}, actor)
-                    current = self.catalog._record(conn, 'publication', publication['publication_id'])
             self.catalog._apply_metadata(conn, source['md5'], incoming, schema_org, actor, True, current['revision'])
-            if evaluation is None:
-                doc = self.catalog._record(conn, 'document', source['md5'])
-                self.catalog._update(conn, 'document', source['md5'], doc, {'meta_extraction_method': method}, actor)
-            else:
-                applicable = boolean(evaluation['applicable'], 'applicable')
-                classification = self._classification(conn, evaluation['ddc'], evaluation['path'], actor) if applicable else None
-                current = self.catalog._record(conn, 'publication', publication['publication_id'])
-                self._decision(conn, current, source, {'inclusion': 'included' if applicable else 'excluded',
-                    'classification_id': classification, 'evaluation_method': method}, actor)
-                conn.execute(self.catalog.table('evidence').insert().values(md5=source['md5'], record_kind='publication',
-                    record_key=str(publication['publication_id']), source=actor, payload=evaluation))
+            applicable = boolean(evaluation['applicable'], 'applicable')
+            classification = self._classification(conn, evaluation['ddc'], evaluation['path'], actor) if applicable else None
+            current = self.catalog._record(conn, 'publication', publication['publication_id'])
+            self._decision(conn, current, source, {'inclusion': 'included' if applicable else 'excluded',
+                'classification_id': classification, 'evaluation_method': method}, actor)
+            conn.execute(self.catalog.table('evidence').insert().values(md5=source['md5'], record_kind='publication',
+                record_key=str(publication['publication_id']), source=actor, payload=evaluation))
             # Validate actual retained fields after protections, not just the incoming payload.
             fresh = self._schema(conn, source)
             proposal_ids = sorted(self._proposal_ids(conn, publication['publication_id']) - before_proposals)

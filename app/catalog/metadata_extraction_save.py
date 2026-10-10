@@ -1,0 +1,183 @@
+"""Prepare guarded extraction writes and submit one atomic PostgreSQL batch."""
+
+import json
+from copy import deepcopy
+from pathlib import Path
+
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extensions import TRANSACTION_STATUS_IDLE
+from psycopg2.extras import Json
+
+from app.catalog.contracts import CatalogConflict, document_md5, nonblank
+from app.catalog.metadata import SCALARS, compose_metadata, decompose_metadata, items
+from app.catalog.metadata_store import RELATIONAL_FIELDS, comparable_credits, credit_signature, unmanaged_subjects
+from app.catalog.schema_org import metadata_contract_issues
+from app.document_operation_lock import DocumentOperationBusy
+from app.runtime_config import config_integer
+
+_BATCH = Path(__file__).with_suffix('.sql').read_text(encoding='utf-8')
+
+
+def comparable_record(record):
+    result = {key: deepcopy(value) for key, value in record.items() if key not in {'publication_id', 'revision'}}
+    result['credits'] = comparable_credits(result['credits'])
+    return result
+
+
+def _projected_record(record):
+    """Match the normalized readers' omission of nulls and empty author lists."""
+    result = deepcopy(record)
+    for field in ('subjects', 'audiences'):
+        result[field] = [{key: value for key, value in item.items() if value is not None}
+                         for item in result[field]]
+    reference = result['based_on']
+    if reference is not None:
+        if set(reference) - {'@type', 'name', 'inLanguage', 'url', 'author'}:
+            raise ValueError('unsupported source-work reference')
+        normalized = {key: reference[key] for key in ('@type', 'name', 'inLanguage', 'url')
+                      if key in reference and reference[key] is not None}
+        authors = [{'@type': entity['@type'], 'name': entity['name']}
+                   for entity in items(reference.get('author'))]
+        if authors:
+            normalized['author'] = authors
+        result['based_on'] = normalized
+    return result
+
+
+def _decision(publication, protected):
+    if publication['evaluation_method'] is None:
+        return {}, {}
+    changes = {field: value for field, value in {
+        'inclusion': 'pending', 'classification_id': None, 'evaluation_method': None,
+    }.items() if publication[field] != value}
+    if protected & {'inclusion', 'classification_id', 'evaluation_method'}:
+        return {}, changes
+    return changes, {}
+
+
+def _merge(snapshot, incoming):
+    source = snapshot['source']
+    before = source['metadata_record']
+    protected = set(source['publication_protections'])
+    doc_protected = set(source['document_protections'])
+    decision, decision_proposal = _decision(snapshot['publication'], protected)
+    prior = {(row['role'], row['position'], row['nested_position']): row for row in before['credits']}
+    for credit in incoming['credits']:
+        old = prior.get((credit['role'], credit['position'], credit['nested_position']))
+        if (old and credit['kind'] == old['kind'] and credit['role_name'] == old['role_name']
+                and credit['raw_name'] == old.get('display_name')):
+            credit['raw_name'] = old['raw_name']
+    changed = {field for field in RELATIONAL_FIELDS - {'credits'} if incoming[field] != before[field]}
+    if comparable_credits(incoming['credits']) != comparable_credits(before['credits']):
+        changed.add('credits')
+        signatures = {credit_signature(row) for row in incoming['credits']}
+        if any(row['resolution'] == 'confirmed' and credit_signature(row) not in signatures
+               for row in before['credits']):
+            protected.add('credits')
+    scalars = {field: incoming['scalars'].get(field) for field in SCALARS.values()
+               if snapshot['publication'][field] != incoming['scalars'].get(field)}
+    if before['languages'] != incoming['languages']:
+        scalars['languages'] = incoming['languages']
+    blocked = {field: value for field, value in scalars.items() if field in protected}
+    blocked.update({field: incoming[field] for field in changed & protected})
+    if 'audiences' in blocked:
+        blocked['audience_array'] = incoming['audience_array']
+    file_changes = {field for field in {'access_modes', 'sufficient_modes'} if incoming[field] != before[field]}
+    blocked.update({field: incoming[field] for field in file_changes & doc_protected})
+    merged = deepcopy(before)
+    for field, value in scalars.items():
+        if field in protected:
+            continue
+        if field == 'languages':
+            merged[field] = value
+        elif value is None:
+            merged['scalars'].pop(field, None)
+        else:
+            merged['scalars'][field] = value
+    for field in changed - protected:
+        merged[field] = incoming[field]
+    if 'audiences' not in protected:
+        merged['audience_array'] = incoming['audience_array']
+    for field in file_changes - doc_protected:
+        merged[field] = incoming[field]
+    return merged, {
+        'relations': sorted(changed - protected),
+        'languages_changed': 'languages' in scalars and 'languages' not in protected,
+        'file_changes': sorted(file_changes - doc_protected),
+        'blocked': blocked, 'decision': decision, 'decision_proposal': decision_proposal,
+    }
+
+
+def _prepare(source, schema_org, *, actor, method):
+    if 'save_snapshot' not in source:
+        raise CatalogConflict('Extraction snapshot is missing; resume with a fresh inventory')
+    saved = source['save_snapshot']
+    incoming = decompose_metadata(deepcopy(schema_org))
+    incoming['subjects'] = unmanaged_subjects(incoming['subjects'])
+    merged, plan = _merge(saved, incoming)
+    merged = _projected_record(merged)
+    schema = compose_metadata(merged)
+    path = saved['source']['classification_path'] if not plan['decision'] else None
+    if path is not None:
+        schema['about'] = unmanaged_subjects(merged['subjects']) + [
+            {'@type': 'DefinedTerm', 'termCode': value,
+             'inDefinedTermSet': {'@type': 'DefinedTermSet', 'name': termset}}
+            for termset, value in (('DDC', path['ddc']), ('CategoryPath', ' > '.join(path['path_en'])))
+        ]
+    issues = metadata_contract_issues(schema)
+    if issues and not (plan['blocked'] or plan['decision_proposal']):
+        raise CatalogConflict('Protected or retained metadata requires review: ' +
+                              ', '.join(sorted({issue['code'] for issue in issues})))
+    prior = {credit_signature(row): row['contribution_id'] for row in saved['source']['metadata_record']['credits']}
+    plan['retained_credits'] = [prior[credit_signature(row)] for row in merged['credits']
+                               if credit_signature(row) in prior]
+    return {
+        'snapshot': saved, 'md5': document_md5(source['md5']),
+        'actor': nonblank(actor, 'actor'), 'method': nonblank(method, 'method'),
+        'schema_org': schema_org, 'expected': comparable_record(merged), 'plan': plan,
+        'expected_classification_path': path,
+    }
+
+
+def save_extracted_metadata(engine, schema, source, schema_org, *, actor, method, snapshot_query):
+    payload = _prepare(source, schema_org, actor=actor, method=method)
+    # The simple-query message has an implicit transaction spanning all its
+    # statements. Its final SELECT returns proposals before the server commits;
+    # execute() only succeeds after the complete message, including that commit.
+    statement = sql.SQL('SET TRANSACTION READ WRITE; SET LOCAL search_path TO {}, public;\n').format(sql.Identifier(schema))
+    statement += sql.SQL(_BATCH.replace('{{snapshot_query}}', snapshot_query))
+    pooled = engine.raw_connection()
+    connection = pooled.driver_connection
+    previous_autocommit = connection.autocommit
+    try:
+        if connection.get_transaction_status() != TRANSACTION_STATUS_IDLE:
+            raise RuntimeError('Metadata batch requires an idle pooled PostgreSQL connection')
+        connection.autocommit = True
+        with connection.cursor() as cursor:
+            cursor.execute(statement, {
+                'payload': Json(payload, dumps=lambda value: json.dumps(value, ensure_ascii=False)),
+                'lock_timeout': f"{config_integer('postgres', 'lock_timeout_seconds') * 1000}ms",
+            })
+            proposals = cursor.fetchone()[0]
+        return proposals
+    except psycopg2.Error as exc:
+        if exc.pgcode == 'MZ001':
+            raise CatalogConflict(exc.diag.message_primary) from None
+        if exc.pgcode == 'MZ002':
+            raise DocumentOperationBusy(exc.diag.message_primary) from None
+        # A missing commit acknowledgement is not permission to replay a write.
+        # Discard failed sessions; normal discovery reconciles durable metadata.
+        pooled.invalidate()
+        raise
+    finally:
+        try:
+            if not connection.closed:
+                if connection.get_transaction_status() != TRANSACTION_STATUS_IDLE:
+                    connection.rollback()
+                connection.autocommit = previous_autocommit
+        except BaseException:
+            pooled.invalidate()
+            raise
+        finally:
+            pooled.close()
