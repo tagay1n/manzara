@@ -38,6 +38,8 @@ Run daily maintenance without a terminal using `python scripts/run_daily_mainten
 
 The CLI launches idle with a compact activity row and an inline prompt. Type `/` for a filtered command picker; arrows navigate, Enter chooses, Tab completes, and Esc dismisses. Ordinary text receives a command hint; it is never executed as a shell command.
 
+Command, task, and run pickers keep the list stationary while the selection moves within the visible area, scrolling only when needed to reveal the selected entry. Lists that fit remain fully visible; the picker heading shows the selection's position and total matches. Long labels wrap within the terminal width.
+
 Outside pickers, Up recalls older submitted commands and Down moves toward newer ones, restoring your unfinished input after the newest command. Recalled commands stay in the prompt until you press Enter; editing one resumes command completion. History includes commands chosen from the picker, skips empty input and consecutive duplicates, and lasts for the current CLI session. Press Esc to dismiss an open command picker before browsing command history. `/history` remains the task run picker.
 
 | Command | Behavior |

@@ -184,20 +184,26 @@ class Terminal:
     def _picker_title(self):
         titles = {"commands": "Commands", "task": "Tasks · select, then /run",
                   "history": f"Recent runs · {self.task.title if self.task else ''} (latest 20)"}
-        return [("", titles.get(self.mode, ""))]
+        title = titles.get(self.mode, "")
+        items = self._picker_items()
+        if items:
+            title += f" · {min(self.picker_index, len(items) - 1) + 1} of {len(items)}"
+        return [("", title)]
 
     def _picker_text(self):
         items = self._picker_items()
         if not items:
             return [("class:disabled", "No matches")]
         self.picker_index = min(self.picker_index, len(items) - 1)
-        # Keep the selected row visible without a permanent scrolling pane.
-        first = self.picker_index
         rows = []
-        for index in range(first, min(len(items), first + 5)):
-            _, label = items[index]
+        for index, (_, label) in enumerate(items):
+            if index:
+                rows.append(("", "\n"))
+            if index == self.picker_index:
+                # Let Window keep the selection visible and scroll at viewport edges.
+                rows.append(("[SetCursorPosition]", ""))
             style = "class:selected" if index == self.picker_index else ""
-            rows.append((style, f"{'›' if index == self.picker_index else ' '} {redact(label)}\n"))
+            rows.append((style, f"{'›' if index == self.picker_index else ' '} {redact(label)}"))
         return rows
 
     def _activity_text(self):
