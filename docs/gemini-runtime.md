@@ -1,40 +1,33 @@
-# Shared Gemini runtime contract
+# Shared Gemini runtime
 
-Read this only when changing `app/gemini_*.py` or a Gemini-consuming workflow.
+Read when changing `app/gemini_*.py` or consumers. All calls use the shared runtime/configured model pool; never hardcode task models. Configuration uses account-to-key-list mappings, with strings or `{api_key, quota_domain}` entries; retired aliases/account lists fail.
 
-- All Gemini calls use the shared runtime manager. Resolve model aliases and pools from config; task logic must not hardcode model names.
-- Keys are grouped by owner account; quota state is grouped by configured Google project/domain and model. A plain string key defaults to an independent quota domain; use `{api_key, quota_domain}` entries for keys sharing a project. All workflows use a shared round-robin cursor to select the next ready configured model, skipping pauses, exhausted projects and item content exclusions. Claims and cursor advances are atomic SQLite transactions shared across processes.
-- Prefer accounts without active requests, then the least recently used eligible project. Independent projects under a busy account remain usable. Hold one renewable request lease per project across all models; owner tokens protect heartbeat/release, and expired leases recover after a crashed worker. Enforce configured project/model generation spacing, including when multiple keys share a project. Shared request transports advance spacing at the actual generation start after uploads/preparation, under the same lease. Every task uses one worker and sends one request at a time; necessary lease-renewal support threads remain.
-- Quota control is provider-led: conservative project/model spacing plus Gemini's quota responses, without a billing ledger, proactive quota table or token-count API calls. There is no global ten-request/minute cap. `gemini.runtime` explicitly configures per-item quota rotations, transient attempts, project spacing/leases, provider waits, reset blackout, cooldowns, model pauses, and generic-quota circuits. Missing policy fields fail; values have no code defaults. Cooldowns and daily exhaustion remain disposable local SQLite state.
-- Only a `429` with explicit per-day quota evidence causes quota-domain/model exhaustion until Pacific reset. Generic, RPM, TPM, rolling-spend, and shared-capacity `429` responses start a persisted quota-domain/model cooldown instead. Honor Gemini retry metadata and otherwise use bounded exponential cooldowns from the configured base to maximum. Generic `429` responses open the shared model circuit at the configured distinct-domain threshold/window, for the configured pause. A successful request clears that model's generic-429 circuit history and the successful domain's cooldown history.
-- Daily exhaustion clears at reset rollover. Block new requests within `gemini.runtime.reset_blackout_seconds` on either side of Pacific reset. The CLI exposes no quota reset or blackout override commands.
-- A `400` rejects only the item. A `5xx` starts the configured shared model pause.
-- Transport and `5xx` failures share a bounded retry budget. Authentication/configuration errors are task-fatal. Uploaded Gemini files use shared best-effort cleanup.
-- All provider and flow messages use the shared redacted stdout logger, without worker prefixes, log files, or events. Provider waits are direct local run snapshots; JSON artifacts and summaries remain separate from logs.
-- Gemini configuration uses the shared runtime loader and the account-to-key-list mapping shown in `config.example.yaml`. Keys are strings or `{api_key, quota_domain}` mappings. Retired account-list and field aliases are rejected.
+## Scheduling and leases
 
-Personality normalization opts into `run_ordered_model_pool(...,
-yield_on_transient=True)`: it yields the item immediately on 429, service 5xx,
-transport failures and local deadlines. The shared runtime first records its
-normal key/quota/model state. These transient outcomes do not exclude a model as
-a content failure. The personality queue handles one later turn after the first
-pass, with durable deferral. The worker proceeds to the next person using another
-ready model, subject to the personalities-only pacing gate below. The scheduler
-waits stoppably when the pool has no ready capacity or the run pacing gate is
-closed. An item blocked by its content exclusions yields while
-other items can run; total daily exhaustion ends the queue without consuming
-untouched work. Other workflows retain bounded same-item retry and checkpoint
-policies while using the same ready-model scheduler.
+Keys belong to owner accounts; quotas belong to configured Google project/domain + model. Plain keys default to independent quota domains; explicitly group keys sharing a project. Atomic SQLite claims and round-robin cursor select ready models across processes, skipping pauses/exhaustion/item exclusions. Prefer idle accounts, then least-recently-used eligible projects; independent projects under busy accounts remain usable.
 
-Personality normalization also opts into a run-scoped `GeminiPacingPolicy` loaded from `gemini.personality_pacing`. Configured increasing interval/cooldown sequences and quota/success thresholds control slowdown, exclusive probes, cooldown escalation, and recovery. Response time counts toward generation spacing. Other tasks do not enable this gate. Ordinary model service failures preserve recovery progress while retaining the shared model pause; quota, transport, timeout, and neutral outcomes reset that progress. Failed service probes still escalate cooldowns. Content validation failures count as provider availability for pacing without changing their item failure semantics.
+One renewable owner-token lease per project spans all models; heartbeat/release are guarded and expired leases recover crashes. Configured project/model spacing advances at actual generation start after preparation/uploads under the lease. Each task sends one request at a time; lease support threads are allowed.
 
-`gemini.request` supplies request and personality/metadata I/O timeouts, uploaded-file activation/poll timing, sampling settings, and response-log limits. An I/O timeout is not a hard deadline for a streamed response's total duration. Uploaded files still receive shared best-effort cleanup.
+Provider-led quota control uses spacing and responses, without billing ledgers, proactive quota tables, token-count calls, or a global ten-request/minute cap. Required `gemini.runtime` policies configure quota rotations, transient budgets, spacing/leases, waits, reset blackout, cooldowns, model pauses, and generic circuits. State is disposable SQLite.
 
-Admission and probe ownership use renewable SQLite leases. Preparation reserves
-admission; the transport advances spacing at the actual generation start.
-Epochs prevent responses from before a cooldown from reopening the queue.
-Stdout log lines and direct provider-wait snapshots describe interval, cooldown
-and probe transitions. Requests within the same
-run retain pacing state; each new run starts fresh at its configured initial interval while existing
-shared provider cooldowns still apply. Stop tasks gracefully before changing
-coordination contracts; incompatible lease implementations must not overlap.
+| Outcome | Shared action |
+| --- | --- |
+| 429 with explicit per-day evidence | Exhaust domain/model until Pacific reset |
+| Generic/RPM/TPM/rolling-spend/shared-capacity 429 | Persist cooldown; honor retry metadata or bounded exponential policy |
+| Distinct-domain generic 429 threshold/window | Pause model for configured circuit duration |
+| Success | Clear model generic-429 history and successful-domain cooldown history |
+| 400 | Reject only the item |
+| 5xx | Configured model pause; share bounded transient budget with transport failures |
+| Authentication/configuration error | Fail task |
+
+Daily exhaustion clears at rollover; block new requests within configured blackout on both sides of Pacific reset. CLI exposes no reset/blackout overrides. Uploaded files receive best-effort cleanup. Shared redacted stdout logging and local provider-wait snapshots follow root/task-runtime rules.
+
+## Personality queue and pacing
+
+Personality normalization uses `run_ordered_model_pool(..., yield_on_transient=True)`: 429/5xx/transport/deadlines yield immediately after provider state is recorded, without content exclusions. Its queue owns one later turn; item-only exclusions yield while other names run, and total daily exhaustion leaves untouched work. Other consumers retain bounded same-item retry policies.
+
+Only personality uses run-scoped `GeminiPacingPolicy` from `gemini.personality_pacing`. Increasing interval/cooldown sequences and quota/success thresholds govern slowdown, exclusive probes, escalation, and recovery. Response time counts toward spacing. Service failures preserve recovery progress plus shared pauses; quota/transport/timeout/neutral outcomes reset progress. Failed service probes escalate cooldowns. Content-validation failures count as provider availability without changing item semantics.
+
+Renewable SQLite leases own admission/probes; preparation reserves admission and transport advances generation spacing. Epochs prevent pre-cooldown responses from reopening the queue. Logs/wait snapshots report transitions. Pacing persists within a run; new runs start at the configured initial interval while shared provider cooldowns remain. Stop gracefully before coordination changes; incompatible lease implementations must not overlap.
+
+`gemini.request` owns request/personality/metadata I/O timeouts, file activation/polling, sampling, and response-log limits. I/O timeout is not a hard total streaming deadline.

@@ -1,23 +1,16 @@
-# Library flow guidance
+# Library flow rules
 
-These rules apply to `app/modules/library/`.
+Applies to `app/modules/library/`. Use [owner lookup](guidance/navigation.md), then only matching guidance:
 
-The PostgreSQL catalog is migrated. Personality normalization, non-PDF extraction, book preview generation, static Library export, publisher clustering proposal generation, collection discovery, and metadata extraction/evaluation have catalog-native interactive CLI handlers. Publisher review/apply remains deferred; collection discovery is deterministic and proposal-only, with validation/apply and its former review workbench removed. Cleanup preparation runs through daily maintenance using the shared task runtime; explicit cleanup review commands remain in the CLI. All registered interactive workflows have catalog-native handlers; live execution remains unverified. Guidance below preserves workflow requirements; legacy table/field names in remaining code need verification against the catalog. See `docs/catalog-model.md` from the repo root. Web pages and HTTP APIs are removed.
-
-Read only the guidance matching the files or behavior being changed:
-
-Use `guidance/navigation.md` to locate implementation owners before reading code. It is a lookup table, not additional policy.
-
-| Area | Guidance |
+| Area | Contract |
 | --- | --- |
-| source cache, previews, non-PDF conversion | `guidance/documents.md` |
-| metadata extraction and evaluation | `guidance/metadata.md` |
-| collection discovery and proposals | `guidance/collections.md` |
-| static-site publishing export | `guidance/site-export.md` |
+| Sources, previews, conversion | [Documents](guidance/documents.md) |
+| Metadata extraction/evaluation | [Metadata](guidance/metadata.md) |
+| Collection proposals | [Collections](guidance/collections.md) |
+| Publisher proposals / Codex exception | [Publishers](guidance/publisher-merges.md) |
+| Static publishing | [Export](guidance/site-export.md) |
 
-General Library rules:
-
-- `~/.manzara/cache/source-documents` is a shared persistent, MD5-verified source cache, not a task artifact directory. Generated and temporary outputs stay in the retention-oriented `cache/` and `workspaces/` subtrees.
-- Gemini workflows use only the shared configured Gemini model pool. Publisher merge analysis is the explicit exception: it uses configured Codex with ChatGPT subscription authentication, never provider or billing fallback. Read `guidance/publisher-merges.md` for this workflow.
-- Flow work is resumable and must preserve per-item failure context and stable progress/artifact summaries.
-- Library cleanup preparation is planning-only. Remote or catalog mutation requires the guarded Maintenance executor and explicit persisted review state.
+- Use the configured MD5-verified persistent source cache; generated/temporary outputs belong in artifact `cache/` or `workspaces/` subtrees.
+- Gemini consumers use the shared configured pool. Publisher analysis uses configured subscription-authenticated Codex without provider/billing fallback.
+- Preserve resumability, item failure context, and stable progress/artifact summaries.
+- Cleanup preparation is planning-only. Remote/catalog cleanup requires the guarded Maintenance executor and persisted review state.

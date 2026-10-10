@@ -2,28 +2,24 @@
 
 ## Backup contract
 
-`.github/workflows/nightly-postgres-backup.yml` runs at **01:27 UTC** and supports manual dispatch. `scripts/backup_postgres_to_b2.py` creates independent custom-format logical dumps using YAML `backup.postgres_image`, covering `database_schema`, `public`, and `pg_trgm`, without ownership/privileges.
+[nightly-postgres-backup.yml](../.github/workflows/nightly-postgres-backup.yml) runs at 01:27 UTC or manual dispatch. `scripts/backup_postgres_to_b2.py` creates independent custom-format dumps with YAML `backup.postgres_image`, covering `database_schema`, `public`, and `pg_trgm`, without ownership/privileges. Validate via `pg_restore --list`, record SHA-256, upload sequentially with SSE-B2 AES-256, and verify remote size/checksum/encryption.
 
-S3 uploads run sequentially on the calling worker. It validates with `pg_restore --list`, records SHA-256 metadata, requests SSE-B2 AES-256, and verifies remote size/checksum/encryption. This documents workflow behavior; it does not confirm current remote configuration or successful runs.
-
-| Recovery tier | Object key | Retention |
+| Tier | Object key | Lifecycle |
 | --- | --- | --- |
 | Daily | `logical/manzara/daily/YYYY/MM/manzara-<UTC timestamp>.dump` | Hide after 90 days; delete 1 day later |
 | Monthly | `logical/manzara/monthly/YYYY/manzara-YYYY-MM.dump` | Hide after 730 days; delete 1 day later |
 
-Monthly retains the first successful complete dump of the UTC month; there is no incremental chain.
+Monthly preserves the first successful full dump of each UTC month; no incremental chain.
 
 ## Configuration
 
-Use the existing database/CA/backup secrets and storage repository variables listed in [runtime configuration](operations.md#runtime-configuration). Workflow policies, including the PostgreSQL image and connection deadline, live in `.github/config/backup.yaml`; setup writes these and the credentials into private YAML. The workflow enforces `sslmode=verify-full` and requires the CA secret. Local backup operations still require explicit YAML settings and a CA value or an existing certificate path in `database_url`.
+[Operations](operations.md#runtime-configuration) lists credentials/profile setup. Workflow requires CA and `sslmode=verify-full`; local backup requires explicit YAML plus CA or URL certificate path. Store secrets in artifact `private/credentials/`. Scope the B2 key to `ttbackups`, `logical/manzara/`, and `listFiles`/`readFiles`/`writeFiles`; read verifies uploads/monthly preservation. No delete/bucket-management rights are needed.
 
-Keep the CA and credentials outside git under the artifacts root's `private/credentials/`. Scope the B2 key to `ttbackups`, prefix `logical/manzara/`, and `listFiles`/`readFiles`/`writeFiles`. Read access verifies uploads and preserves monthly objects; no delete/bucket-management permission is needed.
-
-Configure B2 lifecycle rules **only** for `logical/manzara/daily/` and `logical/manzara/monthly/`, using the retention values above and canceling unfinished large files after 1 day. Never use a bucket-wide prefix. Processing is asynchronous. SSE-B2 is encryption at rest; valid read credentials still yield plaintext archives.
+Apply lifecycle rules only to the daily/monthly prefixes above; cancel unfinished large files after one day. Never use bucket-wide rules. Processing is asynchronous. SSE-B2 protects at rest; authorized downloads are plaintext.
 
 ## Restore drill
 
-After setup, dispatch once and inspect the Action summary: daily/monthly keys, size, SHA-256, encryption. Download a dump with independently held read credentials:
+Dispatch once after setup and inspect keys/size/SHA-256/encryption. Download with independently held read credentials:
 
 ```bash
 aws s3 cp s3://ttbackups/logical/manzara/daily/YYYY/MM/manzara-TIMESTAMP.dump /tmp/manzara-restore.dump \
@@ -35,8 +31,6 @@ docker run --rm --volume=/tmp/manzara-restore.dump:/backup/manzara.dump:ro \
   postgres:18 pg_restore --list /backup/manzara.dump
 ```
 
-Compare local SHA-256 with object metadata. Restore into a new, empty, isolated PostgreSQL database via a private libpq service file using `pg_restore --no-owner --no-privileges`. Never use production for drills. Verify Alembic revision, normalized catalog/checkpoint counts, constraints/indexes, and representative reads. Backend readiness remains a separate unresolved issue.
+Compare SHA-256 with metadata. Restore directly into an empty isolated PostgreSQL database using private libpq service settings and `pg_restore --no-owner --no-privileges`; never production or a precreated baseline. Verify Alembic revision, catalog/checkpoint counts, constraints/indexes, representative reads. Older-than-`20261008_0062` dumps require historical code/reviewed upgrades under [database tools](operations.md#database-tools), never restamping. Worker readiness remains separate.
 
-The active Alembic history starts at `20261008_0062`. Dumps at older revisions need the historical checkout and reviewed upgrade procedure in [operations](operations.md); do not stamp a restored older schema to the baseline. Restore dumps directly into an empty database rather than creating the baseline over their objects first.
-
-Enable Actions failure notifications and verify recovery points periodically; schedules may be missed. Update client major version before a server upgrade beyond PostgreSQL 18.
+Enable Actions failure notifications, periodically verify recovery points, and update client major before server upgrades beyond PostgreSQL 18. A scheduled/listed archive does not prove successful backup or restore.

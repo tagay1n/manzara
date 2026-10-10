@@ -1,33 +1,20 @@
 # Verification
 
-Create, modify, or run tests only when the owner explicitly requests that work, as required by root [AGENTS.md](../AGENTS.md). Implementation/refactoring and committing do not imply test authorization. No automatic TDD or full-suite requirement applies.
+[Root rules](../AGENTS.md) require explicit owner requests to create, modify, or run tests. Implementation, refactoring, documentation, and commits do not authorize test work. No test suite is retained; pytest is not a runtime dependency.
 
 ## Default inspection
 
-Review changed code and contracts, inspect relevant paths/configuration, and use `git diff --check`. For documentation, verify local links and owner paths against retained code. Do not start the backend or apply migrations merely to validate docs. Report the limits of inspection; do not claim runtime readiness from static checks.
+Review changed contracts, code, dependencies, and configuration; use `git diff --check`. For documentation, inspect local links and owner paths. Do not start the backend or apply migrations to validate docs. Static checks do not establish terminal behavior, provider connectivity, catalog mutations, recovery, or operational readiness.
 
 ## Coverage available on request
 
-There is no retained test suite. The obsolete API assembly test was removed with explicit owner authorization. Creating tests or running runtime acceptance checks requires an explicit request; pytest is not a runtime dependency.
+Pending CLI acceptance covers:
 
-Static CLI validation includes syntax inspection, retained import/reference checks, dependency inspection, and `git diff --check`. It does not establish terminal interaction, live provider behavior, transactional catalog mutations, checkpoint recovery, or safe-stop readiness.
+- Idle launch, task/options selection, command/history pickers, settings validation, narrow-terminal resizing, and command recall.
+- Exclusive foreground ownership through finalization/output drain; history preserves that identity.
+- Redacted scrollback, responsive input, honest progress/provider waits, and invalidation after runtime-read failure.
+- Safe stop/restart, quit, repeated Ctrl-C exit 130, terminal restoration, and interrupted-run recovery.
+- Slow/broken output: bounded backpressure, ordered transcript, coalesced redraws, final drain, and exit 1 on output errors.
+- Structured artifacts independent of logs/events; approved SQLite reset and retained files; scheduled stdout flushing and finalization.
 
-Terminal verification requires explicit owner authorization. The current CLI acceptance scope is:
-
-1. Launch idle with the requested task/options selected; task selection never starts work.
-2. Use command/task/history pickers, settings validation and narrow-terminal resizing without persistent clutter.
-3. Reject repeated starts and task/settings changes from the initial request through worker finalization and output drain.
-4. Stream every redacted run message into native scrollback while preserving partially typed commands and responsive controls.
-5. Distinguish starting, discovery, processing, provider backoff, safe stopping, and finalizing; animate quiet activity without fabricating progress, and visibly invalidate progress after runtime-read failure.
-6. Browse history without changing foreground identity; distinguish deferred, stopped, failed, and completed results.
-7. Safely stop with Ctrl-C, drain output, return to idle, and start another run.
-8. Safely quit or force exit during startup/work/finalization with terminal restoration and retained recovery semantics; verify idle input clearing and ordinary `q` handling.
-9. Exercise slow/broken output without silent loss during normal operation, unbounded buffering, deadlock, or false success. With the terminal reader stalled, input must remain attached and a repeated Ctrl-C must exit with code 130 without waiting for output. Resume slow output and inspect transcript ordering, coalesced redraws, resize handling, and final drain. Output errors, including during final renderer cleanup, must produce exit code 1.
-10. Save structured artifacts and summaries directly, with no events or log files and no dependence on an existing task directory.
-11. Verify the approved local-state reset on upgrade, retain existing artifact files, and verify stdout-only scheduled output, flushing, and worker finalization.
-
-These scenarios are pending runtime acceptance coverage, not an instruction to execute them during ordinary implementation.
-
-If the owner requests database tests, use an isolated PostgreSQL instance matching the migrated catalog with explicit test-only configuration. Never fall back to the owner's database or local config. Keep test scope within the request.
-
-Credential-backed Gemini/storage/converter smoke testing also requires an explicit request, configured services, and reviewed cohorts. Backup restore drills remain deliberate operations under the recovery procedure.
+These are coverage targets, not instructions to execute them. Authorized database tests require isolated PostgreSQL matching the catalog and explicit test-only configuration; never fall back to owner credentials/config. Provider/storage/converter smoke checks require an explicit request, configured services, and reviewed cohorts. Restore drills follow [recovery](postgres-backup-recovery.md).

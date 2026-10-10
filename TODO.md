@@ -1,18 +1,12 @@
 # Active work
 
-## Current priorities
+- Assess operational readiness of catalog-native CLI and scheduled workflows through explicitly authorized execution; inspect deployed schema/readiness before repairing any remaining assumptions. See [verification](docs/verification.md).
+- Publisher proposal review/apply remains deferred. Collection discovery has no review/apply command; metadata proposals pause processing until reviewed.
 
-- Adapt backend reads, writes, and workers to the migrated PostgreSQL catalog. Audit legacy SQL/ORM assumptions before treating workflows as ready. See [catalog model](docs/catalog-model.md).
-- Assess operational readiness of the catalog-native CLI tasks through explicitly authorized execution. All registered interactive tasks now have handlers; static inspection does not establish runtime readiness.
-
-## Older requests needing owner reprioritization
-
-These came from the previous backlog; their current necessity is unconfirmed.
+Older requests need owner reprioritization:
 
 - Rename the database schema; move `gec-annotations-filter`.
 - Revisit task hierarchy and concurrency.
-- Review which metadata facets should be English; descriptions currently follow document language.
-- Review remote `upstream_meta` / Schema.org buckets and retention before deleting anything.
-- Improve OCR handling for image-only DOC/RTF and DjVu; sample FB2/EPUB regressions.
-
-Removed completed converter requests and historical cohort counts. Upstream metadata already has a database owner; a notification panel belongs to the retired web design.
+- Review metadata language policy; current facets are English and descriptions follow document language.
+- Review remote `upstream_meta` / Schema.org retention before deletion.
+- Improve image-only DOC/RTF and DjVu OCR; assess FB2/EPUB regressions.

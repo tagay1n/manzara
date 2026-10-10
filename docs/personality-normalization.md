@@ -1,41 +1,33 @@
-# Personality normalization contract
+# Personality normalization
 
-Owners: `app/modules/library/personality_normalization.py`, `personality_normalization_prompt.py`, `runtime/run_normalize_personalities.py`, `app/repositories/normalization.py`, and `app/catalog/personality_normalization.py`. The CLI registers the flow-owned handler through `app/cli/`; only task controls and run inspection are enabled.
+Owners: `app/modules/library/personality_normalization.py`, `personality_normalization_prompt.py`, `runtime/run_normalize_personalities.py`, `app/repositories/normalization.py`, and `app/catalog/personality_normalization.py`. Select `library.normalize_personalities` in the CLI.
 
 ## Identity and outcomes
 
-Initials accept one alphabetic character or Latin units `Kh`, `Sh`, `Ts`, `Ju`, normalized to an uppercase first letter and one trailing dot. Reject internal dots, multiple initials, and other multi-letter strings. Preserve full names/script; never expand initials.
+Initials accept one alphabetic character or Latin `Kh`, `Sh`, `Ts`, `Ju`, normalized to an uppercase first letter and trailing dot. Reject internal dots, multiple initials, and other multi-letter strings. Preserve full names/script; never expand initials.
 
-The strict response requires every field:
+Strict responses require every field:
 
-- `normalized`: usable components, null reason; derive canonical name/key locally and atomically persist catalog identity/alias hypotheses, review evidence, audit records, and the PostgreSQL checkpoint. New AI associations remain unconfirmed.
+- `normalized`: usable components, null reason; derive canonical name/key locally and atomically persist identity/alias hypotheses, review evidence, audit, and durable checkpoint. AI associations stay unconfirmed.
 - `not_person`: organization, website, or other non-person.
-- `unusable`: potentially personal but unsafe ambiguous/corrupted input.
+- `unusable`: unsafe ambiguous/corrupted personal input.
 
-Negative decisions require a nonblank reason of at most 300 characters and null identity components/title/sex. Rare names or initials alone are not grounds for rejection. Valid negatives stop fallback; malformed/contradictory responses use bounded content-failure fallback.
+Negatives require a nonblank reason of at most 300 characters and null identity/title/sex fields. Rare names/initials alone do not justify rejection. Valid negatives end fallback; invalid/contradictory responses use bounded content-failure fallback.
 
 ## Checkpoints and review
 
-Candidate reads use normalized publications/documents/names/credits and ordered publication languages, retaining raw names, roles/counts, language hints, and source fingerprints. Language hints now come from the migrated child relation; any resulting fingerprint change follows existing changed-input eligibility rules. Canonical display changes must not alter source identity. This adapted read does not establish readiness of every remaining normalization operation.
+Candidates retain raw names, roles/counts, ordered language hints, and source fingerprints from normalized relations. Canonical display changes must not alter source identity.
 
-PostgreSQL checkpoints retain input fingerprints, contract versions, accepted identities, semantic negative reasons/evidence, identity conflicts, explicit human retry intent, timestamps, and successful model hints. SQLite owns processing, pending/failed/deferred attempts, content-failure exclusions, and recovery evidence; `app/repositories/personality_checkpoints.py` composes the two stores without fallback or dual writes. Negative decisions create no canonical and never rewrite source metadata. Unchanged negatives are skipped; changed inputs/contracts or explicit retry reopen eligible work.
+`app/repositories/personality_checkpoints.py` composes PostgreSQL decisions/fingerprints/contracts/accepted identities/conflicts/explicit retries/model hints with local SQLite attempts/content exclusions/recovery evidence. Negatives create no canonical and never rewrite metadata. Unchanged current-contract decisions skip; changed inputs/prompt/schema or explicit persisted `retry_requested` reopen work without erasing evidence. No historical prompt/schema compatibility or CLI review/retry workbench exists.
 
-The CLI exposes no personality review/retry workbench. Existing persisted `retry_requested` decisions remain eligible; changed source metadata or contract versions also reopen applicable work without deleting prior evidence.
+Preserve `recovered_response` / `previous_failure` evidence; item HTTP 400 closes pending recoveries and records blocking evidence. Never reopen every failure automatically.
 
-Only current prompt/schema versions qualify as completed checkpoints. Changed input/contracts and explicit retry intent reopen applicable work; no historical prompt/schema compatibility rules remain. Keep `recovered_response` / `previous_failure` evidence for current retry decisions. An item HTTP 400 closes all pending recoveries and records blocking evidence. Do not broaden recovery into an automatic retry of every failure.
+Reuse an exact-compatible active identity, preferring the checkpoint target; otherwise ambiguity requires review or a new unconfirmed identity is created. Preserve human approvals/reviewed associations. Multiple active alias targets require explicit resolution; normalization never resolves contributions.
 
-A successful result reuses an exact-compatible active identity, preferring the checkpoint's existing target. Multiple compatible targets without that preference fail the item for explicit review. Otherwise it creates an unconfirmed identity. Existing human approvals and reviewed associations are preserved. A spelling with several active alias targets requires explicit resolution. Contributions are never resolved or rewritten by normalization.
-
-Review ownership is checked before inserting the alias: the catalog trigger may create an owner-labeled placeholder during that insert. The transaction fills that new placeholder with AI evidence and audits the change; a pre-existing human review is preserved.
+Check review ownership before alias insertion. If its trigger creates a new owner-labeled placeholder, fill it with AI evidence and audit transactionally; preserve pre-existing human review.
 
 ## Queue and reporting
 
-Untouched names precede checkpointed names before applying the candidate limit. One worker processes names sequentially; each name gets one first-pass turn and at most one later turn, after the first pass finishes.
+Untouched names precede checkpointed names before the limit. Each gets one first-pass turn and at most one later turn after that pass. Yield on 429, service 5xx, transport/local deadline failures after recording shared provider state, without content-excluding the model. Wait stoppably when capacity is unavailable; total daily exhaustion preserves untouched work. A second transient failure defers locally; stop preserves pending retries.
 
-Yield on 429, service 5xx, transport failures, and local deadlines without content-excluding the model. Record shared provider state first. Wait stoppably when no capacity is ready; total daily exhaustion preserves untouched work. A second transient failure leaves local deferral; stopping preserves local pending retry state.
-
-Personality-only pacing and the configured HTTP I/O timeout are defined in [Gemini runtime](gemini-runtime.md). An I/O timeout is not a total streaming deadline.
-
-Count unique people separately from physical `model_attempts`; distinguish negative outcomes, failures, final deferrals, and pending retries. Write shared stdout logs and explicit summary artifacts.
-
-The CLI passes an explicit run context, shares its PostgreSQL pool, and uses the shared stdout logger on its single task worker. Stop prevents new claims and waits for safe checkpoint boundaries. Structured artifacts and final progress survive stopped/deferred runs; logs are never parsed into business results. Launch with `python -m app --task library.normalize_personalities`.
+[Gemini runtime](gemini-runtime.md) owns personality pacing and I/O timeouts. Count unique people separately from physical `model_attempts`, distinguishing negatives, failures, final deferrals, and pending retries. Safe stop prevents new claims and finishes checkpoint boundaries; shared logging/progress/artifacts retain stopped/deferred outcomes.

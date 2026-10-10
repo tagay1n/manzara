@@ -1,17 +1,14 @@
-# Task runtime guidance
+# Task runtime rules
 
-These rules apply to `app/task_runtime/` and the shared runner in `app/tasks.py`.
+Applies to `app/task_runtime/` and `app/tasks.py`; extends root rules.
 
-- All task logs go only to stdout. `logging.py` owns one formatter, redaction, run context, and flush/close contract for interactive and scheduled runs. Never create log files, capture subprocess log streams to files, or add file-log switches.
-- Tasks emit no events. Persist coalesced progress and current provider-wait status directly on the local run row; summaries, heartbeat, stop state, and recovery remain local SQLite data.
-- Save structured result artifacts directly under `workspaces/task-runs/<task_id>/run-<run_id>/`. Each artifact gets a separate JSON file and a reference in the run summary. Never derive business results by parsing logs. Artifact writers create their own directories independently of logging.
-- Run exactly one task worker and process items sequentially. No worker settings, executor pools, or concurrent item queues. Managed S3 transfers use `app/s3_transfer.py` to disable SDK threads and CRT transfer selection. Necessary support threads for terminal I/O, run heartbeat, provider lease renewal, and subprocess transport are allowed.
-- The backend owns domain decisions and checkpoints. Handlers receive explicit `RunContext` logging, progress, artifacts, cancellation, and options. Share one bounded PostgreSQL engine; never mutate per-task process environment or redirect global stdout.
-- Log start, item, mutation, decision, failure, and final-summary boundaries with stable identifiers. Keep detailed result inventories in artifacts; final log messages must not dump the artifact index.
-- `batch.py` owns session locking, recovery, sequential stages, signals, and cooperative time budgets. Composition boundaries supply flow descriptors and read-only preflight. Inspect terminal state after worker finalization; return nonzero for failed, stopped, or deferred work.
-- Batch stdout flushes each message. Interactive output uses a bounded thread-safe queue with backpressure and one terminal consumer: redact before enqueueing, preserve order, and drain before completion or exit. Renderer and transcript share a nonblocking writer; keep raw input attached and coalesce redraws during backpressure.
-- Output failure unblocks producers, requests safe stop, and returns CLI exit code 1. Keep the consumer alive during cooperative shutdown; never join workers on the UI loop. Force exit restores input mode without waiting for renderer flushes or buffered-stream locks.
-- The runner enforces one active task through thread finalization. The CLI owns its foreground slot from the initial request through output drain; task/history selection must not replace foreground identity. Presentation flags are not persisted workflow states.
-- Descriptors require Python handlers and own grouping and complete-inventory requirements. Reject candidate limits for complete-inventory tasks before creating a run. Do not persist task definitions or worker counts. `panel_id` is only a retained task-group identifier.
-- Initialize only SQLite at startup and check the catalog read-only. Hold the session lock before initialization/recovery. The owner-approved local reset policy is documented once in [operations](../../docs/operations.md#local-runtime-state); PostgreSQL migrations run separately.
-- Preserve safe-stop boundaries, resumable checkpoints, redaction, and actionable error context. Use direct current contracts; do not retain legacy compatibility branches.
+- `logging.py` owns shared formatting, redaction, run context, and flush/close. Never capture subprocess logs to files or add file-log switches. Persist coalesced progress/provider waits directly on local run rows.
+- Save separate JSON results under artifact `workspaces/task-runs/<task_id>/run-<run_id>/` and reference them in summaries. Writers create directories independently of logging; detailed inventories stay in artifacts, not final log lines.
+- One worker, sequential items; no executor pools/concurrent item queues/worker settings. `app/s3_transfer.py` disables SDK threads/CRT. Support threads may handle terminal I/O, heartbeat, leases, and subprocess transport.
+- Handlers receive explicit `RunContext` logging/progress/artifacts/cancellation/options and share the bounded PostgreSQL engine. Never change per-task process environment or redirect global stdout. Log start/item/mutation/decision/failure/final boundaries with stable IDs.
+- `batch.py` owns session locks, recovery, sequential stages, signals, and cooperative budgets. Composition supplies descriptors/read-only preflight. Finalize workers before inspecting terminal outcome; failed/stopped/deferred work returns nonzero.
+- Batch stdout flushes each message. Interactive output redacts before a bounded ordered queue with backpressure and one terminal consumer. Renderer/transcript share a nonblocking writer; keep input attached and coalesce redraws.
+- Output failure unblocks producers, requests safe stop, and exits 1. Keep the consumer alive during shutdown; never join workers on the UI loop. Force exit restores input without waiting on renderer flush/buffer locks.
+- Enforce one active task through finalization; CLI foreground ownership extends through output drain. History must not replace foreground identity; presentation flags are not persisted states.
+- Descriptors own Python handlers/grouping/full-inventory requirements. Reject invalid limits before creating runs; never persist definitions/worker counts. `panel_id` is a group identifier.
+- Acquire the session lock before SQLite initialization/recovery; check PostgreSQL read-only. [Operations](../../docs/operations.md#local-runtime-state) owns the approved reset policy; migrations run separately. Preserve safe stops, checkpoint recovery, and actionable failures without legacy branches.

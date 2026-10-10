@@ -12,5 +12,3 @@ Paths are relative to the repository root. Policy: [metadata contract](metadata.
 | Prompt | `app/modules/library/runtime/prompts/metadata_evaluation.py` |
 | Parsing, patches, merged validation | `app/modules/library/runtime/metadata/evaluation_types.py`, `app/modules/library/runtime/metadata/evaluation_response.py`, `app/modules/library/runtime/metadata/evaluation_patch.py` |
 | Managed terms, classification normalization, text | `app/modules/library/runtime/metadata/evaluation_terms.py`, `app/modules/library/runtime/metadata/evaluation_classification.py`, `app/modules/library/runtime/metadata/evaluation_text.py` |
-
-Commit audited catalog results before clearing retry checkpoints. The old ORM batch loop, environment-owned run ID, Yandex source fallback, automatic prompt dumps, and file-backed failure lists are removed. Tests and live execution require explicit owner authorization.

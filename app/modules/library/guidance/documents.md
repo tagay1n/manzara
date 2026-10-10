@@ -1,57 +1,49 @@
 # Library document processing
 
-Non-PDF extraction and book preview generation have catalog-native CLI handlers. Other catalog-dependent document workers still need adaptation. Live execution remains unverified. Owners: [navigation](navigation.md).
+Owners: [navigation](navigation.md). Common logging/artifact/lifecycle rules are in the nearest `AGENTS.md`; [operations](../../../../docs/operations.md#local-storage) owns paths/cache configuration.
 
 ## Sources and previews
 
-Select `library.generate_book_previews` with `python -m app --task library.generate_book_previews`. Launch selects the task and remains idle until `/run`. One worker processes the deterministic MD5-ordered cohort. `--limit` caps eligible documents before requests are created; repeated `--only-md5` restricts the cohort. These controls remain saved with run options.
+`library.generate_book_previews` processes an MD5-ordered cohort. `--limit` caps eligibility before request creation; repeated `--only-md5` restricts sources; `--retry-known-failures` creates new requests while preserving generations.
 
-Generate for all `complete=true`, `restricted=false` PDFs of included, unmerged publications, without requiring `selected=true`. Completeness is the catalog's whole-publication flag, formerly `full`, rather than a download/integrity result. Require a verified `s3/primary` location with known size, configured primary storage, and no active document cleanup plan. A source or eligibility change prevents publication.
+Eligible sources are complete unrestricted PDFs of included, unmerged publications, regardless of selection. Completeness means whole-publication content, not download integrity. Require verified `s3/primary` with known size and no active document cleanup plan. Recheck source/eligibility before publication.
 
-Skip current-recipe successful public generations, including successes with zero selected pages. Skip known failed requests unless `--retry-known-failures` is supplied; retries create a new request and preserve existing generations. Pending requests and expired claims resume at the document boundary with a fresh claim token; live claims are skipped. Only requests for the selected cohort are claimed.
+Skip current-recipe public successes, including zero selected pages, and known failures unless explicitly retried. Pending/expired claims resume with fresh tokens at document boundaries; live claims skip. Claim only the selected cohort. Catalog requests/pages own intent, leases, recipe, page count, and selected roles; attempts/errors are local.
 
-Use `documents.primary_storage.bucket.book_previews` as a dedicated public preview bucket and the shared storage configuration/cache. The configured PostgreSQL pool needs at least two connections for the document operation lock and short catalog transactions. Detector packages are pinned in `requirements.txt`; the YAML-selected Hugging Face checkpoint downloads on the first nonempty run. Empty cohorts do not initialize model or storage clients.
+Use configured primary storage/cache and dedicated public `documents.primary_storage.bucket.book_previews`. Pool size must be at least two. Detector packages are pinned in `requirements.txt`; the YAML-selected checkpoint downloads on the first nonempty run. Empty cohorts initialize no model/storage clients.
 
-Logs use the shared terminal/stdout sink without a verbose `.log` file. Tasks emit no events; progress uses the local run row and the shared runner saves the final summary artifact directly. Per-request operational errors remain in local SQLite. Item failures continue and make the run fail; shared storage, model, or database failures stop processing. Cooperative stop finishes the current document. Uploads use immutable request/claim keys and all objects must verify before the catalog publishes page roles. Keep previous outputs and abandoned generation objects for explicit maintenance review.
-
-- Use the shared persistent MD5-verified source cache. Populate processing misses from verified primary Backblaze storage. Enforce `documents.cache_max_gib`; evict least-recently-used completed sources to `documents.cache_target_percent` when exceeded, protecting recent partial downloads and the current source.
-- Preview detection uses pinned `yolov12l-doclaynet.pt`, CPU `imgsz=1024`, first/last three pages. Ignore page-header/footer/picture-only layouts. Select first useful front, last useful back, then next distinct front; persist actual page numbers and distinct roles. Zero/fewer than three qualifying pages is a completed outcome.
-- Catalog requests/pages are the sole durable preview owner, retaining generation intent, leases, recipe, page count, and selected roles. Attempt counts and transient errors are local; the duplicate `library_book_previews` table is retired. Retain rendered workspaces; never prune previews automatically. Review-prefetched sources remain cached until ordinary eviction.
+- Populate source-cache misses only from MD5-verified Backblaze primary storage. Exceeding `documents.cache_max_gib` evicts completed least-recently-used entries to `documents.cache_target_percent`, protecting current sources/recent partials.
+- Detection uses pinned `yolov12l-doclaynet.pt`, CPU `imgsz=1024`, first/last three pages. Ignore header/footer/picture-only layouts; choose first useful front, last useful back, then next distinct front. Persist page numbers/distinct roles; fewer than three or zero useful pages is success.
+- Upload immutable request/claim keys and verify all objects before publishing roles. Item failures continue and fail the run; shared storage/model/database failure stops it. Safe stop completes the current document. Retain previous/abandoned outputs and rendered workspaces for explicit maintenance review; no automatic preview pruning.
 
 ## Extraction and publication
 
-Select `library.extract_non_pdf` with `python -m app --task library.extract_non_pdf`. One worker processes each document through a safe checkpoint boundary. Launch does not start work automatically.
+`library.extract_non_pdf` accepts `--limit`, `--per-mime-limit`, repeated `--only-md5`, and `--retry-known-failures`; options persist and `/settings` preserves cohort controls. Full-catalog promotion and known-source repairs require owner review. Exact retry cohorts use MD5/retry flags and retain old outputs for comparison.
 
-Pandoc and LibreOffice (`soffice`) are required at launch; MOBI additionally needs Calibre's `ebook-convert`. DOC/RTF and legacy PowerPoint Google fallbacks use `credentials/google-drive/personal_token.json` under the configured artifacts root. Missing optional tools/credentials produce per-item operational failures. No legacy repository credential fallback is used.
+Pandoc/LibreOffice (`soffice`) are required at launch; MOBI also requires Calibre `ebook-convert`. Google DOC/RTF/PPT fallbacks use artifact `private/credentials/google-drive/personal_token.json`. Missing optional tools/credentials fail per item; no repository credential fallback.
 
-The CLI accepts `--limit`, `--per-mime-limit`, repeated `--only-md5`, and `--retry-known-failures` for this task. Cohort/retry options are printed when starting and in `/summary`, and saved with run options; changing the limit in `/settings` preserves the cohort. Select the task with `/task`, then explicitly start/resume with `/run`. Reviewed full-catalog promotion remains an owner decision.
-
-
-- Select unrestricted catalog documents with a verified `s3/primary` location and no active document cleanup plan. Read `yandex/source` paths and `s3/content` results from `catalog_locations`; publication inclusion and metadata do not gate extraction. Restricted/unknown privacy is ineligible for this public-output workflow.
-- Extract verified non-PDF sources before language/classification decisions. Treat MIME as a hint; inspect byte signatures. OLE root streams distinguish DOC/PPT/XLS; nested objects do not determine outer format. Ambiguous/unreadable OLE remains unsupported. Persist verified DOC/PPT MIME against the unchanged source; XLS has no catalog correction.
-- Preserve tables, LaTeX, and HTML figures in rich Markdown. Apply the shared Pandoc final formatter: LF, canonical headings/lists/fences, no prose wrapping, one terminal newline; preserve Unicode punctuation, literal text/code/LaTeX/HTML.
-- Retain `unformatted.md`, `final.md`, converted sources/media/ASTs, validation reports, and an archive containing exactly final Markdown under `workspaces/library/non-pdf-extraction/run-<run-id>/<md5>/`. Save a compact `library.non_pdf_local_content` artifact before remote publication; include workspace paths in the summary.
-- Every prepared image needs a public HTML reference. After local validation and saving its artifact, acquire document/location locks and recheck their revisions, privacy, source verification, and cleanup eligibility before uploading. Keep those locks through object verification and the atomic content-location/result commit. MIME and recipe edits respect protected fields and write catalog audit revisions. Keep downstream metadata workspaces separate.
-- New archives use `<md5>/run-<run-id>-<unique-generation>.zip`; images use the matching generation directory. The catalog owns the actual archive URL. Regeneration retains older outputs and cleans unexpected image keys only within the new generation, so failed publication cannot overwrite prior content. Broader remote retention/deletion belongs to guarded Maintenance work.
-- QA cohorts are deterministic and capped per normalized MIME. Full-catalog promotion and known-source repairs need owner review. Use repeated `--only-md5` plus `--retry-known-failures` for exact reviewed retry cohorts; preserve prior outputs for comparison.
-- Only deterministic verified-byte container/decoding/parser failures justify a guarded `corrupted` move. Unsupported/OCR-only content, converter timeouts, output-validation/storage failures, and missing tools are operational or deferred outcomes, never proof of corruption.
-- Non-PDF successful outputs, unsupported decisions, verified MIME facts, and recipe versions are durable. Processing/failure/deferral state, attempt counts, run IDs, and errors are local SQLite; regeneration must retain prior durable output.
-- Runs with operational failures or snapshot conflicts report failure; intact unsupported files and guarded corruption plans are handled outcomes. Deferred content reports a deferred outcome. Source workspaces, inspection artifacts, progress snapshots, and the final summary retain their existing payload kinds.
-- Recipe versions live in `non_pdf_types.py`; inspect code instead of maintaining a second version ledger here.
+- Select unrestricted documents with verified `s3/primary`, no active cleanup, and known privacy; inclusion/metadata do not gate extraction. Source/content locations come from `catalog_locations`.
+- Extract before language/classification decisions. Inspect byte signatures rather than trusting MIME. OLE root streams distinguish DOC/PPT/XLS; nested objects never determine outer format. Ambiguous/unreadable OLE is unsupported. Correct verified DOC/PPT MIME against the unchanged source; no XLS catalog correction.
+- Preserve tables, LaTeX, and HTML figures. Shared Pandoc formatting uses LF, canonical headings/lists/fences, no prose wrapping, one terminal newline, and preserved Unicode/literal code/LaTeX/HTML.
+- Retain `unformatted.md`, `final.md`, converted sources/media/ASTs, validation reports, and an archive containing exactly final Markdown under `workspaces/library/non-pdf-extraction/run-<run-id>/<md5>/`. Save `library.non_pdf_local_content` before remote publication and link workspaces in summaries.
+- Every prepared image needs a public HTML reference. After validation/artifact save, lock document/locations and recheck revisions/privacy/source/cleanup before upload. Hold locks through verification and atomic content-location/result commit. MIME/recipe writes honor protection and audit revisions; metadata workspaces stay separate.
+- Archives use `<md5>/run-<run-id>-<unique-generation>.zip`; images share that generation directory. Catalog stores actual URLs. Never overwrite prior content; unexpected-image cleanup is limited to the new generation. Broader deletion belongs to guarded Maintenance.
+- Only deterministic verified-byte container/decoding/parser failures justify `corrupted` plans. Unsupported/OCR-only content, timeouts, validation/storage failures, and missing tools are not corruption.
+- Successes/unsupported decisions/verified MIME/recipes are durable; attempts/run IDs/errors/deferrals are local. Operational failures/snapshot conflicts fail the run; intact unsupported files/guarded corruption plans are handled; deferred content yields a deferred outcome.
 
 ## Converter contracts
 
-| Format | Required behavior |
+| Format | Behavior |
 | --- | --- |
-| DOC/RTF | LibreOffice first; normalize converted DOCX ZIP metadata. Google Drive fallback only for failed/invalid conversion; always delete temporary Drive files. Word owner files are invalid sources. |
-| Large DOCX | Stream paragraphs/images to HTML only when body XML is oversized and has no tables; otherwise retain normal reader. Omit empty image files with workspace evidence. |
-| PPTX | Visible slides only, coordinate ordering with stable fallback; preserve native text/lists/tables. Defer whole deck for visible pictures/fills/backgrounds, charts, SmartArt, embedded objects/equations, unsupported visuals, or no native text. Ignore hidden slides/notes and unreferenced/master media. No OCR/generated descriptions. |
-| Legacy PPT | Stage byte-detected `.ppt`, convert to PPTX locally; Google Slides fallback for failed/invalid/text-empty conversion, always cleaning remote temporary files. Preserve slide boundaries; ambiguous drawing relations defer. |
-| XLS/XLSX | Stage correct suffix, LibreOffice HTML; retain visible sheet headings/tables, exclude navigation/images/charts/formula expressions. Displayed values may be calculated without source caches. |
-| ODT | Verify ZIP, LibreOffice HTML; retain prose/headings/tables/sidecar images, then shared formatter. |
-| MOBI | Verify BOOKMOBI, Calibre `ebook-convert` to EPUB, Pandoc parsing; retain MOBI source identity. No Google fallback. |
-| HTML | Decode declared charset with verified legacy fallback; flatten prose layout tables, preserve data tables, retain normalized UTF-8 source. |
+| DOC/RTF | LibreOffice first; normalize converted DOCX ZIP metadata. Google fallback only after failed/invalid conversion; delete temporary Drive files. Word owner files are invalid. |
+| Large DOCX | Stream oversized table-free body XML paragraphs/images to HTML; otherwise use normal reader. Omit empty images with workspace evidence. |
+| PPTX | Visible slides, coordinate order/stable fallback, native text/lists/tables. Defer whole deck for visible pictures/fills/backgrounds, charts, SmartArt, embedded objects/equations, unsupported visuals, or no native text. Ignore hidden slides/notes/unreferenced master media. No OCR/generated descriptions. |
+| Legacy PPT | Stage detected `.ppt`, convert locally to PPTX; Google Slides fallback after failed/invalid/text-empty conversion, always deleting remote temporaries. Preserve slide boundaries; ambiguous drawing relations defer. |
+| XLS/XLSX | Correct suffix, LibreOffice HTML; visible sheet headings/tables, no navigation/images/charts/formula expressions. Displayed values may calculate without source caches. |
+| ODT | Verify ZIP, LibreOffice HTML, preserve prose/headings/tables/sidecar images; shared formatter. |
+| MOBI | Verify BOOKMOBI, Calibre EPUB conversion, Pandoc parsing; retain source identity, no Google fallback. |
+| HTML | Declared charset with verified legacy fallback; flatten layout tables, preserve data tables and normalized UTF-8 source. |
 
-PPTX inspection persists `pptx-inspection.json` and a compact artifact. Summary counts distinguish inspected/extracted/image/unsupported/empty decks; visual counts overlap. Oversized XML produces incomplete inspection and no completed-inspection count. Deferred outcomes retain existing content and reopen only on explicit retry/new recipe.
+PPTX saves `pptx-inspection.json`/compact artifacts; counts distinguish inspected/extracted/image/unsupported/empty decks and visual counts may overlap. Oversized XML yields incomplete inspection, never a completed-inspection count. Deferrals retain content and reopen only on explicit retry/new recipe.
 
-Conversion deadlines, size/retry limits, DjVu rendering, AI evidence sizes, and preview detector/rendering/lease policies are explicit in YAML (`non_pdf`, `djvu`, `metadata`, `previews`, and `network`). Missing fields fail; code supplies no operational defaults. Configuration changes apply to newly performed work, preserving the existing checkpoint/recipe rules.
+Recipes live in `non_pdf_types.py`. YAML `non_pdf`, `djvu`, `metadata`, `previews`, and `network` own deadlines/limits/evidence/rendering/lease policies; changes affect newly performed work under checkpoint rules.
