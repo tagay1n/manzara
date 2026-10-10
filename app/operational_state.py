@@ -1,4 +1,4 @@
-"""Local-only flow retry state and reproducible caches; never domain truth."""
+"""Local flow retry state, caches, and CLI preferences; never domain truth."""
 
 import json
 from contextlib import contextmanager

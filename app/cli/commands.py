@@ -24,11 +24,23 @@ COMMANDS = (
 COMMAND_BY_NAME = {command.name: command for command in COMMANDS}
 
 
+def parse_command(text: str) -> tuple[Command | None, str]:
+    parts = text.strip().split(maxsplit=1)
+    if not parts:
+        return None, ""
+    command = COMMAND_BY_NAME.get(parts[0][1:]) if parts[0].startswith("/") else None
+    argument = parts[1].strip() if len(parts) > 1 else ""
+    if command is None or argument not in command.arguments:
+        return None, argument
+    return command, argument
+
+
 def help_text() -> str:
     commands = "\n".join(f"  /{command.name:<10} {command.description}" for command in COMMANDS)
     return ("Manzara commands\n" + commands + "\n\n"
             "  / opens command completion; arrows select, Enter chooses, Tab completes.\n"
-            "  Outside pickers: Up/Down recall commands from this session; Down past the newest restores your draft.\n"
+            "  Outside pickers: Up/Down recall commands; valid slash commands survive restarts (latest 1,000).\n"
+            "  Down past the newest restores your draft. Launch remembers the selected task; --task overrides it.\n"
             "  Task/history pickers: type to search; Esc dismisses.\n"
             "  Settings: Tab changes focus; Enter/Ctrl-S saves; Esc cancels.\n"
             "  Ctrl-C: stop work and stay; press again while stopping/exiting to force exit.\n"

@@ -7,7 +7,6 @@ import re
 import sys
 
 from app.cli.task_registry import build_descriptors
-from app.runtime_config import config_text
 
 
 def _positive(value: str) -> int:
@@ -38,7 +37,7 @@ def main(arguments: list[str] | None = None) -> None:
     decide.add_argument("--keep", nargs="+", required=True, metavar="MD5")
     undo = cleanup_commands.add_parser("undo", help="Undo a decision before cleanup starts")
     undo.add_argument("review_id", type=_positive)
-    parser.add_argument("--task", help="Initially selected task ID")
+    parser.add_argument("--task", help="Initially selected task ID; overrides the remembered selection")
     parser.add_argument("--limit", type=_positive, help="Optional candidate limit; metadata tasks count publications")
     parser.add_argument("--per-mime-limit", type=_positive, help="Non-PDF extraction: deterministic cohort cap per MIME")
     parser.add_argument("--only-md5", action="append", type=_md5, default=[], metavar="MD5",
@@ -46,8 +45,6 @@ def main(arguments: list[str] | None = None) -> None:
     parser.add_argument("--retry-known-failures", action="store_true",
                         help="Extraction/previews: explicitly retry known failures; extraction also retries deferred results")
     args = parser.parse_args(arguments)
-    if args.command is None and args.task is None:
-        args.task = config_text("terminal", "initial_task")
     if args.per_mime_limit is not None and (
         args.command is not None or args.task != "library.extract_non_pdf"
     ):
@@ -56,7 +53,7 @@ def main(arguments: list[str] | None = None) -> None:
         args.command is not None or args.task not in {"library.extract_non_pdf", "library.generate_book_previews"}
     ):
         parser.error("Source cohort/retry options require --task library.extract_non_pdf or library.generate_book_previews")
-    if args.command is None:
+    if args.command is None and args.task is not None:
         descriptor = next((item for item in build_descriptors() if item.task_id == args.task), None)
         if descriptor is None:
             parser.error(f"Unknown task ID: {args.task}")

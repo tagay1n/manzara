@@ -12,7 +12,7 @@ python3 -m venv .venv
 .venv/bin/python -m app
 ```
 
-Execution requires a terminal; `--help` needs no configuration. `--task TASK_ID` selects the initial task and `--limit N` sets its candidate limit. Launch always remains idle until `/run`.
+Execution requires a terminal; `--help` needs no configuration. Launch restores the last selected task, including tasks selected without running them. `--task TASK_ID` overrides and updates that selection; without a saved registered task, YAML `terminal.initial_task` supplies the default. `--limit N` sets the candidate limit; limits and other run options remain session-specific. Launch always remains idle until `/run`.
 
 | Interactive task ID | Contract / controls |
 | --- | --- |
@@ -42,7 +42,7 @@ Daily cleanup preparation and Yandex Sync use `python scripts/run_daily_maintena
 | `/help` | Show commands and keyboard guidance |
 | `/quit` | Stop safely, drain output, exit |
 
-Type `/` for completion; arrows navigate, Enter chooses, Tab completes, Esc dismisses. Task/history pickers support search and scrolling; long labels wrap. Settings use Tab for focus, Enter/Ctrl-S to save, Esc to cancel. Outside pickers, Up/Down recall session commands and restore unfinished input after the newest entry. Ordinary text, including `q`, is never executed as a shell command.
+Type `/` for completion; arrows navigate, Enter chooses, Tab completes, Esc dismisses. Task/history pickers support search and scrolling; long labels wrap. Settings use Tab for focus, Enter/Ctrl-S to save, Esc to cancel. Outside pickers, Up/Down recall commands and restore unfinished input after the newest entry. Valid slash commands survive restarts, retaining the latest 1,000 entries and skipping consecutive duplicates. Unrecognized input stays in current-session recall only. Ordinary text, including `q`, is never executed as a shell command.
 
 One foreground run owns the CLI through worker finalization and output drain. Further starts and task/settings changes are rejected; history browsing preserves foreground identity. Activity animates through discovery, provider waits, stopping, and finalization; counters indicate progress. Runtime-read failure marks progress unavailable. Summaries distinguish completed, stopped, deferred, and failed outcomes. Finalized runs ring the terminal bell once; `PROMPT_TOOLKIT_BELL=false` disables it.
 

@@ -62,6 +62,8 @@ Columns: `md5`, `mime_type`, `ya_path`, `ya_public_url`, `publisher`, `author`, 
 
 The approved fresh-state policy resets older SQLite databases to schema version 8: local history, Gemini coordination, retry exclusions, attempts/errors, and SQLite caches are cleared on first initialization. PostgreSQL checkpoints, artifact files, and source caches are unaffected. Current-version startups retain state; unknown future versions fail. Task definitions remain Python-owned; run options/progress/provider waits/artifact references are local. `panel_id` denotes the task group.
 
+CLI selection and command recall use the existing `operational_items` table under scope `cli.session`, with separate `selection` (`task_id`) and `commands` (`entries`, oldest first) records. They follow the configured `local_state_path`, survive normal restarts, and are cleared by the same local reset policy. Adding these records requires no schema version change or reset. Commands are validated against the Python registry before storage; no log text or credentials are saved. Writes run off the UI loop in order and drain on normal quit; forced exit can lose pending changes. Read failures prevent startup; write failures warn while the session remains usable.
+
 ## Database tools
 
 `PYTHONPATH=. .venv/bin/alembic heads` inspects the code chain; `current` connects to the selected database. Startup never migrates PostgreSQL.

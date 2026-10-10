@@ -30,7 +30,7 @@ from prompt_toolkit.utils import (
 )
 from prompt_toolkit.widgets import Button, Label, TextArea
 
-from app.cli.commands import COMMAND_BY_NAME, COMMANDS, help_text
+from app.cli.commands import COMMANDS, help_text, parse_command
 from app.cli.display import InlineApplication, TerminalDisplay, emergency_notice
 from app.cli.output import OutputFailure, TerminalOutput
 from app.cli.presentation import (
@@ -42,8 +42,9 @@ from app.cli.presentation import (
     status,
     summary_text,
 )
+from app.cli.state import CLIStateStore, append_command
 from app.db import Database
-from app.runtime_config import config_integer, config_number
+from app.runtime_config import config_integer, config_number, config_text
 from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTING
 from app.settings import load_settings
 from app.task_runtime.contracts import RunOptions
@@ -59,6 +60,11 @@ class Terminal:
         self.db = None
         self.runner = None
         self.session = None
+        self.cli_state = None
+        self._cli_state_lock = asyncio.Lock()
+        self._cli_history_loaded = False
+        self._command_history = []
+        self._startup_commands = []
         self.descriptors = []
         self.options = {}
         self.selected_id = arguments.task
@@ -150,6 +156,23 @@ class Terminal:
             await asyncio.to_thread(self.output.write, redact(text) + "\n")
         except OutputFailure as exc:
             self.message = str(exc)
+
+    async def _persist_cli_state(self, item_id, payload):
+        async with self._cli_state_lock:
+            try:
+                await asyncio.to_thread(self.cli_state.save, item_id, payload)
+            except Exception as exc:
+                await self._say(
+                    f"Could not save CLI {item_id}: {redact(exc)}. "
+                    "Check the configured local_state_path and its permissions; "
+                    "this change may not survive restart."
+                )
+
+    def _remember_command(self, text):
+        if not self._cli_history_loaded:
+            self._startup_commands.append(text)
+        elif append_command(self._command_history, text):
+            self._spawn(self._persist_cli_state("commands", {"entries": list(self._command_history)}))
 
     def _prompt_changed(self, _buffer):
         if self.mode in ("task", "history", "settings"):
@@ -338,12 +361,14 @@ class Terminal:
                 self.message = "Task selection is locked until the foreground run finishes."
                 return
             self.selected_id = value.task_id
+            self._spawn(self._persist_cli_state("selection", {"task_id": value.task_id}))
             self._spawn(self._say(f"Selected · {value.title}. Use /settings or /run."))
         elif mode == "history":
             title = self.task.title
             self._spawn(self._say(summary_text(value, title)))
 
     def _submit_command(self, text):
+        self._remember_command(text)
         self.prompt.text = text.strip()
         self.prompt.buffer.reset(append_to_history=True)
         self.mode = ""
@@ -354,10 +379,8 @@ class Terminal:
         if not text:
             return
         self.message = ""
-        parts = text.split(maxsplit=1)
-        command = COMMAND_BY_NAME.get(parts[0][1:]) if parts[0].startswith("/") else None
-        argument = parts[1].strip() if len(parts) > 1 else ""
-        if command is None or argument not in command.arguments:
+        command, argument = parse_command(text)
+        if command is None:
             await self._say("Use / to choose a command, or /help for guidance. Task selection: /task.")
             return
         if not self.ready and command.name not in ("help", "quit"):
@@ -692,18 +715,27 @@ class Terminal:
                            pool_size=settings.database_pool_size, local_state_path=settings.local_state_path)
         self.db.init_local_state()
         descriptors = self.descriptor_factory()
+        self.cli_state = CLIStateStore(settings.local_state_path)
+        remembered_id, commands = self.cli_state.load()
+        task_ids = {task.task_id for task in descriptors}
+        selected_id = self.arguments.task
+        if selected_id is None:
+            selected_id = remembered_id if remembered_id in task_ids else config_text("terminal", "initial_task")
+        selected = next((task for task in descriptors if task.task_id == selected_id), None)
+        if selected is None:
+            raise ValueError(f"Unknown task ID: {selected_id}")
+        if selected.requires_full_inventory and self.arguments.limit is not None:
+            raise ValueError(f"{selected.title} requires the complete inventory; omit --limit")
         recovered = self.db.recover_active_runs()
         if recovered:
             self.output.write(f"Recovered interrupted runs: {recovered}\n")
         self.runner = TaskRunner(self.db, descriptors, log_factory=self.output.sink)
-        return descriptors
+        return descriptors, selected_id, commands
 
     async def _startup(self):
         try:
-            self.descriptors = await asyncio.to_thread(self._initialize)
+            self.descriptors, self.selected_id, self._command_history = await asyncio.to_thread(self._initialize)
             self.descriptors.sort(key=lambda item: (item.group, item.title))
-            if self.task is None:
-                raise ValueError(f"Unknown task ID: {self.arguments.task}")
             for task in self.descriptors:
                 extraction = task.task_id == "library.extract_non_pdf"
                 source_cohort = task.task_id == self.arguments.task and task.task_id in {
@@ -715,6 +747,19 @@ class Terminal:
                     retry_known_failures=self.arguments.retry_known_failures if source_cohort else False,
                     only_md5s=tuple(dict.fromkeys(self.arguments.only_md5)) if source_cohort else (),
                 )
+            # Reset the toolkit loader while retaining the draft and commands
+            # entered during initialization. History is never auto-submitted.
+            buffer = self.prompt.buffer
+            buffer.reset(document=buffer.document)
+            buffer.history = InMemoryHistory(history_strings=self._command_history + self._startup_commands)
+            changed = False
+            for text in self._startup_commands:
+                changed = append_command(self._command_history, text) or changed
+            self._startup_commands.clear()
+            self._cli_history_loaded = True
+            self._spawn(self._persist_cli_state("selection", {"task_id": self.selected_id}))
+            if changed:
+                self._spawn(self._persist_cli_state("commands", {"entries": list(self._command_history)}))
             self.ready = True
             self.message = ""
             await self._say(f"Manzara · {self.task.title} selected. /task to change, /settings to edit, /run to start.")
