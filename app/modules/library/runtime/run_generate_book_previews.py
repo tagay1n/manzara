@@ -4,8 +4,6 @@ from app.task_runtime.contracts import RunContext
 
 
 def execute(context: RunContext) -> dict:
-    if context.options.workers != 1:
-        raise ValueError("Book previews are sequential; select one worker")
     if context.options.per_mime_limit is not None:
         raise ValueError("Book previews do not support per-MIME limits")
     if context.should_stop():

@@ -19,7 +19,7 @@ codex:
     # Optional verified capacity if the exact model is absent from local CLI metadata.
     # context_window_tokens: 272000
 
-# AI models and quota accounts
+# AI models and quota accounts (tasks process sequentially with one worker)
 gemini:
   metadata_extraction_operational_retry_cooldown_seconds: 21600
   runtime:
@@ -33,6 +33,7 @@ gemini:
     - "gemini-3.6-flash"
     - "gemini-3.5-flash"
     - "gemini-3-flash-preview"
+  # Map account IDs to key lists; key mappings use only api_key and quota_domain.
   accounts:
     tt:
       - "<REDACTED>"

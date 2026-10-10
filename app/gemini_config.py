@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, List
 
-import yaml
+from app.runtime_config import load_runtime_config
 
 
 _REDACTED_SENTINEL = "<REDACTED>"
@@ -22,7 +20,7 @@ class GeminiKey:
     key_id: str
     key_value: str
     masked_key: str
-    quota_domain_id: str = ""
+    quota_domain_id: str
 
 
 @dataclass(frozen=True)
@@ -33,27 +31,6 @@ class GeminiRuntimeLimits:
     generic_429_circuit_breaker_threshold: int = 3
     generic_429_window_seconds: int = 60
     generic_429_pause_seconds: int = 60
-
-
-def _candidate_config_paths() -> Sequence[Path]:
-    env_override = str(os.environ.get("MANZARA_CONFIG_PATH") or "").strip()
-    if env_override:
-        return (Path(env_override).expanduser(),)
-    repo_root = Path(__file__).resolve().parent.parent
-    return (
-        repo_root / "config.local.yaml",
-        repo_root / "config.yaml",
-    )
-
-
-def _load_config_payload() -> Dict[str, Any]:
-    for path in _candidate_config_paths():
-        if not path.exists():
-            continue
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        if isinstance(payload, dict):
-            return payload
-    return {}
 
 
 def _clean_key(value: Any) -> str:
@@ -76,22 +53,20 @@ def _mask_key(key: str) -> str:
 
 def _key_id(account_id: str, key: str) -> str:
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
-    clean_account = str(account_id or "default").strip() or "default"
-    return f"{clean_account}:{digest}"
+    return f"{account_id}:{digest}"
 
 
 def _configured_key(account_id: str, raw_value: Any) -> GeminiKey | None:
     quota_domain = ""
     key_value = raw_value
     if isinstance(raw_value, dict):
-        key_value = (
-            raw_value.get("api_key")
-            or raw_value.get("key")
-            or raw_value.get("value")
-        )
-        quota_domain = str(
-            raw_value.get("quota_domain") or raw_value.get("project_id") or ""
-        ).strip()
+        key_value = raw_value["api_key"]
+        if not isinstance(key_value, str):
+            raise ValueError("Gemini api_key must be a string")
+        quota_domain = raw_value.get("quota_domain", "")
+        if not isinstance(quota_domain, str):
+            raise ValueError("Gemini quota_domain must be a string")
+        quota_domain = quota_domain.strip()
     key = _clean_key(key_value)
     if not key:
         return None
@@ -105,49 +80,27 @@ def _configured_key(account_id: str, raw_value: Any) -> GeminiKey | None:
     )
 
 
-def _iter_new_shape(payload: Dict[str, Any]) -> Iterable[GeminiKey]:
-    gemini = payload.get("gemini")
-    if not isinstance(gemini, dict):
-        return []
-    accounts = gemini.get("accounts")
-    if accounts is None:
-        return []
-
-    rows: List[GeminiKey] = []
-    if isinstance(accounts, list):
-        for index, item in enumerate(accounts):
-            if not isinstance(item, dict):
-                continue
-            account_id = str(
-                item.get("account_id") or item.get("name") or f"account-{index + 1}"
-            ).strip()
-            account_id = account_id or f"account-{index + 1}"
-            keys = item.get("keys")
-            if not isinstance(keys, list):
-                continue
-            for raw_key in keys:
-                configured = _configured_key(account_id, raw_key)
-                if configured is not None:
-                    rows.append(configured)
-        return rows
-
-    if isinstance(accounts, dict):
-        for raw_account_id, keys in accounts.items():
-            account_id = str(raw_account_id or "").strip() or "default"
-            if not isinstance(keys, list):
-                continue
-            for raw_key in keys:
-                configured = _configured_key(account_id, raw_key)
-                if configured is not None:
-                    rows.append(configured)
-        return rows
-
-    return []
-
-
 def load_gemini_keys() -> List[GeminiKey]:
-    """Load configured Gemini keys from the account-grouped config shape."""
-    return list(_iter_new_shape(_load_config_payload()))
+    """Read the account-to-key-list mapping documented in config.example.yaml."""
+    gemini = load_runtime_config().get("gemini", {})
+    if not isinstance(gemini, dict):
+        raise ValueError("gemini must be a mapping")
+    accounts = gemini.get("accounts", {})
+    if not isinstance(accounts, dict):
+        raise ValueError("gemini.accounts must map account IDs to key lists")
+    rows = []
+    for account_id, keys in accounts.items():
+        if not isinstance(account_id, str) or not account_id.strip() or not isinstance(keys, list):
+            raise ValueError("gemini.accounts requires nonblank string IDs and key lists")
+        for raw_key in keys:
+            if not isinstance(raw_key, (str, dict)):
+                raise ValueError("Gemini keys must be strings or {api_key, quota_domain} mappings")
+            if isinstance(raw_key, dict) and ("api_key" not in raw_key or set(raw_key) - {"api_key", "quota_domain"}):
+                raise ValueError("Gemini key mappings support only api_key and quota_domain")
+            configured = _configured_key(account_id.strip(), raw_key)
+            if configured is not None:
+                rows.append(configured)
+    return rows
 
 
 def _positive_runtime_integer(
@@ -161,7 +114,7 @@ def _positive_runtime_integer(
 
 def load_gemini_runtime_limits() -> GeminiRuntimeLimits:
     """Load strict shared limits, retaining safe defaults when omitted."""
-    payload = _load_config_payload()
+    payload = load_runtime_config()
     gemini = payload.get("gemini")
     raw_runtime = gemini.get("runtime") if isinstance(gemini, dict) else None
     if raw_runtime is None:
@@ -197,12 +150,14 @@ def load_gemini_runtime_limits() -> GeminiRuntimeLimits:
 
 def load_configured_gemini_model_names() -> List[str]:
     """Return the shared configured runtime model pool without defaults."""
-    payload = _load_config_payload()
+    payload = load_runtime_config()
     gemini = payload.get("gemini")
     raw_models = gemini.get("model_pool") if isinstance(gemini, dict) else None
     if not isinstance(raw_models, list):
         return []
-    models = [str(value or "").strip() for value in raw_models]
+    if any(not isinstance(value, str) or not value.strip() for value in raw_models):
+        raise ValueError("gemini.model_pool requires nonblank model names")
+    models = [value.strip() for value in raw_models]
     return list(dict.fromkeys(value for value in models if value))
 
 

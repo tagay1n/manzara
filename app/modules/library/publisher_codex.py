@@ -135,21 +135,10 @@ def estimate_prompt_tokens(prompt, workspace):
         ) from exc
 
 
-def _safe_event(value):
-    if isinstance(value, dict):
-        secrets = {"authorization", "password", "passwd", "token", "access_token", "refresh_token",
-                   "secret", "api_key", "apikey", "aws_access_key_id", "aws_secret_access_key"}
-        return {key: "<redacted>" if key.lower() in secrets else _safe_event(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_safe_event(item) for item in value]
-    return redact(value) if isinstance(value, str) else value
-
-
 class _AnalysisOutput:
     """Bounded stream decoding independent of subprocess lifecycle management."""
 
-    def __init__(self, lifecycle, log):
-        self.lifecycle = lifecycle
+    def __init__(self, log):
         self.log = log
         self.buffers = {"stdout": b"", "stderr": b""}
         self.stderr_tail = deque(maxlen=20)
@@ -187,8 +176,6 @@ class _AnalysisOutput:
         event = json.loads(line)
         if not isinstance(event, dict):
             raise ValueError("Codex lifecycle event must be a JSON object")
-        self.lifecycle.write(json.dumps(_safe_event(event), ensure_ascii=False) + "\n")
-        self.lifecycle.flush()
         event_type = event.get("type")
         if event_type in {"turn.completed", "turn.failed", "error"}:
             self.terminal = event
@@ -379,10 +366,8 @@ class CodexAdapter:
         started = time.monotonic()
         diagnostics = {"stderr_tail": [], "cancelled": False, "timed_out": False}
         process = None
-        with prompt_file.open("rb") as stdin, selectors.DefaultSelector() as selector, (
-            self.workspace / "lifecycle.jsonl"
-        ).open("w", encoding="utf-8") as lifecycle:
-            capture = _AnalysisOutput(lifecycle, log)
+        with prompt_file.open("rb") as stdin, selectors.DefaultSelector() as selector:
+            capture = _AnalysisOutput(log)
             try:
                 process = subprocess.Popen(command, cwd=context, env=self.env, stdin=stdin,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)

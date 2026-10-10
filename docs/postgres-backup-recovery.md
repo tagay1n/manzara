@@ -4,7 +4,7 @@
 
 `.github/workflows/nightly-postgres-backup.yml` runs at **01:27 UTC** and supports manual dispatch. `scripts/backup_postgres_to_b2.py` creates independent custom-format logical dumps using PostgreSQL 18 clients, covering `monocorpus`, `public`, and `pg_trgm`, without ownership/privileges.
 
-It validates with `pg_restore --list`, records SHA-256 metadata, requests SSE-B2 AES-256, and verifies remote size/checksum/encryption. This documents workflow behavior; it does not confirm current remote configuration or successful runs.
+S3 uploads run sequentially on the calling worker. It validates with `pg_restore --list`, records SHA-256 metadata, requests SSE-B2 AES-256, and verifies remote size/checksum/encryption. This documents workflow behavior; it does not confirm current remote configuration or successful runs.
 
 | Recovery tier | Object key | Retention |
 | --- | --- | --- |

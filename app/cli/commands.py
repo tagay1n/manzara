@@ -15,7 +15,7 @@ COMMANDS = (
     Command("task", "Select a task", "_select_task"),
     Command("run", "Start/resume the selected task", "_start"),
     Command("stop", "Stop safely and keep Manzara open", "_stop"),
-    Command("settings", "Edit workers and candidate limit", "_settings"),
+    Command("settings", "Edit candidate limit", "_settings"),
     Command("history", "Inspect the selected task's recent runs", "_history"),
     Command("summary", "Print the current run or latest saved summary", "_summary"),
     Command("help", "Print commands and keyboard guidance", "_help"),

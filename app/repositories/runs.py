@@ -12,12 +12,12 @@ from app.runtime_states import (
     TASK_RUN_STATUS_FAILED,
     TASK_RUN_STATUS_RUNNING,
     TASK_RUN_STATUS_STARTING,
-    task_status_from_stop_mode,
+    TASK_RUN_STATUS_STOPPING_GRACEFUL,
 )
 
 
 class RunRepository:
-    """Machine-local run history, progress snapshots, and structured events."""
+    """Machine-local run history, progress, and provider-wait snapshots."""
 
     def get_latest_run_for_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Return most recent run for task."""
@@ -35,7 +35,7 @@ class RunRepository:
         return self._row_to_run(row) if row else None
 
 
-    def create_run(self, *, task_id: str, panel_id: str, workers: int) -> int:
+    def create_run(self, *, task_id: str, panel_id: str) -> int:
         """Create a run from the handler registration and explicit options."""
         now = utc_now()
         with self._lock:
@@ -44,9 +44,8 @@ class RunRepository:
                     """
                     INSERT INTO runs (
                         task_id, panel_id, status, stop_mode,
-                        started_at, heartbeat_at, created_at, updated_at, summary_json,
-                        gemini_workers
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        started_at, heartbeat_at, created_at, updated_at, summary_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task_id,
@@ -58,7 +57,6 @@ class RunRepository:
                         now,
                         now,
                         "{}",
-                        workers,
                     ),
                 )
                 return int(cur.lastrowid)
@@ -127,9 +125,18 @@ class RunRepository:
         return True
 
 
-    def set_stop_mode(self, run_id: int, mode: str) -> bool:
-        """Move an active run into graceful or force stopping mode."""
-        status = task_status_from_stop_mode(mode)
+    def set_run_provider_wait(self, run_id: int, wait: Dict[str, Any]) -> None:
+        """Replace transient provider status independently of item progress."""
+        with self._lock:
+            with self._runtime_connect() as conn:
+                conn.execute(
+                    "UPDATE runs SET provider_wait_json = ?, updated_at = ? WHERE run_id = ?",
+                    (json.dumps(wait, ensure_ascii=False), utc_now(), run_id),
+                )
+
+
+    def request_run_stop(self, run_id: int) -> bool:
+        """Request the only checkpointed stop mode: graceful."""
         now = utc_now()
         placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
         with self._lock:
@@ -141,7 +148,7 @@ class RunRepository:
                     WHERE run_id = ?
                       AND status IN ({placeholders})
                     """,
-                    (mode, status, now, now, run_id, *ACTIVE_STATUSES),
+                    ("graceful", TASK_RUN_STATUS_STOPPING_GRACEFUL, now, now, run_id, *ACTIVE_STATUSES),
                 )
                 return int(cur.rowcount or 0) > 0
 
@@ -160,7 +167,7 @@ class RunRepository:
                 conn.execute(
                     """
                     UPDATE runs
-                    SET status = ?, exit_code = ?, error_text = ?,
+                    SET status = ?, exit_code = ?, error_text = ?, provider_wait_json = '{}',
                         finished_at = ?, heartbeat_at = ?, updated_at = ?
                     WHERE run_id = ?
                     """,
@@ -185,82 +192,6 @@ class RunRepository:
                         run_id,
                     ),
                 )
-
-
-    def insert_event(
-        self,
-        event_type: str,
-        task_id: Optional[str],
-        run_id: Optional[int],
-        panel_id: Optional[str],
-        payload: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Persist an event row and return serialized event object."""
-        timestamp = utc_now()
-        with self._lock:
-            with self._runtime_connect() as conn:
-                cur = conn.execute(
-                    """
-                    INSERT INTO events (ts, type, task_id, run_id, panel_id, payload_json)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        timestamp,
-                        event_type,
-                        task_id,
-                        run_id,
-                        panel_id,
-                        json.dumps(payload, ensure_ascii=False),
-                    ),
-                )
-                event_id = int(cur.lastrowid)
-        return {
-            "event_id": event_id,
-            "ts": timestamp,
-            "type": event_type,
-            "task_id": task_id,
-            "run_id": run_id,
-            "panel_id": panel_id,
-            "payload": payload,
-        }
-
-
-    def get_events_after(self, after_event_id: int, limit: int = 200) -> List[Dict[str, Any]]:
-        """Return events with id greater than marker."""
-        with self._runtime_connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT event_id, ts, type, task_id, run_id, panel_id, payload_json
-                FROM events
-                WHERE event_id > ?
-                ORDER BY event_id ASC
-                LIMIT ?
-                """,
-                (after_event_id, limit),
-            ).fetchall()
-        events: List[Dict[str, Any]] = []
-        for row in rows:
-            events.append(
-                {
-                    "event_id": row["event_id"],
-                    "ts": row["ts"],
-                    "type": row["type"],
-                    "task_id": row["task_id"],
-                    "run_id": row["run_id"],
-                    "panel_id": row["panel_id"],
-                    "payload": json.loads(row["payload_json"]),
-                }
-            )
-        return events
-
-
-    def get_latest_event_id(self) -> int:
-        """Return the current end cursor for the operational event stream."""
-        with self._runtime_connect() as conn:
-            row = conn.execute(
-                "SELECT COALESCE(MAX(event_id), 0) AS event_id FROM events"
-            ).fetchone()
-        return int(row["event_id"] or 0) if row else 0
 
 
     def get_run(self, run_id: int) -> Optional[Dict[str, Any]]:
@@ -293,8 +224,7 @@ class RunRepository:
                 """
                 SELECT run_id, task_id, panel_id, status, stop_mode,
                        started_at, finished_at, heartbeat_at,
-                       pid, exit_code, error_text, summary_json, progress_json,
-                       gemini_workers
+                       pid, exit_code, error_text, summary_json, progress_json, provider_wait_json
                 FROM runs
                 WHERE task_id = ?
                 ORDER BY run_id DESC

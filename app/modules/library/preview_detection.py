@@ -51,7 +51,7 @@ def qualifying_layout_classes(class_names: Iterable[object]) -> tuple[str, ...]:
 
 
 def configure_detector_environment(cache_dir: Path) -> None:
-    """Set process-wide dependency paths once at CLI bootstrap, before workers exist."""
+    """Set process-wide dependency paths once at CLI bootstrap, before the task worker starts."""
     runtime_config_dir = cache_dir.parent
     for variable, directory in (("YOLO_CONFIG_DIR", "ultralytics"), ("MPLCONFIGDIR", "matplotlib")):
         path = runtime_config_dir / directory

@@ -64,7 +64,6 @@ class GeminiRepository(GeminiPacingRepository):
         lease_token: str,
         task_id: Optional[str],
         run_id: Optional[int],
-        worker_id: str,
         reserve: bool = True,
         pacing_policy: GeminiPacingPolicy | None = None,
     ) -> Dict[str, Any]:
@@ -123,13 +122,13 @@ class GeminiRepository(GeminiPacingRepository):
             conn.execute(
                 """INSERT INTO gemini_project_leases
                     (quota_domain_id, lease_token, lease_expires_at, last_acquired_at,
-                     task_id, run_id, worker_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                     task_id, run_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(quota_domain_id) DO UPDATE SET
                     lease_token=excluded.lease_token, lease_expires_at=excluded.lease_expires_at,
                     last_acquired_at=excluded.last_acquired_at, task_id=excluded.task_id,
-                    run_id=excluded.run_id, worker_id=excluded.worker_id""",
-                (domain, lease_token, expires_at, now_ts, task_id, run_id, worker_id),
+                    run_id=excluded.run_id""",
+                (domain, lease_token, expires_at, now_ts, task_id, run_id),
             )
             conn.execute(
                 """INSERT INTO gemini_project_model_spacing VALUES (?, ?, ?)
@@ -225,7 +224,7 @@ class GeminiRepository(GeminiPacingRepository):
             return bool(
                 conn.execute(
                     """UPDATE gemini_project_leases SET lease_token=NULL, lease_expires_at=NULL,
-                    task_id=NULL, run_id=NULL, worker_id=NULL
+                    task_id=NULL, run_id=NULL
                     WHERE quota_domain_id=? AND lease_token=?""",
                     (quota_domain_id, lease_token),
                 ).rowcount
@@ -319,71 +318,27 @@ class GeminiRepository(GeminiPacingRepository):
             )
         return int(cur.rowcount or 0)
 
-    def ensure_gemini_runtime_cycle(self, cycle_label: str) -> Dict[str, Any]:
-        """Read the current cycle cheaply and reset it atomically when needed."""
+    def ensure_gemini_runtime_cycle(self, cycle_label: str) -> None:
+        """Clear daily exhaustion atomically when the Pacific quota day changes."""
         now = utc_now()
-        with self._lock:
-            with self._runtime_connect(immediate=True) as conn:
-                row = conn.execute(
-                    """
-                    SELECT control_id, cycle_label, pause_until, last_pause_reason,
-                           blackout_override_until, updated_at
-                    FROM gemini_runtime_control
-                    WHERE control_id = 1
-                    FOR UPDATE
-                    """
-                ).fetchone()
-                if row is None:
-                    row = conn.execute(
-                        """
-                        INSERT INTO gemini_runtime_control (
-                            control_id, cycle_label, pause_until, last_pause_reason,
-                            blackout_override_until, updated_at
-                        ) VALUES (1, ?, NULL, NULL, NULL, ?)
-                        RETURNING control_id, cycle_label, pause_until,
-                                  last_pause_reason, blackout_override_until,
-                                  updated_at
-                        """,
-                        (cycle_label, now),
-                    ).fetchone()
-                    return {**dict(row or {}), "rolled": False}
-                if str(row.get("cycle_label") or "") == cycle_label:
-                    return {**dict(row), "rolled": False}
-
-                row = conn.execute(
-                    """
-                    UPDATE gemini_runtime_control
-                    SET cycle_label = ?, pause_until = NULL,
-                        blackout_override_until = NULL, updated_at = ?
-                    WHERE control_id = 1
-                    RETURNING control_id, cycle_label, pause_until,
-                              last_pause_reason, blackout_override_until,
-                              updated_at
-                    """,
-                    (cycle_label, now),
-                ).fetchone()
-                conn.execute(
-                    """
-                    UPDATE gemini_key_model_state
-                        SET exhausted = 0,
-                            exhausted_at = NULL,
-                            cooldown_until = NULL,
-                            attempts_cycle = 0,
-                            success_cycle = 0,
-                            updated_at = ?
-                    """,
-                    (now,),
-                )
-                conn.execute("DELETE FROM gemini_quota_domain_model_state")
-        return {**dict(row), "rolled": True} if row else {
-            "control_id": 1,
-            "cycle_label": cycle_label,
-            "pause_until": None,
-            "last_pause_reason": None,
-            "blackout_override_until": None,
-            "updated_at": now,
-            "rolled": True,
-        }
+        with self._runtime_connect(immediate=True) as conn:
+            row = conn.execute(
+                "SELECT cycle_label FROM gemini_runtime_control WHERE control_id=1"
+            ).fetchone()
+            if row and row["cycle_label"] == cycle_label:
+                return
+            conn.execute(
+                """INSERT INTO gemini_runtime_control VALUES (1, ?, ?)
+                   ON CONFLICT(control_id) DO UPDATE
+                   SET cycle_label=excluded.cycle_label, updated_at=excluded.updated_at""",
+                (cycle_label, now),
+            )
+            conn.execute(
+                """UPDATE gemini_key_model_state SET exhausted=0, exhausted_at=NULL,
+                   cooldown_until=NULL, attempts_cycle=0, success_cycle=0, updated_at=?""",
+                (now,),
+            )
+            conn.execute("DELETE FROM gemini_quota_domain_model_state")
 
     def get_gemini_quota_domain_model_state(
         self, quota_domain_id: str, model_name: str
@@ -514,37 +469,6 @@ class GeminiRepository(GeminiPacingRepository):
                            ON CONFLICT(key_id, model_name) DO NOTHING""",
                         (str(key_id), model_name, now),
                     )
-
-
-    def set_gemini_pause(self, pause_until: Optional[str], reason: Optional[str] = None) -> Dict[str, Any]:
-        """Set or clear global Gemini pause timestamp."""
-        now = utc_now()
-        with self._lock:
-            with self._runtime_connect() as conn:
-                conn.execute(
-                    """
-                    UPDATE gemini_runtime_control
-                    SET pause_until = ?, last_pause_reason = ?, updated_at = ?
-                    WHERE control_id = 1
-                    """,
-                    (pause_until, reason, now),
-                )
-                row = conn.execute(
-                    """
-                    SELECT control_id, cycle_label, pause_until, last_pause_reason,
-                           blackout_override_until, updated_at
-                    FROM gemini_runtime_control
-                    WHERE control_id = 1
-                    """
-                ).fetchone()
-        return dict(row) if row else {
-            "control_id": 1,
-            "cycle_label": "",
-            "pause_until": pause_until,
-            "last_pause_reason": reason,
-            "blackout_override_until": None,
-            "updated_at": now,
-        }
 
 
     def mark_gemini_success(

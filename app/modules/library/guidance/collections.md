@@ -26,6 +26,6 @@ Historical `library_collection_proposals`, items, signatures, collection events,
 
 ## Output and verification
 
-Use `RunContext.log` for redacted terminal output; create no log file, subprocess wrapper, task environment variables, stdout capture, or collection-specific events. The descriptor suppresses shared task lifecycle events, including failure-finalization events. Local run state, progress, heartbeat, stop/recovery, and history remain available. The final `library.collection_discovery_summary` artifact includes scan/candidate counts, proposal refresh counts, proposal IDs, and outcome; its structured `task.artifact` event remains local SQLite data.
+Use `RunContext.log` for redacted terminal output; create no log file, subprocess wrapper, task environment variables, stdout capture, or collection-specific events. All tasks omit event emission. Local run state, progress, heartbeat, stop/recovery, and history remain available. The final `library.collection_discovery_summary` artifact includes scan/candidate counts, proposal refresh counts, proposal IDs, and outcome; it is saved directly as JSON and referenced by the local run summary.
 
 Testing follows root `AGENTS.md` and `docs/verification.md`. Static inspection does not establish live terminal behavior, deployed query execution, transaction rollback, or operational readiness.

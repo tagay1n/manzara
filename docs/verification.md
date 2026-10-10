@@ -23,8 +23,8 @@ Terminal verification requires explicit owner authorization. The current CLI acc
 7. Safely stop with Ctrl-C, drain output, return to idle, and start another run.
 8. Safely quit or force exit during startup/work/finalization with terminal restoration and retained recovery semantics; verify idle input clearing and ordinary `q` handling.
 9. Exercise slow/broken output without silent loss during normal operation, unbounded buffering, deadlock, or false success. With the terminal reader stalled, input must remain attached and a repeated Ctrl-C must exit with code 130 without waiting for output. Resume slow output and inspect transcript ordering, coalesced redraws, resize handling, and final drain. Output errors, including during final renderer cleanup, must produce exit code 1.
-10. Create structured artifacts/events and saved summaries without an interactive `.log` file or dependence on an existing task directory.
-11. Retain existing summaries/log files and daily maintenance file/console output, flushing, and worker-finalization behavior.
+10. Save structured artifacts and summaries directly, with no events or log files and no dependence on an existing task directory.
+11. Verify the approved local-state reset on upgrade, retain existing artifact files, and verify stdout-only scheduled output, flushing, and worker finalization.
 
 These scenarios are pending runtime acceptance coverage, not an instruction to execute them during ordinary implementation.
 

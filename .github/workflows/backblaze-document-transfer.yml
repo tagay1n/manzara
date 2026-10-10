@@ -1,4 +1,4 @@
-name: Backblaze document transfer
+name: Upload to S3 storage
 
 on:
   workflow_run:
@@ -71,7 +71,7 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           path: |
-            ${{ runner.temp }}/manzara/logs/task-runs/maintenance.sync_documents_s3/*.artifact.json
+            ${{ runner.temp }}/manzara/workspaces/task-runs/maintenance.sync_documents_s3/**/*.json
             ${{ runner.temp }}/manzara/state/runtime.sqlite3*
 
       - name: Summarize workflow outcome

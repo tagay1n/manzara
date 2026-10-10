@@ -20,11 +20,11 @@ def _open_terminal(stream) -> int:
 
 
 def emergency_notice(text: str) -> None:
-    """Best effort only: diagnostics must not wait on stderr or its Python lock."""
+    """Best effort only: diagnostics must not wait on stdout or its Python lock."""
     try:
-        fd = _open_terminal(sys.stderr)
+        fd = _open_terminal(sys.stdout)
         try:
-            data = (redact(text) + "\n").encode(sys.stderr.encoding or "utf-8", "replace")
+            data = (redact(text) + "\n").encode(sys.stdout.encoding or "utf-8", "replace")
             os.write(fd, data[:4096])
         finally:
             os.close(fd)

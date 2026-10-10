@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import argparse
 import re
+import json
+from uuid import uuid4
 import signal
 import tempfile
 from pathlib import Path
 from typing import Any
 
+from app.task_runtime.logging import log_message
 from app.artifacts import private_credentials_dir, workspace_dir
 from app.modules.maintenance.catalog_sharing import SharingValidationError
 from app.modules.maintenance.dump_state import StopRequested, run_dump
 from app.postgres_engine import get_postgres_engine
-from app.run_artifact_channel import emit_run_artifact
 from app.settings import load_settings
 
 SCHEMA_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -27,12 +29,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--validate-sharing",
         action="store_true",
         help="Block export unless every document matches the catalog sharing policy.",
-    )
-    parser.add_argument(
-        "--legacy-credentials-dir",
-        type=Path,
-        default=None,
-        help="Read-only fallback directory for existing monocorpus OAuth files.",
     )
     return parser
 
@@ -51,10 +47,6 @@ def main() -> int:
 
     def request_stop(_signum: int, _frame: Any) -> None:
         stop_state["requested"] = True
-        print(
-            "dump state: graceful stop requested; finishing current operation",
-            flush=True,
-        )
 
     signal.signal(signal.SIGINT, request_stop)
     root = workspace_dir("maintenance", "catalog-export")
@@ -65,18 +57,18 @@ def main() -> int:
                 engine=engine,
                 workspace=Path(temp_dir),
                 credentials_dir=credentials_dir,
-                legacy_credentials_dir=args.legacy_credentials_dir,
                 schema=settings.database_schema,
                 validate_sharing=args.validate_sharing,
                 should_stop=lambda: bool(stop_state["requested"]),
             )
-        emit_run_artifact(summary)
+        (root / f"run-{uuid4().hex}.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         return 0
     except SharingValidationError as exc:
-        print(str(exc), flush=True)
+        log_message(str(exc))
         return 1
     except StopRequested as exc:
-        print(f"dump state: stopped: {exc}", flush=True)
+        log_message(f"dump state: stopped: {exc}")
         return 130
 
 

@@ -12,12 +12,12 @@ cache/
   cache/source-documents is automatically bounded by documents.cache_max_gib.
 
 workspaces/
+  Task results, structured artifact files, and temporary/generated outputs.
   Completed-run directories may be removed. Never remove an active run.
 
 logs/
-  Batch task logs, existing verbose logs, and structured run artifacts.
-  New interactive verbose output lives only in terminal scrollback.
-  Remove files only when the corresponding run history is no longer needed.
+  Existing historical files only. New task logs go only to stdout.
+  Remove historical files only when no longer needed.
 
 state/
   Machine-local disposable runtime state. Remove only while all tasks are idle.
@@ -104,11 +104,6 @@ def private_credentials_dir(scope: object) -> Path:
     return _area_dir("private", "credentials", scope, private=True)
 
 
-def task_runs_dir() -> Path:
-    """Return directory that stores per-run task logs."""
-    return _area_dir("logs", "task-runs")
-
-
 def local_state_path() -> Path:
     """Return the sole machine-local runtime database path."""
     root = artifacts_root()
@@ -123,7 +118,6 @@ __all__ = [
     "cache_dir",
     "durable_path",
     "private_credentials_dir",
-    "task_runs_dir",
     "local_state_path",
     "workspace_dir",
 ]

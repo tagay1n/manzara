@@ -1,12 +1,9 @@
 """Explicit CLI orchestration for publication metadata extraction/evaluation."""
 
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
-import threading
 
 from boto3 import Session
 from botocore.config import Config
@@ -22,7 +19,6 @@ from app.gemini_model_pool import (
 )
 from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
-from app.gemini_workers import current_gemini_worker_id, emit_gemini_worker_log
 from app.local_state import AIItemCheckpointStore
 from app.modules.library.corrupt_document import CorruptDocumentError, build_corrupt_cleanup_plan
 from app.modules.library.metadata_contract import CONTRACT_VERSION, metadata_contract_issues
@@ -82,7 +78,6 @@ class Progress:
     def __init__(self, context, total):
         self.context = context
         self.total = total
-        self.lock = threading.Lock()
         self.counters = Counter(succeeded=0, review_required=0, failed=0, terminal=0, source_deferred=0,
                                 quota_deferred=0, service_deferred=0, checkpoint_raced=0,
                                 corrupted_planned=0, corrupted_plan_reused=0)
@@ -90,24 +85,22 @@ class Progress:
         self.attempts = Counter()
         self.successes = Counter()
 
-    def publish(self):
+    def publish(self, *, force=False):
         self.context.progress({'phase': 'processing', 'current': self.current, 'total': self.total,
             'percent': round(100 * self.current / self.total, 2) if self.total else 100,
             'remaining': max(0, self.total - self.counters['succeeded'] - self.counters['review_required'] - self.counters['terminal']),
-            **self.counters, 'model_attempts': dict(self.attempts), 'model_successes': dict(self.successes)})
+            **self.counters, 'model_attempts': dict(self.attempts), 'model_successes': dict(self.successes)}, force=force)
 
     def attempt(self, model):
-        with self.lock:
-            self.attempts[model] += 1
-            self.publish()
+        self.attempts[model] += 1
+        self.publish()
 
     def complete(self, outcome, model=None):
-        with self.lock:
-            self.current += 1
-            self.counters[outcome] += 1
-            if model:
-                self.successes[model] += 1
-            self.publish()
+        self.current += 1
+        self.counters[outcome] += 1
+        if model:
+            self.successes[model] += 1
+        self.publish()
 
 
 class Processor:
@@ -117,16 +110,16 @@ class Processor:
         self.version, self.checkpoints, self.progress = version, checkpoints, progress
         self.flow, self.cooldown, self.known = FLOWS[mode], cooldown, known
         self.workspace = workspace_dir('library', 'metadata-' + mode, run_id=context.run_id)
-        self.abort = threading.Event()
-        self.global_unavailable = threading.Event()
+        self.abort = False
+        self.global_unavailable = False
         self.results = []
-        self.results_lock = threading.Lock()
+        self.manager = GeminiRuntimeManager(context.db, task_id=context.task_id, should_stop=self.stopped)
 
     def stopped(self):
-        return self.context.should_stop() or self.abort.is_set() or self.global_unavailable.is_set()
+        return self.context.should_stop() or self.abort or self.global_unavailable
 
     def log(self, text):
-        emit_gemini_worker_log(text, worker_id=current_gemini_worker_id('metadata-' + self.mode))
+        self.context.log(text)
 
     def _checkpoint_args(self, source):
         return dict(flow_id=self.flow, item_id=source['checkpoint_id'], contract_version=self.version,
@@ -147,8 +140,7 @@ class Processor:
             record['proposal_ids'] = proposals
         if error:
             record['error'] = redact(error)
-        with self.results_lock:
-            self.results.append(record)
+        self.results.append(record)
         self.progress.complete(outcome, model)
         self.log('Metadata item final ' + json.dumps(record, ensure_ascii=False))
 
@@ -184,14 +176,12 @@ class Processor:
         try:
             with self.store.mutation(publication, source) as (conn, _):
                 cleanup_id, created = repository.enqueue_cleanup(plan, conn=conn)
-            with self.progress.lock:
-                self.progress.counters['corrupted_planned' if created else 'corrupted_plan_reused'] += 1
+            self.progress.counters['corrupted_planned' if created else 'corrupted_plan_reused'] += 1
             payload = {'kind': 'library.metadata_corruption_plan', 'publication_id': publication['publication_id'],
                        'md5': candidate.md5, 'cleanup_id': cleanup_id, 'created': created}
             path = self.workspace / f'corruption-{candidate.md5}.json'
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
-            with self.results_lock:
-                self.context.artifact({**payload, 'plan_path': str(path)})
+            self.context.artifact({**payload, 'plan_path': str(path)})
             self.log(f'Corruption plan md5={candidate.md5} cleanup_id={cleanup_id} created={created}')
         finally:
             repository.dispose()
@@ -202,16 +192,13 @@ class Processor:
         if not publication['sources']:
             self.finish(publication, 'source_deferred', error='No complete, unrestricted evidence file with verified primary storage')
             return
-        manager = GeminiRuntimeManager(self.context.db, task_id=self.context.task_id, panel_id=self.context.panel_id,
-            should_stop=self.stopped, worker_id=current_gemini_worker_id('metadata-' + self.mode))
         primary_s3 = None
         try:
             primary_s3 = self._primary_s3()
-            self._process_sources(publication, manager, primary_s3)
+            self._process_sources(publication, self.manager, primary_s3)
         except BaseException as exc:
-            self.abort.set()
-            with self.results_lock:
-                recorded = any(row['publication_id'] == publication['publication_id'] for row in self.results)
+            self.abort = True
+            recorded = any(row['publication_id'] == publication['publication_id'] for row in self.results)
             if not recorded:
                 self.finish(publication, 'failed', error=exc)
             raise
@@ -288,13 +275,13 @@ class Processor:
             except GeminiModelPoolUnavailableError as exc:
                 self.defer(source, exc, exc.retry_at)
                 if exc.all_models_unavailable:
-                    self.global_unavailable.set()
+                    self.global_unavailable = True
                 self.finish(publication, 'quota_deferred', source=source, error=exc)
                 return
             except GeminiModelPoolOperationalError as exc:
                 if not exc.retryable:
                     self.finish(publication, 'failed', source=source, error=exc)
-                    self.abort.set()
+                    self.abort = True
                     raise
                 self.defer(source, exc, exc.retry_at)
                 self.finish(publication, 'service_deferred', source=source, error=exc)
@@ -307,7 +294,7 @@ class Processor:
             except Exception as exc:
                 if not is_transient_postgres_error(exc):
                     self.finish(publication, 'failed', source=source, error=exc)
-                    self.abort.set()
+                    self.abort = True
                     raise
                 self.defer(source, exc)
                 self.finish(publication, 'service_deferred', source=source, error=exc)
@@ -317,7 +304,7 @@ class Processor:
 
 def execute(context, *, mode):
     if context.options.per_mime_limit is not None or context.options.only_md5s or context.options.retry_known_failures:
-        raise ValueError('Metadata tasks support workers and a publication limit; clear MIME/source/retry options')
+        raise ValueError('Metadata tasks support a publication limit; clear MIME/source/retry options')
     summary = {'kind': 'library.metadata_extraction_summary' if mode == 'extract' else 'library.metadata_evaluation_summary',
                'unit': 'publication', 'checkpoint_namespace': FLOWS[mode]}
     if context.should_stop():
@@ -381,17 +368,17 @@ def execute(context, *, mode):
     known = store.known_classifications() if mode == 'evaluate' and candidates else []
     prune_document_cache(storage.cache_path, max_bytes=storage.cache_max_bytes)
     processor = Processor(context, mode, store, config, storage, models, version, checkpoints, progress, cooldown, known)
-    context.log(f'Metadata processing: mode={mode} publications={len(candidates)} workers={context.options.workers}')
+    context.log(f'Metadata processing: mode={mode} publications={len(candidates)}')
     fatal = None
-    with ThreadPoolExecutor(max_workers=context.options.workers, thread_name_prefix='metadata-' + mode) as pool:
-        futures = [pool.submit(copy_context().run, processor.process, publication) for publication in candidates]
-        for future in futures:
-            try:
-                future.result()
-            except Exception as exc:
-                processor.abort.set()
-                fatal = fatal or exc
-    # Worker finalization precedes summary/artifact publication.
+    for publication in candidates:
+        if processor.stopped():
+            break
+        try:
+            processor.process(publication)
+        except Exception as exc:
+            fatal = exc
+            break
+    progress.publish(force=True)
     items_path = processor.workspace / 'items.json'
     items_path.write_text(json.dumps(sorted(processor.results, key=lambda row: row['publication_id']),
                                     ensure_ascii=False, indent=2), encoding='utf-8')
@@ -400,11 +387,11 @@ def execute(context, *, mode):
     deferred = (any(counters.get(key, 0) for key in ('source_deferred', 'quota_deferred', 'service_deferred', 'review_required', 'terminal'))
                 or bool(skipped['awaiting_review']) or bool(skipped['retry_excluded']) or bool(skipped['needs_extraction']))
     outcome = 'failed' if fatal or counters.get('checkpoint_raced') else (
-        'stopped' if context.should_stop() else 'deferred' if deferred or processor.global_unavailable.is_set() else 'completed')
+        'stopped' if context.should_stop() else 'deferred' if deferred or processor.global_unavailable else 'completed')
     error = redact(fatal) if fatal else ('Metadata snapshots changed; inspect items and resume with a fresh inventory'
                                        if counters.get('checkpoint_raced') else None)
     return {**summary, 'outcome': outcome, 'stopped': context.should_stop(), 'processed': progress.current,
-            'total': len(candidates), 'eligible': len(candidates), 'workers': context.options.workers,
+            'total': len(candidates), 'eligible': len(candidates),
             'remaining': max(0, len(candidates) - counters['succeeded'] - counters['review_required'] - counters['terminal']),
             'already_complete': skipped['already_complete'], 'unprocessed': len(candidates) - progress.current, **counters,
             'skipped': dict(skipped), 'model_attempts': dict(progress.attempts), 'model_successes': dict(progress.successes),

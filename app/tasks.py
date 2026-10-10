@@ -8,17 +8,15 @@ import os
 import threading
 from typing import Any, Callable
 
-from app.artifacts import task_runs_dir
+from app.task_runtime.artifacts import save_run_artifact
 from app.db import Database
 from app.runtime_states import (
     TASK_RUN_STATUS_COMPLETED,
     TASK_RUN_STATUS_FAILED,
-    TASK_RUN_STATUS_STARTING,
     TASK_RUN_STATUS_STOPPED,
-    task_terminal_event_type,
 )
 from app.task_runtime.contracts import RunContext, RunOptions, TaskDescriptor
-from app.task_runtime.logging import RunLog, RunLogSink, bind_run_log, redact
+from app.task_runtime.logging import RunLogSink, bind_run_log, redact
 
 
 @dataclass
@@ -31,41 +29,27 @@ class _RunHandle:
 
 class TaskRunner:
     def __init__(self, db: Database, descriptors: list[TaskDescriptor], *,
-                 console_sink: Callable[[str], None] | None = None,
-                 log_factory: Callable[[str, str, int], RunLogSink] | None = None,
-                 max_active_runs: int | None = None):
+                 log_factory: Callable[[str, str, int], RunLogSink]):
         self.db = db
         self.descriptors = {item.task_id: item for item in descriptors}
         self._lock = threading.RLock()
         self._runs: dict[str, _RunHandle] = {}
         self._closing = False
-        self._root = task_runs_dir()
-        self._log_factory = log_factory or (
-            lambda task_id, panel_id, run_id: RunLog(self._root, task_id, panel_id, run_id, console_sink)
-        )
-        self._max_active_runs = max_active_runs
+        self._log_factory = log_factory
 
     def start_task(self, task_id: str, *, options: RunOptions) -> dict[str, Any]:
         with self._lock:
             if self._closing:
                 raise ValueError("Manzara is shutting down")
-            if self._max_active_runs is not None and sum(
-                handle.thread.is_alive() for handle in self._runs.values()
-            ) >= self._max_active_runs:
+            if any(handle.thread.is_alive() for handle in self._runs.values()):
                 raise ValueError("A foreground run is still active or finalizing; wait for its result")
             descriptor = self.descriptors[task_id]
-            if descriptor.workers_max is not None and options.workers > descriptor.workers_max:
-                raise ValueError(f"{descriptor.title} supports at most {descriptor.workers_max} worker(s)")
             if descriptor.requires_full_inventory and options.limit is not None:
                 raise ValueError(f"{descriptor.title} requires the complete inventory; clear the limit")
-            handle = self._runs.get(task_id)
-            if handle is not None and handle.thread.is_alive():
-                return {"action": "noop", "reason": "already_running", "run": self.db.get_run(handle.context.run_id)}
             active = self.db.get_active_run_for_task(task_id)
             if active:
                 raise ValueError("A persisted active run needs recovery; reopen Manzara before starting another run")
-            run_id = self.db.create_run(task_id=task_id, panel_id=descriptor.group_id,
-                                        workers=options.workers)
+            run_id = self.db.create_run(task_id=task_id, panel_id=descriptor.group_id)
             try:
                 log = self._log_factory(task_id, descriptor.group_id, run_id)
                 context = RunContext(
@@ -74,10 +58,9 @@ class TaskRunner:
                     progress=lambda progress, force=False: self.db.publish_run_progress(
                         run_id=run_id, progress=progress, force=force,
                     ),
-                    artifact=lambda payload: self._publish_artifact(task_id, descriptor.group_id, run_id, payload),
+                    artifact=lambda payload: save_run_artifact(self.db, task_id, run_id, payload),
                 )
-                self.db.update_run_summary(run_id, {"options": options.as_dict(), **self._log_location(log)})
-                self._publish_lifecycle("task.started", task_id, run_id, descriptor.group_id, {"status": TASK_RUN_STATUS_STARTING})
+                self.db.update_run_summary(run_id, {"options": options.as_dict()})
                 run = self.db.get_run(run_id)
                 if run is None:
                     raise RuntimeError(f"Run {run_id} is missing before execution")
@@ -96,14 +79,6 @@ class TaskRunner:
                 raise
             return {"action": "start", "run": run}
 
-    def _publish_lifecycle(self, event_type: str, task_id: str, run_id: int,
-                           group_id: str, payload: dict) -> None:
-        if self.descriptors[task_id].emit_lifecycle_events:
-            self.db.insert_event(event_type, task_id, run_id, group_id, payload)
-
-    @staticmethod
-    def _log_location(log: RunLogSink) -> dict[str, str]:
-        return {"log_path": str(log.path)} if log.path is not None else {}
 
     def get_run_error(self, run_id: int) -> str | None:
         """Expose worker/finalization failure even when persistence is unavailable."""
@@ -130,9 +105,7 @@ class TaskRunner:
             if run_id is not None and handle.context.run_id != run_id:
                 return
             handle.context.stop_event.set()
-            self.db.set_stop_mode(handle.context.run_id, "graceful")
-            self._publish_lifecycle("task.stop_requested", task_id, handle.context.run_id,
-                                 handle.context.panel_id, {"mode": "graceful"})
+            self.db.request_run_stop(handle.context.run_id)
 
     def request_shutdown(self) -> None:
         with self._lock:
@@ -159,23 +132,6 @@ class TaskRunner:
             for thread in threads:
                 thread.join()
 
-    def _publish_artifact(self, task_id: str, group_id: str, run_id: int, payload: dict) -> None:
-        if not isinstance(payload, dict) or not isinstance(payload.get("kind"), str) or not payload["kind"]:
-            raise ValueError("Structured run artifacts require a kind")
-        target = self._artifact_path(task_id, run_id)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(target)
-        compact = {key: value for key, value in payload.items()
-                   if isinstance(value, (str, int, float, bool)) or value is None}
-        compact["artifact_path"] = str(target)
-        self.db.insert_event("task.artifact", task_id, run_id, group_id, compact)
-
-    def _artifact_path(self, task_id: str, run_id: int):
-        from app.run_log_store import safe_task_slug
-
-        return self._root / safe_task_slug(task_id) / f"run-{run_id}.artifact.json"
 
     def _execute(self, descriptor: TaskDescriptor, context: RunContext, log: RunLogSink) -> None:
         heartbeat_stop = threading.Event()
@@ -189,7 +145,7 @@ class TaskRunner:
             with bind_run_log(log):
                 self.db.mark_run_started(context.run_id, os.getpid())
                 if context.should_stop():
-                    self.db.set_stop_mode(context.run_id, "graceful")
+                    self.db.request_run_stop(context.run_id)
                 heartbeat.start()
                 log(f"task start options={json.dumps(context.options.as_dict())}")
                 context.progress({"phase": "discovering"}, force=True)
@@ -215,18 +171,15 @@ class TaskRunner:
                 heartbeat.join()
             try:
                 persisted = self.db.get_run(context.run_id) or {}
-                summary = {**summary, "options": context.options.as_dict(), **self._log_location(log),
+                summary = {**summary, "options": context.options.as_dict(),
                            "progress": persisted.get("progress", {})}
                 if not summary.get("kind"):
                     summary["kind"] = "task.summary"
-                context.artifact(summary)
-                summary["artifact_path"] = str(self._artifact_path(context.task_id, context.run_id))
-                self.db.update_run_summary(context.run_id, summary)
+                self._save_summary(context, summary)
                 self.db.finish_run(context.run_id, status, 1 if status == TASK_RUN_STATUS_FAILED else 0, error)
-                self._publish_lifecycle(task_terminal_event_type(status), context.task_id, context.run_id,
-                                     context.panel_id, {"status": status, "exit_code": 1 if status == TASK_RUN_STATUS_FAILED else 0,
-                                                        **({"error": error} if error else {})})
-                log(f"task final status={status} summary={json.dumps(summary, ensure_ascii=False)}")
+                log(f"task final status={status} summary=" + json.dumps(
+                    {key: value for key, value in summary.items() if key not in {"artifacts", "progress"}},
+                    ensure_ascii=False))
                 log.flush()
                 log.close()
                 log_closed = True
@@ -237,15 +190,11 @@ class TaskRunner:
                 # Do not hide a failed artifact/checkpoint finalization behind a success state.
                 try:
                     summary.update(outcome="failed", error=error)
-                    context.artifact(summary)
-                    self.db.update_run_summary(context.run_id, summary)
+                    self._save_summary(context, summary)
                 except Exception:
                     pass
                 try:
                     self.db.finish_run(context.run_id, TASK_RUN_STATUS_FAILED, 1, error)
-                    self._publish_lifecycle("task.failed", context.task_id, context.run_id,
-                                         context.panel_id, {"status": TASK_RUN_STATUS_FAILED,
-                                                            "exit_code": 1, "error": error})
                 except Exception as final_error:
                     self._try_log(log, f"run remains recoverable after persistence failure: {redact(final_error)}")
             finally:
@@ -254,6 +203,16 @@ class TaskRunner:
                         log.close()
                     except Exception as exc:
                         self._record_error(context.run_id, redact(exc))
+
+    def _save_summary(self, context: RunContext, summary: dict[str, Any]) -> None:
+        saved = self.db.get_run(context.run_id)
+        if saved is None:
+            raise RuntimeError(f"Run {context.run_id} is missing during finalization")
+        summary["artifacts"] = saved["summary"].get("artifacts", [])
+        context.artifact(summary)
+        artifacts = self.db.get_run(context.run_id)["summary"]["artifacts"]
+        summary.update(artifact_path=artifacts[-1]["artifact_path"], artifacts=artifacts)
+        self.db.update_run_summary(context.run_id, summary)
 
     @staticmethod
     def _try_log(log: RunLogSink, message: str) -> None:

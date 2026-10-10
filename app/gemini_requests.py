@@ -111,9 +111,9 @@ def generate_structured_json(
             try:
                 client.files.delete(name=item.name)
             except Exception as exc:  # noqa: BLE001
-                from app.gemini_workers import emit_gemini_worker_log
+                from app.task_runtime.logging import log_message
 
-                emit_gemini_worker_log(
+                log_message(
                     f"gemini request: uploaded file cleanup failed "
                     f"name={getattr(item, 'name', '')} error={type(exc).__name__}: {exc}",
                 )

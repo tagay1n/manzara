@@ -64,8 +64,7 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           path: |
-            ${{ runner.temp }}/manzara/logs/task-runs/**/*.log
-            ${{ runner.temp }}/manzara/logs/task-runs/**/*.artifact.json
+            ${{ runner.temp }}/manzara/workspaces/task-runs/**/*.json
             ${{ runner.temp }}/manzara/state/runtime.sqlite3*
 
       - name: Summarize workflow outcome

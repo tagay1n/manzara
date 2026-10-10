@@ -31,8 +31,8 @@ def cleanup_paths() -> dict[str, str]:
 
 
 def execute(context: RunContext) -> dict[str, Any]:
-    if context.options.limit is not None or context.options.workers != 1:
-        raise ValueError("Cleanup requires the complete ISBN cohort: use one worker and no limit")
+    if context.options.limit is not None:
+        raise ValueError("Cleanup requires the complete ISBN cohort: omit the limit")
     if context.should_stop():
         return {"kind": "library.document_cleanup_preparation_summary", "outcome": "stopped"}
     paths = cleanup_paths()

@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 import shutil
 from tempfile import TemporaryDirectory
-import threading
 from typing import Any, Mapping
 
 from boto3 import Session
@@ -14,6 +13,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from yadisk_client import YaDisk
 
+from app.s3_transfer import sequential_transfer_config
 from app.artifacts import workspace_dir
 from app.catalog.contracts import CatalogConflict, document_md5, integer
 from app.catalog.document_transfer import pending
@@ -216,21 +216,22 @@ def _cleanup_stale_upload(repository, conn, row, settings, s3, bucket, key, coun
 def _upload_source(source, *, s3, bucket, key, row, size, context,
                    counters, total, processed):
     upload_bytes = 0
-    progress_lock = threading.Lock()
 
     def on_upload(delta):
         nonlocal upload_bytes
-        with progress_lock:
-            upload_bytes += delta
-            _progress(context, counters, stage='uploading', total=total,
-                      processed=processed, md5=row['md5'],
-                      current_bytes=upload_bytes, current_size=size)
+        upload_bytes += delta
+        _progress(context, counters, stage='uploading', total=total,
+                  processed=processed, md5=row['md5'],
+                  current_bytes=upload_bytes, current_size=size)
 
     context.log(f"document upload start md5={row['md5']} size={size}")
-    s3.upload_file(str(source), bucket, key,
+    s3.upload_file(
+        str(source), bucket, key,
         ExtraArgs={'Metadata': {'source-md5': row['md5']},
                    'ContentType': row.get('mime_type') or 'application/octet-stream'},
-        Callback=on_upload)
+        Callback=on_upload,
+        Config=sequential_transfer_config(),
+    )
     return _confirm_upload(s3, bucket, key, row['md5'], size)
 
 
@@ -409,8 +410,8 @@ def _validate_primary_buckets(s3: Any, public_bucket: str, private_bucket: str) 
 
 
 def execute(context: RunContext):
-    if context.options.workers != 1 or context.options.limit is not None:
-        raise ValueError('Transfer requires one worker and no candidate limit')
+    if context.options.limit is not None:
+        raise ValueError('Transfer requires no candidate limit')
     if context.should_stop():
         return {'kind': 'maintenance.document_s3_upload_summary', 'outcome': 'stopped', 'stopped': True}
     settings = load_document_storage_settings(load_runtime_config())

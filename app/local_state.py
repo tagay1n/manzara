@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
-LOCAL_STATE_SCHEMA_VERSION = 7
+LOCAL_STATE_SCHEMA_VERSION = 8
 _FOR_UPDATE_RE = re.compile(r"\s+FOR\s+UPDATE\b", re.IGNORECASE)
 
 
@@ -88,7 +88,7 @@ class LocalStateStore:
             # IDs remain unique against retained run artifacts if the disposable
             # database is recreated on the same laptop.
             floor = int(time.time() * 1000)
-            for table in ("runs", "events"):
+            for table in ("runs",):
                 updated = conn.execute(
                     "UPDATE sqlite_sequence SET seq=MAX(seq, ?) WHERE name=?",
                     (floor, table),
@@ -313,16 +313,12 @@ CREATE TABLE IF NOT EXISTS runs (
     panel_id TEXT NOT NULL, status TEXT NOT NULL, stop_mode TEXT, pid INTEGER,
     started_at TEXT NOT NULL, finished_at TEXT, heartbeat_at TEXT,
     exit_code INTEGER, error_text TEXT, summary_json TEXT NOT NULL DEFAULT '{}',
-    progress_json TEXT NOT NULL DEFAULT '{}', gemini_workers INTEGER,
+    progress_json TEXT NOT NULL DEFAULT '{}',
+    provider_wait_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_runs_task_status ON runs(task_id, status);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
-CREATE TABLE IF NOT EXISTS events (
-    event_id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL,
-    task_id TEXT, run_id INTEGER, panel_id TEXT, ts TEXT NOT NULL,
-    payload_json TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS gemini_keys (
     key_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, masked_key TEXT NOT NULL,
     quota_domain_id TEXT NOT NULL,
@@ -341,8 +337,8 @@ CREATE TABLE IF NOT EXISTS gemini_key_model_state (
 CREATE INDEX IF NOT EXISTS idx_gemini_state_model
 ON gemini_key_model_state(model_name, exhausted);
 CREATE TABLE IF NOT EXISTS gemini_runtime_control (
-    control_id INTEGER PRIMARY KEY, cycle_label TEXT NOT NULL, pause_until TEXT,
-    last_pause_reason TEXT, blackout_override_until TEXT, updated_at TEXT NOT NULL
+    control_id INTEGER PRIMARY KEY, cycle_label TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS gemini_quota_domain_model_state (
     quota_domain_id TEXT NOT NULL, model_name TEXT NOT NULL, cooldown_until TEXT,
@@ -361,7 +357,7 @@ CREATE TABLE IF NOT EXISTS gemini_scheduler_cursor (
 );
 CREATE TABLE IF NOT EXISTS gemini_project_leases (
     quota_domain_id TEXT PRIMARY KEY, lease_token TEXT, lease_expires_at TEXT,
-    last_acquired_at TEXT, task_id TEXT, run_id INTEGER, worker_id TEXT
+    last_acquired_at TEXT, task_id TEXT, run_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS gemini_project_model_spacing (
     quota_domain_id TEXT NOT NULL, model_name TEXT NOT NULL, next_request_at TEXT NOT NULL,

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime
 import threading
 
-from app.task_runtime.logging import redact
+from app.task_runtime.logging import RunLog, redact
 
 
 class OutputFailure(RuntimeError):
@@ -72,33 +71,10 @@ class TerminalOutput:
             self._failure = self._failure or f"Terminal output failed: {redact(error)}"
             self._condition.notify_all()
 
-    def sink(self, _task_id: str, _panel_id: str, _run_id: int) -> TerminalRunLog:
-        return TerminalRunLog(self)
+    def sink(self, task_id: str, _panel_id: str, run_id: int) -> RunLog:
+        return RunLog(task_id, run_id, self.write, self.check_failure)
 
-
-class TerminalRunLog:
-    path = None
-
-    def __init__(self, output: TerminalOutput):
-        self.output = output
-        self._lock = threading.Lock()
-        self._closed = False
-
-    def __call__(self, message: str, *, level: str = "INFO") -> None:
-        with self._lock:
-            if self._closed:
-                raise OutputFailure("Run output sink is closed")
-            severity = "" if level == "INFO" else f" {redact(level)}"
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            safe = redact(message).replace("\n", "\n  ")
-            self.output.write(f"  {timestamp}{severity} · {safe}\n")
-
-    def flush(self) -> None:
-        # Queue delivery belongs to the UI consumer. Worker flush does not join
-        # the consumer; completion separately waits for its acknowledgement.
-        if self.output.failure:
-            raise OutputFailure(self.output.failure)
-
-    def close(self) -> None:
-        with self._lock:
-            self._closed = True
+    def check_failure(self) -> None:
+        # Delivery belongs to the UI consumer; completion drains separately.
+        with self._condition:
+            self._raise_if_failed()

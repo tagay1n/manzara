@@ -7,18 +7,17 @@ from threading import Event
 import re
 from typing import Any, Callable
 
+from app.task_runtime.logging import RunLogSink
+
 
 @dataclass(frozen=True)
 class RunOptions:
-    workers: int = 1
     limit: int | None = None
     per_mime_limit: int | None = None
     retry_known_failures: bool = False
     only_md5s: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if isinstance(self.workers, bool) or not isinstance(self.workers, int) or self.workers < 1:
-            raise ValueError("workers must be a positive integer")
         if self.limit is not None and (
             isinstance(self.limit, bool) or not isinstance(self.limit, int) or self.limit < 1
         ):
@@ -35,7 +34,7 @@ class RunOptions:
             raise ValueError("only_md5s must be a tuple of lowercase source MD5s")
 
     def as_dict(self) -> dict[str, Any]:
-        values = {"workers": self.workers, "limit": self.limit}
+        values = {"limit": self.limit}
         if self.per_mime_limit is not None or self.retry_known_failures or self.only_md5s:
             values.update(per_mime_limit=self.per_mime_limit, retry_known_failures=self.retry_known_failures,
                           only_md5s=list(self.only_md5s))
@@ -50,7 +49,7 @@ class RunContext:
     run_id: int
     options: RunOptions
     stop_event: Event
-    log: Callable[[str], None]
+    log: RunLogSink
     progress: Callable[..., None]
     artifact: Callable[[dict[str, Any]], None]
 
@@ -65,7 +64,4 @@ class TaskDescriptor:
     group: str
     group_id: str
     execute: Callable[[RunContext], dict[str, Any]] = field(repr=False)
-    workers_default: int = 1
-    workers_max: int | None = None
     requires_full_inventory: bool = False
-    emit_lifecycle_events: bool = True

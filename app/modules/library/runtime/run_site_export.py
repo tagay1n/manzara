@@ -69,8 +69,6 @@ def run_export(
 
 
 def execute(context: RunContext) -> dict:
-    if context.options.workers != 1:
-        raise ValueError("Static Library export is sequential; select one worker")
     if (context.options.limit is not None or context.options.per_mime_limit is not None
             or context.options.only_md5s or context.options.retry_known_failures):
         raise ValueError("Static Library export requires the complete inventory; clear candidate/retry options")

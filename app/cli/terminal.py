@@ -27,7 +27,6 @@ from app.cli.display import InlineApplication, TerminalDisplay, emergency_notice
 from app.cli.output import OutputFailure, TerminalOutput
 from app.cli.presentation import duration, elapsed, progress_text, provider_wait, restrictions, status, summary_text
 from app.db import Database
-from app.gemini_workers import resolve_gemini_workers
 from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTING
 from app.settings import load_settings
 from app.task_runtime.contracts import RunOptions
@@ -57,8 +56,6 @@ class Terminal:
         self.foreground_snapshot = None
         self.foreground_started = 0.0
         self.runtime_error = None
-        self.event_cursor = 0
-        self.waiting = {}
         self.output = TerminalOutput()
         self.display = TerminalDisplay.from_pty(
             sys.stdout, term=get_term_environment_variable(),
@@ -83,7 +80,6 @@ class Terminal:
         self.prompt.buffer.on_text_changed += self._prompt_changed
         self.search = TextArea(height=1, multiline=False, prompt="Search › ")
         self.search.buffer.on_text_changed += self._search_changed
-        self.workers_input = TextArea(height=1, multiline=False)
         self.limit_input = TextArea(height=1, multiline=False)
         self.save_button = Button("Save", handler=self._save_settings, width=8)
         self.cancel_button = Button("Cancel", handler=self._dismiss, width=8)
@@ -95,7 +91,6 @@ class Terminal:
         ]), filter=Condition(lambda: self.mode in ("commands", "task", "history")))
         form = ConditionalContainer(HSplit([
             Label(lambda: f"Settings · {self.task.title if self.task else ''}"),
-            Label("Workers (positive integer)"), self.workers_input,
             Label("Candidate limit (blank = unlimited)"), self.limit_input,
             ConditionalContainer(
                 Window(FormattedTextControl(lambda: [("class:warning", self.form_error)]),
@@ -209,11 +204,10 @@ class Terminal:
         elif run and phase == "Running":
             parts.append(redact(progress_text(run, self.app.output.get_size().columns)))
         parts.append(elapsed_text)
-        if not self.runtime_error:
-            # Each event describes a worker or request gate, never all workers.
-            waits = [text for payload in self.waiting.values() if (text := provider_wait(payload))]
-            if waits:
-                parts.append(redact(waits[0]) + (f" (+{len(waits) - 1} waits)" if len(waits) > 1 else ""))
+        if not self.runtime_error and run:
+            wait = provider_wait(run.get("provider_wait") or {})
+            if wait:
+                parts.append(redact(wait))
         return [("class:warning" if self.runtime_error else "class:activity", "  ·  ".join(parts))]
 
     def _hint_text(self):
@@ -271,7 +265,7 @@ class Terminal:
         @keys.add("tab", filter=editing)
         @keys.add("s-tab", filter=editing)
         def form_tab(event):
-            targets = [self.workers_input, self.limit_input, self.save_button, self.cancel_button]
+            targets = [self.limit_input, self.save_button, self.cancel_button]
             current = next((i for i, target in enumerate(targets) if self.layout.has_focus(target)), 0)
             step = -1 if event.key_sequence[0].key == "s-tab" else 1
             self.layout.focus(targets[(current + step) % len(targets)])
@@ -365,29 +359,22 @@ class Terminal:
             await self._say("Settings require an idle task.")
             return
         options = self.options[self.task.task_id]
-        self.workers_input.text = str(options.workers)
         self.limit_input.text = str(options.limit) if options.limit is not None else ""
         self.form_error = ""
         self.mode = "settings"
-        self.layout.focus(self.workers_input)
+        self.layout.focus(self.limit_input)
 
     def _save_settings(self):
         try:
             if self.locked:
                 raise ValueError("Settings are locked until the foreground run finishes")
-            workers = self.workers_input.text.strip()
             limit = self.limit_input.text.strip()
-            if not workers.isascii() or not workers.isdigit():
-                raise ValueError("Workers must be a positive integer")
             if limit and (not limit.isascii() or not limit.isdigit()):
                 raise ValueError("Limit must be a positive integer or blank")
-            maximum = self.task.workers_max
-            if maximum is not None and int(workers) > maximum:
-                raise ValueError(f"{self.task.title} supports at most {maximum} worker(s)")
             if self.task.requires_full_inventory and limit:
                 raise ValueError(f"{self.task.title} requires the complete inventory; leave limit blank")
             self.options[self.task.task_id] = replace(
-                self.options[self.task.task_id], workers=int(workers), limit=int(limit) if limit else None,
+                self.options[self.task.task_id], limit=int(limit) if limit else None,
             )
         except ValueError as exc:
             self.form_error = str(exc)
@@ -409,12 +396,11 @@ class Terminal:
         self.foreground_snapshot = None
         self.foreground_started = time.monotonic()
         self.runtime_error = None
-        self.waiting = {}
         options = self.options[task.task_id]
         try:
             if task.requires_full_inventory and options.limit is not None:
                 raise ValueError(f"{task.title} requires the complete inventory; clear the limit in /settings")
-            text = f"Starting · {task.title} · workers {options.workers} · limit {options.limit or 'unlimited'}"
+            text = f"Starting · {task.title} · limit {options.limit or 'unlimited'}"
             if task.task_id == "library.extract_non_pdf":
                 text += "\n" + restrictions(options.as_dict())
             await self._say(text)
@@ -509,7 +495,7 @@ class Terminal:
             self._force_exit()
         elif self.foreground:
             self._request_stop()
-        elif self.mode == "settings" and (self.workers_input.text or self.limit_input.text):
+        elif self.mode == "settings" and self.limit_input.text:
             self._dismiss()
         elif self.mode in ("task", "history") and self.search.text:
             self.search.text = ""
@@ -547,7 +533,7 @@ class Terminal:
             except Exception as exc:
                 await self._say("Safe exit recording failed: " + redact(exc) + ". Ctrl-C again forces exit.")
 
-    def _snapshot(self, run_id, event_cursor):
+    def _snapshot(self, run_id):
         # Determine worker exit *before* reading the final saved result. A
         # terminal row read before exit can still become a finalization failure.
         idle = self.runner.is_idle()
@@ -555,27 +541,9 @@ class Terminal:
         run = self.db.get_run(run_id) if run_id is not None else None
         if run_id is not None and run is None:
             raise RuntimeError(f"Run {run_id} is missing")
-        events = self.db.get_events_after(event_cursor, limit=200)
         failure = self.runner.get_run_error(run_id) if run_id is not None else None
-        return run, events, idle, failure, finalizing
+        return run, idle, failure, finalizing
 
-    def _consume_events(self, events):
-        for event in events:
-            self.event_cursor = event["event_id"]
-            if event["run_id"] != self.foreground_run_id:
-                continue
-            payload = event["payload"]
-            if event["type"] in ("gemini.scheduler.waiting", "gemini.pacing.changed"):
-                key = (event["type"], payload.get("worker_id") or payload.get("scope_id"))
-                if provider_wait(payload):
-                    self.waiting[key] = payload
-                else:
-                    self.waiting.pop(key, None)
-            elif event["type"] == "gemini.key.used":
-                worker = payload.get("worker_id")
-                if worker:
-                    self.waiting.pop(("gemini.scheduler.waiting", worker), None)
-        self.waiting = {key: payload for key, payload in self.waiting.items() if provider_wait(payload)}
 
     async def _drain(self):
         try:
@@ -590,7 +558,7 @@ class Terminal:
         if run.get("status") in TASK_RUN_ACTIVE_STATUSES:
             failure = failure or "Worker exited without a final persisted result; reopen Manzara for recovery."
         if failure and self.output.failure:
-            await self._fallback(f"Failed · {self.foreground.title} · run {run['run_id']} · {elapsed(run)}\n{failure}")
+            await self._show_emergency_notice(f"Failed · {self.foreground.title} · run {run['run_id']} · {elapsed(run)}\n{failure}")
         else:
             await self._say(summary_text(run, self.foreground.title, completion=True, failure=failure))
             await self._drain()
@@ -604,7 +572,7 @@ class Terminal:
                 f"{failure or read_failure}\n"
                 "Final counts/outcome are unavailable. Inspect /history after reopening; an unfinished persisted run needs recovery.")
         if self.output.failure:
-            await self._fallback(text)
+            await self._show_emergency_notice(text)
         else:
             await self._say(text)
             await self._drain()
@@ -620,7 +588,6 @@ class Terminal:
         self.foreground_snapshot = None
         self.stopping = False
         self.finalizing = False
-        self.waiting = {}
         self.runtime_error = None
         if not self.closing:
             self.message = ""
@@ -630,13 +597,12 @@ class Terminal:
             if self.ready:
                 try:
                     run_id = self.foreground_run_id
-                    run, events, idle, failure, finalizing = await asyncio.to_thread(self._snapshot, run_id, self.event_cursor)
+                    run, idle, failure, finalizing = await asyncio.to_thread(self._snapshot, run_id)
                     if run_id != self.foreground_run_id:
                         continue
                     self.foreground_snapshot = run
                     self.finalizing = finalizing
                     self.runtime_error = None
-                    self._consume_events(events)
                     if self.foreground and not self.starting and not self._stop_pending and idle:
                         if run is not None:
                             await self._finish_foreground(run, failure)
@@ -651,8 +617,7 @@ class Terminal:
                         await self._say(message + ". Current progress is unavailable; /stop or /quit remain available.")
                     self.runtime_error = message
                     self.foreground_snapshot = None
-                    self.waiting = {}
-                    # Worker exit and output drain are knowable without DB
+                                # Worker exit and output drain are knowable without DB
                     # reads. Never strand the UI slot or claim stale success.
                     idle = await asyncio.to_thread(self.runner.is_idle)
                     if self.foreground and not self.starting and not self._stop_pending and idle:
@@ -670,7 +635,7 @@ class Terminal:
             self.app.invalidate()
             await asyncio.sleep(0.3)
 
-    async def _fallback(self, text):
+    async def _show_emergency_notice(self, text):
         emergency_notice(text)
 
     async def _consume_output(self):
@@ -690,7 +655,7 @@ class Terminal:
                 self.output.fail(exc)
                 self.message = self.output.failure
                 self._request_exit()
-                await self._fallback(self.output.failure + ". Safe stop requested; Ctrl-C again forces exit.")
+                await self._show_emergency_notice(self.output.failure + ". Safe stop requested; Ctrl-C again forces exit.")
                 return
             finally:
                 if batch:
@@ -706,8 +671,8 @@ class Terminal:
         descriptors = self.descriptor_factory()
         recovered = self.db.recover_active_runs()
         if recovered:
-            self.db.insert_event("system.recovery", None, None, None, {"recovered_runs": recovered})
-        self.runner = TaskRunner(self.db, descriptors, log_factory=self.output.sink, max_active_runs=1)
+            self.output.write(f"Recovered interrupted runs: {recovered}\n")
+        self.runner = TaskRunner(self.db, descriptors, log_factory=self.output.sink)
         return descriptors
 
     async def _startup(self):
@@ -717,21 +682,16 @@ class Terminal:
             if self.task is None:
                 raise ValueError(f"Unknown task ID: {self.arguments.task}")
             for task in self.descriptors:
-                default = resolve_gemini_workers() if os.environ.get("MANZARA_GEMINI_WORKERS") else task.workers_default
-                workers = self.arguments.workers if self.arguments.workers is not None else default
-                if task.workers_max == 1:
-                    workers = 1
                 extraction = task.task_id == "library.extract_non_pdf"
                 source_cohort = task.task_id == self.arguments.task and task.task_id in {
                     "library.extract_non_pdf", "library.generate_book_previews",
                 }
                 self.options[task.task_id] = RunOptions(
-                    workers, None if task.requires_full_inventory else self.arguments.limit,
+                    limit=None if task.requires_full_inventory else self.arguments.limit,
                     per_mime_limit=self.arguments.per_mime_limit if extraction else None,
                     retry_known_failures=self.arguments.retry_known_failures if source_cohort else False,
                     only_md5s=tuple(dict.fromkeys(self.arguments.only_md5)) if source_cohort else (),
                 )
-            self.event_cursor = await asyncio.to_thread(self.db.get_latest_event_id)
             self.ready = True
             self.message = ""
             await self._say(f"Manzara · {self.task.title} selected. /task to change, /settings to edit, /run to start.")
@@ -766,7 +726,7 @@ class Terminal:
                 refresh.cancel()
                 await asyncio.gather(refresh, return_exceptions=True)
             # Initialization must finish before resource cleanup; the output
-            # consumer remains alive while workers/operations finish off-loop.
+            # consumer remains alive while the task/operations finish off-loop.
             try:
                 if startup:
                     await startup
@@ -790,7 +750,7 @@ class Terminal:
                             await self.display.drain()
                         except OutputFailure as exc:
                             self.output.fail(exc)
-                            await self._fallback(self.output.failure)
+                            await self._show_emergency_notice(self.output.failure)
                     finally:
                         self.display.close()
                         try:

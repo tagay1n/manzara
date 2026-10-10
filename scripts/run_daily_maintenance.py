@@ -12,6 +12,8 @@ from typing import Any
 # Direct script execution puts scripts/, rather than the repository, on sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.task_runtime.logging import log_message
+
 
 def _descriptors():
     from app.modules.library.runtime.run_prepare_document_cleanup import TASK_ID as cleanup_id, execute as prepare
@@ -78,7 +80,7 @@ def _github_summary(results, exit_code: int) -> None:
             status = result["status"] if result else "not run"
             counters = ", ".join(f"{key}={value}" for key, value in result["counters"].items()) if result else ""
             handle.write(f"| {title} | {status} | {counters} |\n")
-        handle.write("\nDetailed diagnostics are in the task logs and structured artifacts.\n")
+        handle.write("\nDetailed diagnostics are in Actions stdout and structured result artifacts.\n")
 
 
 def main() -> int:
@@ -89,19 +91,15 @@ def main() -> int:
         import yaml
         from app.settings import load_settings
         from app.task_runtime.batch import run_batch
-        from app.task_runtime.logging import redact
 
         settings = load_settings()
         exit_code = run_batch(settings, _descriptors(), preflight=_preflight,
                               on_result=lambda run: _report_run(run, results))
     except Exception as exc:
-        # Imports can fail before shared redaction is available.
         if "yaml" in locals() and isinstance(exc, yaml.YAMLError):
-            print("Daily maintenance failed: runtime configuration must be valid YAML", file=sys.stderr, flush=True)
-        elif "redact" in locals():
-            print(f"Daily maintenance failed: {redact(exc)}", file=sys.stderr, flush=True)
+            log_message("Daily maintenance failed: runtime configuration must be valid YAML", level="ERROR")
         else:
-            print(f"Daily maintenance dependency unavailable: {type(exc).__name__}", file=sys.stderr, flush=True)
+            log_message(f"Daily maintenance failed: {exc}", level="ERROR")
     finally:
         _github_summary(results, exit_code)
     return exit_code

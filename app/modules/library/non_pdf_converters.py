@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Mapping
 from xml.etree import ElementTree
 
+from app.task_runtime.logging import log_message
+
 from app.modules.library.non_pdf_types import (
     ConverterCommandError,
     ConverterTimeoutError,
@@ -57,8 +59,9 @@ def _run(
         _terminate_process_group(process)
         process.communicate()
         raise
-    (workspace / f"{label}.stdout.log").write_text(stdout, encoding="utf-8")
-    (workspace / f"{label}.stderr.log").write_text(stderr, encoding="utf-8")
+    log_message(f"Converter {label}: exit_code={process.returncode} stdout_chars={len(stdout)}")
+    if stderr.strip():
+        log_message(f"Converter {label} stderr:\n{stderr}", level="WARNING")
     if timed_out:
         raise ConverterTimeoutError(
             f"{label} timed out after {timeout_seconds} seconds"

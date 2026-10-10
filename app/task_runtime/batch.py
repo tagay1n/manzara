@@ -7,12 +7,13 @@ import json
 import signal
 import threading
 import time
+import sys
 from typing import Any, Callable
 
 from app.db import Database
 from app.runtime_states import TASK_RUN_STATUS_COMPLETED, TASK_RUN_STATUS_STOPPED
 from app.task_runtime.contracts import RunOptions, TaskDescriptor
-from app.task_runtime.logging import StdoutRunLog, redact
+from app.task_runtime.logging import RunLog, log_message, write_stdout
 from app.task_runtime.session import SessionLock
 from app.tasks import TaskRunner
 
@@ -25,7 +26,7 @@ class _ConsoleLogs:
         self.last_output = time.monotonic()
 
     def __call__(self, line: str) -> None:
-        print(line, flush=True)
+        write_stdout(line)
         self.last_output = time.monotonic()
 
 
@@ -39,8 +40,9 @@ def _print_status(db, run_id, started_at, last_log_output) -> None:
         "status": run["status"], "elapsed_seconds": int(now - started_at),
         "seconds_since_log_output": int(now - last_log_output),
         "progress": run.get("progress") or {},
+        "provider_wait": run["provider_wait"],
     }
-    print(redact(json.dumps(snapshot, ensure_ascii=True)), flush=True)
+    log_message(json.dumps(snapshot, ensure_ascii=True))
 
 
 def _run_stages(db, runner, descriptors, stop, deadline, on_result, console) -> int:
@@ -49,7 +51,7 @@ def _run_stages(db, runner, descriptors, stop, deadline, on_result, console) -> 
             return 130
         started = runner.start_task(descriptor.task_id, options=RunOptions())
         run_id = started["run"]["run_id"]
-        print(f"Starting {descriptor.task_id} run_id={run_id}", flush=True)
+        log_message(f"Starting {descriptor.task_id} run_id={run_id}")
         started_at = time.monotonic()
         console.last_output = started_at
         next_status = started_at + _STATUS_INTERVAL_SECONDS
@@ -62,15 +64,16 @@ def _run_stages(db, runner, descriptors, stop, deadline, on_result, console) -> 
             if not stopping and (stop.is_set() or time.monotonic() >= deadline):
                 stop.set()
                 stopping = True
-                print("Safe stop requested; finishing the current operation", flush=True)
+                log_message("Safe stop requested; finishing the current operation")
                 runner.request_shutdown()
             time.sleep(0.5)
-        # Read after the worker exits, including artifact/event finalization.
+        # Read after the worker exits, including artifact finalization.
         run = db.get_run(run_id)
         if run is None:
             raise RuntimeError(f"Run {run_id} is missing after execution")
         on_result(run)
-        if run["status"] != TASK_RUN_STATUS_COMPLETED or run.get("exit_code") != 0:
+        if (run["status"] != TASK_RUN_STATUS_COMPLETED or run.get("exit_code") != 0
+                or run["summary"].get("outcome") == "deferred" or runner.get_run_error(run_id)):
             return 130 if stop.is_set() or run["status"] == TASK_RUN_STATUS_STOPPED else 1
     return 130 if stop.is_set() else 0
 
@@ -82,11 +85,8 @@ def run_batch(
     on_result: Callable[[dict[str, Any]], None],
     preflight: Callable[[Database], None],
     budget_seconds: int = 5 * 60 * 60,
-    log_to_file: bool = True,
 ) -> int:
     """Own local state and stop cooperatively between sequential task stages."""
-    if type(log_to_file) is not bool:
-        raise ValueError('log_to_file must be boolean')
     stop = threading.Event()
     deadline = time.monotonic() + budget_seconds
     with ExitStack() as resources:
@@ -102,12 +102,10 @@ def run_batch(
         db.init_local_state()
         recovered = db.recover_active_runs()
         if recovered:
-            db.insert_event("system.recovery", None, None, None, {"recovered_runs": recovered})
+            log_message(f"Recovered interrupted runs: {recovered}")
         console = _ConsoleLogs()
-        log_factory = None if log_to_file else (
-            lambda task_id, panel_id, run_id: StdoutRunLog(task_id, panel_id, run_id, console)
-        )
-        runner = TaskRunner(db, descriptors, console_sink=console, log_factory=log_factory)
+        runner = TaskRunner(db, descriptors, log_factory=lambda task_id, _panel_id, run_id:
+                            RunLog(task_id, run_id, console, sys.stdout.flush))
         resources.callback(runner.shutdown)
         if stop.is_set() or time.monotonic() >= deadline:
             return 130

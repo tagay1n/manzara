@@ -135,8 +135,8 @@ def summary(groups, scope, metadata, imported, **flags):
 def execute(context: RunContext) -> dict:
     details = {"kind": "library.publisher_merge_summary"}
     try:
-        if context.options.workers != 1 or context.options.limit is not None:
-            raise ValueError("Cluster publishers requires one worker and the complete inventory; clear the candidate limit.")
+        if context.options.limit is not None:
+            raise ValueError("Cluster publishers requires the complete inventory; clear the candidate limit.")
         if context.options.per_mime_limit is not None or context.options.only_md5s or context.options.retry_known_failures:
             raise ValueError("Non-PDF cohort/retry options do not apply to Cluster publishers.")
         if context.should_stop():

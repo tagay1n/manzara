@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
+from importlib import import_module
 import re
 import sys
 
@@ -20,56 +22,30 @@ def build_descriptors():
     )
     from app.task_runtime.contracts import TaskDescriptor
 
-    def normalize(context):
-        from app.modules.library.runtime.run_normalize_personalities import execute
-        return execute(context)
-
-    def extract_non_pdf(context):
-        from app.modules.library.runtime.run_extract_non_pdf import execute
-        return execute(context)
-
-    def cluster_publishers(context):
-        from app.modules.library.runtime.run_suggest_publisher_merges import execute
-        return execute(context)
-
-    def generate_previews(context):
-        from app.modules.library.runtime.run_generate_book_previews import execute
-        return execute(context)
-
-    def export_library(context):
-        from app.modules.library.runtime.run_site_export import execute
-        return execute(context)
-
-    def discover_collections(context):
-        from app.modules.library.runtime.run_collection_detect import execute
-        return execute(context)
-
-    def extract_metadata(context):
-        from app.modules.library.runtime.run_metadata_extract import execute
-        return execute(context)
-
-    def evaluate_metadata(context):
-        from app.modules.library.runtime.run_meta_evaluate import execute
-        return execute(context)
-
-    handlers = {"library.metadata_extract": extract_metadata,
-                "maintenance.monocorpus_meta_evaluate": evaluate_metadata,
-                "library.normalize_personalities": normalize, "library.extract_non_pdf": extract_non_pdf,
-                "library.suggest_publisher_merges": cluster_publishers,
-                "library.generate_book_previews": generate_previews,
-                "library.site_export": export_library, "library.collection_detect": discover_collections}
+    handlers = {
+        "library.normalize_personalities": "run_normalize_personalities",
+        "library.extract_non_pdf": "run_extract_non_pdf",
+        "library.generate_book_previews": "run_generate_book_previews",
+        "library.site_export": "run_site_export",
+        "library.suggest_publisher_merges": "run_suggest_publisher_merges",
+        "library.collection_detect": "run_collection_detect",
+        "library.metadata_extract": "run_metadata_extract",
+        "maintenance.monocorpus_meta_evaluate": "run_meta_evaluate",
+    }
     scheduled = {LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID, MAINTENANCE_MONOCORPUS_SYNC_TASK_ID,
                  MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID}
     definitions = [*library_task_definitions(), *collection_task_definitions(),
                    *maintenance_task_definitions()]
     return [TaskDescriptor(
         task_id=item["task_id"], title=item["title"], group_id=item["group_id"],
-        workers_default=item.get("workers_default", 1), workers_max=item.get("workers_max"),
         requires_full_inventory=item.get("requires_full_inventory", False),
-        emit_lifecycle_events=item.get("emit_lifecycle_events", True),
         group="Maintenance" if item["task_id"].startswith("maintenance.") else "Library",
-        execute=handlers[item["task_id"]],
+        execute=partial(_execute, handlers[item["task_id"]]),
     ) for item in definitions if item["task_id"] not in scheduled]
+
+
+def _execute(module_name, context):
+    return import_module(f"app.modules.library.runtime.{module_name}").execute(context)
 
 
 def _positive(value: str) -> int:
@@ -101,7 +77,6 @@ def main(arguments: list[str] | None = None) -> None:
     undo = cleanup_commands.add_parser("undo", help="Undo a decision before cleanup starts")
     undo.add_argument("review_id", type=_positive)
     parser.add_argument("--task", default="library.normalize_personalities", help="Initially selected task ID")
-    parser.add_argument("--workers", type=_positive, help="Worker count; non-PDF extraction, previews, export and publisher clustering require 1")
     parser.add_argument("--limit", type=_positive, help="Optional candidate limit; metadata tasks count publications")
     parser.add_argument("--per-mime-limit", type=_positive, help="Non-PDF extraction: deterministic cohort cap per MIME")
     parser.add_argument("--only-md5", action="append", type=_md5, default=[], metavar="MD5",
@@ -117,25 +92,12 @@ def main(arguments: list[str] | None = None) -> None:
         args.command is not None or args.task not in {"library.extract_non_pdf", "library.generate_book_previews"}
     ):
         parser.error("Source cohort/retry options require --task library.extract_non_pdf or library.generate_book_previews")
-    if args.task == "library.extract_non_pdf" and args.workers not in (None, 1):
-        parser.error("Non-PDF extraction requires --workers 1")
-    if args.task == "library.generate_book_previews" and args.workers not in (None, 1):
-        parser.error("Book previews require --workers 1")
-    if args.command is None and args.task == "library.site_export":
-        if args.workers not in (None, 1):
-            parser.error("Static Library export requires --workers 1")
-        if args.limit is not None:
-            parser.error("Static Library export requires the complete inventory; omit --limit")
-    if args.command is None and args.task == "library.suggest_publisher_merges":
-        if args.workers not in (None, 1):
-            parser.error("Cluster publishers requires --workers 1")
-        if args.limit is not None:
-            parser.error("Cluster publishers requires the complete inventory; omit --limit")
-    if args.command is None and args.task == "library.collection_detect":
-        if args.workers not in (None, 1):
-            parser.error("Discover collections requires --workers 1")
-        if args.limit is not None:
-            parser.error("Discover collections requires the complete inventory; omit --limit")
+    if args.command is None:
+        descriptor = next((item for item in build_descriptors() if item.task_id == args.task), None)
+        if descriptor is None:
+            parser.error(f"Unknown task ID: {args.task}")
+        if descriptor.requires_full_inventory and args.limit is not None:
+            parser.error(f"{descriptor.title} requires the complete inventory; omit --limit")
     if args.command == "cleanup":
         from app.modules.library.cleanup_cli import execute
         try:

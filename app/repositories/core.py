@@ -267,4 +267,5 @@ class CoreRepository:
         payload = dict(row)
         payload["summary"] = self._decode_summary(payload.pop("summary_json", "{}"))
         payload["progress"] = self._decode_summary(payload.pop("progress_json", "{}"))
+        payload["provider_wait"] = self._decode_summary(payload.pop("provider_wait_json"))
         return payload

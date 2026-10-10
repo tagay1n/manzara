@@ -14,6 +14,7 @@ import requests
 from boto3 import Session
 from botocore.config import Config
 
+from app.s3_transfer import sequential_transfer_config
 from app.artifacts import workspace_dir
 from app.db import Database
 from app.document_storage import (
@@ -87,11 +88,10 @@ def _failure_status(exc: Exception) -> str:
 
 
 def _record_pptx_inspection(
-    db: Database,
+    artifact: Callable[[dict[str, Any]], None],
     *,
     workspace: Path,
     md5: str,
-    run_id: int,
     counters: Counter[str],
 ) -> None:
     """Persist compact findings and link the retained, detailed inspection report."""
@@ -114,17 +114,12 @@ def _record_pptx_inspection(
             bool(report["unsupported_visual_slide_count"])
         )
         counters["pptx_empty_decks"] += int("pptx_no_text" in report["reasons"])
-    db.insert_event(
-        event_type="task.artifact",
-        task_id=TASK_ID,
-        run_id=run_id,
-        panel_id="library",
-        payload={
-            **{key: value for key, value in report.items() if key != "slides"},
-            "md5": md5,
-            "report_path": str(path),
-        },
-    )
+    artifact({
+        **{key: value for key, value in report.items() if key != "slides"},
+        "kind": "library.non_pdf_inspection",
+        "md5": md5,
+        "report_path": str(path),
+    })
 
 
 def _s3_client(storage: DocumentStorageSettings) -> Any:
@@ -250,6 +245,7 @@ def _upload_assets(
                         "asset-ordinal": str(asset.ordinal),
                     },
                 },
+                Config=sequential_transfer_config(),
             )
             head = _matching_object(
                 s3,
@@ -342,6 +338,7 @@ def run_extraction(
     run_id: int,
     should_stop: Callable[[], bool],
     log: Callable[[str], None],
+    artifact: Callable[[dict[str, Any]], None],
     limit: int | None = None,
     per_mime_limit: int | None = None,
     retry_known_failures: bool = False,
@@ -461,10 +458,9 @@ def run_extraction(
                 counters[f"powerpoint_{prepared.legacy_conversion}_converted"] += 1
             if detected in {"pptx", "powerpoint"}:
                 _record_pptx_inspection(
-                    db,
+                    artifact,
                     workspace=doc_workspace,
                     md5=candidate.md5,
-                    run_id=run_id,
                     counters=counters,
                 )
             formats[detected] += 1
@@ -476,24 +472,18 @@ def run_extraction(
             archive_path = _write_content_archive(
                 candidate.md5, markdown, doc_workspace / f"{candidate.md5}.zip"
             )
-            db.insert_event(
-                event_type="task.artifact",
-                task_id=TASK_ID,
-                run_id=run_id,
-                panel_id="library",
-                payload={
-                    "kind": "library.non_pdf_local_content",
-                    "md5": candidate.md5,
-                    "detected_format": detected,
-                    "extractor_version": item_version,
-                    "legacy_conversion": prepared.legacy_conversion,
-                    "markdown_path": str(doc_workspace / "final.md"),
-                    "unformatted_path": str(doc_workspace / "unformatted.md"),
-                    "archive_path": str(archive_path),
-                    "generation_id": generation_id,
-                    "validation_path": str(doc_workspace / "validation.json"),
-                },
-            )
+            artifact({
+                "kind": "library.non_pdf_local_content",
+                "md5": candidate.md5,
+                "detected_format": detected,
+                "extractor_version": item_version,
+                "legacy_conversion": prepared.legacy_conversion,
+                "markdown_path": str(doc_workspace / "final.md"),
+                "unformatted_path": str(doc_workspace / "unformatted.md"),
+                "archive_path": str(archive_path),
+                "generation_id": generation_id,
+                "validation_path": str(doc_workspace / "validation.json"),
+            })
             with repository.publication(candidate) as conn:
                 uploaded_urls, uploaded_images, reused_images = _upload_assets(
                     prepared,
@@ -531,6 +521,7 @@ def run_extraction(
                                 "asset-count": str(len(prepared.assets)),
                             },
                         },
+                        Config=sequential_transfer_config(),
                     )
                     head = _matching_object(
                         s3,
@@ -714,8 +705,6 @@ def run_extraction(
 
 def execute(context: RunContext) -> dict[str, Any]:
     """Run in the CLI worker with explicit logging, cancellation and local state."""
-    if context.options.workers != 1:
-        raise ValueError("Non-PDF extraction is sequential; select one worker")
     if context.should_stop():
         return {"kind": "library.non_pdf_extraction_summary", "outcome": "stopped"}
     repository = NonPdfExtractionRepository(
@@ -740,7 +729,7 @@ def execute(context: RunContext) -> dict[str, Any]:
             repository=repository, cleanup_repository=cleanup_repository,
             db=context.db, s3=s3, storage=storage,
             workspace=workspace_dir("library", "non-pdf-extraction", run_id=context.run_id),
-            run_id=context.run_id, should_stop=context.should_stop, log=context.log,
+            run_id=context.run_id, should_stop=context.should_stop, log=context.log, artifact=context.artifact,
             limit=context.options.limit, per_mime_limit=context.options.per_mime_limit,
             retry_known_failures=context.options.retry_known_failures,
             only_md5s=frozenset(context.options.only_md5s) if context.options.only_md5s else None,

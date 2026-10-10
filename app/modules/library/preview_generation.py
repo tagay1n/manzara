@@ -16,6 +16,7 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
+from app.s3_transfer import sequential_transfer_config
 from app.document_storage import (
     DEFAULT_DOCUMENT_CACHE_MAX_BYTES,
     find_valid_cache_file,
@@ -145,7 +146,8 @@ def ensure_cached_pdf(
 
     def download(temporary: Path) -> None:
         s3.download_file(
-            str(source_bucket), str(source_key or f"{digest}.pdf"), str(temporary)
+            str(source_bucket), str(source_key or f"{digest}.pdf"), str(temporary),
+            Config=sequential_transfer_config(),
         )
 
     target = materialize_cached_document(
@@ -323,6 +325,7 @@ def process_book(
                     "Metadata": {**metadata, "width": str(output.width),
                                  "height": str(output.height), "quality": str(output.quality)},
                 },
+                Config=sequential_transfer_config(),
             )
             head = _matching_remote(target_s3, bucket=settings.target_bucket, key=key, metadata=metadata)
             if head is None:

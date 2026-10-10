@@ -18,7 +18,7 @@ python3 -m venv .venv
 
 Copy the masked structure of `config.example.yaml` to a gitignored `config.local.yaml` or `config.yaml`. Runtime configuration resolves `MANZARA_CONFIG_PATH`, then local configuration; never load the example at runtime.
 
-Optional `--workers N`, `--limit N`, and `--task TASK_ID` select next-run settings and the initial interactive task. Launching never starts a task automatically. Interactive execution requires a terminal; `--help` works without configuration. Backblaze upload is available only through its [GitHub workflow](docs/operations.md#backblaze-document-transfer).
+Optional `--limit N` and `--task TASK_ID` select next-run settings and the initial interactive task. Launching never starts a task automatically. Interactive execution requires a terminal; `--help` works without configuration. Backblaze upload is available only through its [GitHub workflow](docs/operations.md#backblaze-document-transfer).
 
 Select non-PDF extraction with `.venv/bin/python -m app --task library.extract_non_pdf --per-mime-limit 1`, then enter `/run`. It runs sequentially with one worker. [Document processing](app/modules/library/guidance/documents.md#extraction-and-publication) owns source eligibility, converter requirements, cohort/retry controls, and retained output behavior.
 
@@ -30,7 +30,7 @@ Select publisher clustering with `.venv/bin/python -m app --task library.suggest
 
 Select collection discovery with `.venv/bin/python -m app --task library.collection_detect`, then enter `/run`. It requires one worker and the complete inventory and generates deterministic publication-based proposals without AI or membership/inclusion changes. Logs stream to the terminal without a log file or lifecycle events; local run tracking and the final structured artifact remain available. [Collection discovery](app/modules/library/guidance/collections.md) owns the contract.
 
-Select metadata extraction with `.venv/bin/python -m app --task library.metadata_extract`, or evaluation with `--task maintenance.monocorpus_meta_evaluate`, then enter `/run`. Both support workers and a publication limit. They use terminal-only logs, omit task lifecycle events, and retain structured result artifacts. [Metadata processing](app/modules/library/guidance/metadata.md) owns source selection, protected writes, and retry behavior.
+Select metadata extraction with `.venv/bin/python -m app --task library.metadata_extract`, or evaluation with `--task maintenance.monocorpus_meta_evaluate`, then enter `/run`. Both process publications sequentially and support a publication limit. All tasks use stdout-only logs, emit no events, and retain structured result artifacts. [Metadata processing](app/modules/library/guidance/metadata.md) owns source selection, protected writes, and retry behavior.
 
 Run daily maintenance without a terminal using `python scripts/run_daily_maintenance.py`. It prepares cleanup plans/reviews, then executes persisted cleanup and Yandex Sync with one worker and no limit. Sync and Cleanup plan are absent from the interactive task list. [Operations](docs/operations.md#scheduled-sync-and-cleanup) owns the daily schedule, Actions secrets, retention, and failure behavior; [cleanup review](docs/document-cleanup.md) explains explicit ISBN decisions.
 
@@ -43,7 +43,7 @@ Outside pickers, Up recalls older submitted commands and Down moves toward newer
 | Command | Behavior |
 | --- | --- |
 | `/task` | Search and select a task. Selection never starts work. |
-| `/settings` | Edit workers and candidate limit with inline validation, Save, and Cancel. Tab changes focus; Enter/Ctrl-S saves; Esc cancels. Cohort/retry options are preserved. |
+| `/settings` | Edit candidate limit with inline validation, Save, and Cancel. Tab changes focus; Enter/Ctrl-S saves; Esc cancels. Cohort/retry options are preserved. |
 | `/run` | Start/resume the selected task using current options. |
 | `/stop` | Request safe stop and keep Manzara open. |
 | `/history` | Search the selected task's latest 20 runs and print a saved summary. |
@@ -51,7 +51,7 @@ Outside pickers, Up recalls older submitted commands and Down moves toward newer
 | `/help` | Print command and keyboard guidance. |
 | `/quit` | Stop safely, drain output, and exit. |
 
-One foreground run owns the CLI from the start request through worker finalization and output drain. Additional starts are rejected, and task selection/settings stay locked. Browsing history leaves foreground activity unchanged. Activity animates during discovery, processing, provider waits, stopping, and finalization; the spinner indicates activity, while meaningful counters indicate advancement. Provider waits describe individual workers/request gates. Runtime-read failures visibly mark progress unavailable. Completion distinguishes completed, stopped, deferred, and failed outcomes.
+One foreground run owns the CLI from the start request through worker finalization and output drain. Additional starts are rejected, and task selection/settings stay locked. Browsing history leaves foreground activity unchanged. Activity animates during discovery, processing, provider waits, stopping, and finalization; the spinner indicates activity, while meaningful counters indicate advancement. Provider waits come directly from the run status. Runtime-read failures visibly mark progress unavailable. Completion distinguishes completed, stopped, deferred, and failed outcomes.
 
 When a run finishes, the CLI rings the terminal bell once after worker finalization and final output drain, including failed, deferred, and safely stopped runs. The summary shows the outcome. Sound depends on your terminal's audible-bell settings; set `PROMPT_TOOLKIT_BELL=false` to disable it. Browsing saved summaries does not ring the bell.
 
@@ -61,7 +61,7 @@ Renderer updates and transcript messages share a nonblocking terminal writer. In
 
 Reopening preserves compatible completed decisions and resumes eligible work. One CLI session owns each local runtime store; a second session reports the conflict.
 
-CLI and maintenance startup initialize local SQLite and recover interrupted local runs. Python task registrations own task titles, grouping, worker defaults, and handlers. Older local runtime databases are recreated once for schema version 7 under the owner-approved [fresh-state policy](docs/operations.md#local-runtime-state). They do **not** apply PostgreSQL migrations. All interactive tasks, daily maintenance, and Backblaze transfer check the catalog read-only before processing; incompatible schemas must be migrated separately.
+CLI and maintenance startup initialize local SQLite and recover interrupted local runs. Python task registrations own task titles, grouping, inventory requirements, and handlers. Older local runtime databases are recreated once for schema version 8 under the owner-approved [fresh-state policy](docs/operations.md#local-runtime-state). They do **not** apply PostgreSQL migrations. All interactive tasks, daily maintenance, and Backblaze transfer check the catalog read-only before processing; incompatible schemas must be migrated separately.
 
 | Setting | Purpose / default |
 | --- | --- |
@@ -73,9 +73,9 @@ CLI and maintenance startup initialize local SQLite and recover interrupted loca
 | `MANZARA_ARTIFACTS_ROOT` | Artifact root; `~/.manzara` |
 | `MANZARA_LOCAL_STATE_PATH` | Disposable SQLite runtime; `~/.manzara/state/runtime.sqlite3` |
 
-Every enabled task shares the process's bounded PostgreSQL engine. Task definitions are code-owned. Runs, events, Gemini coordination, and AI retry exclusions remain in local SQLite; domain data and safety-critical checkpoints remain in PostgreSQL.
+Every enabled task shares the process's bounded PostgreSQL engine. Task definitions are code-owned. Runs, Gemini coordination, and AI retry exclusions remain in local SQLite; domain data and safety-critical checkpoints remain in PostgreSQL.
 
-New interactive run messages stream into native terminal scrollback with compact formatting and visible warning/error severity. No verbose `.log` file is created for these runs; terminal retention controls how much output survives. Saved run summaries, restartable checkpoints, structured `run-<run_id>.artifact.json` files under `~/.manzara/logs/task-runs/<task_id>/`, and persisted `task.artifact` events remain. Daily maintenance continues to write authoritative `.log` files and Actions console output. Backblaze transfer writes redacted logs only to Actions stdout. Existing log files/history remain intact; saved summaries link their files when present. Overrides use the configured artifacts root.
+Every task processes items sequentially with one worker. Necessary support threads keep terminal controls and leases responsive. Interactive and scheduled logs use the same redacted stdout formatter; no task creates log files or emits events. Result artifacts are separate JSON files under `workspaces/task-runs/<task_id>/run-<run_id>/`, linked from local run summaries. Existing files remain on disk. The upgrade resets local runtime state according to the [approved policy](docs/operations.md#local-runtime-state).
 
 Gemini models and account/project-grouped keys come from local configuration, with no model default. See the [Gemini contract](docs/gemini-runtime.md).
 

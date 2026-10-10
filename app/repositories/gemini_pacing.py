@@ -56,7 +56,7 @@ class GeminiPacingRepository:
         )
         result = {"pacing_epoch": state.epoch, "pacing_probe": probe}
         if row is None or probe:
-            result["pacing_event"] = {**pacing_snapshot(policy, state), "reason": "probe_started" if probe else "enabled"}
+            result["pacing_snapshot"] = {**pacing_snapshot(policy, state), "reason": "probe_started" if probe else "enabled"}
         return result
 
     def _start_paced_generation(self, conn, policy, *, lease_token, epoch, now_ts, expires_at):

@@ -477,8 +477,8 @@ def _finish(context, counters, planned, *, error=None):
 
 
 def execute(context: RunContext) -> dict[str, Any]:
-    if context.options.workers != 1 or context.options.limit is not None:
-        raise ValueError('Sync requires one worker and no limit')
+    if context.options.limit is not None:
+        raise ValueError('Sync requires no limit')
     if context.should_stop():
         return {'kind': 'maintenance.monocorpus_sync_summary', 'stopped': True, 'outcome': 'stopped'}
     settings = load_document_storage_settings(load_runtime_config())

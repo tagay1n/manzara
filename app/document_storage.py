@@ -13,6 +13,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote, unquote, urlparse
 
+from app.s3_transfer import sequential_transfer_config
+
 
 DEFAULT_MULTIPART_CHUNK_SIZE = 8 * 1024 * 1024
 DEFAULT_DOCUMENT_CACHE_MAX_BYTES = 50 * 1024**3
@@ -270,7 +272,7 @@ def prune_document_cache(
             removed_files += 1
             removed_bytes += size
 
-    from app.task_runtime.logging import LOG_SINK
+    from app.task_runtime.logging import log_message
 
     message = (
         "document cache: pruned "
@@ -278,11 +280,7 @@ def prune_document_cache(
         f"removed_files={removed_files} removed_bytes={removed_bytes} "
         f"failed_files={len(failed)}"
     )
-    sink = LOG_SINK.get()
-    if sink is not None:
-        sink(message)
-    else:
-        print(message, flush=True)
+    log_message(message)
     return CachePruneResult(
         initial,
         max(0, total),
@@ -411,7 +409,7 @@ def download_cached_primary_document(
             document_url=document_url,
             expected_size=expected_size,
         )
-        s3.download_file(location[0], location[1], str(destination))
+        s3.download_file(location[0], location[1], str(destination), Config=sequential_transfer_config())
 
     return materialize_cached_document(
         cache_path=settings.cache_path,

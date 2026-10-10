@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import sys
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -21,6 +22,11 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.s3_transfer import sequential_transfer_config
+from app.task_runtime.logging import log_message
 
 BACKUP_PREFIX = "logical/manzara"
 DEFAULT_POSTGRES_IMAGE = "postgres:18"
@@ -322,6 +328,7 @@ def _upload_one(
             "ServerSideEncryption": "AES256",
             "Metadata": metadata,
         },
+        Config=sequential_transfer_config(),
     )
     head = client.head_object(Bucket=bucket, Key=key)
     _validate_remote_object(
@@ -442,7 +449,7 @@ def main() -> int:
     try:
         result = run_backup(postgres_image=args.postgres_image)
     except (BotoCoreError, ClientError, OSError, RuntimeError, ValueError) as exc:
-        print(f"::error::PostgreSQL logical backup failed: {exc}", flush=True)
+        log_message(f"PostgreSQL logical backup failed: {exc}", level="ERROR")
         return 1
     print(json.dumps(result.__dict__, sort_keys=True), flush=True)
     return 0

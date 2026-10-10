@@ -22,7 +22,7 @@ PostgreSQL checkpoints retain input fingerprints, contract versions, accepted id
 
 The CLI exposes no personality review/retry workbench. Existing persisted `retry_requested` decisions remain eligible; changed source metadata or contract versions also reopen applicable work without deleting prior evidence.
 
-Preserve the targeted legacy recovery rules implemented in code: compatible successes stay completed, unrelated terminal failures stay excluded, and only affected model exclusions are released. Keep `recovered_response` / `previous_failure` evidence. An item HTTP 400 closes all pending recoveries and records blocking evidence. Do not broaden recovery into an automatic retry of every failure.
+Only current prompt/schema versions qualify as completed checkpoints. Changed input/contracts and explicit retry intent reopen applicable work; no historical prompt/schema compatibility rules remain. Keep `recovered_response` / `previous_failure` evidence for current retry decisions. An item HTTP 400 closes all pending recoveries and records blocking evidence. Do not broaden recovery into an automatic retry of every failure.
 
 A successful result reuses an exact-compatible active identity, preferring the checkpoint's existing target. Multiple compatible targets without that preference fail the item for explicit review. Otherwise it creates an unconfirmed identity. Existing human approvals and reviewed associations are preserved. A spelling with several active alias targets requires explicit resolution. Contributions are never resolved or rewritten by normalization.
 
@@ -30,12 +30,12 @@ Review ownership is checked before inserting the alias: the catalog trigger may 
 
 ## Queue and reporting
 
-Untouched names precede checkpointed names before applying the candidate limit. Workers share one queue; each name gets one first-pass turn and at most one later turn, after all first-pass workers finish.
+Untouched names precede checkpointed names before applying the candidate limit. One worker processes names sequentially; each name gets one first-pass turn and at most one later turn, after the first pass finishes.
 
 Yield on 429, service 5xx, transport failures, and local deadlines without content-excluding the model. Record shared provider state first. Wait stoppably when no capacity is ready; total daily exhaustion preserves untouched work. A second transient failure leaves local deferral; stopping preserves local pending retry state.
 
 Personality-only pacing and the 60-second HTTP I/O timeout are defined in [Gemini runtime](gemini-runtime.md). An I/O timeout is not a total streaming deadline.
 
-Count unique people separately from physical `model_attempts`; distinguish negative outcomes, failures, final deferrals, and pending retries. Emit worker-attributed logs and explicit summary artifacts.
+Count unique people separately from physical `model_attempts`; distinguish negative outcomes, failures, final deferrals, and pending retries. Write shared stdout logs and explicit summary artifacts.
 
-The CLI passes an explicit run context, shares its PostgreSQL pool, and propagates run logging into all worker threads. Stop prevents new claims and waits for safe checkpoint boundaries. Structured artifacts and final progress survive stopped/deferred runs; logs are never parsed into business results. Launch with `python -m app --task library.normalize_personalities`.
+The CLI passes an explicit run context, shares its PostgreSQL pool, and uses the shared stdout logger on its single task worker. Stop prevents new claims and waits for safe checkpoint boundaries. Structured artifacts and final progress survive stopped/deferred runs; logs are never parsed into business results. Launch with `python -m app --task library.normalize_personalities`.

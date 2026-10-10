@@ -111,21 +111,17 @@ def write_csv(
 
 
 def load_google_credentials(
-    credentials_dir: Path, legacy_dir: Path | None = None
+    credentials_dir: Path
 ) -> Any:
-    """Load OAuth credentials, falling back to the former monocorpus files."""
+    """Load OAuth credentials from the configured private directory."""
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
 
     token_path = credentials_dir / "personal_token.json"
-    legacy_token = legacy_dir / "personal_token.json" if legacy_dir else None
-    existing_token = token_path if token_path.exists() else legacy_token
-    if existing_token is not None and existing_token.exists():
-        return Credentials.from_authorized_user_file(str(existing_token), SCOPES)
+    if token_path.exists():
+        return Credentials.from_authorized_user_file(str(token_path), SCOPES)
 
     client_secret = credentials_dir / "client_secret.json"
-    if not client_secret.exists() and legacy_dir is not None:
-        client_secret = legacy_dir / "client_secret.json"
     if not client_secret.exists():
         raise FileNotFoundError(
             f"Google OAuth client secret not found at {credentials_dir / 'client_secret.json'}"
@@ -197,10 +193,7 @@ def upload_csv_to_sheets(
         chunk = data[start : start + chunk_size]
         pace_write()
         worksheet.update(values=chunk, range_name=f"A{start + 1}", value_input_option="RAW")
-        print(
-            f"dump state: sheets rows {start + 1}-{start + len(chunk)} uploaded",
-            flush=True,
-        )
+        log_message(f"dump state: sheets rows {start + 1}-{start + len(chunk)} uploaded")
 
     pace_write()
     spreadsheet.batch_update(
@@ -224,7 +217,6 @@ def run_dump(
     engine: Engine,
     workspace: Path,
     credentials_dir: Path,
-    legacy_credentials_dir: Path | None = None,
     schema: str = "monocorpus",
     validate_sharing: bool = False,
     should_stop: Callable[[], bool] = lambda: False,
@@ -233,25 +225,19 @@ def run_dump(
     workspace.mkdir(parents=True, exist_ok=True)
     csv_path = workspace / "documents.csv"
 
-    print("dump state: reading document catalog", flush=True)
+    log_message("dump state: reading document catalog")
     source_columns, records = fetch_document_rows(engine, schema=schema)
     if validate_sharing:
         validate_catalog_sharing(records)
-        print(
-            f"dump state: sharing validation passed for {len(records)} documents",
-            flush=True,
-        )
+        log_message(f"dump state: sharing validation passed for {len(records)} documents")
     columns, rows = prepare_document_export(records, source_columns=source_columns)
     write_csv(csv_path, columns, rows)
-    print(
-        f"dump state: exported rows={len(rows)} columns={len(columns)}",
-        flush=True,
-    )
+    log_message(f"dump state: exported rows={len(rows)} columns={len(columns)}")
     if should_stop():
         raise StopRequested("graceful stop requested before remote upload")
 
-    credentials = load_google_credentials(credentials_dir, legacy_credentials_dir)
-    print("dump state: publishing Google Sheets", flush=True)
+    credentials = load_google_credentials(credentials_dir)
+    log_message("dump state: publishing Google Sheets")
     try:
         sheet_rows = upload_csv_to_sheets(csv_path, credentials)
     except Exception:
@@ -266,7 +252,7 @@ def run_dump(
         "columns_exported": len(columns),
         "sheet_columns": columns,
     }
-    print(f"dump state: completed {json.dumps(summary, sort_keys=True)}", flush=True)
+    log_message(f"dump state: completed {json.dumps(summary, sort_keys=True)}")
     return summary
 
 

@@ -1,4 +1,4 @@
-"""Bounded item fallback on top of the shared ready-model scheduler."""
+"""Bounded item retries on top of the shared ready-model scheduler."""
 
 from __future__ import annotations
 
@@ -74,11 +74,6 @@ class GeminiModelPoolItemRejectedError(GeminiModelPoolOperationalError):
 
 
 @dataclass(frozen=True)
-class _ParsedResponse(Generic[T]):
-    value: T
-
-
-@dataclass(frozen=True)
 class GeminiModelPoolResult(Generic[T]):
     """Validated response with the model that produced it."""
 
@@ -113,7 +108,7 @@ def run_ordered_model_pool(
         def invoke(model, key, lease):
             nonlocal selected
             selected = model
-            return _ParsedResponse(parse(request(model, key, lease)))
+            return parse(request(model, key, lease))
 
         try:
             selected, response = manager.run_with_available_model(
@@ -122,20 +117,14 @@ def run_ordered_model_pool(
                 call=invoke,
                 run_id=run_id,
             )
-            value = (
-                response.value
-                if isinstance(response, _ParsedResponse)
-                else parse(response)
-            )
+            value = response
         except GeminiStopRequestedError:
             raise
         except GeminiAllKeysExhaustedError as exc:
             raise GeminiModelPoolUnavailableError(
                 eligible,
-                retry_at=getattr(exc, "retry_at", None),
-                all_models_unavailable=getattr(
-                    exc, "all_models_unavailable", not failed
-                ),
+                retry_at=exc.retry_at,
+                all_models_unavailable=exc.all_models_unavailable,
             ) from exc
         except (
             GeminiQuotaExceededError,
@@ -143,7 +132,6 @@ def run_ordered_model_pool(
             GeminiTransportError,
             GeminiRequestTimeoutError,
         ) as exc:
-            selected = selected or getattr(exc, "model_name", None)
             if selected is None:
                 raise GeminiModelPoolOperationalError(str(exc), retryable=True) from exc
             if yield_on_transient:
@@ -151,7 +139,7 @@ def run_ordered_model_pool(
                     str(exc),
                     retryable=True,
                     model_name=selected,
-                    retry_at=getattr(exc, "pause_until", None),
+                    retry_at=exc.pause_until if isinstance(exc, GeminiServerPauseError) else None,
                 ) from exc
             if isinstance(exc, GeminiQuotaExceededError):
                 quota_attempts[selected] = quota_attempts.get(selected, 0) + 1
@@ -170,7 +158,6 @@ def run_ordered_model_pool(
         except GeminiRequestRejectedError as exc:
             raise GeminiModelPoolItemRejectedError(str(exc)) from exc
         except GeminiModelResponseError as exc:
-            selected = selected or getattr(exc, "model_name", None)
             if selected is None:
                 raise
             record_failure(selected, "response", str(exc))

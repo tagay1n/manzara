@@ -11,7 +11,7 @@ Owner: tans1q
 
 ## Invariants
 
-- Durable domain data and safety-critical workflow checkpoints use PostgreSQL (`MANZARA_DATABASE_URL`, schema `MANZARA_DB_SCHEMA`, default `monocorpus`). Runs, events, Gemini coordination, flow attempts/errors, AI retry exclusions, and reproducible caches use only local SQLite (`~/.manzara/state/runtime.sqlite3` or `MANZARA_LOCAL_STATE_PATH`). Task registrations are code-owned; dashboard definitions and conveyor state are retired. Never fall back between stores or dual-write.
+- Durable domain data and safety-critical workflow checkpoints use PostgreSQL (`MANZARA_DATABASE_URL`, schema `MANZARA_DB_SCHEMA`, default `monocorpus`). Runs, Gemini coordination, flow attempts/errors, AI retry exclusions, and reproducible caches use only local SQLite (`~/.manzara/state/runtime.sqlite3` or `MANZARA_LOCAL_STATE_PATH`). Task registrations are code-owned; dashboard definitions and conveyor state are retired. Never fall back between stores or dual-write.
 - The backend owns domain decisions and persisted truth. Clients own rendering, transport, interaction, and transient state.
 - Artifacts live under `~/.manzara` or `MANZARA_ARTIFACTS_ROOT`; never create repository-root runtime artifact directories.
 - Keep secrets out of git and logs. Local configuration is gitignored; keep `config.example.yaml` masked and structurally current, and never load it at runtime.
@@ -23,8 +23,8 @@ Owner: tans1q
 - Create, modify, or run tests only when the owner explicitly requests that test work. Ordinary implementation, fixes, refactoring, documentation, and commits do not authorize tests or require TDD/full-suite runs. Use code review and appropriate non-test inspection by default; report validation limits. See [docs/verification.md](docs/verification.md).
 - Validate external control payloads strictly: explicit boolean allowlists; integral integers without truncation.
 - Prefer declarative registries and shared contracts; small functions, shallow nesting, side effects at boundaries.
-- Define shared workflow states once. Preserve retained task/event payload schemas; HTTP/SSE transport has been retired by owner decision.
-- Tasks stop at safe boundaries, resume from persisted checkpoints, surface actionable failures, and keep dedicated structured artifact logs.
-- Structured artifacts require persisted `task.artifact` events, never log parsing. Saved log paths remain in run summaries; the CLI has no log-reading API.
+- Define shared workflow states once. Tasks emit no events; progress and provider waits use the local run row. HTTP/SSE transport is retired.
+- Tasks stop at safe boundaries, resume from persisted checkpoints, surface actionable failures, and retain structured result artifacts.
+- All task logs go only to stdout using the shared formatter. Tasks process items sequentially with one task worker; necessary support threads are allowed. Save structured artifacts directly and reference them in run summaries, never through events or log parsing.
 - Deliver small slices, verify runtime/dependency assumptions, and update stale guidance in the same change. Nearest instructions win.
 - Document current contracts, operations, and unresolved work once. Use code for implementation detail and git history for completed handoffs; avoid duplicated setup, frozen test counts, benchmark snapshots, and nonexistent path references.

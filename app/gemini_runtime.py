@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from app.db import Database
-from app.gemini_workers import emit_gemini_worker_log
+from app.task_runtime.logging import log_message
 from app.gemini_pacing import GeminiPacingPolicy, PacingOutcome
 from app.repositories.gemini_pacing import GeminiPacingAdmissionLost
 from app.gemini_config import (
@@ -57,7 +57,8 @@ class GeminiQuotaExceededError(GeminiRuntimeError):
 class GeminiAllKeysExhaustedError(GeminiRuntimeError):
     """Raised when no non-exhausted keys remain for the eligible models."""
 
-    def __init__(self, message: str, *, all_models_unavailable: bool = True):
+    def __init__(self, message: str, *, all_models_unavailable: bool = True, retry_at: datetime | None = None):
+        self.retry_at = retry_at
         self.all_models_unavailable = all_models_unavailable
         super().__init__(message)
 
@@ -66,8 +67,7 @@ class GeminiQuotaCooldownError(GeminiAllKeysExhaustedError):
     """Raised when every otherwise-usable quota domain is cooling down."""
 
     def __init__(self, message: str, *, retry_at: datetime | None = None):
-        self.retry_at = retry_at
-        super().__init__(message)
+        super().__init__(message, retry_at=retry_at)
 
 
 class GeminiServerPauseError(GeminiRuntimeError):
@@ -108,8 +108,8 @@ class GeminiLease:
     key_value: str
     masked_key: str
     model_name: str
-    project_lease_token: str = ""
-    quota_domain_id: str = ""
+    project_lease_token: str
+    quota_domain_id: str
     pacing_epoch: int = 0
     pacing_probe: bool = False
 
@@ -287,24 +287,19 @@ def _is_terminated_upload_error(error: Exception) -> bool:
 
 
 class GeminiRuntimeManager:
-    """Shared Gemini key allocator with local runtime state and coordination events."""
+    """Shared Gemini key allocator with local runtime state and request coordination."""
 
     def __init__(
         self,
         db: Database,
         *,
         task_id: Optional[str],
-        panel_id: Optional[str],
         should_stop: Optional[Callable[[], bool]] = None,
-        worker_id: Optional[str] = None,
         pacing_policy: GeminiPacingPolicy | None = None,
     ):
         self.db = db
         self.task_id = task_id
-        self.panel_id = panel_id
         self.should_stop = should_stop or (lambda: False)
-        self._local_lock = threading.Lock()
-        self.worker_id = worker_id
         self.pacing_policy = pacing_policy
         self._configured_keys: Optional[List[GeminiKey]] = None
         self._prepared_models: set[str] = set()
@@ -314,35 +309,27 @@ class GeminiRuntimeManager:
     def max_quota_rotations_per_model(self) -> int:
         return self._limits.max_quota_rotations_per_model
 
-    def _emit(
-        self, event_type: str, payload: Dict[str, Any], *, run_id: Optional[int] = None
-    ) -> None:
-        self.db.insert_event(
-            event_type,
-            task_id=self.task_id,
-            run_id=run_id,
-            panel_id=self.panel_id,
-            payload=payload,
-        )
+    def _set_wait(self, run_id: int | None, payload: dict) -> None:
+        if run_id is not None:
+            self.db.set_run_provider_wait(run_id, payload)
 
     def _sync_key_registry(self) -> List[GeminiKey]:
-        with self._local_lock:
-            if self._configured_keys is not None:
-                return list(self._configured_keys)
-            keys = load_gemini_keys()
-            self.db.upsert_gemini_keys(
-                [
-                    {
-                        "key_id": item.key_id,
-                        "account_id": item.account_id,
-                        "masked_key": item.masked_key,
-                        "quota_domain_id": item.quota_domain_id or item.key_id,
-                    }
-                    for item in keys
-                ]
-            )
-            self._configured_keys = list(keys)
-            return list(keys)
+        if self._configured_keys is not None:
+            return list(self._configured_keys)
+        keys = load_gemini_keys()
+        self.db.upsert_gemini_keys(
+            [
+                {
+                    "key_id": item.key_id,
+                    "account_id": item.account_id,
+                    "masked_key": item.masked_key,
+                    "quota_domain_id": item.quota_domain_id,
+                }
+                for item in keys
+            ]
+        )
+        self._configured_keys = list(keys)
+        return list(keys)
 
     @staticmethod
     def _cycle_label(now_utc: datetime) -> str:
@@ -385,59 +372,8 @@ class GeminiRuntimeManager:
             "wait_until_utc": _iso_utc(end) if active else None,
         }
 
-    def _ensure_cycle(self, now_utc: datetime) -> Dict[str, Any]:
-        cycle_label = self._cycle_label(now_utc)
-        control = self.db.ensure_gemini_runtime_cycle(cycle_label)
-        rolled = bool(control.pop("rolled", False))
-        if rolled:
-            self._emit(
-                "gemini.all_reset",
-                {
-                    "cycle_label": cycle_label,
-                    "reason": "daily_reset",
-                },
-            )
-        return control
-
-    def _clear_elapsed_pause_if_needed(
-        self, control: Dict[str, Any], now_utc: datetime
-    ) -> Dict[str, Any]:
-        pause_until = _parse_ts(control.get("pause_until"))
-        if pause_until is None or pause_until > now_utc:
-            return control
-        updated = self.db.set_gemini_pause(None, None)
-        self._emit(
-            "gemini.pause.ended",
-            {
-                "ended_at": _iso_utc(now_utc),
-            },
-        )
-        return updated
-
-    def _wait_reason(
-        self, control: Dict[str, Any], now_utc: datetime
-    ) -> Optional[Dict[str, Any]]:
-        blackout = self._blackout_window(now_utc)
-        override_until = _parse_ts(control.get("blackout_override_until"))
-        blackout_overridden = bool(
-            blackout["active"]
-            and override_until is not None
-            and override_until > now_utc
-        )
-        if blackout["active"] and not blackout_overridden:
-            return {
-                "type": "blackout",
-                "wait_until": _parse_ts(blackout.get("wait_until_utc")),
-                "blackout": blackout,
-            }
-        pause_until = _parse_ts(control.get("pause_until"))
-        if pause_until is not None and pause_until > now_utc:
-            return {
-                "type": "pause",
-                "wait_until": pause_until,
-                "pause_reason": str(control.get("last_pause_reason") or ""),
-            }
-        return None
+    def _ensure_cycle(self, now_utc: datetime) -> None:
+        self.db.ensure_gemini_runtime_cycle(self._cycle_label(now_utc))
 
     def _ensure_model_rows(self, keys: List[GeminiKey], model_name: str) -> None:
         if model_name in self._prepared_models:
@@ -488,10 +424,11 @@ class GeminiRuntimeManager:
             keys = self._sync_key_registry()
             if not keys:
                 raise GeminiAllKeysExhaustedError("No Gemini keys configured")
-            control = self._clear_elapsed_pause_if_needed(self._ensure_cycle(now), now)
-            gate = self._wait_reason(control, now)
-            if gate is not None:
-                self._sleep_until(gate.get("wait_until"))
+            self._ensure_cycle(now)
+            blackout = self._blackout_window(now)
+            if blackout["active"]:
+                self._set_wait(run_id, {"mode": "daily reset", "wait_until": blackout["wait_until_utc"]})
+                self._sleep_until(_parse_ts(blackout["wait_until_utc"]))
                 continue
             for model in pool_models or models:
                 self._ensure_model_rows(keys, model)
@@ -506,13 +443,13 @@ class GeminiRuntimeManager:
                 lease_token=uuid.uuid4().hex,
                 task_id=self.task_id,
                 run_id=run_id,
-                worker_id=self.worker_id or threading.current_thread().name,
             )
             if self.pacing_policy is not None:
                 claim_args["pacing_policy"] = self.pacing_policy
             decision = self.db.claim_gemini_ready_request(models=models, **claim_args)
             if decision.get("wait_reason") == "pacing":
                 wait_until = _parse_ts(decision["retry_at"])
+                self._set_wait(run_id, {"mode": "pacing", "wait_until": decision["retry_at"]})
                 self._sleep_until(min(wait_until, now + timedelta(seconds=1)))
                 continue
             if "key_id" not in decision:
@@ -541,15 +478,9 @@ class GeminiRuntimeManager:
                     raise error
                 wait_until = _parse_ts(full.get("retry_at")) or retry_at
                 if last_wait != wait_until:
-                    self._emit(
-                        "gemini.scheduler.waiting",
-                        {"models": list(models), "wait_until": _iso_utc(wait_until),
-                         "worker_id": claim_args["worker_id"]},
-                        run_id=run_id,
-                    )
-                    emit_gemini_worker_log(
+                    self._set_wait(run_id, {"mode": "capacity", "wait_until": _iso_utc(wait_until)})
+                    log_message(
                         f"gemini runtime: waiting models={','.join(models)} until={_iso_utc(wait_until)}",
-                        worker_id=claim_args["worker_id"],
                     )
                     last_wait = wait_until
                 # A peer may release its project before the lease expiry or clear
@@ -558,21 +489,9 @@ class GeminiRuntimeManager:
                 continue
             key = next(key for key in keys if key.key_id == decision["key_id"])
             model = decision["model_name"]
-            if "pacing_event" in decision:
-                self._emit_pacing(decision["pacing_event"], run_id=run_id)
-            self._emit(
-                "gemini.key.used",
-                {
-                    "account_id": key.account_id,
-                    "key_id": key.key_id,
-                    "masked_key": key.masked_key,
-                    "model_name": model,
-                    "quota_domain_id": decision["quota_domain_id"],
-                    "worker_id": claim_args["worker_id"],
-                    "cooldown_until": cooldown,
-                },
-                run_id=run_id,
-            )
+            self._set_wait(run_id, {})
+            if "pacing_snapshot" in decision:
+                self._report_pacing(decision["pacing_snapshot"], run_id=run_id)
             return GeminiLease(
                 account_id=key.account_id,
                 key_id=key.key_id,
@@ -592,27 +511,44 @@ class GeminiRuntimeManager:
         call: Callable[[str, str, GeminiLease], Any],
         pool_models: Sequence[str] | None = None,
         run_id: Optional[int] = None,
-        max_attempts: int = 1,
     ) -> tuple[str, Any]:
-        """Execute on ready models within the retry budget; return the successful model."""
-        selected: list[str] = []
+        """Execute one leased request; the model pool owns bounded retries."""
+        while True:
+            lease = self.acquire_available_key(models=models, pool_models=pool_models, run_id=run_id)
+            heartbeat_stop = threading.Event()
+            heartbeat = threading.Thread(
+                target=self._lease_heartbeat, args=(lease, heartbeat_stop),
+                daemon=True, name=f"gemini-lease-{lease.account_id}",
+            )
+            generation_context = _GENERATION_START.set(lambda: self._record_generation_start(lease, run_id))
+            try:
+                heartbeat.start()
+                result = call(lease.model_name, lease.key_value, lease)
+            except GeminiPacingAdmissionLost:
+                # Preparation lost admission before sending anything; reacquire.
+                continue
+            except GeminiResponseValidationError:
+                self._record_pacing_outcome(lease, "success", run_id=run_id)
+                raise
+            except GeminiStopRequestedError:
+                raise
+            except Exception as error:
+                self._record_pacing_outcome(lease, self._pacing_error_outcome(error), run_id=run_id)
+                self._handle_error(lease=lease, error=error)
+            else:
+                self._record_pacing_outcome(lease, "success", run_id=run_id)
+                self.db.clear_gemini_generic_quota_signals(lease.model_name)
+                self.db.clear_gemini_quota_domain_model_state(lease.quota_domain_id, lease.model_name)
+                self.db.mark_gemini_success(lease.key_id, lease.model_name, now_ts=_iso_utc(_utc_now()))
+                return lease.model_name, result
+            finally:
+                _GENERATION_START.reset(generation_context)
+                heartbeat_stop.set()
+                if heartbeat.ident is not None:
+                    heartbeat.join()
+                self.db.release_gemini_project_lease(lease.quota_domain_id, lease.project_lease_token)
 
-        def invoke(key, lease):
-            selected.append(lease.model_name)
-            return call(lease.model_name, key, lease)
-
-        value = self._run_with_allocator(
-            acquire=lambda: self.acquire_available_key(
-                models=models, pool_models=pool_models, run_id=run_id
-            ),
-            call=invoke,
-            run_id=run_id,
-            max_attempts=max_attempts,
-            wait_on_pause=False,
-        )
-        return selected[-1], value
-
-    def _record_generation_start(self, lease: GeminiLease) -> None:
+    def _record_generation_start(self, lease: GeminiLease, run_id: int | None) -> None:
         while True:
             if self.should_stop():
                 raise GeminiStopRequestedError("Gemini generation interrupted by graceful stop")
@@ -621,7 +557,7 @@ class GeminiRuntimeManager:
             if self.pacing_policy is not None:
                 pacing = {"pacing_policy": self.pacing_policy, "pacing_epoch": lease.pacing_epoch}
             decision = self.db.record_gemini_generation_start(
-                lease.quota_domain_id or lease.key_id, lease.model_name,
+                lease.quota_domain_id, lease.model_name,
                 key_id=lease.key_id, lease_token=lease.project_lease_token,
                 now_ts=_iso_utc(now),
                 next_request_at=_iso_utc(now + timedelta(seconds=_PROJECT_MODEL_SPACING_SECONDS)),
@@ -631,11 +567,13 @@ class GeminiRuntimeManager:
             if decision is False:
                 raise GeminiRuntimeError("Gemini project lease lost before generation; request cancelled")
             if isinstance(decision, str):
+                self._set_wait(run_id, {"mode": "spacing", "wait_until": decision})
                 self._sleep_until(min(_parse_ts(decision), now + timedelta(seconds=1)))
                 continue
+            self._set_wait(run_id, {})
             return
 
-    def _emit_pacing(self, snapshot: dict, *, run_id: int | None) -> None:
+    def _report_pacing(self, snapshot: dict, *, run_id: int | None) -> None:
         state = snapshot["state"]
         payload = {
             "scope_id": self.pacing_policy.scope_id,
@@ -643,23 +581,22 @@ class GeminiRuntimeManager:
             "wait_until": state["cooldown_until"] or state["next_start_at"],
             "reason": snapshot["reason"], "probe": snapshot.get("probe", state["mode"] == "probe"),
         }
-        self._emit("gemini.pacing.changed", payload, run_id=run_id)
-        emit_gemini_worker_log(
+        self._set_wait(run_id, payload)
+        log_message(
             f"gemini pacing: reason={payload['reason']} mode={payload['mode']} "
             f"interval={payload['interval_seconds']}s until={payload['wait_until'] or 'ready'}",
-            worker_id=self.worker_id,
         )
 
     def _record_pacing_outcome(self, lease: GeminiLease, outcome: PacingOutcome, *, run_id: int | None) -> None:
         if self.pacing_policy is None:
             return
         result = self.db.record_gemini_pacing_outcome(
-            self.pacing_policy, quota_domain_id=lease.quota_domain_id or lease.key_id,
+            self.pacing_policy, quota_domain_id=lease.quota_domain_id,
             lease_token=lease.project_lease_token, epoch=lease.pacing_epoch,
             probe=lease.pacing_probe, outcome=outcome, now_ts=_iso_utc(_utc_now()),
         )
         if result is not None and (result["changed"] or result["probe"]):
-            self._emit_pacing(result, run_id=run_id)
+            self._report_pacing(result, run_id=run_id)
 
     @staticmethod
     def _pacing_error_outcome(error: Exception) -> PacingOutcome:
@@ -673,14 +610,11 @@ class GeminiRuntimeManager:
         return "neutral"
 
     def _lease_heartbeat(self, lease: GeminiLease, stop: threading.Event) -> None:
-        renew = getattr(self.db, "renew_gemini_project_lease", None)
-        if renew is None:
-            return
         while not stop.wait(_PROJECT_LEASE_HEARTBEAT_SECONDS):
             now_utc = _utc_now()
             try:
-                renewed = renew(
-                    lease.quota_domain_id or lease.key_id,
+                renewed = self.db.renew_gemini_project_lease(
+                    lease.quota_domain_id,
                     lease.project_lease_token,
                     expires_at=_iso_utc(
                         now_utc + timedelta(seconds=_PROJECT_LEASE_TTL_SECONDS)
@@ -697,51 +631,21 @@ class GeminiRuntimeManager:
         *,
         lease: GeminiLease,
         error: Exception,
-        run_id: Optional[int],
     ) -> None:
         now_utc = _utc_now()
         status_code = _extract_status_code(error)
         error_text = str(error)
+        log_message(f"Gemini request failed model={lease.model_name} status={status_code} reason={error_text}", level="WARNING")
 
         if status_code == 429:
             disposition = _classify_quota_error(error)
             now_ts = _iso_utc(now_utc)
-            quota_domain_id = lease.quota_domain_id or lease.key_id
+            quota_domain_id = lease.quota_domain_id
             if disposition.daily:
-                mark_domain = getattr(
-                    self.db, "mark_gemini_quota_domain_model_exhausted", None
+                self.db.mark_gemini_quota_domain_model_exhausted(
+                    quota_domain_id, lease.model_name, now_ts=now_ts, error_text=error_text,
                 )
-                if mark_domain is not None:
-                    rows_changed = mark_domain(
-                        quota_domain_id,
-                        lease.model_name,
-                        now_ts=now_ts,
-                        error_text=error_text,
-                    )
-                else:
-                    self.db.mark_gemini_error(
-                        lease.key_id,
-                        lease.model_name,
-                        now_ts=now_ts,
-                        error_text=error_text,
-                        exhausted=True,
-                    )
-                    rows_changed = 1
-                self._emit(
-                    "gemini.key.exhausted",
-                    {
-                        "account_id": lease.account_id,
-                        "key_id": lease.key_id,
-                        "masked_key": lease.masked_key,
-                        "model_name": lease.model_name,
-                        "status_code": status_code,
-                        "quota_scope": "quota_domain_model_daily",
-                        "quota_domain_id": quota_domain_id,
-                        "rows_changed": rows_changed,
-                        "error": error_text,
-                    },
-                    run_id=run_id,
-                )
+                log_message(f"Gemini daily quota exhausted domain={quota_domain_id} model={lease.model_name}")
             else:
                 self.db.mark_gemini_error(
                     lease.key_id,
@@ -750,14 +654,7 @@ class GeminiRuntimeManager:
                     error_text=error_text,
                     exhausted=False,
                 )
-                get_quota = getattr(
-                    self.db, "get_gemini_quota_domain_model_state", None
-                )
-                current = (
-                    get_quota(quota_domain_id, lease.model_name)
-                    if get_quota is not None
-                    else None
-                ) or {}
+                current = self.db.get_gemini_quota_domain_model_state(quota_domain_id, lease.model_name) or {}
                 failure_count = int(current.get("failure_count") or 0) + 1
                 exponential_delay = min(
                     _QUOTA_COOLDOWN_MAX_SECONDS,
@@ -768,47 +665,16 @@ class GeminiRuntimeManager:
                     int(disposition.retry_after_seconds or 0),
                 )
                 cooldown_until = now_utc + timedelta(seconds=delay_seconds)
-                set_cooldown = getattr(
-                    self.db, "set_gemini_quota_domain_model_cooldown", None
+                self.db.set_gemini_quota_domain_model_cooldown(
+                    quota_domain_id, lease.model_name, cooldown_until=_iso_utc(cooldown_until),
+                    failure_count=failure_count, now_ts=now_ts, error_text=error_text,
                 )
-                if set_cooldown is not None:
-                    set_cooldown(
-                        quota_domain_id,
-                        lease.model_name,
-                        cooldown_until=_iso_utc(cooldown_until),
-                        failure_count=failure_count,
-                        now_ts=now_ts,
-                        error_text=error_text,
-                    )
-                self._emit(
-                    "gemini.quota.cooldown.started",
-                    {
-                        "account_id": lease.account_id,
-                        "quota_domain_id": quota_domain_id,
-                        "model_name": lease.model_name,
-                        "status_code": status_code,
-                        "cooldown_until": _iso_utc(cooldown_until),
-                        "failure_count": failure_count,
-                        "error": error_text,
-                    },
-                    run_id=run_id,
+                log_message(f"Gemini quota cooldown domain={quota_domain_id} model={lease.model_name} until={_iso_utc(cooldown_until)}")
+                domain_count = self.db.record_gemini_generic_quota_signal(
+                    model_name=lease.model_name, quota_domain_id=quota_domain_id,
+                    now_ts=now_ts, window_start_ts=_iso_utc(
+                        now_utc - timedelta(seconds=self._limits.generic_429_window_seconds)),
                 )
-                record_signal = getattr(
-                    self.db, "record_gemini_generic_quota_signal", None
-                )
-                domain_count = 0
-                if record_signal is not None:
-                    domain_count = record_signal(
-                        model_name=lease.model_name,
-                        quota_domain_id=quota_domain_id,
-                        now_ts=now_ts,
-                        window_start_ts=_iso_utc(
-                            now_utc
-                            - timedelta(
-                                seconds=self._limits.generic_429_window_seconds
-                            )
-                        ),
-                    )
                 if (
                     domain_count
                     >= self._limits.generic_429_circuit_breaker_threshold
@@ -816,30 +682,10 @@ class GeminiRuntimeManager:
                     pause_until = now_utc + timedelta(
                         seconds=self._limits.generic_429_pause_seconds
                     )
-                    set_model_pause = getattr(
-                        self.db, "set_gemini_model_pause", None
+                    self.db.set_gemini_model_pause(
+                        lease.model_name, _iso_utc(pause_until), reason="generic_429_circuit_breaker",
                     )
-                    if set_model_pause is not None:
-                        set_model_pause(
-                            lease.model_name,
-                            _iso_utc(pause_until),
-                            reason="generic_429_circuit_breaker",
-                        )
-                    self._emit(
-                        "gemini.model.quota_circuit_opened",
-                        {
-                            "model_name": lease.model_name,
-                            "distinct_quota_domains": domain_count,
-                            "threshold": (
-                                self._limits.generic_429_circuit_breaker_threshold
-                            ),
-                            "window_seconds": (
-                                self._limits.generic_429_window_seconds
-                            ),
-                            "pause_until": _iso_utc(pause_until),
-                        },
-                        run_id=run_id,
-                    )
+                    log_message(f"Gemini model quota circuit paused model={lease.model_name} until={_iso_utc(pause_until)}")
             raise GeminiQuotaExceededError(
                 f"Gemini quota unavailable for domain={quota_domain_id} "
                 f"model={lease.model_name}"
@@ -853,37 +699,12 @@ class GeminiRuntimeManager:
                 error_text=error_text,
                 exhausted=False,
             )
-            self._emit(
-                "gemini.request.transport_error",
-                {
-                    "account_id": lease.account_id,
-                    "key_id": lease.key_id,
-                    "masked_key": lease.masked_key,
-                    "model_name": lease.model_name,
-                    "status_code": status_code,
-                    "reason": "upload_session_terminated",
-                    "error": error_text,
-                },
-                run_id=run_id,
-            )
             raise GeminiTransportError(
                 f"Gemini upload session terminated for model={lease.model_name}: "
                 f"{error_text}"
             ) from error
 
         if status_code == 400:
-            self._emit(
-                "gemini.request.rejected",
-                {
-                    "account_id": lease.account_id,
-                    "key_id": lease.key_id,
-                    "masked_key": lease.masked_key,
-                    "model_name": lease.model_name,
-                    "status_code": status_code,
-                    "error": error_text,
-                },
-                run_id=run_id,
-            )
             raise GeminiRequestRejectedError(
                 f"Gemini request rejected (400) for model={lease.model_name}: {error_text}"
             ) from error
@@ -897,25 +718,10 @@ class GeminiRuntimeManager:
                 error_text=error_text,
                 exhausted=False,
             )
-            set_model_pause = getattr(self.db, "set_gemini_model_pause", None)
-            if set_model_pause is not None:
-                set_model_pause(
-                    lease.model_name, _iso_utc(pause_until), reason=f"gemini_{status_code}"
-                )
-            else:
-                self.db.set_gemini_pause(
-                    _iso_utc(pause_until), reason=f"gemini_{status_code}"
-                )
-            self._emit(
-                "gemini.pause.started",
-                {
-                    "pause_until": _iso_utc(pause_until),
-                    "model_name": lease.model_name,
-                    "status_code": status_code,
-                    "reason": error_text,
-                },
-                run_id=run_id,
+            self.db.set_gemini_model_pause(
+                lease.model_name, _iso_utc(pause_until), reason=f"gemini_{status_code}",
             )
+            log_message(f"Gemini service pause model={lease.model_name} until={_iso_utc(pause_until)}")
             raise GeminiServerPauseError(
                 f"Gemini server error {status_code}; model {lease.model_name} paused until {_iso_utc(pause_until)}",
                 model_name=lease.model_name,
@@ -930,17 +736,6 @@ class GeminiRuntimeManager:
                 error_text=error_text,
                 exhausted=False,
             )
-            self._emit(
-                "gemini.request.timeout",
-                {
-                    "account_id": lease.account_id,
-                    "key_id": lease.key_id,
-                    "masked_key": lease.masked_key,
-                    "model_name": lease.model_name,
-                    "error": error_text,
-                },
-                run_id=run_id,
-            )
             raise GeminiRequestTimeoutError(
                 f"Gemini request timed out for model={lease.model_name}: {error_text}"
             ) from error
@@ -953,17 +748,6 @@ class GeminiRuntimeManager:
                 error_text=error_text,
                 exhausted=False,
             )
-            self._emit(
-                "gemini.request.transport_error",
-                {
-                    "account_id": lease.account_id,
-                    "key_id": lease.key_id,
-                    "masked_key": lease.masked_key,
-                    "model_name": lease.model_name,
-                    "error": error_text,
-                },
-                run_id=run_id,
-            )
             raise GeminiTransportError(
                 f"Gemini transport failed for model={lease.model_name}: {error_text}"
             ) from error
@@ -975,117 +759,4 @@ class GeminiRuntimeManager:
             error_text=error_text,
             exhausted=False,
         )
-        self._emit(
-            "gemini.key.error",
-            {
-                "account_id": lease.account_id,
-                "key_id": lease.key_id,
-                "masked_key": lease.masked_key,
-                "model_name": lease.model_name,
-                "status_code": status_code,
-                "error": error_text,
-            },
-            run_id=run_id,
-        )
         raise GeminiRuntimeError(error_text) from error
-
-
-    def _run_with_allocator(
-        self, *, acquire, call, run_id, max_attempts, wait_on_pause=True
-    ):
-        """Execute with a held project lease, including heartbeat and cleanup."""
-
-        attempts = max(1, int(max_attempts))
-        last_error: Optional[Exception] = None
-
-        attempt = 0
-        while attempt < attempts:
-            lease = acquire()
-            attempt += 1
-            heartbeat_stop = threading.Event()
-            heartbeat = threading.Thread(
-                target=self._lease_heartbeat,
-                args=(lease, heartbeat_stop),
-                daemon=True,
-                name=f"gemini-lease-{lease.account_id}",
-            )
-            heartbeat.start()
-            generation_context = _GENERATION_START.set(lambda: self._record_generation_start(lease))
-            try:
-                result = call(lease.key_value, lease)
-            except GeminiPacingAdmissionLost:
-                # Nothing was sent. Release preparation capacity and reacquire
-                # after the task gate, without consuming the physical retry budget.
-                attempt -= 1
-                continue
-            except GeminiResponseValidationError:
-                self._record_pacing_outcome(lease, "success", run_id=run_id)
-                raise
-            except GeminiStopRequestedError:
-                raise
-            except Exception as error:  # noqa: BLE001
-                self._record_pacing_outcome(lease, self._pacing_error_outcome(error), run_id=run_id)
-                try:
-                    self._handle_error(lease=lease, error=error, run_id=run_id)
-                except GeminiRequestRejectedError:
-                    raise
-                except GeminiServerPauseError as pause_error:
-                    last_error = pause_error
-                    if attempt < attempts:
-                        if wait_on_pause:
-                            self._sleep_until(pause_error.pause_until)
-                        continue
-                    raise
-                except GeminiQuotaExceededError:
-                    raise
-                except GeminiRuntimeError as runtime_error:
-                    last_error = runtime_error
-                    if attempt < attempts:
-                        continue
-                    raise
-            else:
-                self._record_pacing_outcome(lease, "success", run_id=run_id)
-                now_utc = _utc_now()
-                clear_signals = getattr(
-                    self.db, "clear_gemini_generic_quota_signals", None
-                )
-                if clear_signals is not None:
-                    clear_signals(lease.model_name)
-                clear_quota = getattr(
-                    self.db, "clear_gemini_quota_domain_model_state", None
-                )
-                if clear_quota is not None:
-                    clear_quota(
-                        lease.quota_domain_id or lease.key_id,
-                        lease.model_name,
-                    )
-                self.db.mark_gemini_success(
-                    lease.key_id,
-                    lease.model_name,
-                    now_ts=_iso_utc(now_utc),
-                )
-                self._emit(
-                    "gemini.key.success",
-                    {
-                        "account_id": lease.account_id,
-                        "key_id": lease.key_id,
-                        "masked_key": lease.masked_key,
-                        "model_name": lease.model_name,
-                        "last_success_at": _iso_utc(now_utc),
-                    },
-                    run_id=run_id,
-                )
-                return result
-            finally:
-                _GENERATION_START.reset(generation_context)
-                heartbeat_stop.set()
-                heartbeat.join(timeout=1.0)
-                release = getattr(self.db, "release_gemini_project_lease", None)
-                if release is not None:
-                    release(
-                        lease.quota_domain_id or lease.key_id, lease.project_lease_token
-                    )
-
-        if last_error is not None:
-            raise last_error
-        raise GeminiRuntimeError("Gemini call failed without explicit error")

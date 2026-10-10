@@ -18,7 +18,7 @@ The flow uses the shared `RunContext` database, terminal logging, progress, canc
 
 Exact-model CLI metadata or verified `context_window_tokens` supplies capacity. Estimate input with o200k_base plus 15% margin and reserve at least one-third capacity for research/reasoning/output. Tokenizer caching uses a separate process environment and the run workspace; never mutate the interactive process environment.
 
-Logs appear only through the CLI's redacted terminal sink. There is no publisher `.log` file, raw stdout forwarding, web review link, or SSE emission. Retain inventory, prompt, response schema, response, redacted lifecycle JSONL, and bounded structured diagnostics under the configured artifacts root. The subprocess drains both output pipes with bounded buffers. SQLite owns coalesced progress, run lifecycle, and persisted `task.artifact` events. Saved summaries contain counts, analysis ID, and paths; detailed proposals live in `proposals.json`, referenced by the final artifact event, rather than in the local run row or final terminal line.
+Logs appear only through the CLI's redacted terminal sink. There is no publisher `.log` file, raw stdout forwarding, web review link, or SSE emission. Retain inventory, prompt, response schema, response and bounded structured diagnostics under the configured artifacts root. The subprocess drains both output pipes with bounded buffers. SQLite owns coalesced progress, run lifecycle, and direct artifact references. Saved summaries contain counts, analysis ID, and paths; detailed proposals live in `proposals.json`, referenced by the final summary artifact, rather than in the local run row or final terminal line.
 
 ## Response, persistence, and recovery
 

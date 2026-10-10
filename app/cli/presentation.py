@@ -54,10 +54,8 @@ def provider_wait(payload: dict) -> str | None:
             return None
     except (KeyError, TypeError, ValueError):
         return None
-    worker = payload.get("worker_id")
-    subject = f"worker {worker}" if worker else "request pacing"
     mode = payload.get("mode")
-    return f"Provider {subject}: {mode + ' · ' if isinstance(mode, str) else ''}{seconds}s wait"
+    return f"Provider: {mode + ' · ' if isinstance(mode, str) else ''}{seconds}s wait"
 
 
 def summary_text(run: dict | None, title: str, *, completion: bool = False,
@@ -106,14 +104,14 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
     if error:
         lines.append("Error: " + str(error))
     if not completion:
-        lines.append(f"Workers: {options.get('workers', run.get('gemini_workers') or 1)} · limit: {options.get('limit') or 'unlimited'}")
+        lines.append(f"Limit: {options.get('limit') or 'unlimited'}")
         if options.get("per_mime_limit") is not None or options.get("retry_known_failures") or options.get("only_md5s"):
             lines.append(restrictions(options))
         attempts = summary.get("model_attempts") or {}
         if attempts:
             lines.append("Model attempts: " + ", ".join(f"{model}: {count}" for model, count in attempts.items()))
     for label, key in (("Workspace", "workspace_path"), ("Items", "items_path"), ("Proposals", "proposals_path"),
-                       ("Artifact", "artifact_path"), ("Log", "log_path")):
+                       ("Artifact", "artifact_path")):
         if summary.get(key):
             lines.append(f"{label}: {summary[key]}")
     return redact("\n".join(lines))

@@ -10,8 +10,6 @@ from app.task_runtime.contracts import RunContext
 
 
 def execute(context: RunContext) -> dict:
-    if context.options.workers != 1:
-        raise ValueError("Discover collections requires one worker")
     if (context.options.limit is not None or context.options.per_mime_limit is not None
             or context.options.only_md5s or context.options.retry_known_failures):
         raise ValueError("Discover collections requires the complete inventory; clear candidate/retry options")

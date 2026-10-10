@@ -16,10 +16,7 @@ def collection_task_definitions() -> list[dict[str, Any]]:
             "task_id": COLLECTION_DETECT_TASK_ID,
             "group_id": COLLECTIONS_PANEL_ID,
             "title": "Discover collections",
-            "workers_default": 1,
-            "workers_max": 1,
             "requires_full_inventory": True,
-            "emit_lifecycle_events": False,
         },
     ]
 
