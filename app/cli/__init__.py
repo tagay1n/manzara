@@ -5,49 +5,9 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from functools import partial
-from importlib import import_module
 
+from app.cli.task_registry import build_descriptors
 from app.runtime_config import config_text
-
-
-def build_descriptors():
-    from app.modules.library.collection_tasks import collection_task_definitions
-    from app.modules.library.tasks import (
-        LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID,
-        library_task_definitions,
-    )
-    from app.modules.maintenance.tasks import (
-        MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID,
-        MAINTENANCE_MONOCORPUS_SYNC_TASK_ID,
-        maintenance_task_definitions,
-    )
-    from app.task_runtime.contracts import TaskDescriptor
-
-    handlers = {
-        "library.normalize_personalities": "run_normalize_personalities",
-        "library.extract_non_pdf": "run_extract_non_pdf",
-        "library.generate_book_previews": "run_generate_book_previews",
-        "library.site_export": "run_site_export",
-        "library.suggest_publisher_merges": "run_suggest_publisher_merges",
-        "library.collection_detect": "run_collection_detect",
-        "library.metadata_extract": "run_metadata_extract",
-        "maintenance.monocorpus_meta_evaluate": "run_meta_evaluate",
-    }
-    scheduled = {LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID, MAINTENANCE_MONOCORPUS_SYNC_TASK_ID,
-                 MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID}
-    definitions = [*library_task_definitions(), *collection_task_definitions(),
-                   *maintenance_task_definitions()]
-    return [TaskDescriptor(
-        task_id=item["task_id"], title=item["title"], group_id=item["group_id"],
-        requires_full_inventory=item.get("requires_full_inventory", False),
-        group="Maintenance" if item["task_id"].startswith("maintenance.") else "Library",
-        execute=partial(_execute, handlers[item["task_id"]]),
-    ) for item in definitions if item["task_id"] not in scheduled]
-
-
-def _execute(module_name, context):
-    return import_module(f"app.modules.library.runtime.{module_name}").execute(context)
 
 
 def _positive(value: str) -> int:

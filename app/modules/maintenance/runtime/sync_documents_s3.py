@@ -8,7 +8,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Mapping
 
-from boto3 import Session
 from botocore.exceptions import ClientError
 from yadisk_client import YaDisk
 
@@ -36,7 +35,7 @@ from app.modules.maintenance.document_sync_repository import (
 )
 from app.modules.runtime_shared_utils import encrypt
 from app.runtime_config import config_integer, load_runtime_config
-from app.s3_transfer import s3_client_config, sequential_transfer_config
+from app.s3_transfer import create_s3_client, sequential_transfer_config
 from app.task_runtime.contracts import RunContext
 from app.task_runtime.logging import redact
 
@@ -371,17 +370,6 @@ def run_document_upload(*, repository, yadisk, primary_s3, settings, context):
     return summary
 
 
-def _create_s3_client(connection: Any) -> Any:
-    return Session().client(
-        "s3",
-        aws_access_key_id=connection.access_key_id,
-        aws_secret_access_key=connection.secret_access_key,
-        endpoint_url=connection.endpoint_url,
-        region_name=connection.region_name,
-        config=s3_client_config("transfer"),
-    )
-
-
 def _allows_public_read(acl: Mapping[str, Any]) -> bool:
     for grant in acl.get("Grants", []):
         if not isinstance(grant, Mapping):
@@ -428,7 +416,7 @@ def execute(context: RunContext):
         yadisk = YaDisk(settings.yadisk_token)
         resources.callback(yadisk.close)
         yadisk.default_args.update(timeout=(config_integer("network", "yandex", "connect_timeout_seconds"), config_integer("network", "yandex", "read_timeout_seconds")), poll_timeout=config_integer("network", "yandex", "poll_timeout_seconds"), n_retries=config_integer("network", "yandex", "retries", minimum=0))
-        primary_s3 = _create_s3_client(settings.primary)
+        primary_s3 = create_s3_client(settings.primary, profile="transfer")
         resources.callback(primary_s3.close)
         _validate_primary_buckets(primary_s3, settings.public_bucket, settings.private_bucket)
         return run_document_upload(repository=repository, yadisk=yadisk, primary_s3=primary_s3,

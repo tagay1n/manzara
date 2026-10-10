@@ -5,8 +5,6 @@ import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
-from boto3 import Session
-
 from app.artifacts import workspace_dir
 from app.catalog.contracts import CatalogConflict
 from app.catalog.metadata_processing import MetadataProcessingStore
@@ -57,7 +55,7 @@ from app.runtime_config import (
     load_runtime_config,
     required_integer,
 )
-from app.s3_transfer import s3_client_config
+from app.s3_transfer import create_s3_client
 from app.task_runtime.logging import redact
 
 EVALUATION_PROMPT_VERSION = 'prompt.v4'
@@ -162,13 +160,6 @@ class Processor:
         self.progress.complete(outcome, model)
         self.log('Metadata item final ' + json.dumps(record, ensure_ascii=False))
 
-    def _primary_s3(self):
-        primary = self.storage.primary
-        return Session().client('s3', endpoint_url=primary.endpoint_url,
-            region_name=primary.region_name,
-            aws_access_key_id=primary.access_key_id, aws_secret_access_key=primary.secret_access_key,
-            config=s3_client_config("metadata"))
-
     def _prepare(self, candidate, source, primary_s3):
         if self.mode == 'extract':
             request = prepare_metadata_request(candidate, workspace=self.workspace,
@@ -211,7 +202,7 @@ class Processor:
             return
         primary_s3 = None
         try:
-            primary_s3 = self._primary_s3()
+            primary_s3 = create_s3_client(self.storage.primary, profile="metadata")
             self._process_sources(publication, self.manager, primary_s3)
         except BaseException as exc:
             self.abort = True

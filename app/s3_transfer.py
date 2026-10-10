@@ -1,9 +1,27 @@
 """Keep managed S3 transfers on the calling task worker."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from boto3 import Session
 from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 
 from app.runtime_config import config_integer, config_text
+
+if TYPE_CHECKING:
+    from app.document_storage import S3ConnectionSettings
+
+
+def create_s3_client(connection: S3ConnectionSettings, *, profile: str) -> Any:
+    """Create a caller-owned client with the operation's network policy."""
+    return Session().client(
+        "s3", endpoint_url=connection.endpoint_url, region_name=connection.region_name,
+        aws_access_key_id=connection.access_key_id,
+        aws_secret_access_key=connection.secret_access_key,
+        config=s3_client_config(profile),
+    )
 
 
 def s3_client_config(profile: str) -> Config:

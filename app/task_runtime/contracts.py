@@ -58,6 +58,19 @@ class RunContext:
 
 
 @dataclass(frozen=True)
+class TaskRegistration:
+    """Code-owned metadata and a handler resolved by the composition boundary."""
+
+    task_id: str
+    title: str
+    group: str
+    group_id: str
+    handler_module: str
+    requires_full_inventory: bool = False
+    interactive: bool = True
+
+
+@dataclass(frozen=True)
 class TaskDescriptor:
     task_id: str
     title: str

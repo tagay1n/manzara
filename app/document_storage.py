@@ -143,7 +143,8 @@ def calculate_md5(path: Path) -> str:
     """Return the MD5 content identity used by monocorpus."""
     digest = hashlib.md5()  # noqa: S324 - existing document identity is MD5.
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(config_integer("documents", "md5_chunk_bytes")), b""):
+        chunk_size = config_integer("documents", "md5_chunk_bytes")
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
             digest.update(chunk)
     return digest.hexdigest()
 

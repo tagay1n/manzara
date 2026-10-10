@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -14,26 +13,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.runtime_config import config_integer
 from app.task_runtime.logging import log_message
+from app.task_runtime.reporting import report_run
 
 
 def _descriptors():
-    from app.modules.library.runtime.run_prepare_document_cleanup import (
-        TASK_ID as cleanup_id,
-    )
-    from app.modules.library.runtime.run_prepare_document_cleanup import (
-        execute as prepare,
-    )
-    from app.modules.library.tasks import library_task_definitions
-    from app.modules.maintenance.runtime.sync_monocorpus import TASK_ID as sync_id
-    from app.modules.maintenance.runtime.sync_monocorpus import execute as sync
-    from app.modules.maintenance.tasks import maintenance_task_definitions
-    from app.task_runtime.contracts import TaskDescriptor
+    from app.cli.task_registry import build_descriptors
+    from app.modules.library.tasks import LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID
+    from app.modules.maintenance.tasks import MAINTENANCE_MONOCORPUS_SYNC_TASK_ID
 
-    definitions = {item["task_id"]: item for item in
-                   [*library_task_definitions(), *maintenance_task_definitions()]}
-    return [TaskDescriptor(task_id=task_id, title=definitions[task_id]["title"], group="Maintenance",
-                           group_id=definitions[task_id]["group_id"], execute=handler)
-            for task_id, handler in ((cleanup_id, prepare), (sync_id, sync))]
+    return build_descriptors((LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID,
+                              MAINTENANCE_MONOCORPUS_SYNC_TASK_ID))
 
 
 def _preflight(db) -> None:
@@ -61,19 +50,6 @@ def _preflight(db) -> None:
         repository.catalog.preflight()
     finally:
         repository.dispose()
-
-
-def _report_run(run: dict[str, Any], results: list[dict[str, Any]]) -> None:
-    from app.task_runtime.logging import redact
-
-    summary = run.get("summary") or {}
-    result = {"task_id": run["task_id"], "run_id": run["run_id"], "status": run["status"],
-              "exit_code": run.get("exit_code"),
-              "counters": {key: value for key, value in summary.items() if type(value) is int}}
-    if run.get("error_text") or summary.get("error"):
-        result["error"] = redact(run.get("error_text") or summary["error"])
-    results.append(result)
-    print(json.dumps(result, ensure_ascii=True), flush=True)
 
 
 def _github_summary(results, exit_code: int) -> None:
@@ -105,7 +81,7 @@ def main() -> int:
         settings = load_settings()
         exit_code = run_batch(settings, _descriptors(), preflight=_preflight,
             budget_seconds=config_integer("maintenance", "daily_budget_seconds"),
-                              on_result=lambda run: _report_run(run, results))
+                              on_result=lambda run: report_run(run, results))
     except Exception as exc:
         if "yaml" in locals() and isinstance(exc, yaml.YAMLError):
             log_message("Daily maintenance failed: runtime configuration must be valid YAML", level="ERROR")

@@ -7,7 +7,6 @@ from contextlib import ExitStack
 from pathlib import PurePosixPath
 from typing import Any, Iterable, Mapping
 
-from boto3 import Session
 from yadisk.exceptions import PathExistsError, PathNotFoundError
 from yadisk_client import YaDisk
 
@@ -45,7 +44,7 @@ from app.modules.maintenance.document_cleanup_executor import execute_yandex_cle
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
 from app.postgres_engine import is_transient_postgres_error
 from app.runtime_config import config_integer, load_runtime_config
-from app.s3_transfer import s3_client_config
+from app.s3_transfer import create_s3_client
 from app.task_runtime.contracts import RunContext
 from app.task_runtime.logging import redact
 
@@ -115,14 +114,6 @@ def _walk_files(yadisk: Any, root: str, *, context: RunContext, counters: dict[s
                     'public_url': resource_value(resource, 'public_url'),
                     'public_key': resource_value(resource, 'public_key'),
                 }
-
-
-def _s3_client(connection: Any) -> Any:
-    return Session().client(
-        's3', aws_access_key_id=connection.access_key_id, aws_secret_access_key=connection.secret_access_key,
-        endpoint_url=connection.endpoint_url, region_name=connection.region_name,
-        config=s3_client_config("sync"),
-    )
 
 
 def _ensure_yandex_directory(yadisk: Any, directory: str) -> None:
@@ -521,7 +512,7 @@ def execute(context: RunContext) -> dict[str, Any]:
             if yadisk.check_token() is not True:
                 raise RuntimeError('Yandex Disk token validation failed')
             context.log('sync setup Yandex token valid; initializing primary storage client')
-            primary_s3 = _s3_client(settings.primary)
+            primary_s3 = create_s3_client(settings.primary, profile="sync")
             resources.callback(primary_s3.close)
             return run_monocorpus_sync(repository=repository, yadisk=yadisk, primary_s3=primary_s3,
                                       settings=settings, context=context)

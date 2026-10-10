@@ -1,7 +1,6 @@
 """Internal GitHub workflow runner for catalog-native Backblaze transfer."""
 
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -10,16 +9,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.runtime_config import config_integer
 from app.task_runtime.logging import log_message
+from app.task_runtime.reporting import report_run
 
 
 def _descriptor():
-    from app.modules.maintenance.runtime.sync_documents_s3 import TASK_ID, execute
-    from app.modules.maintenance.tasks import maintenance_task_definitions
-    from app.task_runtime.contracts import TaskDescriptor
+    from app.cli.task_registry import build_descriptors
+    from app.modules.maintenance.tasks import MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID
 
-    definition = next(item for item in maintenance_task_definitions() if item['task_id'] == TASK_ID)
-    return TaskDescriptor(task_id=TASK_ID, title=definition['title'],
-                          group='Maintenance', group_id=definition['group_id'], execute=execute)
+    return build_descriptors((MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID,))[0]
 
 
 def _preflight(db):
@@ -35,19 +32,6 @@ def _preflight(db):
         repository.preflight()
     finally:
         repository.dispose()
-
-
-def _report(run, results):
-    from app.task_runtime.logging import redact
-
-    summary = run.get('summary') or {}
-    result = {'task_id': run['task_id'], 'run_id': run['run_id'], 'status': run['status'],
-              'exit_code': run.get('exit_code'),
-              'counters': {key: value for key, value in summary.items() if type(value) is int}}
-    if run.get('error_text') or summary.get('error'):
-        result['error'] = redact(run.get('error_text') or summary['error'])
-    results.append(result)
-    print(json.dumps(result, ensure_ascii=True), flush=True)
 
 
 def _summary(results, exit_code):
@@ -78,7 +62,7 @@ def main():
 
         exit_code = run_batch(load_settings(), [_descriptor()], preflight=_preflight,
             budget_seconds=config_integer("maintenance", "transfer_budget_seconds"),
-                              on_result=lambda run: _report(run, results))
+                              on_result=lambda run: report_run(run, results))
     except Exception as exc:
         if "yaml" in locals() and isinstance(exc, yaml.YAMLError):
             log_message("Backblaze transfer failed: runtime configuration must be valid YAML", level="ERROR")

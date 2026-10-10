@@ -119,9 +119,10 @@ class _SnapshotReader:
         if self.should_stop():
             raise ExportStopped("Static Library export stopped during snapshot")
         query = (_COHORT + query).replace("{catalog}", self.prefix)
-        with self.conn.execute(text(query), execution_options={"yield_per": config_integer("postgres", "read_batch_size")}) as result:
+        batch_size = config_integer("postgres", "read_batch_size")
+        with self.conn.execute(text(query), execution_options={"yield_per": batch_size}) as result:
             for index, row in enumerate(result.mappings()):
-                if index % config_integer("postgres", "read_batch_size") == 0 and self.should_stop():
+                if index % batch_size == 0 and self.should_stop():
                     raise ExportStopped("Static Library export stopped during snapshot")
                 yield dict(row)
 

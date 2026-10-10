@@ -1,92 +1,28 @@
 """Google Drive fallback conversion for legacy word-processing documents."""
 
-from __future__ import annotations
-
 from pathlib import Path
-from typing import Any
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
-
-from app.artifacts import private_credentials_dir
-from app.runtime_config import config_text
-
-DRIVE_SCOPES = ("https://www.googleapis.com/auth/drive",)
-
-
-def _load_credentials() -> Credentials:
-    token_path = private_credentials_dir("google-drive") / "personal_token.json"
-    if not token_path.is_file():
-        raise FileNotFoundError(
-            f"Google Drive OAuth token not found; expected {token_path}"
-        )
-    return Credentials.from_authorized_user_file(str(token_path), DRIVE_SCOPES)
+from app.modules.library.google_drive_conversion import GoogleDriveConversionClient
 
 
 class GoogleDriveDocxConverter:
     """Import a legacy document into Google Drive, export DOCX, then delete it."""
 
     def __init__(self) -> None:
-        self._service: Any | None = None
-
-    def _drive(self) -> Any:
-        if self._service is None:
-            self._service = build(
-                "drive",
-                "v3",
-                credentials=_load_credentials(),
-                cache_discovery=False,
-            )
-        return self._service
+        self._client = GoogleDriveConversionClient()
 
     def __call__(
-        self,
-        source: Path,
-        *,
-        workspace: Path,
-        detected_format: str,
+        self, source: Path, *, workspace: Path, detected_format: str,
     ) -> Path:
-        service = self._drive()
-        output_dir = workspace / "google-converted"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / "source.docx"
-        mime_type = {
-            "doc": "application/msword",
-            "rtf": "application/rtf",
-        }.get(str(detected_format), "application/octet-stream")
-        uploaded = service.files().create(
-            body={
-                "name": Path(source).name,
-                "mimeType": "application/vnd.google-apps.document",
-                "parents": [
-                    config_text("google", "conversion_folder_id")
-                ],
-            },
-            media_body=MediaFileUpload(
-                str(source), mimetype=mime_type, resumable=True
-            ),
-            fields="id",
-        ).execute()
-        file_id = str(uploaded.get("id") or "").strip()
-        if not file_id:
-            raise RuntimeError("Google Drive conversion upload returned no file id")
-        try:
-            request = service.files().export_media(
-                fileId=file_id,
-                mimeType=(
-                    "application/vnd.openxmlformats-officedocument."
-                    "wordprocessingml.document"
-                ),
-            )
-            with output_path.open("wb") as handle:
-                downloader = MediaIoBaseDownload(handle, request)
-                done = False
-                while not done:
-                    _status, done = downloader.next_chunk()
-        finally:
-            service.files().delete(fileId=file_id).execute()
-        return output_path
+        source_mime = {"doc": "application/msword", "rtf": "application/rtf"}.get(
+            str(detected_format), "application/octet-stream"
+        )
+        return self._client.convert(
+            source, output=workspace / "google-converted" / "source.docx",
+            source_mime=source_mime, target_mime="application/vnd.google-apps.document",
+            export_mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            upload_name=Path(source).name,
+        )
 
 
 __all__ = ["GoogleDriveDocxConverter"]
