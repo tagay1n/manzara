@@ -52,6 +52,6 @@ One CLI session owns each local runtime store. Startup initializes SQLite and ch
 
 ## Documentation
 
-- [Repository rules](AGENTS.md), [implementation map](docs/architecture.md), [catalog contract](docs/catalog-model.md).
+- [Repository rules](AGENTS.md), [implementation map](docs/architecture.md), [catalog contract](docs/catalog-model.md), [database reference for the administration service](docs/database-reference.md).
 - [Operations](docs/operations.md), [backup/recovery](docs/postgres-backup-recovery.md), [Gemini runtime](docs/gemini-runtime.md).
 - [Verification policy and limits](docs/verification.md), [active work](TODO.md).
