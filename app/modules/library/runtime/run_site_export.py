@@ -1,149 +1,108 @@
-"""Build the versioned public export consumed by the static Library site."""
+"""Export the public static Library through the interactive operations CLI."""
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
-import signal
-import tarfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
-from app.artifacts import durable_path
-from app.document_storage import load_document_storage_settings
 from app.modules.library.site_export import (
-    EXPORT_FORMAT,
-    EXPORT_VERSION,
-    ExportStopped,
-    ExportStorage,
-    build_library_export,
-    write_export_bundle,
+    EXPORT_FORMAT, EXPORT_VERSION, ExportStopped, ExportStorage,
+    build_library_export, write_export_bundle,
 )
 from app.modules.library.site_export_repository import LibrarySiteExportRepository
-from app.run_artifact_channel import emit_run_artifact
-from app.runtime_config import load_runtime_config
-from app.settings import load_settings
-
+from app.task_runtime.contracts import RunContext
 
 TASK_ID = "library.site_export"
 
 
-def _run_id() -> int:
-    raw = str(os.environ.get("MANZARA_TASK_RUN_ID") or "").strip()
-    if not raw.isdigit() or int(raw) <= 0:
-        raise RuntimeError("MANZARA_TASK_RUN_ID is required")
-    return int(raw)
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _manifest(path: Path) -> dict[str, Any]:
-    with tarfile.open(path, "r:gz") as archive:
-        member = archive.extractfile("manifest.json")
-        if member is None:
-            raise RuntimeError("Static Library export has no manifest")
-        payload = json.loads(member.read().decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise RuntimeError("Static Library export manifest must be an object")
-    return payload
+def _storage(configuration: Mapping[str, Any]) -> ExportStorage:
+    # Export needs public URL configuration, never storage/Yandex credentials.
+    documents = configuration.get("documents") or {}
+    if not isinstance(documents, Mapping):
+        raise ValueError("documents configuration must be a mapping")
+    primary = documents.get("primary_storage") or {}
+    if not isinstance(primary, Mapping):
+        raise ValueError("documents.primary_storage configuration must be a mapping")
+    buckets = primary.get("bucket") or {}
+    if not isinstance(buckets, Mapping):
+        raise ValueError("documents.primary_storage.bucket configuration must be a mapping")
+    return ExportStorage(
+        endpoint_url=str(primary.get("endpoint_url") or "").strip().rstrip("/"),
+        public_document_bucket=str(buckets.get("public") or "").strip(),
+        public_preview_bucket=str(buckets.get("book_previews") or "").strip(),
+        public_content_bucket=str(buckets.get("content") or "").strip(),
+    )
 
 
 def run_export(
-    *,
-    repository: LibrarySiteExportRepository,
-    storage: ExportStorage,
-    destination: Path,
-    should_stop: Any = lambda: False,
+    *, repository: LibrarySiteExportRepository, storage: ExportStorage, destination: Path,
+    should_stop: Callable[[], bool] = lambda: False,
+    log: Callable[[str], None] = lambda _message: None,
+    progress: Callable[..., None] = lambda *_args, **_kwargs: None,
 ) -> dict[str, Any]:
-    """Read, validate, and atomically publish one static-site bundle."""
-    candidates, aliases = repository.load_snapshot()
+    """Read, validate, and publish a full snapshot at the final safe boundary."""
+    progress({"phase": "discovering", "current": 0}, force=True)
+    candidates, entities = repository.load_snapshot(should_stop=should_stop, log=log)
+    progress({"phase": "processing", "current": 0, "total": len(candidates)}, force=True)
+
+    def document_progress(values):
+        progress({**values, "total": len(candidates)})
+
     export = build_library_export(
-        candidates,
-        aliases=aliases,
-        storage=storage,
-        should_stop=should_stop,
+        candidates, entities=entities, storage=storage, should_stop=should_stop,
+        log=log, progress=document_progress,
     )
     if should_stop():
         raise ExportStopped("Static Library export stopped before publication")
-    bundle = write_export_bundle(export, destination=destination)
-    manifest = _manifest(bundle)
+    log(f"static library export: preparing bundle documents={len(export.documents)} excluded={sum(export.exclusions.values())}")
+    progress({"phase": "publishing", "current": len(candidates), "total": len(candidates)}, force=True)
+    bundle = write_export_bundle(export, destination=destination, should_stop=should_stop)
     summary = {
-        "kind": "library.site_export_summary",
-        "format": EXPORT_FORMAT,
-        "version": EXPORT_VERSION,
-        "revision": str(manifest.get("revision") or ""),
-        "bundle_path": str(bundle),
-        "bundle_sha256": _file_sha256(bundle),
-        "documents_published": len(export.documents),
-        "documents_excluded": sum(export.exclusions.values()),
-        "entities": len(export.entities),
-        "collections": len(export.collections),
-        "classifications": len(export.classifications),
+        "kind": "library.site_export_summary", "format": EXPORT_FORMAT, "version": EXPORT_VERSION,
+        "revision": bundle.manifest["revision"], "bundle_path": str(bundle.path), "bundle_sha256": bundle.sha256,
+        "documents_published": len(export.documents), "documents_excluded": sum(export.exclusions.values()),
+        "entities": len(export.entities), "collections": len(export.collections), "classifications": len(export.classifications),
         "documents_with_previews": sum("preview" in row for row in export.documents),
-        "exclusion_reasons": export.exclusions,
-        "stopped": False,
+        "exclusion_reasons": export.exclusions, "stopped": False, "outcome": "completed",
     }
-    print(
-        f"static library export: {json.dumps(summary, ensure_ascii=False, sort_keys=True)}",
-        flush=True,
-    )
+    log(f"static library export: published revision={summary['revision']} bundle={bundle.path}")
+    log(f"static library export: completed documents={summary['documents_published']} excluded={summary['documents_excluded']} entities={summary['entities']}")
     return summary
 
 
-def main() -> int:
-    _run_id()
-    settings = load_settings()
-    document_storage = load_document_storage_settings(load_runtime_config())
-    repository = LibrarySiteExportRepository(
-        settings.database_url,
-        schema=settings.database_schema,
-    )
-    destination = durable_path("library", "site-exports")
-    storage = ExportStorage(
-        endpoint_url=document_storage.primary.endpoint_url,
-        public_document_bucket=document_storage.public_bucket,
-        public_preview_bucket=document_storage.preview_bucket,
-        public_content_bucket=document_storage.content_bucket,
-    )
-    stop_state = {"requested": False}
+def execute(context: RunContext) -> dict:
+    if context.options.workers != 1:
+        raise ValueError("Static Library export is sequential; select one worker")
+    if (context.options.limit is not None or context.options.per_mime_limit is not None
+            or context.options.only_md5s or context.options.retry_known_failures):
+        raise ValueError("Static Library export requires the complete inventory; clear candidate/retry options")
+    stopped = {"kind": "library.site_export_summary", "format": EXPORT_FORMAT,
+               "version": EXPORT_VERSION, "stopped": True, "outcome": "stopped"}
+    if context.should_stop():
+        return stopped
+    from app.artifacts import durable_path
+    from app.runtime_config import load_runtime_config
 
-    def request_stop(_signum: int, _frame: Any) -> None:
-        stop_state["requested"] = True
-        print(
-            "static library export: graceful stop requested; no partial bundle will be published",
-            flush=True,
-        )
-
-    signal.signal(signal.SIGINT, request_stop)
+    storage = _storage(load_runtime_config())
+    repository = LibrarySiteExportRepository(context.db.database_url, schema=context.db.schema)
     try:
-        try:
-            summary = run_export(
-                repository=repository,
-                storage=storage,
-                destination=destination,
-                should_stop=lambda: bool(stop_state["requested"]),
-            )
-        except ExportStopped:
-            summary = {
-                "kind": "library.site_export_summary",
-                "format": EXPORT_FORMAT,
-                "version": EXPORT_VERSION,
-                "documents_published": 0,
-                "documents_excluded": 0,
-                "stopped": True,
-            }
-        emit_run_artifact(summary)
-        return 0
+        return run_export(
+            repository=repository, storage=storage, destination=durable_path("library", "site-exports"),
+            should_stop=context.should_stop, log=context.log, progress=context.progress,
+        )
+    except ExportStopped:
+        context.log("static library export: stopped; previous bundle retained")
+        return stopped
     finally:
         repository.dispose()
 
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+def main() -> None:
+    import sys
+    from app.cli import main as cli_main
+
+    cli_main(["--task", TASK_ID, "--workers", "1", *sys.argv[1:]])
+
+
+if __name__ == "__main__":
+    main()

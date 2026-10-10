@@ -59,6 +59,8 @@ class TaskRunner:
                 raise ValueError(descriptor.unavailable_reason)
             if descriptor.workers_max is not None and options.workers > descriptor.workers_max:
                 raise ValueError(f"{descriptor.title} supports at most {descriptor.workers_max} worker(s)")
+            if descriptor.requires_full_inventory and options.limit is not None:
+                raise ValueError(f"{descriptor.title} requires the complete inventory; clear the limit")
             handle = self._runs.get(task_id)
             if handle is not None and handle.thread.is_alive():
                 return {"action": "noop", "reason": "already_running", "run": self.db.get_run(handle.context.run_id)}

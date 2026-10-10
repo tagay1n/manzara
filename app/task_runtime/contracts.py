@@ -66,6 +66,7 @@ class TaskDescriptor:
     group_id: str
     workers_default: int = 1
     workers_max: int | None = None
+    requires_full_inventory: bool = False
     execute: Callable[[RunContext], dict[str, Any]] | None = field(default=None, repr=False)
     unavailable_reason: str = "Catalog adaptation and CLI execution are pending."
 
