@@ -391,6 +391,8 @@ class Terminal:
             maximum = self.task.workers_max
             if maximum is not None and int(workers) > maximum:
                 raise ValueError(f"{self.task.title} supports at most {maximum} worker(s)")
+            if self.task.task_id == "library.suggest_publisher_merges" and limit:
+                raise ValueError("Cluster publishers requires the complete inventory; leave limit blank")
             self.options[self.task.task_id] = replace(
                 self.options[self.task.task_id], workers=int(workers), limit=int(limit) if limit else None,
             )
@@ -420,6 +422,8 @@ class Terminal:
         self.waiting = {}
         options = self.options[task.task_id]
         try:
+            if task.task_id == "library.suggest_publisher_merges" and options.limit is not None:
+                raise ValueError("Cluster publishers requires the complete inventory; clear the limit in /settings")
             text = f"Starting · {task.title} · workers {options.workers} · limit {options.limit or 'unlimited'}"
             if task.task_id == "library.extract_non_pdf":
                 text += "\n" + restrictions(options.as_dict())
@@ -729,7 +733,7 @@ class Terminal:
                     workers = 1
                 extraction = task.task_id == "library.extract_non_pdf"
                 self.options[task.task_id] = RunOptions(
-                    workers, self.arguments.limit,
+                    workers, None if task.task_id == "library.suggest_publisher_merges" else self.arguments.limit,
                     per_mime_limit=self.arguments.per_mime_limit if extraction else None,
                     retry_known_failures=self.arguments.retry_known_failures if extraction else False,
                     only_md5s=tuple(dict.fromkeys(self.arguments.only_md5)) if extraction else (),

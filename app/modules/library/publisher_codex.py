@@ -6,16 +6,20 @@ import json
 import math
 import os
 import queue
+import selectors
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.modules.library.publisher_merge_contract import ClusteringWireResponse
 from app.runtime_config import load_runtime_config
+from app.task_runtime.logging import redact
 
 
 @dataclass(frozen=True)
@@ -83,11 +87,15 @@ def isolated_environment(workspace):
     home = workspace / "codex-home"
     home.mkdir(mode=0o700, exist_ok=True)
     source = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
-    for name in ("auth.json", "models_cache.json"):
-        path = source / name
-        if path.is_file():
-            shutil.copyfile(path, home / name)
-            (home / name).chmod(0o600)
+    try:
+        for name in ("auth.json", "models_cache.json"):
+            path = source / name
+            if path.is_file():
+                shutil.copyfile(path, home / name)
+                (home / name).chmod(0o600)
+    except BaseException:
+        shutil.rmtree(home, ignore_errors=True)
+        raise
     return {
         key: value
         for key, value in os.environ.items()
@@ -111,24 +119,83 @@ def stop_process(process):
 
 
 def estimate_prompt_tokens(prompt, workspace):
-    # The reference encoding is an estimate; configured models may tokenize differently.
-    # Keep downloaded tokenizer data in the configured artifact workspace.
-    import tiktoken
-
-    previous = os.environ.get("TIKTOKEN_CACHE_DIR")
-    os.environ["TIKTOKEN_CACHE_DIR"] = str(Path(workspace) / "tokenizer-cache")
+    """Keep tokenizer caching local without mutating the CLI process environment."""
+    env = {key: value for key, value in os.environ.items()
+           if key in {"PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR"}}
+    env["TIKTOKEN_CACHE_DIR"] = str(Path(workspace) / "tokenizer-cache")
     try:
-        encoding = tiktoken.get_encoding("o200k_base")
-        return math.ceil(len(encoding.encode(prompt, disallowed_special=())) * 1.15)
-    except (OSError, ValueError, RuntimeError) as exc:
+        result = subprocess.run([
+            sys.executable, "-c",
+            "import sys,tiktoken; print(len(tiktoken.get_encoding('o200k_base').encode(sys.stdin.read(), disallowed_special=())))",
+        ], input=prompt, capture_output=True, text=True, encoding="utf-8", env=env, timeout=30, check=True)
+        return math.ceil(int(result.stdout.strip()) * 1.15)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise RuntimeError(
             "Local tokenizer unavailable; initialize the o200k_base tokenizer cache before analysis."
         ) from exc
-    finally:
-        if previous is None:
-            os.environ.pop("TIKTOKEN_CACHE_DIR", None)
-        else:
-            os.environ["TIKTOKEN_CACHE_DIR"] = previous
+
+
+def _safe_event(value):
+    if isinstance(value, dict):
+        secrets = {"authorization", "password", "passwd", "token", "access_token", "refresh_token",
+                   "secret", "api_key", "apikey", "aws_access_key_id", "aws_secret_access_key"}
+        return {key: "<redacted>" if key.lower() in secrets else _safe_event(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_safe_event(item) for item in value]
+    return redact(value) if isinstance(value, str) else value
+
+
+class _AnalysisOutput:
+    """Bounded stream decoding independent of subprocess lifecycle management."""
+
+    def __init__(self, lifecycle, log):
+        self.lifecycle = lifecycle
+        self.log = log
+        self.buffers = {"stdout": b"", "stderr": b""}
+        self.stderr_tail = deque(maxlen=20)
+        self.terminal = None
+        self.reported_model = None
+
+    def feed(self, channel, chunk):
+        buffered = self.buffers[channel] + chunk
+        if not chunk and buffered:
+            buffered += b"\n"
+        lines = buffered.split(b"\n")
+        self.buffers[channel] = lines.pop()
+        for raw in lines:
+            if channel == "stdout" and len(raw) > 8 * 1024 * 1024:
+                raise ValueError("Codex lifecycle event exceeds the supported 8 MiB bound")
+            self._line(channel, raw.decode("utf-8", errors="replace"))
+        if channel == "stderr" and len(self.buffers[channel]) > 8192:
+            self._diagnostic(self.buffers[channel][-4096:].decode("utf-8", errors="replace"))
+            self.buffers[channel] = b""
+        elif len(self.buffers[channel]) > 8 * 1024 * 1024:
+            raise ValueError("Codex lifecycle event exceeds the supported 8 MiB bound")
+
+    def _diagnostic(self, line):
+        if line.strip():
+            safe = redact(line[:4096])
+            self.stderr_tail.append(safe)
+            self.log("Codex diagnostic: " + safe)
+
+    def _line(self, channel, line):
+        if channel == "stderr":
+            self._diagnostic(line)
+            return
+        if not line.strip():
+            return
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError("Codex lifecycle event must be a JSON object")
+        self.lifecycle.write(json.dumps(_safe_event(event), ensure_ascii=False) + "\n")
+        self.lifecycle.flush()
+        event_type = event.get("type")
+        if event_type in {"turn.completed", "turn.failed", "error"}:
+            self.terminal = event
+        if event_type in {"thread.started", "turn.started", "turn.completed", "turn.failed", "error"}:
+            self.log(f"Codex lifecycle: {event_type}")
+        if self.reported_model is None and isinstance(event.get("model"), str):
+            self.reported_model = event["model"]
 
 
 class CodexAdapter:
@@ -246,14 +313,14 @@ class CodexAdapter:
             "local_estimate_method": "o200k_base tokens plus 15% margin; not service-reported usage",
         }
 
-    def analyze(self, prompt, should_stop):
+    def analyze(self, prompt, should_stop, *, log):
         # Keep the CLI environment context stable across run-specific workspaces.
         # Artifacts and isolated credentials remain in each dedicated workspace.
         context = self.workspace.parent / "codex-context"
         context.mkdir(mode=0o700, exist_ok=True)
         schema = self.workspace / "response-schema.json"
         output = self.workspace / "response.json"
-        schema.write_text(json.dumps(ClusteringWireResponse.model_json_schema()))
+        schema.write_text(json.dumps(ClusteringWireResponse.model_json_schema()), encoding="utf-8")
         output.unlink(missing_ok=True)
         command = [
             self.settings.executable,
@@ -295,56 +362,69 @@ class CodexAdapter:
             command.extend(["-c", f"{key}={json.dumps(value)}"])
         command.append("-")
         prompt_file = self.workspace / "prompt.txt"
-        prompt_file.write_text(prompt)
-        started = time.monotonic()
-        with (
-            prompt_file.open("rb") as stdin,
-            (self.workspace / "lifecycle.jsonl").open("wb") as stdout,
-            (self.workspace / "cli-stderr.log").open("wb") as stderr,
-        ):
-            process = subprocess.Popen(
-                command,
-                cwd=context,
-                env=self.env,
-                stdin=stdin,
-                stdout=stdout,
-                stderr=stderr,
-                start_new_session=True,
-            )
-            try:
-                while process.poll() is None:
-                    if should_stop():
-                        raise InterruptedError(
-                            "Publisher analysis cancelled; no incomplete proposals were imported."
-                        )
-                    if time.monotonic() - started > self.settings.timeout_seconds:
-                        raise TimeoutError(
-                            "Publisher analysis timed out. Increase timeout_seconds or retry manually."
-                        )
-                    time.sleep(0.1)
-            finally:
-                stop_process(process)
-        events = []
-        for line in (self.workspace / "lifecycle.jsonl").read_text().splitlines():
-            try:
-                events.append(json.loads(line))
-            except ValueError:
-                continue
-        completed = [event for event in events if event.get("type") == "turn.completed"]
-        if process.returncode or not completed or not output.exists():
+        prompt_file.write_text(prompt, encoding="utf-8")
+        terminal, reported_model = self._capture(command, context, prompt_file, should_stop, log)
+        if terminal is None or terminal.get("type") != "turn.completed" or not output.exists():
             raise RuntimeError(
-                f"Codex analysis failed for configured model {self.settings.model}. Check account model availability and the dedicated CLI artifact log; no fallback was attempted."
+                f"Codex analysis failed for configured model {self.settings.model}. Inspect diagnostics.json in the publisher workspace; no fallback was attempted."
             )
-        usage = completed[-1].get("usage")
-        return json.loads(output.read_text()), {
+        usage = terminal.get("usage")
+        return json.loads(output.read_text(encoding="utf-8")), {
             "reported_token_usage": usage if isinstance(usage, dict) else None,
-            "reported_model": next(
-                (event.get("model") for event in events if event.get("model")), None
-            ),
+            "reported_model": reported_model,
         }
 
+    def _capture(self, command, context, prompt_file, should_stop, log):
+        """Drain both pipes with bounded buffers; retain JSON, never a .log file."""
+        started = time.monotonic()
+        diagnostics = {"stderr_tail": [], "cancelled": False, "timed_out": False}
+        process = None
+        with prompt_file.open("rb") as stdin, selectors.DefaultSelector() as selector, (
+            self.workspace / "lifecycle.jsonl"
+        ).open("w", encoding="utf-8") as lifecycle:
+            capture = _AnalysisOutput(lifecycle, log)
+            try:
+                process = subprocess.Popen(command, cwd=context, env=self.env, stdin=stdin,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+                for channel in capture.buffers:
+                    stream = getattr(process, channel)
+                    os.set_blocking(stream.fileno(), False)
+                    selector.register(stream, selectors.EVENT_READ, channel)
+                while selector.get_map() or process.poll() is None:
+                    if should_stop():
+                        diagnostics["cancelled"] = True
+                        raise InterruptedError("Publisher analysis cancelled; no incomplete proposals were imported.")
+                    if time.monotonic() - started > self.settings.timeout_seconds:
+                        diagnostics["timed_out"] = True
+                        raise TimeoutError("Publisher analysis timed out. Increase timeout_seconds or retry manually.")
+                    for key, _mask in selector.select(timeout=0.1):
+                        channel = key.data
+                        chunk = os.read(key.fileobj.fileno(), 65536)
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                        capture.feed(channel, chunk)
+                process.wait()
+                if process.returncode:
+                    raise RuntimeError(f"Codex exited with status {process.returncode}; inspect diagnostics.json in the publisher workspace.")
+            except BaseException as exc:
+                diagnostics["stream_error"] = redact(exc)
+                raise
+            finally:
+                if process is not None:
+                    stop_process(process)
+                    diagnostics["returncode"] = process.returncode
+                    process.stdout.close()
+                    process.stderr.close()
+                diagnostics["stderr_tail"] = list(capture.stderr_tail)
+                diagnostics["duration_seconds"] = time.monotonic() - started
+                (self.workspace / "diagnostics.json").write_text(
+                    json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
+        return capture.terminal, capture.reported_model
+
     def close(self):
-        shutil.rmtree(self.env["CODEX_HOME"], ignore_errors=True)
+        home = Path(self.env["CODEX_HOME"])
+        if home.exists():
+            shutil.rmtree(home)
 
     def telemetry(self):
         """Version-dependent RPC is isolated and never determines analysis validity."""
@@ -360,11 +440,17 @@ class CodexAdapter:
                 text=True,
                 start_new_session=True,
             )
-            lines = queue.Queue()
+            lines = queue.Queue(maxsize=64)
 
             def read():
-                for line in process.stdout:
-                    lines.put(line)
+                while line := process.stdout.readline(65536):
+                    if not line.endswith("\n"):
+                        return
+                    try:
+                        lines.put_nowait(line)
+                    except queue.Full:
+                        # Telemetry is optional; never block analysis shutdown on it.
+                        return
 
             threading.Thread(target=read, daemon=True).start()
 
@@ -379,6 +465,8 @@ class CodexAdapter:
                     response = json.loads(
                         lines.get(timeout=max(0.01, deadline - time.monotonic()))
                     )
+                    if not isinstance(response, dict):
+                        continue
                     if response.get("id") == identifier:
                         if "error" in response:
                             raise RuntimeError("telemetry RPC unavailable")

@@ -73,6 +73,8 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
         lines.append(str(summary["message"]))
     keys = (("total", "eligible_total", "processed", "succeeded", "not_person", "unusable", "skipped", "failed", "deferred", "remaining")
             if summary.get("kind") == "library.personality_normalization_summary"
+            else ("cluster_count", "singleton_count", "unresolved_count", "conflicting_groups", "new_proposals")
+            if summary.get("kind") == "library.publisher_merge_summary"
             else ("total", "processed", "ready", "failed", "deferred", "unsupported", "corrupted", "checkpoint_raced"))
     counts = [f"{key.replace('_', ' ')}: {summary[key]}" for key in keys if key in summary]
     if not counts:
@@ -80,6 +82,13 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
                   if isinstance(value, int) and not isinstance(value, bool) and key != "percent"]
     if counts:
         lines.append(" · ".join(counts))
+    if summary.get("kind") == "library.publisher_merge_summary":
+        if summary.get("analysis_id") is not None:
+            lines.append(f"Analysis: {summary['analysis_id']} · scope: {summary.get('scope', 'unknown')}")
+        if summary.get("no_analysis_needed"):
+            lines.append("No publisher analysis needed for the current inventory and scope.")
+        elif outcome == "completed":
+            lines.append("Proposals saved for later explicit review; publisher identities were not changed.")
     if outcome == "deferred":
         lines.append("Work remains deferred; inspect provider/retry restrictions before resuming with /run.")
     error = failure or run.get("error_text") or summary.get("error")
@@ -92,7 +101,8 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
         attempts = summary.get("model_attempts") or {}
         if attempts:
             lines.append("Model attempts: " + ", ".join(f"{model}: {count}" for model, count in attempts.items()))
-    for label, key in (("Workspace", "workspace_path"), ("Artifact", "artifact_path"), ("Log", "log_path")):
+    for label, key in (("Workspace", "workspace_path"), ("Proposals", "proposals_path"),
+                       ("Artifact", "artifact_path"), ("Log", "log_path")):
         if summary.get(key):
             lines.append(f"{label}: {summary[key]}")
     return redact("\n".join(lines))

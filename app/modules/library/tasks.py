@@ -21,6 +21,7 @@ def library_task_definitions() -> list[dict[str, Any]]:
         },
         {
             "task_id": "library.suggest_publisher_merges",
+            "workers_max": 1,
             "group_id": "library",
             "title": "Cluster publishers",
         },

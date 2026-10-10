@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-PROMPT_VERSION = "publisher-clusters.v3"
+PROMPT_VERSION = "publisher-clusters.v4"
 
 
 class Citation(BaseModel):
@@ -35,7 +35,7 @@ class Citation(BaseModel):
 class PublisherCluster(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     kind: Literal["cluster", "singleton", "unresolved"]
-    member_ids: list[str] = Field(min_length=1)
+    member_ids: list[str] = Field(min_length=1, max_length=200)
     proposed_name: str = Field(min_length=1)
     rationale: str = Field(min_length=1, max_length=6000)
     confidence: Literal["strong", "possible", "uncertain"]
@@ -51,7 +51,7 @@ class ClusterResponse(BaseModel):
 class MatchingPublisherCluster(PublisherCluster):
     proposed_name: str = Field(min_length=1, max_length=240)
     kind: Literal["cluster"]
-    member_ids: list[str] = Field(min_length=2)
+    member_ids: list[str] = Field(min_length=2, max_length=200)
 
 
 class ClusteringWireResponse(BaseModel):
@@ -72,6 +72,8 @@ def resolve_scope(scope, successful_analysis):
 
 
 def validate_response(payload, inventory, scope, separations):
+    if scope not in {"all", "new"}:
+        raise ValueError("publisher response scope must be all or new")
     response = ClusterResponse.model_validate(payload)
     entries = {item["key"]: item for item in inventory}
     result = []
@@ -84,6 +86,11 @@ def validate_response(payload, inventory, scope, separations):
         if any(set(pair).issubset(members) for pair in separations):
             raise ValueError("group conflicts with an owner separation decision")
         rows = [entries[member] for member in members]
+        kinds = {member["snapshot"]["kind"] for row in rows for member in row["members"]} - {"unknown"}
+        if group.kind == "cluster" and len(kinds) > 1:
+            raise ValueError("a person and an organization cannot be clustered as one identity")
+        if sum(len(row["members"]) for row in rows) > 200:
+            raise ValueError("publisher proposal must have at most 200 catalog members")
         established = [row for row in rows if not row["is_new"]]
         if group.kind == "cluster" and (
             len(members) < 2 or len(group.proposed_name) > 240
@@ -120,6 +127,12 @@ def validate_response(payload, inventory, scope, separations):
 
 def validate_clustering_response(payload, inventory, scope, separations):
     clusters = validate_response(payload, inventory, scope, separations)
+    occurrences = {}
+    for group in clusters:
+        for key in group["member_ids"]:
+            occurrences.setdefault(key, []).append(group["kind"])
+    if any(len(kinds) > 1 and any(kind != "cluster" for kind in kinds) for kinds in occurrences.values()):
+        raise ValueError("singleton and unresolved assignments must not overlap any other assignment")
     covered = {key for cluster in clusters for key in cluster["member_ids"]}
     if covered != {row["key"] for row in inventory}:
         raise ValueError("Clustering must account for every inventory entry")
@@ -167,6 +180,8 @@ def restore_response_ids(payload, inventory):
 
 
 def build_prompt(inventory, scope, separations):
+    if any(left == right for left, right in separations):
+        raise ValueError("Publisher name grouping conflicts with a separation decision; review the linked-name association before another analysis.")
     mapping = prompt_id_mapping(inventory)
     wire_ids = {key: wire for wire, key in mapping.items()}
     model_inventory = [
@@ -205,78 +220,19 @@ what each supports. Distinguish facts from uncertainty; include uncertain groups
 Unresolved entries are not proven unique. Never change the catalog, remove aliases, split identities,
 or override recorded separation decisions. Confidence is a review
 category, never a numerical probability. Perform one analysis, no automatic verification pass.
+Do not merge a person with an organization. Entity kinds follow in run settings; unknown is not proof of either kind.
 The run scope is specified after the inventory. In new scope each group needs an unresolved entry and at most one established
 publisher; preserve that established publisher's chosen name and ID. Never bridge two established
 publishers through a new name. In all scope established merges may be proposed for owner review.
-Inventory rows are [id,status,names]. Status c means established canonical;
+Inventory rows are [id,status,names]. Status c means an existing active identity, not human confirmation;
 u means unresolved. The first name is the chosen/display name; remaining names are aliases.
 IDs are snapshot-local strings: return them verbatim in member_ids. All names remain verbatim.
 Document counts follow in run settings as an array aligned with inventory row order.
 Complete inventory: {json.dumps(model_inventory, ensure_ascii=False, separators=(",", ":"))}
-Run settings: scope={scope}; distinct_document_counts={json.dumps([row["document_count"] for row in inventory], separators=(",", ":"))}
+Run settings: scope={scope}; distinct_document_counts={json.dumps([row["document_count"] for row in inventory], separators=(",", ":"))}; entity_kinds={json.dumps([sorted({member["snapshot"]["kind"] for member in row["members"]}) for row in inventory], separators=(",", ":"))}
 Recorded pairwise separation decisions: {json.dumps(model_separations, ensure_ascii=False, separators=(",", ":"))}"""
 
 
 def build_inventory(db):
-    """No row limit; distinct document sets prevent overlapping alias overcounts."""
-    documents = db.list_publisher_source_documents()
-    mentions = {}
-    for document in documents:
-        metadata = document["schema_org"]
-        if isinstance(metadata, str):
-            metadata = json.loads(metadata)
-        values = metadata.get("publisher", []) if isinstance(metadata, dict) else []
-        if not isinstance(values, list):
-            values = [values]
-        for value in values:
-            if isinstance(value, dict):
-                value = next(
-                    (
-                        value[key]
-                        for key in ("name", "legalName", "alternateName")
-                        if value.get(key)
-                    ),
-                    "",
-                )
-            if isinstance(value, str) and value.strip():
-                mentions.setdefault(value.strip(), set()).add(document["md5"])
-    canonicals = db.list_normalization_canonicals("publisher")
-    active = {
-        int(row["canonical_id"]): row for row in canonicals if row["status"] == "active"
-    }
-    names = {key: {row["display_name"]} for key, row in active.items()}
-    linked = set()
-    for alias in db.list_normalization_aliases("publisher"):
-        key = alias.get("canonical_id")
-        if alias["decision_status"] == "linked" and key in active:
-            names[key].add(alias["raw_name"])
-            linked.add(alias["raw_name"])
-    items = []
-    for key, row in active.items():
-        aliases = sorted(names[key])
-        linked.update(aliases)
-        doc_ids = set().union(*(mentions.get(name, set()) for name in aliases))
-        items.append(
-            {
-                "key": f"canonical:{key}",
-                "canonical_id": key,
-                "raw_name": None,
-                "display_name": row["display_name"],
-                "aliases": aliases,
-                "document_count": len(doc_ids),
-                "is_new": False,
-            }
-        )
-    for name in sorted(set(mentions) - linked):
-        items.append(
-            {
-                "key": f"raw:{name}",
-                "canonical_id": None,
-                "raw_name": name,
-                "display_name": name,
-                "aliases": [],
-                "document_count": len(mentions[name]),
-                "is_new": True,
-            }
-        )
-    return sorted(items, key=lambda row: row["key"])
+    """Read the complete catalog inventory, preserving linked-name suppression."""
+    return db.publisher_catalog().inventory()

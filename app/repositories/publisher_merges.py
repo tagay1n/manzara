@@ -66,6 +66,15 @@ def _keys(changes):
 
 
 class PublisherMergeRepository:
+    def publisher_catalog(self):
+        """Compose catalog-native generation without the retired review workbench."""
+        from app.catalog.publisher_analysis import PublisherCatalogStore
+        from app.catalog.repository import CatalogRepository
+
+        if self._engine is None:
+            raise RuntimeError("Publisher clustering requires the shared PostgreSQL engine")
+        return PublisherCatalogStore(CatalogRepository(self._engine, schema=self.schema))
+
     def list_publisher_source_documents(self):
         with self._connect() as conn:
             return [

@@ -9,7 +9,7 @@ Paths are relative to the repo root; all implementation rows below live in `app/
 | Normalization matching / mentions / views | `normalization_rules.py`, `normalization_queries.py`, `normalization_views.py` |
 | Canonicals / decisions / history / quality / suggestions | `normalization_canonicals.py`, `normalization_decisions.py`, `normalization_history.py`, `normalization_quality.py`, `normalization_suggestions.py` |
 | Personality extraction and review | `personality_normalization.py`, `personality_normalization_prompt.py`, `personality_workbench.py`, `runtime/run_normalize_personalities.py`; [contract](../../../../docs/personality-normalization.md) |
-| Publisher analysis / subprocess / review | `publisher_merge_contract.py`, `publisher_workbench.py`, `publisher_codex.py`, `publisher_merge_review.py`, `app/repositories/publisher_merges.py`; [contract](publisher-merges.md) |
+| Publisher analysis / subprocess / deferred review | `runtime/run_suggest_publisher_merges.py`, `publisher_merge_contract.py`, `publisher_codex.py`; catalog: `app/catalog/publisher_analysis.py`; retained review: `publisher_workbench.py`, `publisher_merge_review.py`, `app/repositories/publisher_merges.py`; [contract](publisher-merges.md) |
 | Non-PDF orchestration / detection / checkpoints | `non_pdf_extraction.py`, `non_pdf_formats.py`, `non_pdf_types.py`, `non_pdf_repository.py`; durable catalog commands: `app/catalog/non_pdf.py`; [document rules](documents.md) |
 | Converters and rendering | Matching `non_pdf_*.py`; Google fallbacks: `google_doc_conversion.py`, `google_presentation_conversion.py` |
 | Source storage / previews | `app/document_storage.py`, `preview_generation.py`, `preview_detection.py`, `preview_repository.py`, `catalog_preview_worker.py` |

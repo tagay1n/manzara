@@ -1,35 +1,39 @@
-# Publisher analysis and review
+# Publisher clustering proposals
 
-`library.suggest_publisher_merges` performs one subscription-authenticated Codex analysis of the complete inventory. Generation never changes publishers. Explicit owner apply consumes a durable review draft; the former web review interface is removed.
+`library.suggest_publisher_merges` is an interactive CLI task that performs one subscription-authenticated Codex analysis of the complete publisher inventory. It saves proposals only. CLI review, editing, staging, separation, and apply commands remain deferred; the former web interface is removed. Retained workbench/review helpers are not execution dependencies of this task and still require separate catalog adaptation.
 
-## Ownership and execution
+## Inventory and scope
 
-Library owns inventory/prompt/validation/review intents. PostgreSQL repositories own snapshots, response checkpoints, proposals, revisioned drafts, and pairwise separation decisions. SQLite owns task lifecycle/artifact events and operational telemetry. `catalog_proposals` is the sole publisher proposal owner; `catalog_publisher_proposals` is a command/read view, replacing the duplicate physical `publisher_merge_proposals` table. Review drafts refer to catalog proposal IDs.
+The catalog store reads normalized entities, names, linked alias reviews, and publisher contributions. Preserve the previous inventory grouping rule: one entry per active publisher, containing its display name and aliases marked `linked` to that identity. Only observed spellings outside the combined name set become new candidates. Human confirmation and individual credit resolution do not change this grouping rule. Generation never resolves credits or changes identities, aliases, or confirmation.
 
-- `auto` audits all identities until a valid analysis checkpoint, then unresolved names. `new` includes skipped unresolved names; groups require an unresolved member and at most one established publisher. Preserve its ID and chosen name. `all` permits proposed established-publisher merges. All scopes see active publishers and approved aliases.
-- Reserve two PostgreSQL connections: one for the session advisory lock, one for short transactions. Commit after acquiring the lock; release on every exit.
-- `codex.publisher_merges` config selects model/reasoning/scope/research/timeout; `codex.executable` may select an absolute CLI path. Authentication uses the service user's file-backed ChatGPT subscription login, with no provider/billing/model fallback.
-- The adapter copies only CLI authentication/model metadata into an isolated home, ignores user config/execpolicy, disables shell/image/app/plugin/subagent tools, uses a read-only sandbox, and removes copied credentials afterward. Keyring-only auth is insufficient.
-- Exact-model CLI metadata or explicitly verified `context_window_tokens` supplies capacity. Estimate input with o200k_base plus 15% margin and at least one-third capacity reserved for research/reasoning/output. Oversized inventories fail; never split or truncate.
+All scopes see every active publisher classified by the existing canonical projection rules. Included library publications with metadata supply observed spellings and distinct MD5 counts; aliases do not double-count documents. An uncovered spelling is analyzed once, retaining every associated catalog name ID. Durable members use `entity:<id>` or `name:<id>` keys. Compact prompt IDs remain snapshot-local.
 
-## Response and checkpoints
+`auto` uses `all` until a valid checkpoint with the current catalog contract exists, then `new`. `new` includes skipped unresolved names; clusters need a new member and at most one existing identity, preserving its ID and chosen name. `all` permits proposed existing-identity merges. Empty inventories and `new` scopes without new candidates finish without inference. The task requires exactly one worker and no candidate limit; never split or truncate an oversized inventory.
 
-Compact wire IDs are snapshot-local; map strictly to durable IDs before validation/persistence. Transmit every distinct name/alias without retaining a stale inventory for caching. Keep reported token usage unchanged; token counts do not determine subscription percentages.
+## Runtime and configuration
 
-The response requires `clusters`, `singleton_ids`, and `unresolved_ids` covering every inventory ID. Reject missing/unknown IDs, old response contracts, and invalid schema/scope/separation claims. Never infer omitted singletons. Preserve singleton/unresolved display names.
+The flow uses the shared `RunContext` database, terminal logging, progress, cancellation, and artifact contracts. Reserve at least two shared PostgreSQL connections: one for the session advisory lock and one for short transactions. Commit after acquiring the lock and release it on every exit. Preflight checks the deployed catalog read-only; migration remains a separate operation.
 
-Retain overlapping otherwise valid clusters for explicit review; do not join them or select a winner. Derive conflicts from current edits. A publisher cannot be staged in two merges.
+`codex.publisher_merges` config selects model, reasoning, scope, research, timeout, and optional verified context capacity; `codex.executable` may select an absolute CLI path. Authentication uses the service user's file-backed ChatGPT subscription login with no provider, billing, or model fallback. The adapter copies only authentication/model metadata into a private isolated home, ignores user configuration/rules, disables local shell/image/app/plugin/subagent tools, uses a read-only sandbox, and removes copied credentials on every exit. Keyring-only authentication is insufficient.
 
-Checkpoint a valid completed response before idempotent import. Reruns import remaining checkpoints without inference; interrupted inference needs a later user-started run. Preserve pending/staged proposals and owner edits; deduplicate unchanged groups.
+Exact-model CLI metadata or verified `context_window_tokens` supplies capacity. Estimate input with o200k_base plus 15% margin and reserve at least one-third capacity for research/reasoning/output. Tokenizer caching uses a separate process environment and the run workspace; never mutate the interactive process environment.
 
-Explicit completed-response recovery runs under the analysis lock and verifies lifecycle completion, current prompt contract, inventory fingerprint, separation decisions, and response. It does not change historical run status. Administrative analysis discard also requires the lock and preserves identities/aliases/audits, manual draft operations, and separation decisions.
+Logs appear only through the CLI's redacted terminal sink. There is no publisher `.log` file, raw stdout forwarding, web review link, or SSE emission. Retain inventory, prompt, response schema, response, redacted lifecycle JSONL, and bounded structured diagnostics under the configured artifacts root. The subprocess drains both output pipes with bounded buffers. SQLite owns coalesced progress, run lifecycle, and persisted `task.artifact` events. Saved summaries contain counts, analysis ID, and paths; detailed proposals live in `proposals.json`, referenced by the final artifact event, rather than in the local run row or final terminal line.
 
-## Review transactions
+## Response, persistence, and recovery
 
-Save name/member edits before staging. Skip makes no identity conclusion; keep-separate immediately persists all member pairs. Discard removes unapplied draft operations/edits and returns staged proposals to review.
+Require `clusters`, `singleton_ids`, and `unresolved_ids` to cover every inventory ID. Reject missing/unknown/duplicate group IDs, singleton/unresolved overlaps, incompatible entity kinds, invalid scope or separation claims, and proposals exceeding 200 catalog members. Never infer omitted singletons. Preserve singleton/unresolved names. Retain otherwise valid overlapping clusters for explicit later review; do not join them or select a winner.
 
-Apply rechecks reviewed names, aliases, and identity status transactionally. Unrelated changes/document counts do not invalidate review. Explicit merges reconcile affected separation endpoints and preserve raw-name provenance, aliases, and audits. Singleton keeps/renames use the same draft checks. Raw names must be kept/applied before renaming. No batch undo is provided.
+PostgreSQL owns `publisher_merge_analyses` response checkpoints and catalog proposal/member snapshots. `catalog_proposals` remains the sole proposal owner; `catalog_publisher_proposals` projects those records without duplicate domain rows. Proposal insertion writes transactional audit records and preserves entity/name snapshots and reviewed entity revisions. It does not initialize or modify review drafts.
 
-Account telemetry is best effort: match reported bucket/duration/reset; resets, missing readings, and falling usage produce no delta. Five-hour/weekly labels require reported 300/10080-minute windows. Concurrent account activity may contribute to observed usage.
+Checkpoint a valid completed response before atomic, idempotent import. Recheck current identity snapshots, linked-name associations, and separation decisions under the catalog review lock, including decisions for suppressed alias spellings. Unrelated document-count changes do not invalidate identity review. Preserve pending/deferred proposals and owner edits, deduplicating unchanged groups with the same member snapshots, kind, and proposed name. Different proposed names for overlapping members remain separate proposals. Changed identities or decisions reject the checkpoint with an actionable failure; no partial proposal import is committed. Contradictions between linked-name grouping and separation decisions fail before inference and require association review.
 
-Implementation: `publisher_merge_contract.py`, `publisher_codex.py`, `publisher_merge_review.py`, `publisher_workbench.py`, `app/repositories/publisher_merges.py`. Audit catalog compatibility before relying on this workflow.
+Only analyses tagged `catalog.publisher-clusters.v1` are eligible for replay or `auto` history. Historical analyses, proposals, drafts, and decisions remain unchanged and are not translated or reused. Abandonment/rejection updates apply only to the current contract. No persisted-data migration is required.
+
+Cancellation stops Codex and returns a stopped task result without importing incomplete output. A committed valid checkpoint can be imported by the next user-started run. Timeouts, provider failures, and invalid responses fail visibly without automatic reinference. Explicit internal completed-response recovery verifies the analysis contract, prompt version, inventory fingerprint, successful lifecycle/diagnostics, response, and current catalog under the analysis lock; it never rewrites historical task status.
+
+Account telemetry is best effort: match reported bucket/duration/reset; resets, missing readings, and falling usage produce no delta. Five-hour/weekly labels require reported 300/10080-minute windows. Concurrent account activity may contribute to observed usage. Keep reported token usage unchanged; token counts do not determine subscription percentages.
+
+## Verification boundary
+
+Static inspection does not establish terminal behavior, authenticated Codex availability, safe stopping, live catalog transactions, or checkpoint recovery. These remain pending runtime acceptance. Testing follows the owner's explicit-request policy in root instructions.

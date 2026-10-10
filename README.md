@@ -4,7 +4,7 @@ Manzara runs Tatar-language content workflows through an inline terminal CLI and
 
 ## Current status
 
-**Normalize personalities** and **Extract non-PDF** are enabled interactive CLI tasks. Normalization uses the shared Gemini runtime; extraction uses local document converters and verified Backblaze sources. Cleanup preparation and Sync run together through standalone daily maintenance; cleanup review commands remain in the CLI. These workflows use the normalized PostgreSQL catalog and resumable checkpoints. Backblaze document transfer has a separate automatic/manual GitHub workflow and is absent from the CLI. Other tasks are disabled pending catalog adaptation and appear only in `/task all`. Operational readiness must be assessed for each execution path; static inspection alone does not establish it.
+**Normalize personalities**, **Extract non-PDF**, and **Cluster publishers** are enabled interactive CLI tasks. Publisher clustering generates proposals using subscription-authenticated Codex; review/apply remains deferred. Normalization uses the shared Gemini runtime; extraction uses local document converters and verified Backblaze sources. Cleanup preparation and Sync run together through standalone daily maintenance; cleanup review commands remain in the CLI. These workflows use the normalized PostgreSQL catalog and resumable checkpoints. Backblaze document transfer has a separate automatic/manual GitHub workflow and is absent from the CLI. Other tasks are disabled pending catalog adaptation and appear only in `/task all`. Operational readiness must be assessed for each execution path; static inspection alone does not establish it.
 
 ## Setup and launch
 
@@ -21,6 +21,8 @@ Copy the masked structure of `config.example.yaml` to a gitignored `config.local
 Optional `--workers N`, `--limit N`, and `--task TASK_ID` select next-run settings and the initial interactive task. Launching never starts a task automatically. Interactive execution requires a terminal; `--help` works without configuration. Backblaze upload is available only through its [GitHub workflow](docs/operations.md#backblaze-document-transfer).
 
 Select non-PDF extraction with `.venv/bin/python -m app --task library.extract_non_pdf --per-mime-limit 1`, then enter `/run`. It runs sequentially with one worker. [Document processing](app/modules/library/guidance/documents.md#extraction-and-publication) owns source eligibility, converter requirements, cohort/retry controls, and retained output behavior.
+
+Select publisher clustering with `.venv/bin/python -m app --task library.suggest_publisher_merges`, then enter `/run`. It requires one worker and the complete inventory, so candidate limits are rejected. `/summary` and `/history` show saved counts and artifact/workspace paths. [Publisher analysis](app/modules/library/guidance/publisher-merges.md) owns grouping, configuration, checkpoints, and output behavior.
 
 Run daily maintenance without a terminal using `python scripts/run_daily_maintenance.py`. It prepares cleanup plans/reviews, then executes persisted cleanup and Yandex Sync with one worker and no limit. Sync and Cleanup plan are absent from the interactive task list. [Operations](docs/operations.md#scheduled-sync-and-cleanup) owns the daily schedule, Actions secrets, retention, and failure behavior; [cleanup review](docs/document-cleanup.md) explains explicit ISBN decisions.
 
@@ -51,7 +53,7 @@ Renderer updates and transcript messages share a nonblocking terminal writer. In
 
 Reopening preserves compatible completed decisions and resumes eligible work. One CLI session owns each local runtime store; a second session reports the conflict.
 
-CLI and maintenance startup initialize local SQLite and recover interrupted local runs. Python task registrations own task titles, grouping, worker defaults, and handlers. Older local runtime databases are recreated once for schema version 7 under the owner-approved [fresh-state policy](docs/operations.md#local-runtime-state). They do **not** apply PostgreSQL migrations. Normalization, non-PDF extraction, daily maintenance, and Backblaze transfer check the catalog read-only before processing; incompatible schemas must be migrated separately.
+CLI and maintenance startup initialize local SQLite and recover interrupted local runs. Python task registrations own task titles, grouping, worker defaults, and handlers. Older local runtime databases are recreated once for schema version 7 under the owner-approved [fresh-state policy](docs/operations.md#local-runtime-state). They do **not** apply PostgreSQL migrations. Normalization, non-PDF extraction, publisher clustering, daily maintenance, and Backblaze transfer check the catalog read-only before processing; incompatible schemas must be migrated separately.
 
 | Setting | Purpose / default |
 | --- | --- |

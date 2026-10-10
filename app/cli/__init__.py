@@ -28,7 +28,12 @@ def build_descriptors():
         from app.modules.library.runtime.run_extract_non_pdf import execute
         return execute(context)
 
-    handlers = {"library.normalize_personalities": normalize, "library.extract_non_pdf": extract_non_pdf}
+    def cluster_publishers(context):
+        from app.modules.library.runtime.run_suggest_publisher_merges import execute
+        return execute(context)
+
+    handlers = {"library.normalize_personalities": normalize, "library.extract_non_pdf": extract_non_pdf,
+                "library.suggest_publisher_merges": cluster_publishers}
     scheduled = {LIBRARY_PREPARE_DOCUMENT_CLEANUP_TASK_ID, MAINTENANCE_MONOCORPUS_SYNC_TASK_ID,
                  MAINTENANCE_DOCUMENT_S3_SYNC_TASK_ID}
     definitions = [*library_task_definitions(), *collection_task_definitions(),
@@ -70,7 +75,7 @@ def main(arguments: list[str] | None = None) -> None:
     undo = cleanup_commands.add_parser("undo", help="Undo a decision before cleanup starts")
     undo.add_argument("review_id", type=_positive)
     parser.add_argument("--task", default="library.normalize_personalities", help="Initially selected task ID")
-    parser.add_argument("--workers", type=_positive, help="Worker count; non-PDF extraction requires 1")
+    parser.add_argument("--workers", type=_positive, help="Worker count; non-PDF extraction and publisher clustering require 1")
     parser.add_argument("--limit", type=_positive, help="Optional candidate limit")
     parser.add_argument("--per-mime-limit", type=_positive, help="Non-PDF extraction: deterministic cohort cap per MIME")
     parser.add_argument("--only-md5", action="append", type=_md5, default=[], metavar="MD5",
@@ -84,6 +89,11 @@ def main(arguments: list[str] | None = None) -> None:
         parser.error("Non-PDF cohort/retry options require --task library.extract_non_pdf")
     if args.task == "library.extract_non_pdf" and args.workers not in (None, 1):
         parser.error("Non-PDF extraction requires --workers 1")
+    if args.command is None and args.task == "library.suggest_publisher_merges":
+        if args.workers not in (None, 1):
+            parser.error("Cluster publishers requires --workers 1")
+        if args.limit is not None:
+            parser.error("Cluster publishers requires the complete inventory; omit --limit")
     if args.command == "cleanup":
         from app.modules.library.cleanup_cli import execute
         try:

@@ -191,6 +191,9 @@ class TaskRunner:
                 context.progress({"phase": "discovering"}, force=True)
                 summary = descriptor.execute(context)
                 outcome = summary.get("outcome", "completed")
+                if outcome == "failed" and summary.get("error"):
+                    error = redact(summary["error"])
+                    self._record_error(context.run_id, error)
                 status = TASK_RUN_STATUS_FAILED if outcome == "failed" else (
                     TASK_RUN_STATUS_STOPPED if context.should_stop() or outcome == "stopped" else TASK_RUN_STATUS_COMPLETED
                 )
