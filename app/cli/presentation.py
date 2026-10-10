@@ -79,6 +79,9 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
                   "proposals_created", "proposals_updated", "proposals_reused", "proposals_superseded",
                   "reviewed_proposals_preserved")
             if summary.get("kind") == "library.collection_discovery_summary"
+            else ("total", "processed", "succeeded", "already_complete", "review_required", "failed", "terminal",
+                  "source_deferred", "quota_deferred", "service_deferred", "checkpoint_raced", "remaining")
+            if summary.get("kind") in {"library.metadata_extraction_summary", "library.metadata_evaluation_summary"}
             else ("total", "processed", "ready", "failed", "skipped", "selected_pages", "uploaded_objects")
             if summary.get("kind") == "library.catalog_preview_summary"
             else ("total", "processed", "ready", "failed", "deferred", "unsupported", "corrupted", "checkpoint_raced"))
@@ -109,7 +112,7 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
         attempts = summary.get("model_attempts") or {}
         if attempts:
             lines.append("Model attempts: " + ", ".join(f"{model}: {count}" for model, count in attempts.items()))
-    for label, key in (("Workspace", "workspace_path"), ("Proposals", "proposals_path"),
+    for label, key in (("Workspace", "workspace_path"), ("Items", "items_path"), ("Proposals", "proposals_path"),
                        ("Artifact", "artifact_path"), ("Log", "log_path")):
         if summary.get(key):
             lines.append(f"{label}: {summary[key]}")

@@ -42,6 +42,7 @@ def library_task_definitions() -> list[dict[str, Any]]:
         },
         {
             "task_id": LIBRARY_METADATA_EXTRACT_TASK_ID,
+            "emit_lifecycle_events": False,
             "workers_default": 1,
             "group_id": "metadata",
             "title": "Extract metadata",

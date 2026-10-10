@@ -6,7 +6,6 @@ import json
 import re
 from typing import Any
 
-from app.modules.library.metadata_contract import is_english_facet
 from app.catalog.isbn import canonicalize_isbn_values
 from app.modules.library.runtime.metadata.schema import MetadataPatch
 from app.modules.library.runtime.metadata.url_utils import normalize_url_list
@@ -14,9 +13,6 @@ from app.modules.library.runtime.metadata.url_utils import normalize_url_list
 from .evaluation_text import _clean_text, _extract_candidate_strings
 
 YEAR_RE = re.compile(r"(1[5-9]\d{2}|20\d{2})")
-
-
-INT_RE = re.compile(r"\d+")
 
 
 def _collect_patch_fields(schema_org: dict | str | None) -> list[str]:
@@ -122,7 +118,11 @@ def _normalize_isbn_values(value: Any) -> list[str] | None:
 def _normalize_date_published(value: Any) -> str | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
+        if isinstance(value, float) and not value.is_integer():
+            return None
         year = int(value)
         return str(year) if 1500 <= year <= 2100 else None
     raw = _clean_text(value, max_len=40)
@@ -147,44 +147,47 @@ def _normalize_number_of_pages(value: Any) -> int | None:
     if isinstance(value, int):
         return value if 1 <= value <= 20_000 else None
     if isinstance(value, float):
+        if not value.is_integer():
+            return None
         int_val = int(value)
         return int_val if 1 <= int_val <= 20_000 else None
     raw = _clean_text(value, max_len=40)
     if not raw:
         return None
-    match = INT_RE.search(raw)
-    if not match:
+    if not re.fullmatch(r"[0-9]+", raw):
         return None
-    int_val = int(match.group(0))
+    int_val = int(raw)
     return int_val if 1 <= int_val <= 20_000 else None
 
 
 def _normalize_author(value: Any) -> list[dict[str, str]] | None:
-    names = _extract_candidate_strings(value, dict_keys=("name",))
-    if not names:
-        return None
+    entries = value if isinstance(value, list) else [value] if value else []
     normalized = []
     seen = set()
-    for name in names:
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else entry
+        kind = entry.get("@type", "Person") if isinstance(entry, dict) else "Person"
         clean = _clean_text(name, max_len=300)
-        if not clean or not is_english_facet(clean):
+        if not clean or kind not in {"Person", "Organization"}:
             continue
-        key = clean.casefold()
+        key = (kind, clean.casefold())
         if key in seen:
             continue
         seen.add(key)
-        normalized.append({"@type": "Person", "name": clean})
+        normalized.append({"@type": kind, "name": clean})
     return normalized or None
 
 
 def _normalize_publisher(value: Any) -> dict[str, str] | None:
     if isinstance(value, dict):
         name = _clean_text(value.get("name"), max_len=400)
+        kind = value.get("@type", "Organization")
     else:
         name = _clean_text(value, max_len=400)
-    if not name:
+        kind = "Organization"
+    if not name or kind not in {"Person", "Organization"}:
         return None
-    return {"@type": "Organization", "name": name}
+    return {"@type": kind, "name": name}
 
 
 def _normalize_genre(value: Any) -> list[str] | None:

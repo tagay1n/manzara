@@ -5,10 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from sqlalchemy import select
-
 from app.modules.library.metadata_contract import is_english_facet
-from app.modules.library.runtime.models import Classification
 
 from .evaluation_text import _clean_text
 
@@ -57,39 +54,3 @@ def _normalize_classification_path(value: Any) -> list[str] | None:
     if len(cleaned) < 2 or len(cleaned) > 8:
         return None
     return cleaned
-
-
-def _resolve_classification_id(
-    session, ddc_raw: str | None, path_raw: list[str] | None
-) -> int | None:
-    """Resolve existing classification id or create a new pending one."""
-    if not ddc_raw or not path_raw:
-        return None
-    ddc = _normalize_ddc(ddc_raw)
-    path = _normalize_classification_path(path_raw)
-    if not ddc or not path:
-        return None
-    path_key = _classification_path_key(path)
-
-    stmt = select(Classification).where(
-        Classification.ddc == ddc,
-        Classification.path_en_key == path_key,
-    )
-    existing = session.scalars(stmt).first()
-    if existing:
-        return existing.id
-
-    created = Classification(
-        ddc=ddc,
-        path_en=path,
-        path_en_key=path_key,
-        status="pending",
-        created_by="gemini",
-    )
-    session.add(created)
-    session.flush()
-    return created.id
-
-
-def _classification_path_key(path: list[str]) -> str:
-    return "|".join([p.casefold() for p in path])

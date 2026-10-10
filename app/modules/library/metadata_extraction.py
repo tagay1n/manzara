@@ -3,20 +3,15 @@
 from __future__ import annotations
 
 import io
-import hashlib
 import json
-import re
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 import pymupdf
 import requests
 from pydantic import Field
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
 
 from app.document_storage import (
     DocumentStorageSettings,
@@ -24,15 +19,12 @@ from app.document_storage import (
     verify_primary_document_object,
 )
 from app.gemini_model_pool import GeminiModelResponseError
-from app.local_state import AIItemCheckpointStore
-from app.operational_state import OperationalStateStore
 from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     PasswordProtectedDocumentError,
 )
 from app.modules.library.djvu_slicing import create_djvu_slice, select_edge_pages
 from app.modules.library.metadata_contract import (
-    CONTRACT_VERSION,
     metadata_contract_issues,
 )
 from app.modules.library.metadata_normalization import normalize_base_schema_org
@@ -44,13 +36,11 @@ from app.modules.library.metadata_prompt import (
 )
 from app.modules.library.runtime.metadata.schema import Book
 from app.modules.library.upstream_metadata import sanitize_upstream_metadata
-from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 
 TEXT_SLICE_CHARS = 20_000
 PDF_EDGE_PAGES = 4
 DJVU_EDGE_PAGES = 3
 PROMPT_VERSION = "prompt.v7"
-_SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SUPPORTING_METADATA_FIELDS = (
     "author",
     "contributor",
@@ -108,17 +98,9 @@ class MetadataExtractionCandidate:
     content_url: str | None
     upstream_metadata: Mapping[str, Any] | None
     primary_storage_size: int
-    attempts: tuple[dict[str, Any], ...]
     source_filename: str = ""
     source_path: str = ""
 
-    @property
-    def attempted_models(self) -> set[str]:
-        return {
-            str(item.get("model") or "").strip()
-            for item in self.attempts
-            if str(item.get("model") or "").strip()
-        }
 
 
 @dataclass(frozen=True)
@@ -127,312 +109,6 @@ class MetadataRequest:
 
     contents: tuple[dict[str, str], ...]
     files: Mapping[Path, str]
-
-
-class MetadataExtractionRepository:
-    """Own metadata candidates, model checkpoints, and final DB writes."""
-
-    def __init__(
-        self,
-        database_url: str,
-        *,
-        schema: str = "monocorpus",
-        checkpoint_store: AIItemCheckpointStore,
-    ) -> None:
-        normalized = str(schema or "monocorpus").strip() or "monocorpus"
-        if not _SCHEMA_RE.fullmatch(normalized):
-            raise ValueError(f"Invalid database schema: {normalized!r}")
-        self.engine: Engine = acquire_postgres_engine(
-            str(database_url), schema=normalized
-        )
-        self.checkpoint_store = checkpoint_store
-        self.quality_store = OperationalStateStore(checkpoint_store._store.path)
-
-    def _record_quality(self, md5, schema_org, issues, quality_issue, *, previous=None):
-        fingerprint = hashlib.sha256(json.dumps(schema_org, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-        if previous and previous.get("input_hash") == fingerprint and previous.get("contract_version") == CONTRACT_VERSION:
-            return
-        self.quality_store.put("library.metadata_quality", md5, {
-            "contract_version": CONTRACT_VERSION, "input_hash": fingerprint,
-            "status": "invalid" if issues or quality_issue else "resolved",
-            "issues_json": list(issues) + ([{"code": "quality", "message": quality_issue}] if quality_issue else []),
-        })
-
-    def _checkpoints(self) -> AIItemCheckpointStore:
-        return self.checkpoint_store
-
-    def dispose(self) -> None:
-        release_postgres_engine(self.engine)
-
-    def list_candidates(
-        self,
-        *,
-        limit: int | None = None,
-        models: Sequence[str] | None = None,
-        only_md5s: frozenset[str] | None = None,
-        force_md5s: frozenset[str] = frozenset(),
-    ) -> list[MetadataExtractionCandidate]:
-        """Return only pending documents with a verified primary object."""
-        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
-            raise ValueError("limit must be a nonnegative integer")
-        if limit == 0:
-            return []
-        sql = """
-            SELECT
-                d.md5,
-                d.mime_type,
-                d.document_url,
-                d.content_url,
-                upstream.payload_json AS upstream_metadata,
-                d.primary_storage_size,
-                d.ya_path, m.schema_org, d.meta_extraction_method
-            FROM document d
-            LEFT JOIN metadata m ON m.md5 = d.md5
-            LEFT JOIN library_upstream_metadata upstream ON upstream.md5 = d.md5
-            WHERE TRUE
-              AND d.document_url IS NOT NULL
-              AND d.primary_storage_size IS NOT NULL
-              AND d.primary_storage_verified_at IS NOT NULL
-              AND (
-                  d.content_url IS NOT NULL
-                  OR LOWER(COALESCE(d.mime_type, '')) = 'application/pdf'
-                  OR LOWER(COALESCE(d.mime_type, '')) = 'image/vnd.djvu'
-              )
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM document_cleanup_queue cleanup
-                  WHERE cleanup.scope = 'document'
-                    AND cleanup.md5 = d.md5
-                    AND cleanup.reason = 'corrupted'
-                    AND cleanup.status IN ('planned', 'running', 'failed')
-              )
-            ORDER BY d.md5 ASC
-        """
-        params: dict[str, Any] = {
-            "contract_version": CONTRACT_VERSION,
-            "force_md5s": sorted(force_md5s),
-        }
-        if only_md5s is not None:
-            sql = sql.replace(
-                "            ORDER BY d.md5 ASC",
-                "              AND d.md5 = ANY(:only_md5s)\n            ORDER BY d.md5 ASC",
-            )
-            params["only_md5s"] = sorted(only_md5s)
-        with self.engine.connect() as conn:
-            rows = conn.execute(text(sql), params).mappings().all()
-        checkpoints = self._checkpoints().get_many(
-            "library.metadata_extract",
-            [str(row.get("md5") or "") for row in rows],
-        )
-        quality_cache = self.quality_store.list("library.metadata_quality")
-        candidates: list[MetadataExtractionCandidate] = []
-        seen: set[str] = set()
-        for row in rows:
-            schema_org = row.get("schema_org")
-            issues = metadata_contract_issues(schema_org) if isinstance(schema_org, Mapping) else []
-            quality_issue = metadata_quality_issue(schema_org)
-            self._record_quality(row["md5"], schema_org, issues, quality_issue,
-                                 previous=quality_cache.get(row["md5"]))
-            needs_language = row.get("meta_extraction_method") is not None and isinstance(schema_org, Mapping) and not _has_value(schema_org.get("inLanguage"))
-            if row["md5"] not in force_md5s and schema_org is not None and not quality_issue and not issues and not needs_language:
-                continue
-            checkpoint = (
-                None
-                if str(row.get("md5") or "") in force_md5s
-                else checkpoints.get(str(row.get("md5") or ""))
-            )
-            if checkpoint and checkpoint.get("contract_version") == PROMPT_VERSION:
-                if checkpoint.get("status") == "terminal":
-                    previous = {
-                        str(value) for value in checkpoint.get("model_pool") or []
-                    }
-                    current = {str(value) for value in models or []}
-                    if models is None or previous == current:
-                        continue
-                retry_after = checkpoint.get("retry_after")
-                if retry_after:
-                    parsed = datetime.fromisoformat(str(retry_after).replace("Z", "+00:00"))
-                    if parsed > datetime.now(timezone.utc):
-                        continue
-                row = {**dict(row), "attempts_json": checkpoint.get("attempts") or [], "prompt_version": PROMPT_VERSION}
-            candidate = self._candidate(row)
-            if not candidate.md5:
-                raise RuntimeError("Metadata candidate has no MD5")
-            if candidate.md5 in seen:
-                raise RuntimeError(
-                    f"Duplicate document MD5 {candidate.md5}; refusing extraction"
-                )
-            seen.add(candidate.md5)
-            candidates.append(candidate)
-            if limit is not None and len(candidates) >= limit:
-                break
-        return candidates
-
-    @staticmethod
-    def _candidate(row: Mapping[str, Any]) -> MetadataExtractionCandidate:
-        raw_attempts = row.get("attempts_json")
-        attempts = (
-            raw_attempts
-            if row.get("prompt_version") == PROMPT_VERSION
-            and isinstance(raw_attempts, list)
-            else []
-        )
-        source_path = str(row.get("ya_path") or "").replace("\\", "/")
-        return MetadataExtractionCandidate(
-            md5=str(row.get("md5") or "").strip().lower(),
-            mime_type=str(row.get("mime_type") or "").strip().lower(),
-            document_url=str(row.get("document_url") or "").strip(),
-            content_url=str(row.get("content_url") or "").strip() or None,
-            upstream_metadata=(
-                dict(row["upstream_metadata"])
-                if isinstance(row.get("upstream_metadata"), Mapping)
-                else None
-            ),
-            primary_storage_size=int(row.get("primary_storage_size") or 0),
-            attempts=tuple(dict(item) for item in attempts if isinstance(item, dict)),
-            source_filename=PurePosixPath(source_path).name,
-            source_path=source_path,
-        )
-
-    def record_model_failure(
-        self,
-        md5: str,
-        *,
-        model_name: str,
-        kind: str,
-        error: str,
-        models: Sequence[str],
-        run_id: int,
-    ) -> None:
-        """Checkpoint one content-level model failure in local SQLite."""
-        self._checkpoints().record_failure(
-            flow_id="library.metadata_extract", item_id=str(md5),
-            contract_version=PROMPT_VERSION, model_name=str(model_name),
-            kind=str(kind), error=str(error), models=models, run_id=int(run_id),
-        )
-
-    def record_operational_deferral(
-        self,
-        md5: str,
-        *,
-        models: Sequence[str],
-        run_id: int,
-        error: str,
-        retry_after_seconds: int,
-    ) -> None:
-        """Defer a retryable service failure without consuming a model attempt."""
-        retry_after = datetime.now(timezone.utc) + timedelta(
-            seconds=max(60, int(retry_after_seconds))
-        )
-        self._checkpoints().record_deferral(
-            flow_id="library.metadata_extract", item_id=str(md5),
-            contract_version=PROMPT_VERSION, models=models,
-            retry_after=retry_after.isoformat(), error=str(error), run_id=int(run_id),
-        )
-
-    def mark_terminal(
-        self,
-        md5: str,
-        *,
-        models: Sequence[str],
-        run_id: int,
-        reason: str,
-    ) -> None:
-        """Exclude one document after every configured model failed."""
-        self._checkpoints().mark_terminal(
-            flow_id="library.metadata_extract", item_id=str(md5),
-            contract_version=PROMPT_VERSION, models=models,
-            reason=str(reason), run_id=int(run_id),
-        )
-
-    def save_success(
-        self,
-        md5: str,
-        *,
-        schema_org: Mapping[str, Any],
-        model_name: str,
-        replace_existing: bool = False,
-    ) -> bool:
-        """Persist usable metadata, allowing explicit replacement for source repairs."""
-        language = str(schema_org.get("inLanguage") or "").strip() or None
-        with self.engine.begin() as conn:
-            conn.execute(text("SET TRANSACTION READ WRITE"))
-            rows = conn.execute(
-                text(
-                    """
-                    SELECT d.md5, d.meta_extraction_method, m.schema_org
-                    FROM document d
-                    LEFT JOIN metadata m ON m.md5 = d.md5
-                    WHERE d.md5 = :md5
-                    FOR UPDATE OF d
-                    """
-                ),
-                {"md5": str(md5)},
-            ).mappings().all()
-            if len(rows) != 1:
-                raise RuntimeError(
-                    f"Document MD5 {md5} matched {len(rows)} rows; refusing metadata write"
-                )
-            existing_schema_org = rows[0].get("schema_org")
-            needs_language_repair = (
-                rows[0].get("meta_extraction_method") is not None
-                and isinstance(existing_schema_org, Mapping)
-                and not _has_value(existing_schema_org.get("inLanguage"))
-            )
-            quality_invalid = bool(metadata_contract_issues(existing_schema_org)) if isinstance(existing_schema_org, Mapping) else True
-            if (
-                existing_schema_org is not None
-                and not replace_existing
-                and not needs_language_repair
-                and not quality_invalid
-                and metadata_quality_issue(existing_schema_org) is None
-                and not metadata_contract_issues(existing_schema_org)
-            ):
-                self._record_quality(md5, existing_schema_org, [], None)
-                self._checkpoints().clear("library.metadata_extract", str(md5))
-                self._checkpoints().clear("library.metadata_evaluate", str(md5))
-                return False
-            if language is None:
-                raise ValueError("Refusing metadata write without inLanguage")
-            if issue := metadata_quality_issue(schema_org):
-                raise ValueError(f"Refusing low-quality metadata write: {issue}")
-            if issues := metadata_contract_issues(schema_org):
-                codes = ", ".join(sorted({item["code"] for item in issues}))
-                raise ValueError(f"Refusing metadata outside {CONTRACT_VERSION}: {codes}")
-
-            stored = conn.execute(
-                text(
-                    """SELECT catalog_upsert('metadata', jsonb_build_object('md5', :md5, 'schema_org', CAST(:schema_org AS JSONB), 'lib', NULL, 'lib_eval_method', NULL, 'classification_id', NULL), ARRAY['md5']::text[], ARRAY['schema_org','lib','lib_eval_method','classification_id']::text[], ARRAY[]::text[])"""
-                ),
-                {
-                    "md5": str(md5),
-                    "schema_org": json.dumps(dict(schema_org), ensure_ascii=False),
-                },
-            )
-            if int(stored.rowcount or 0) != 1:
-                raise RuntimeError(f"Metadata write did not persist for {md5}")
-
-            updated = conn.execute(
-                text(
-                    """
-                    UPDATE document
-                    SET language = COALESCE(:language, language),
-                        meta_extraction_method = :method
-                    WHERE md5 = :md5
-                    """
-                ),
-                {
-                    "md5": str(md5),
-                    "language": language,
-                    "method": f"{model_name}/{PROMPT_VERSION}",
-                },
-            )
-            if int(updated.rowcount or 0) != 1:
-                raise RuntimeError(f"Document metadata marker update failed for {md5}")
-        self._record_quality(md5, schema_org, [], None)
-        self._checkpoints().clear("library.metadata_extract", str(md5))
-        self._checkpoints().clear("library.metadata_evaluate", str(md5))
-        return True
 
 
 def select_pdf_pages(page_count: int, *, edge_pages: int = PDF_EDGE_PAGES) -> list[int]:
@@ -540,7 +216,7 @@ def load_text_slice(
             return handle.read(TEXT_SLICE_CHARS)
 
 
-def create_pdf_slice(source: Path, destination: Path) -> int:
+def create_pdf_slice(source: Path, destination: Path, *, edge_pages: int = PDF_EDGE_PAGES) -> int:
     """Create a first/last-page PDF slice and return its page count."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -552,7 +228,7 @@ def create_pdf_slice(source: Path, destination: Path) -> int:
             raise PasswordProtectedDocumentError(
                 f"Password-protected PDF cannot be read: {source}"
             )
-        pages = select_pdf_pages(pdf.page_count)
+        pages = select_pdf_pages(pdf.page_count, edge_pages=edge_pages)
         if not pages:
             raise CorruptDocumentError(
                 "pdf_page_tree", f"PDF has no usable pages: {source}"
@@ -658,7 +334,6 @@ def parse_metadata_response(raw_response: Any) -> dict[str, Any]:
 __all__ = [
     "ExtractedMetadata",
     "MetadataExtractionCandidate",
-    "MetadataExtractionRepository",
     "MetadataRequest",
     "PROMPT_VERSION",
     "build_pdf_prompt",

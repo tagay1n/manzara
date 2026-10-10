@@ -390,7 +390,7 @@ def _normalize_int(value, min_value: int, max_value: int):
     text = _clean_text(value, max_len=40)
     if not text:
         return None
-    match = re.search(r"\d+", text)
+    match = re.fullmatch(r"[0-9]+", text)
     if not match:
         return None
     int_val = int(match.group(0))

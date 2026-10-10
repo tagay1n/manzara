@@ -44,7 +44,17 @@ def build_descriptors():
         from app.modules.library.runtime.run_collection_detect import execute
         return execute(context)
 
-    handlers = {"library.normalize_personalities": normalize, "library.extract_non_pdf": extract_non_pdf,
+    def extract_metadata(context):
+        from app.modules.library.runtime.run_metadata_extract import execute
+        return execute(context)
+
+    def evaluate_metadata(context):
+        from app.modules.library.runtime.run_meta_evaluate import execute
+        return execute(context)
+
+    handlers = {"library.metadata_extract": extract_metadata,
+                "maintenance.monocorpus_meta_evaluate": evaluate_metadata,
+                "library.normalize_personalities": normalize, "library.extract_non_pdf": extract_non_pdf,
                 "library.suggest_publisher_merges": cluster_publishers,
                 "library.generate_book_previews": generate_previews,
                 "library.site_export": export_library, "library.collection_detect": discover_collections}
@@ -91,8 +101,8 @@ def main(arguments: list[str] | None = None) -> None:
     undo = cleanup_commands.add_parser("undo", help="Undo a decision before cleanup starts")
     undo.add_argument("review_id", type=_positive)
     parser.add_argument("--task", default="library.normalize_personalities", help="Initially selected task ID")
-    parser.add_argument("--workers", type=_positive, help="Worker count; extraction, previews, export and publisher clustering require 1")
-    parser.add_argument("--limit", type=_positive, help="Optional candidate limit")
+    parser.add_argument("--workers", type=_positive, help="Worker count; non-PDF extraction, previews, export and publisher clustering require 1")
+    parser.add_argument("--limit", type=_positive, help="Optional candidate limit; metadata tasks count publications")
     parser.add_argument("--per-mime-limit", type=_positive, help="Non-PDF extraction: deterministic cohort cap per MIME")
     parser.add_argument("--only-md5", action="append", type=_md5, default=[], metavar="MD5",
                         help="Extraction/previews: restrict to these sources; repeat for a cohort")

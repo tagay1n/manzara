@@ -1,24 +1,39 @@
 # Library metadata processing
 
-## Extraction
+## CLI and catalog ownership
 
-- Select only documents with a verified primary-storage checkpoint. Reuse the MD5-verified source cache; populate misses only from configured Backblaze storage.
-- Preserve the adopted prompt, Schema.org validation, PDF edge-page slicing, and normalization unless the owner requests a version change.
-- Read upstream source metadata only from `library_upstream_metadata`; include its prompt-safe fields as non-authoritative supporting evidence in both text and PDF extraction paths.
-- Persist content failures after every model attempt and resume with the next untried model. Quota, service, storage, and stop conditions are retryable, not terminal exclusions.
-- Defer a document whose models are exhausted and continue. Use `all_keys_exhausted` only when every configured model is unavailable.
-- Metadata may omit a title when the document genuinely has none, but it still requires another bibliographic/content signal. Successful extraction requires a valid `inLanguage`; retry previously extracted metadata missing it and replace the full payload only after a validated result. Never overwrite other usable `metadata.schema_org` during ordinary extraction; replace objectively poor metadata only with validated usable output. An explicit source-correction repair may replace usable metadata for a fixed document cohort after successful content re-extraction and validated metadata generation. Never erase language with null, upload metadata ZIPs, or mutate storage URLs.
-- Validate description scripts conservatively against the primary `inLanguage`: require clear two-to-one competing-script dominance before rejecting mixed text, treat `Ьь` as Yanalif letters, and preserve the valid Zamanalif tag `tt-Latn-x-zaman-alif`.
-- Enforce the versioned strict JSON-LD contract before every write and derive quality eligibility from current metadata and cache the result only in local SQLite. Invalid rows retain their current durable payload and remain eligible for extraction; the retired PostgreSQL quality cache is never consulted. Canonical discovery facets (`genre`, Audience `audienceType`, classification paths, and role names) are English; `description` remains in the document language and script declared by `inLanguage`.
-- Treat deterministic PDF open, page-tree, and page-read failures as structural corruption. Persist a guarded `corrupted` move plan and exclude active plans from extraction retries; password protection and storage/service failures are not corruption.
-- Treat DjVu as visual-only for metadata extraction: use the MD5-verified shared source cache before primary Backblaze S3, then render unique first/last three pages into a PDF. Reduce render size when needed to stay below Gemini's PDF size limit. Do not use `content_url` even when present. Missing DjVuLibre tools and rendering timeouts are operational failures. A rejected item is terminal for that document, not the entire run.
+`library.metadata_extract` and `maintenance.monocorpus_meta_evaluate` run through the interactive CLI. Both accept workers (default one) and a publication limit. Source-cohort, per-MIME, and explicit retry flags belong to other tasks and are rejected here. Retained script entry points select the same CLI tasks; the old standalone evaluation batch-size/dry-run/excerpt arguments are removed. Selection never starts processing.
 
-## Evaluation
+Both tasks process a fixed publication inventory in ID order. Prefer selected files, then MD5 order, among complete, unrestricted documents with a verified primary-storage checkpoint and usable content/PDF/DjVu evidence. Try another eligible file after source-preparation failure; a provider content rejection ends the publication's current turn. Publications without usable sources remain deferred. Restrictions, incompleteness, and filename patterns never automatically exclude a publication. Evaluation retains configured Tatar-language filtering and decides applicability from content and metadata.
 
-- Reuse database-owned upstream metadata as supporting evidence; evaluation must not perform remote upstream-metadata reads.
-- Preserve valid positive and negative evaluations. Reopen only missing results, applicable rows without classification, or non-applicable rows that still retain classification.
-- Persist per-document/model failures and do not retry an already-failed model. A changed pool may reopen terminal failures.
-- Usable responses require a concise reason and, when applicable, normalized DDC and category path. Malformed or incomplete responses advance to the next model.
-- Validate the fully merged JSON-LD payload, not only the returned patch. Evaluation prompt-version changes reopen stale terminal checkpoints.
-- Publish processed/total counts, skips, terminal outcomes, and per-model attempts/successes. Log document MD5 and resolved model before each request.
-- DjVu evaluation uses rendered first/last two pages, never extracted text. Defer the document when the visual slice cannot be prepared.
+Read normalized publication/document/name/contribution/storage relations; never write legacy document/metadata views. Publication inclusion and classification are shared by all its documents. File restrictions, accessibility, extraction markers, and storage remain document-owned. Recheck publication/document/storage revisions, membership, source eligibility, and the metadata/upstream evidence snapshot before each short mutation transaction. Conflicts leave the model attempt available for a fresh inventory. Provider calls do not hold PostgreSQL connections.
+
+Automated writes honor field protections. Unchanged contributions retain their IDs and reviewed resolution. Changes removing or rewriting confirmed occurrences enter metadata review; generated names become unconfirmed contributions without entity/alias confirmation. Read observed spellings as AI input and preserve names in their source script. Catalog metadata commands update normalized language, credit-group, accessibility, sufficient-mode, and reference-URL relations. Retain ordered values, empty sufficient-mode groups, absent versus empty reference URL lists, and unrelated non-ISBN identifiers.
+
+Successful extraction replaces unusable metadata only with a validated result and records the evidence document's extraction method. It reopens an earlier unprotected automatic evaluation by resetting inclusion to pending and clearing classification/method. Protected decisions remain intact; conflicting changes become proposals. Evaluation commits permitted metadata patches, publication inclusion/method, normalized taxonomy, evidence, and revision audits atomically. Reuse existing taxonomy nodes/classification IDs; new paths are pending Gemini classifications. Validate the resulting envelope after field protections. Pending task-generated metadata proposals pause both tasks for that publication until explicitly reviewed, avoiding repeated proposals.
+
+## Retry state and output
+
+AI attempts, operational deferrals, terminal exclusions, and metadata-quality caches use only local SQLite. Fresh namespaces are `library.metadata_extract.catalog.v1`, `library.metadata_evaluate.catalog.v1`, and `library.metadata_quality.catalog.v1`. AI checkpoint identities include publication ID and an evidence-snapshot hash; prompt versions remain part of the checkpoint contract. Old MD5 checkpoints and evaluation failure files remain untouched and are never imported or consulted. Changed evidence/prompt/model pools reopen applicable work; resume with untried models and clear checkpoints only after durable results or review proposals commit.
+
+Use the shared configured Gemini runtime and model pool. Content/schema failures consume a model attempt; quota, service, storage, PostgreSQL availability, and stop conditions do not create content exclusions. Exhausted publications remain deferred while other publications continue. Global provider unavailability ends the queue with resumable untouched work. Authentication/configuration and unexpected implementation failures fail the run instead of looping. Workers share explicit cancellation and inherited log context, then finalize before summaries are published.
+
+Logs stream to terminal scrollback without `.log` files, automatic prompt dumps, lifecycle events, or database log/progress events. Retain local run state, heartbeat, coalesced progress, and explicit `task.artifact` events. Dedicated `items.json` and corruption-plan artifacts live in the run workspace under `~/.manzara` or `MANZARA_ARTIFACTS_ROOT`; final summaries link item results and preserve publication counts, source MD5s, review proposal IDs, and per-model attempts/successes. This work has static inspection only; live execution and tests require explicit owner authorization under [verification](../../../../docs/verification.md).
+
+## Extraction evidence and validation
+
+- Reuse the MD5-verified source cache; populate misses only from configured Backblaze primary storage. Never mutate storage URLs or upload metadata ZIPs.
+- Preserve the adopted extraction prompt, Schema.org contract, PDF edge-page slicing, and normalization. Read supporting upstream evidence only from `library_upstream_metadata` and sanitize it in both text and visual requests.
+- Metadata may omit a genuinely absent title, but requires another bibliographic/content signal and valid `inLanguage`. Never overwrite usable publication metadata during ordinary extraction or erase language with null.
+- Validate the strict JSON-LD contract before every write. Canonical discovery facets (`genre`, audience types, classification paths, and role names) are English; descriptions follow `inLanguage`. Do not truncate fractional page/age counts.
+- Validate description scripts conservatively: require two-to-one competing-script dominance before rejecting mixed text, treat `Ьь` as Yanalif letters, and preserve `tt-Latn-x-zaman-alif`.
+- Deterministic PDF open/page-tree/page-read failures may create a guarded `corrupted` move plan; active cleanup plans exclude the source. Password protection and service/storage failures are operational deferrals. Cleanup execution remains Maintenance-owned.
+- DjVu is visual-only: use verified cached/primary sources and unique first/last three pages rendered into PDF. Reduce rendering size to stay below Gemini limits. Ignore extracted content even when present; missing tools and timeouts are operational failures.
+
+## Evaluation evidence and validation
+
+- Preserve valid positive and negative evaluations. Select missing decisions, included publications without classification, or excluded publications retaining classification. Unusable metadata waits for extraction.
+- Use database-owned upstream metadata; never fetch remote upstream evidence or fall back to Yandex source URLs.
+- Require an explicit boolean decision and concise reason; applicable responses also need normalized DDC and an English category path. Validate the fully merged envelope, not only a patch.
+- DjVu always uses rendered first/last two pages. PDF evaluation uses the same page count when text evidence is unavailable. Defer sources whose evidence cannot be prepared.
+- Publish publication counts, skips, terminal/deferred outcomes, and per-model attempts/successes. Log publication ID, source MD5, and resolved model before requests.

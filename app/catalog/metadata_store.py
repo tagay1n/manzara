@@ -2,7 +2,7 @@
 
 import re
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.catalog.metadata import SCALARS, compose_metadata, decompose_metadata, items
@@ -70,9 +70,16 @@ class MetadataStore:
             index_elements=[table.c.kind, table.c.raw_name], set_={"raw_name": raw_name},
         ).returning(table.c.name_id)).scalar_one()
 
-    def _metadata(self, conn, md5):
-        doc = self._record(conn, "document", md5)
-        pub = self._record(conn, "publication", doc["publication_id"])
+    def _metadata(self, conn, md5, *, lock=True):
+        def record(kind, key):
+            if lock:
+                return self._record(conn, kind, key)
+            table = self.table("documents" if kind == "document" else "publications")
+            column = table.c.md5 if kind == "document" else table.c.publication_id
+            return dict(conn.execute(select(table).where(column == key)).mappings().one())
+
+        doc = record("document", md5)
+        pub = record("publication", doc["publication_id"])
         publication_id = pub["publication_id"]
 
         def rows(name):
@@ -80,7 +87,14 @@ class MetadataStore:
             return [dict(row) for row in conn.execute(select(table).where(table.c.publication_id == publication_id).order_by(table.c.position)).mappings()]
 
         credits, names, entities = self.table("contributions"), self.table("names"), self.table("entities")
-        credit_rows = conn.execute(select(credits, names.c.kind, names.c.raw_name, entities.c.display_name).join(names).outerjoin(entities).where(
+        groups = self.table("credit_groups")
+        credit_rows = conn.execute(select(credits, groups.c.role_name, names.c.kind, names.c.raw_name, entities.c.display_name)
+            .join(groups, and_(groups.c.publication_id == credits.c.publication_id,
+                              groups.c.role == credits.c.role, groups.c.position == credits.c.position))
+            .join(names, names.c.name_id == credits.c.name_id)
+            .outerjoin(entities, and_(entities.c.entity_id == credits.c.entity_id,
+                                     entities.c.status == "active", entities.c.approval == "confirmed",
+                                     credits.c.resolution == "confirmed")).where(
             credits.c.publication_id == publication_id,
         ).order_by(credits.c.role, credits.c.position, credits.c.nested_position)).mappings().all()
         subject_rows = rows("subjects")
@@ -105,12 +119,23 @@ class MetadataStore:
                 if row[column] is not None:
                     audience[field] = row[column]
             audiences.append(audience)
-        modes = self.table("sufficient_modes")
+        languages = self.table("publication_languages")
+        access = self.table("document_access_modes")
+        modes, mode_items = self.table("sufficient_modes"), self.table("sufficient_mode_items")
+        sufficient = []
+        for position in conn.execute(select(modes.c.position).where(modes.c.md5 == md5).order_by(modes.c.position)).scalars():
+            sufficient.append(list(conn.execute(select(mode_items.c.mode).where(
+                mode_items.c.md5 == md5, mode_items.c.group_position == position,
+            ).order_by(mode_items.c.position)).scalars()))
         refs = self.table("references")
         ref = conn.execute(select(refs).where(refs.c.publication_id == publication_id)).mappings().first()
         based_on = None
         if ref is not None:
-            based_on = {key: ref[column] for key, column in {"@type": "work_type", "name": "name", "inLanguage": "language", "url": "urls"}.items() if ref[column] is not None}
+            based_on = {key: ref[column] for key, column in {"@type": "work_type", "name": "name", "inLanguage": "language"}.items() if ref[column] is not None}
+            urls = self.table("reference_urls")
+            if ref["urls_present"]:
+                based_on["url"] = list(conn.execute(select(urls.c.url).where(
+                    urls.c.publication_id == publication_id).order_by(urls.c.position)).scalars())
             authors = self.table("reference_authors")
             values = [{"@type": row["kind"], "name": row["name"]} for row in conn.execute(select(authors).where(authors.c.publication_id == publication_id).order_by(authors.c.position)).mappings()]
             if values:
@@ -118,12 +143,14 @@ class MetadataStore:
         return {
             "publication_id": publication_id, "revision": pub["revision"],
             "scalars": {column: pub[column] for column in SCALARS.values() if pub[column] is not None},
-            "languages": pub["languages"], "credits": [dict(row) for row in credit_rows],
-            "identifiers": [row["value"] for row in rows("identifiers")],
+            "languages": list(conn.execute(select(languages.c.language).where(
+                languages.c.publication_id == publication_id).order_by(languages.c.position)).scalars()),
+            "credits": [dict(row) for row in credit_rows],
+            "identifiers": [row["value"] for row in rows("identifiers") if row["kind"] == "isbn"],
             "genres": [row["value"] for row in rows("genres")], "subjects": subjects,
             "audiences": audiences, "audience_array": pub["audience_array"],
-            "access_modes": doc["access_modes"],
-            "sufficient_modes": list(conn.execute(select(modes.c.modes).where(modes.c.md5 == md5).order_by(modes.c.position)).scalars()),
+            "access_modes": list(conn.execute(select(access.c.mode).where(access.c.md5 == md5).order_by(access.c.position)).scalars()),
+            "sufficient_modes": sufficient,
             "based_on": based_on,
         }
 
@@ -154,32 +181,48 @@ class MetadataStore:
             if field == "credits":
                 table = self.table("contributions")
                 names = self.table("names")
-                old = {credit_signature(row): row for row in conn.execute(select(table, names.c.kind, names.c.raw_name)
-                    .join(names).where(table.c.publication_id == publication_id)).mappings()}
+                groups = self.table("credit_groups")
+                old = {credit_signature(row): row for row in conn.execute(select(table, groups.c.role_name, names.c.kind, names.c.raw_name)
+                    .join(groups, and_(groups.c.publication_id == table.c.publication_id,
+                                      groups.c.role == table.c.role, groups.c.position == table.c.position))
+                    .join(names, names.c.name_id == table.c.name_id).where(table.c.publication_id == publication_id)).mappings()}
                 retained = [old[credit_signature(credit)]["contribution_id"] for credit in record[field] if credit_signature(credit) in old]
                 conn.execute(table.delete().where(table.c.publication_id == publication_id, ~table.c.contribution_id.in_(retained)))
+                desired = {(credit["role"], credit["position"]): credit["role_name"] for credit in record[field]}
+                for group in conn.execute(select(groups).where(groups.c.publication_id == publication_id)).mappings():
+                    if (group["role"], group["position"]) not in desired:
+                        conn.execute(groups.delete().where(groups.c.publication_id == publication_id,
+                            groups.c.role == group["role"], groups.c.position == group["position"]))
+                for (role, position), role_name in desired.items():
+                    statement = insert(groups).values(publication_id=publication_id, role=role, position=position, role_name=role_name)
+                    conn.execute(statement.on_conflict_do_update(
+                        index_elements=[groups.c.publication_id, groups.c.role, groups.c.position], set_={"role_name": role_name}))
                 for credit in record[field]:
                     if credit_signature(credit) in old:
                         continue
-                    values = {key: credit[key] for key in ("role", "role_name", "position", "nested_position")}
+                    values = {key: credit[key] for key in ("role", "position", "nested_position")}
                     name_id = self._name(conn, credit["kind"], credit["raw_name"])
                     conn.execute(table.insert().values(publication_id=publication_id, name_id=name_id, **values))
             elif field == "based_on":
-                for name in ("references", "reference_authors"):
-                    table = self.table(name)
-                    conn.execute(table.delete().where(table.c.publication_id == publication_id))
+                table = self.table("references")
+                conn.execute(table.delete().where(table.c.publication_id == publication_id))
                 source = record[field]
                 if source is not None:
                     if set(source) - {"@type", "name", "inLanguage", "url", "author"}:
                         raise ValueError("unsupported source-work reference")
                     conn.execute(self.table("references").insert().values(publication_id=publication_id,
-                        work_type=source.get("@type"), name=source.get("name"), language=source.get("inLanguage"), urls=source.get("url")))
+                        work_type=source.get("@type"), name=source.get("name"), language=source.get("inLanguage"), urls_present="url" in source))
+                    for position, url in enumerate(source.get("url", [])):
+                        conn.execute(self.table("reference_urls").insert().values(publication_id=publication_id, position=position, url=url))
                     for position, entity in enumerate(items(source.get("author"))):
                         conn.execute(self.table("reference_authors").insert().values(publication_id=publication_id,
                             kind=entity["@type"], name=entity["name"], position=position))
             else:
                 table = self.table(field)
-                conn.execute(table.delete().where(table.c.publication_id == publication_id))
+                predicate = table.c.publication_id == publication_id
+                if field == "identifiers":
+                    predicate = and_(predicate, table.c.kind == "isbn")
+                conn.execute(table.delete().where(predicate))
                 for position, item in enumerate(record[field]):
                     values = {"publication_id": publication_id, "position": position}
                     if field == "identifiers":
@@ -222,9 +265,15 @@ class MetadataStore:
         changed = {field for field in RELATIONAL_FIELDS - {"credits"} if incoming[field] != before[field]}
         if comparable_credits(incoming["credits"]) != comparable_credits(before["credits"]):
             changed.add("credits")
-        scalars = {field: value for field, value in incoming["scalars"].items() if pub[field] != value}
-        if pub["languages"] != incoming["languages"]:
+        scalars = {field: incoming["scalars"].get(field) for field in SCALARS.values()
+                   if pub[field] != incoming["scalars"].get(field)}
+        if before["languages"] != incoming["languages"]:
             scalars["languages"] = incoming["languages"]
+        # Automated replacement must not erase or rewrite reviewed occurrences.
+        if automated and "credits" in changed:
+            signatures = {credit_signature(row) for row in incoming["credits"]}
+            if any(row["resolution"] == "confirmed" and credit_signature(row) not in signatures for row in before["credits"]):
+                protected.add("credits")
         blocked = {field: scalars[field] for field in scalars.keys() & protected}
         blocked.update({field: incoming[field] for field in changed & protected})
         if "audiences" in blocked:
@@ -235,7 +284,12 @@ class MetadataStore:
         if blocked:
             conn.execute(self.table("proposals").insert().values(kind="metadata", publication_id=key,
                 evidence={"actor": actor, "md5": md5, "publication_revision": pub["revision"]}, field_changes=blocked))
-        values = {field: value for field, value in scalars.items() if field not in protected}
+        values = {field: value for field, value in scalars.items() if field not in protected and field != "languages"}
+        if "languages" in scalars and "languages" not in protected:
+            languages = self.table("publication_languages")
+            conn.execute(languages.delete().where(languages.c.publication_id == key))
+            for position, language in enumerate(incoming["languages"]):
+                conn.execute(languages.insert().values(publication_id=key, position=position, language=language))
         values["audience_array"] = incoming["audience_array"] if "audiences" not in protected else pub["audience_array"]
         self._replace_relations(conn, key, changed - protected, incoming)
         if not automated:
@@ -244,10 +298,17 @@ class MetadataStore:
             modes = self.table("sufficient_modes")
             conn.execute(modes.delete().where(modes.c.md5 == md5))
             for position, item in enumerate(incoming["sufficient_modes"]):
-                conn.execute(modes.insert().values(md5=md5, position=position, modes=item))
+                conn.execute(modes.insert().values(md5=md5, position=position))
+                for child_position, mode in enumerate(item):
+                    conn.execute(self.table("sufficient_mode_items").insert().values(
+                        md5=md5, group_position=position, position=child_position, mode=mode))
+        if "access_modes" in file_changes and "access_modes" not in doc_protected:
+            access = self.table("document_access_modes")
+            conn.execute(access.delete().where(access.c.md5 == md5))
+            for position, mode in enumerate(incoming["access_modes"]):
+                conn.execute(access.insert().values(md5=md5, position=position, mode=mode))
         if file_changes.keys() - doc_protected:
-            self._update(conn, "document", md5, doc,
-                {"access_modes": incoming["access_modes"]} if "access_modes" in file_changes and "access_modes" not in doc_protected else {}, actor)
+            self._update(conn, "document", md5, doc, {}, actor)
         if not automated:
             self._protect(conn, "document", md5, {"access_modes", "sufficient_modes"}, actor)
         conn.execute(self.table("evidence").insert().values(md5=md5, record_kind="publication", record_key=str(key), source=actor, payload=source))

@@ -5,15 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, StrictBool
 
 from app.modules.library.runtime.metadata.schema import MetadataPatch
 
 
 class Evaluation(BaseModel):
-    """Classification result used to populate boolean `metadata.lib`."""
+    """Validated publication inclusion/classification decision."""
 
-    applicable: bool = True
+    model_config = ConfigDict(extra="forbid")
+
+    applicable: StrictBool
     reason: str | None = None
     metadata_patch: MetadataPatch | None = None
     library_ddc: str | None = None
@@ -24,19 +26,10 @@ class Evaluation(BaseModel):
         return cls(applicable=False, reason=reason)
 
 
-@dataclass
+@dataclass(frozen=True)
 class EvaluationTask:
-    """Document payload needed for library applicability evaluation."""
+    """One publication and its observed metadata at the request boundary."""
 
     md5: str
-    ya_path: str | None
-    language: str | None
-    page_count: int | None
-    full: bool | None
-    sharing_restricted: bool | None
-    ya_public_url: str | None
-    mime_type: str | None
-    document_url: str | None
-    upstream_metadata: dict[str, Any] | None
-    content_url: str | None
-    schema_org: dict | str | None
+    publication_id: int
+    schema_org: dict[str, Any]
