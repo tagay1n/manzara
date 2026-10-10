@@ -8,25 +8,25 @@ Database connection/schema/version-table schema and pool size, artifact/SQLite p
 
 `codex.publisher_merges.context_window_tokens: null` explicitly selects exact-model CLI capacity metadata; a positive integer supplies verified capacity. `database_ca_certificate_base64: null` uses the certificate path already present in `database_url`; a base64 PEM value is materialized privately by workflow setup. Dedicated backup credentials must be filled for backup work; an unconfigured integration may have explicit null fields locally and fails if invoked.
 
-Each Actions workflow decodes its own private YAML from the following secret using `scripts/prepare_workflow_config.py`. Existing separate database/pool/path/credential environment settings and repository variables no longer supply runtime values. Update these YAML secrets before pushing or dispatching the changed workflows.
+Actions are the explicit exception: operational defaults live in `.github/config/maintenance.yaml`, `export.yaml`, `backup.yaml`, and `link-checker.yaml`. `scripts/prepare_workflow_config.py PROFILE` combines these with the existing workflow credentials and writes a complete private YAML file. Application code still reads only that generated file; it has no defaults or environment overrides. Workflow setup never loads `config.example.yaml` or local `config.yaml`. No new configuration secrets or variables are required, and the maintenance secret does not need the newly introduced policy fields.
 
-| Workflow | YAML secret | Sections consumed |
+| Workflow | Existing inputs | Defaults |
 | --- | --- | --- |
-| Sync/cleanup and document transfer | `MANZARA_MAINTENANCE_CONFIG_BASE64` | `database_url`, `database_schema`, `migration_version_schema`, `database_pool_size`, `database_ca_certificate_base64`, `artifacts_root`, `local_state_path`, `postgres`, `runtime`, `documents`, `yandex`, `encryption_key`, `network`, `maintenance` |
-| Google export | `MANZARA_EXPORT_CONFIG_BASE64` | `database_url`, `database_schema`, `database_pool_size`, `database_ca_certificate_base64`, `artifacts_root`, `local_state_path`, `postgres`, `google.sheets`, `yandex.disk.documents.restricted_path` |
-| Logical backup | `MANZARA_BACKUP_CONFIG_BASE64` | `database_url`, `database_schema`, `database_ca_certificate_base64`, `artifacts_root`, `backup`, `network.s3.backup`, `documents.transfer` |
-| README link checker | `MANZARA_LINK_CHECKER_CONFIG_BASE64` | `link_checker` |
+| Sync/cleanup and document transfer | `MANZARA_MAINTENANCE_CONFIG_BASE64`, `MANZARA_DATABASE_URL`, optional `MANZARA_AIVEN_CA_CERT_BASE64` secrets | `.github/config/maintenance.yaml` |
+| Google export | `MANZARA_DATABASE_URL`, `GOOGLE_OAUTH_TOKEN_JSON_BASE64`, optional `MANZARA_AIVEN_CA_CERT_BASE64` secrets | `.github/config/export.yaml` |
+| Logical backup | `MANZARA_DATABASE_URL`, `MANZARA_AIVEN_CA_CERT_BASE64`, `MANZARA_LOGICAL_BACKUP_S3_ACCESS_KEY_ID`, `MANZARA_LOGICAL_BACKUP_S3_SECRET_ACCESS_KEY` secrets; `MANZARA_LOGICAL_BACKUP_S3_ENDPOINT`, `MANZARA_LOGICAL_BACKUP_S3_REGION`, `MANZARA_LOGICAL_BACKUP_S3_BUCKET` repository variables | `.github/config/backup.yaml` |
+| README link checker | No configuration secrets | `.github/config/link-checker.yaml` |
 
-Use only each workflow's required sections, replacing masked values. Preserve dedicated backup credentials rather than reusing document-storage credentials. Store plaintext and encoded YAML under the artifact root's private credentials directory with restrictive permissions. Base64 is encoding, not encryption. Do not include Gemini/Codex credentials in these scheduled subsets.
+The maintenance secret continues to supply `documents.primary_storage` (endpoint, region, credentials and all five buckets), `yandex.disk` (OAuth token and document paths), and `encryption_key`. Setup ignores unrelated application sections in an older full-config secret. Supplied operational fields override maintenance defaults recursively; missing fields receive the workflow defaults. Explicit nulls and invalid values are retained and fail when consumed. Database URL and CA always come from the existing dedicated secrets; runner artifact/state/cache paths always come from the checked-in workflow profile. The maintenance cache defaults to 1 GiB; export uses a single database connection and maintenance uses four.
 
-For Actions, explicitly set `artifacts_root: "${RUNNER_TEMP}/manzara"`, `local_state_path: "${RUNNER_TEMP}/manzara/state/runtime.sqlite3"`, and, where consumed, `documents.cache_path: "${RUNNER_TEMP}/manzara/cache/source-documents"`. Setup expands only this supported placeholder in those paths; cache budgets and all other policies remain exactly as supplied in YAML. Supply `database_ca_certificate_base64` for a certificate-backed database in Actions, since local certificate paths are not present on the runner. Setup writes the certificate and updates that YAML URL's `sslrootcert` while preserving its other TLS settings. Configuration and certificates are written with mode 0600 and removed at the workflow boundary. Google OAuth token provisioning remains the separate `GOOGLE_OAUTH_TOKEN_JSON_BASE64` secret.
-
-For example, after saving the private maintenance subset:
+Keep dedicated backup credentials separate from document-storage credentials. Store private maintenance YAML and its base64 encoding under the artifact root's private credentials directory with restrictive permissions. Base64 is encoding, not encryption. For example:
 
 ```bash
 umask 077
 base64 -w 0 < ~/.manzara/private/credentials/maintenance/actions.yaml > ~/.manzara/private/credentials/maintenance/actions.base64
 ```
+
+Workflow paths use `${RUNNER_TEMP}/manzara`; setup expands only `${RUNNER_TEMP}` in artifact/state/cache paths. An existing CA secret is materialized privately and its path replaces `sslrootcert` in the generated database URL, preserving other TLS options. Without a CA secret, maintenance/export retain the URL's TLS settings; backup requires the CA secret. Configuration and certificates are written with mode 0600 and removed at the workflow boundary. Google OAuth token provisioning remains the separate `GOOGLE_OAUTH_TOKEN_JSON_BASE64` secret.
 
 ## Local storage
 
@@ -68,7 +68,7 @@ A failed download, upload, cleanup, or checkpoint leaves the item unresolved; in
 
 `.github/workflows/nightly-google-export.yml` (Google Sheets export) runs daily at 00:07 UTC and supports manual dispatch. Exact start time is not required; check successful daily runs. It calls `python -m app.modules.maintenance.runtime.dump_state --validate-sharing` to publish the catalog to the YAML `google.sheets` spreadsheet/worksheet target. The former `tt` worksheet is renamed in place on the first publication. No Drive archive is created or uploaded; PostgreSQL recovery dumps remain the separate [backup workflow](postgres-backup-recovery.md).
 
-Provision `MANZARA_EXPORT_CONFIG_BASE64` using [runtime configuration](#runtime-configuration), plus `GOOGLE_OAUTH_TOKEN_JSON_BASE64` (base64 OAuth token JSON with Sheets refresh authorization). The existing token path remains `private/credentials/google-drive/personal_token.json`; no Drive API scope is requested by this exporter. Keep tokens out of git and logs.
+Use the existing database secret and `GOOGLE_OAUTH_TOKEN_JSON_BASE64` described in [runtime configuration](#runtime-configuration) (base64 OAuth token JSON with Sheets refresh authorization). The existing token path remains `private/credentials/google-drive/personal_token.json`; no Drive API scope is requested by this exporter. Keep tokens out of git and logs.
 
 The sharing gate checks the same database snapshot used for export. Restricted-folder documents, including descendants, require `sharing_restricted=true`, an `enc:` document link when present, and blank/null `ya_public_url`. Failures report MD5/rules without links. The check uses the encryption marker and does not decrypt links.
 
@@ -102,4 +102,4 @@ Nightly logical dumps and restore drills: [backup and recovery](postgres-backup-
 
 ## Scheduled README link checker
 
-The checker uses `link_checker.timeout_seconds` from `MANZARA_LINK_CHECKER_CONFIG_BASE64`, materialized through the same private YAML setup. Its secret needs only the `link_checker` section. The workflow schedule and broken-link branch behavior remain code-owned infrastructure.
+The checker uses `link_checker.timeout_seconds` from `.github/config/link-checker.yaml`, materialized through the same private YAML setup. It requires no configuration secret. The workflow schedule and broken-link branch behavior remain code-owned infrastructure.

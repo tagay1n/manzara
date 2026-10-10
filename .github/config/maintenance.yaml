@@ -1,0 +1,59 @@
+# Actions-only operational defaults; credentials are supplied during workflow setup.
+database_schema: monocorpus
+migration_version_schema: monocorpus
+database_pool_size: 4
+database_ca_certificate_base64: null
+postgres:
+  pool_recycle_seconds: 300
+  connect_timeout_seconds: 10
+  preflight_timeout_seconds: 5
+  query_timeout_seconds: 60
+  lock_timeout_seconds: 5
+  sync_timeout_seconds: 30
+  read_batch_size: 1000
+runtime:
+  heartbeat_seconds: 5
+  status_interval_seconds: 30
+  batch_poll_seconds: 0.5
+  sqlite_busy_timeout_seconds: 5
+  progress_interval_seconds: 1
+  list_page_size: 100
+network:
+  s3:
+    sync:
+      connect_timeout_seconds: 10
+      read_timeout_seconds: 30
+      total_attempts: 3
+      retry_mode: legacy
+    transfer:
+      connect_timeout_seconds: 10
+      read_timeout_seconds: 60
+      total_attempts: 3
+      retry_mode: standard
+  yandex:
+    connect_timeout_seconds: 10
+    read_timeout_seconds: 30
+    poll_timeout_seconds: 60
+    retries: 2
+maintenance:
+  daily_budget_seconds: 18000
+  transfer_budget_seconds: 18000
+  disk_reserve_bytes: 1073741824
+  sync_batch_size: 250
+  transfer_batch_size: 250
+  s3_listing_page_size: 1000
+artifacts_root: ${RUNNER_TEMP}/manzara
+local_state_path: ${RUNNER_TEMP}/manzara/state/runtime.sqlite3
+documents:
+  cache_path: ${RUNNER_TEMP}/manzara/cache/source-documents
+  cache_max_gib: 1
+  cache_target_percent: 90
+  abandoned_download_seconds: 86400
+  md5_chunk_bytes: 1048576
+  integrity_chunk_bytes: 8388608
+  transfer:
+    multipart_threshold_bytes: 8388608
+    multipart_chunk_bytes: 8388608
+    download_attempts: 5
+    max_io_queue: 100
+    io_chunk_bytes: 262144

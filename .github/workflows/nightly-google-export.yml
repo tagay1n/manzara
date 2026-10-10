@@ -17,9 +17,14 @@ jobs:
   export:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      MANZARA_CONFIG_PATH: ${{ runner.temp }}/manzara/private/config.yaml
     steps:
+      - name: Initialize runtime paths
+        shell: bash
+        run: |
+          printf '%s\n' \
+            "MANZARA_CONFIG_PATH=$RUNNER_TEMP/manzara/private/config.yaml" \
+            >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
@@ -38,8 +43,9 @@ jobs:
 
       - name: Prepare private runtime configuration
         env:
-          MANZARA_CONFIG_BASE64: ${{ secrets.MANZARA_EXPORT_CONFIG_BASE64 }}
-        run: python scripts/prepare_workflow_config.py
+          MANZARA_DATABASE_URL: ${{ secrets.MANZARA_DATABASE_URL }}
+          MANZARA_AIVEN_CA_CERT_BASE64: ${{ secrets.MANZARA_AIVEN_CA_CERT_BASE64 }}
+        run: python scripts/prepare_workflow_config.py export
 
       - name: Prepare Google OAuth credentials
         shell: bash
@@ -59,4 +65,4 @@ jobs:
 
       - name: Remove private configuration
         if: always()
-        run: rm -rf "${{ runner.temp }}/manzara/private"
+        run: rm -rf "$RUNNER_TEMP/manzara/private"

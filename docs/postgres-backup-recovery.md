@@ -15,7 +15,7 @@ Monthly retains the first successful complete dump of the UTC month; there is no
 
 ## Configuration
 
-Provision `MANZARA_BACKUP_CONFIG_BASE64` with the backup subset described in [runtime configuration](operations.md#runtime-configuration). The image, connection deadline, storage endpoint/region/bucket, and dedicated credentials are required YAML settings. The workflow enforces `sslmode=verify-full`; supply its CA in YAML or, for local operations, explicitly select an existing certificate path in `database_url`.
+Use the existing database/CA/backup secrets and storage repository variables listed in [runtime configuration](operations.md#runtime-configuration). Workflow policies, including the PostgreSQL image and connection deadline, live in `.github/config/backup.yaml`; setup writes these and the credentials into private YAML. The workflow enforces `sslmode=verify-full` and requires the CA secret. Local backup operations still require explicit YAML settings and a CA value or an existing certificate path in `database_url`.
 
 Keep the CA and credentials outside git under the artifacts root's `private/credentials/`. Scope the B2 key to `ttbackups`, prefix `logical/manzara/`, and `listFiles`/`readFiles`/`writeFiles`. Read access verifies uploads and preserves monthly objects; no delete/bucket-management permission is needed.
 

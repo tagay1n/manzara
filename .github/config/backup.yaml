@@ -1,0 +1,21 @@
+# Actions-only operational defaults; credentials are supplied during workflow setup.
+database_schema: monocorpus
+artifacts_root: ${RUNNER_TEMP}/manzara
+backup:
+  postgres_image: postgres:18
+  connect_timeout_seconds: 20
+  hash_chunk_bytes: 1048576
+network:
+  s3:
+    backup:
+      connect_timeout_seconds: 60
+      read_timeout_seconds: 60
+      total_attempts: 5
+      retry_mode: legacy
+documents:
+  transfer:
+    multipart_threshold_bytes: 8388608
+    multipart_chunk_bytes: 8388608
+    download_attempts: 5
+    max_io_queue: 100
+    io_chunk_bytes: 262144

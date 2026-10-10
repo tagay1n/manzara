@@ -1,0 +1,3 @@
+# Actions-only operational defaults; credentials are supplied during workflow setup.
+link_checker:
+  timeout_seconds: 30

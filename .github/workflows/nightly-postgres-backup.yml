@@ -17,9 +17,14 @@ jobs:
   backup:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      MANZARA_CONFIG_PATH: ${{ runner.temp }}/manzara/private/config.yaml
     steps:
+      - name: Initialize runtime paths
+        shell: bash
+        run: |
+          printf '%s\n' \
+            "MANZARA_CONFIG_PATH=$RUNNER_TEMP/manzara/private/config.yaml" \
+            >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
@@ -38,12 +43,18 @@ jobs:
 
       - name: Prepare private runtime configuration
         env:
-          MANZARA_CONFIG_BASE64: ${{ secrets.MANZARA_BACKUP_CONFIG_BASE64 }}
-        run: python scripts/prepare_workflow_config.py
+          MANZARA_DATABASE_URL: ${{ secrets.MANZARA_DATABASE_URL }}
+          MANZARA_AIVEN_CA_CERT_BASE64: ${{ secrets.MANZARA_AIVEN_CA_CERT_BASE64 }}
+          MANZARA_LOGICAL_BACKUP_S3_ACCESS_KEY_ID: ${{ secrets.MANZARA_LOGICAL_BACKUP_S3_ACCESS_KEY_ID }}
+          MANZARA_LOGICAL_BACKUP_S3_SECRET_ACCESS_KEY: ${{ secrets.MANZARA_LOGICAL_BACKUP_S3_SECRET_ACCESS_KEY }}
+          MANZARA_LOGICAL_BACKUP_S3_ENDPOINT: ${{ vars.MANZARA_LOGICAL_BACKUP_S3_ENDPOINT }}
+          MANZARA_LOGICAL_BACKUP_S3_REGION: ${{ vars.MANZARA_LOGICAL_BACKUP_S3_REGION }}
+          MANZARA_LOGICAL_BACKUP_S3_BUCKET: ${{ vars.MANZARA_LOGICAL_BACKUP_S3_BUCKET }}
+        run: python scripts/prepare_workflow_config.py backup
 
       - name: Create and upload logical backup
         run: python scripts/backup_postgres_to_b2.py
 
       - name: Remove private configuration
         if: always()
-        run: rm -rf "${{ runner.temp }}/manzara/private"
+        run: rm -rf "$RUNNER_TEMP/manzara/private"

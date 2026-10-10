@@ -50,8 +50,10 @@ jobs:
 
       - name: Prepare private maintenance configuration
         env:
-          MANZARA_CONFIG_BASE64: ${{ secrets.MANZARA_MAINTENANCE_CONFIG_BASE64 }}
-        run: python scripts/prepare_workflow_config.py
+          MANZARA_MAINTENANCE_CONFIG_BASE64: ${{ secrets.MANZARA_MAINTENANCE_CONFIG_BASE64 }}
+          MANZARA_DATABASE_URL: ${{ secrets.MANZARA_DATABASE_URL }}
+          MANZARA_AIVEN_CA_CERT_BASE64: ${{ secrets.MANZARA_AIVEN_CA_CERT_BASE64 }}
+        run: python scripts/prepare_workflow_config.py maintenance
 
       - name: Transfer and checkpoint documents
         run: python scripts/run_backblaze_transfer.py

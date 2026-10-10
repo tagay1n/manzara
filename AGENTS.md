@@ -14,7 +14,7 @@ Owner: tans1q
 - Durable domain data and safety-critical workflow checkpoints use PostgreSQL (YAML `database_url` and `database_schema`). Runs, Gemini coordination, flow attempts/errors, AI retry exclusions, and reproducible caches use only local SQLite (YAML `local_state_path`). Task registrations are code-owned; dashboard definitions and conveyor state are retired. Never fall back between stores or dual-write.
 - The backend owns domain decisions and persisted truth. Clients own rendering, transport, interaction, and transient state.
 - Artifacts live under the YAML `artifacts_root`; never create repository-root runtime artifact directories.
-- Keep secrets out of git and logs. Local configuration is gitignored; keep `config.example.yaml` masked and structurally current, and never load it at runtime. Operational values and processing policies come only from the selected YAML file; missing settings fail. `MANZARA_CONFIG_PATH` selects that file, without environment value overrides.
+- Keep secrets out of git and logs. Local configuration is gitignored; keep `config.example.yaml` masked and structurally current, and never load it at runtime. Operational values and processing policies come only from the selected YAML file; missing settings fail. `MANZARA_CONFIG_PATH` selects that file, without environment value overrides. Actions-only defaults live in `.github/config/`; workflow provisioning may combine them with existing credential secrets/variables into the selected private YAML.
 - Keep `requirements.txt` as the single dependency file.
 - Prefer forward changes over compatibility branches. Ask the owner before choosing a persisted-data migration or compatibility policy.
 

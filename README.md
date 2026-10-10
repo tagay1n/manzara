@@ -16,7 +16,7 @@ python3 -m venv .venv
 .venv/bin/python -m app
 ```
 
-Copy the masked structure of `config.example.yaml` to gitignored `config.yaml` and replace masked values. `MANZARA_CONFIG_PATH` can select another explicit YAML file. Every operational setting comes from that file; missing settings fail and environment variables do not override values. Never load the example at runtime. [Runtime configuration](docs/operations.md#runtime-configuration) covers policy fields and workflow provisioning.
+Copy the masked structure of `config.example.yaml` to gitignored `config.yaml` and replace masked values. `MANZARA_CONFIG_PATH` can select another explicit YAML file. Every operational setting comes from that file; missing settings fail and environment variables do not override values. Actions-only defaults live in `.github/config/` and workflow setup combines them with existing secrets into private YAML. Never load the example at runtime. [Runtime configuration](docs/operations.md#runtime-configuration) covers policy fields and workflow provisioning.
 
 Optional `--limit N` and `--task TASK_ID` select next-run settings and the initial interactive task. Launching never starts a task automatically. Interactive execution requires a terminal; `--help` works without configuration. Backblaze upload is available only through its [GitHub workflow](docs/operations.md#backblaze-document-transfer).
 

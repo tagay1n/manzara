@@ -1,7 +1,8 @@
-"""Materialize explicit workflow YAML without logging configuration values."""
+"""Combine Actions-only YAML defaults and existing credentials into private YAML."""
 
 from __future__ import annotations
 
+import argparse
 import base64
 import binascii
 import os
@@ -14,6 +15,107 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.runtime_config import RuntimeConfigLoader, required_text, required_value
+
+
+def _mapping(contents: bytes, label: str) -> dict:
+    try:
+        payload = yaml.load(contents, Loader=RuntimeConfigLoader)
+    except (yaml.YAMLError, UnicodeError):
+        raise ValueError(
+            f"{label} must be valid UTF-8 YAML (values suppressed)"
+        ) from None
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must be a YAML mapping")
+    return payload
+
+
+def _merge(target: dict, supplied: dict) -> None:
+    for key, value in supplied.items():
+        if isinstance(target.get(key), dict) and isinstance(value, dict):
+            _merge(target[key], value)
+        else:
+            target[key] = value
+
+
+def _environment_text(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value or "<REDACTED>" in value or "\n" in value or "\r" in value:
+        raise ValueError(f"Configure an unmasked single-line value for {name}")
+    return value
+
+
+def _workflow_payload(profile: str) -> dict:
+    defaults = (
+        Path(__file__).resolve().parents[1] / ".github/config" / f"{profile}.yaml"
+    )
+    payload = _mapping(defaults.read_bytes(), "Workflow defaults")
+    if profile == "maintenance":
+        runner_paths = {
+            field: required_text(payload, field)
+            for field in ("artifacts_root", "local_state_path")
+        }
+        cache_path = required_text(payload, "documents", "cache_path")
+        supplied = _mapping(
+            _decode(
+                _environment_text("MANZARA_MAINTENANCE_CONFIG_BASE64"),
+                "MANZARA_MAINTENANCE_CONFIG_BASE64",
+            ),
+            "Maintenance configuration",
+        )
+        # Ignore unrelated sections from older full application config secrets.
+        allowed = set(payload) | {"yandex", "encryption_key"}
+        _merge(
+            payload, {key: value for key, value in supplied.items() if key in allowed}
+        )
+        for field in (
+            "endpoint_url",
+            "region_name",
+            "access_key_id",
+            "secret_access_key",
+        ):
+            required_text(payload, "documents", "primary_storage", field)
+        for field in (
+            "public",
+            "private",
+            "book_previews",
+            "content",
+            "content_images",
+        ):
+            required_text(payload, "documents", "primary_storage", "bucket", field)
+        for field in ("source_path", "restricted_path", "filtered_out_path"):
+            required_text(payload, "yandex", "disk", "documents", field)
+        required_text(payload, "yandex", "disk", "oauth_token")
+        required_text(payload, "encryption_key")
+        # These are runner paths, not paths copied from a developer's machine.
+        payload.update(runner_paths)
+        payload["documents"]["cache_path"] = cache_path
+    if profile != "link-checker":
+        database_url = _environment_text("MANZARA_DATABASE_URL")
+        if not database_url.startswith(
+            (
+                "postgres://",
+                "postgresql://",
+                "postgresql+psycopg://",
+                "postgresql+psycopg2://",
+            )
+        ):
+            raise ValueError("MANZARA_DATABASE_URL must be a PostgreSQL URL")
+        payload["database_url"] = database_url
+        encoded_ca = os.environ.get("MANZARA_AIVEN_CA_CERT_BASE64", "").strip()
+        if profile == "backup":
+            encoded_ca = _environment_text("MANZARA_AIVEN_CA_CERT_BASE64")
+            for field, suffix in (
+                ("endpoint_url", "ENDPOINT"),
+                ("region_name", "REGION"),
+                ("bucket", "BUCKET"),
+                ("access_key_id", "ACCESS_KEY_ID"),
+                ("secret_access_key", "SECRET_ACCESS_KEY"),
+            ):
+                payload["backup"][field] = _environment_text(
+                    f"MANZARA_LOGICAL_BACKUP_S3_{suffix}"
+                )
+        payload["database_ca_certificate_base64"] = encoded_ca or None
+    return payload
 
 
 def _decode(value: str, field: str) -> bytes:
@@ -31,19 +133,9 @@ def _private_file(path: Path, contents: bytes) -> None:
         handle.write(contents)
 
 
-def prepare() -> None:
+def prepare(profile: str) -> None:
     target = Path(os.environ["MANZARA_CONFIG_PATH"])
-    encoded = os.environ["MANZARA_CONFIG_BASE64"]
-    try:
-        payload = yaml.load(
-            _decode(encoded, "MANZARA_CONFIG_BASE64"), Loader=RuntimeConfigLoader
-        )
-    except (yaml.YAMLError, UnicodeError):
-        raise ValueError(
-            "Workflow configuration must be valid UTF-8 YAML (values suppressed)"
-        ) from None
-    if not isinstance(payload, dict):
-        raise ValueError("Workflow configuration must be a YAML mapping")
+    payload = _workflow_payload(profile)
 
     # Only machine-local paths support this explicit runner placeholder.
     for mapping, field in (
@@ -93,8 +185,13 @@ def prepare() -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "profile", choices=("maintenance", "export", "backup", "link-checker")
+    )
+    args = parser.parse_args()
     try:
-        prepare()
+        prepare(args.profile)
     except (KeyError, OSError, ValueError) as exc:
         message = (
             str(exc)

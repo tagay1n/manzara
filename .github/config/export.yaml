@@ -1,0 +1,26 @@
+# Actions-only operational defaults; credentials are supplied during workflow setup.
+database_schema: monocorpus
+database_ca_certificate_base64: null
+postgres:
+  pool_recycle_seconds: 300
+  connect_timeout_seconds: 10
+  preflight_timeout_seconds: 5
+  query_timeout_seconds: 60
+  lock_timeout_seconds: 5
+  sync_timeout_seconds: 30
+  read_batch_size: 1000
+artifacts_root: ${RUNNER_TEMP}/manzara
+local_state_path: ${RUNNER_TEMP}/manzara/state/runtime.sqlite3
+database_pool_size: 1
+google:
+  sheets:
+    spreadsheet_id: 1qDm6iHJu44wN78YvYRbn44oFd28UfRs9HT-7UAzeZZ8
+    worksheet_name: documents
+    chunk_rows: 1000
+    minimum_rows: 40000
+    minimum_columns: 25
+    write_interval_seconds: 1.1
+yandex:
+  disk:
+    documents:
+      restricted_path: /neurotatarlar/kitaplar/monocorpus/__ТАРАТМАСКА_DONT_SHARE_НЕ_ДЕЛИТЬСЯ

@@ -8,7 +8,7 @@ The inline CLI supports personality normalization, non-PDF extraction, book prev
 
 | Concern | Start here |
 | --- | --- |
-| Required YAML values, runtime settings, workflow provisioning | `app/runtime_config.py`, `app/settings.py`, `scripts/prepare_workflow_config.py`; [configuration](operations.md#runtime-configuration) |
+| Required YAML values, runtime settings, workflow provisioning | `app/runtime_config.py`, `app/settings.py`, `scripts/prepare_workflow_config.py`, `.github/config/`; [configuration](operations.md#runtime-configuration) |
 | CLI composition, keyboard interaction, lifecycle | `app/__main__.py`, `app/cli/` |
 | Daily cleanup/sync composition and runner credentials | `scripts/run_daily_maintenance.py`, `scripts/prepare_workflow_config.py`; [scheduled operations](operations.md) |
 | Task descriptors, sequential run contexts, session / batch ownership | `app/task_runtime/contracts.py`, `app/task_runtime/session.py`, `app/task_runtime/batch.py` |
