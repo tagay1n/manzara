@@ -146,6 +146,8 @@ runtime:
   list_page_size: 100
 terminal:
   initial_task: library.normalize_personalities
+  # /settings saves per-task candidate limits here; omitted/null means unlimited.
+  task_limits: {}
   render_buffer_bytes: 1048576
   output_chunk_chars: 4096
   output_queue_entries: 256
@@ -193,8 +195,11 @@ djvu:
   max_pdf_bytes: 49000000
 metadata:
   text_slice_chars: 20000
-  pdf_edge_pages: 4
-  djvu_edge_pages: 3
+  # Extract metadata: /settings edits these saved defaults directly.
+  # Total Gemini response deadline only; preparation/uploads/cleanup are outside it.
+  response_timeout_seconds: 900
+  first_pages: 4
+  last_pages: 4
   evaluation_excerpt_chars: 500
   evaluation_excerpt_parts: 3
   evaluation_edge_pages: 2

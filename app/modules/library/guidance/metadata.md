@@ -26,6 +26,8 @@ SQLite owns attempts/deferrals/exclusions/quality caches under `library.metadata
 
 Use [shared Gemini](../../../../docs/gemini-runtime.md). Content/schema failures consume model attempts; quota/service/storage/database/stop outcomes do not content-exclude. Exhausted publications defer while others continue; global provider unavailability preserves untouched work. Authentication/configuration/unexpected implementation failures fail the run. Cancellation/finalization follow shared runtime rules.
 
+Extraction's task-scoped `/settings` saves the Gemini response deadline (1–900 seconds) and separate first/last visual page counts directly to private YAML `metadata.response_timeout_seconds`, `first_pages`, and `last_pages`; values survive restarts. The deadline starts after preparation, uploads, file activation, and provider admission/spacing, and covers generation and the full response stream. It excludes cleanup and catalog writes. A timed-out response cancels asynchronous transport, defers the publication operationally, and continues to another publication without recording a content exclusion. Record effective settings in summaries and log response start/end elapsed time. Page-count changes participate in the prompt contract version so earlier content attempts do not exclude changed evidence.
+
 Run workspaces retain `items.json` and corruption-plan artifacts. Summaries link publication outcomes, source MD5s, review IDs, and per-model attempts/successes; common stdout/progress/artifact policy lives in root/runtime rules.
 
 Extraction logs validated model-returned Schema.org as indented JSON, identified by publication ID, source MD5, and model, through shared redacted stdout logging before the guarded catalog save.
@@ -38,7 +40,7 @@ Extraction logs validated model-returned Schema.org as indented JSON, identified
 - Strict JSON-LD validation precedes writes. Genre/audience/classification/role facets are English; descriptions follow `inLanguage`. Never truncate fractional page/age counts.
 - Reject mixed scripts only at two-to-one competing dominance; treat `Ьь` as Yanalif and preserve `tt-Latn-x-zaman-alif`.
 - Deterministic PDF open/page-tree/page-read failure may create guarded `corrupted` plans; active cleanup excludes sources. Password protection/service/storage failures defer operationally; Maintenance executes cleanup.
-- DjVu is visual-only: verified sources, unique first/last three pages rendered to PDF, reduced size below Gemini limits. Ignore extracted content; missing tools/timeouts are operational failures.
+- PDF/DjVu visual extraction uses configured first/last counts, unique overlapping selections, and source order. Either end can be zero, but both cannot be zero. DjVu is visual-only: verified sources rendered to PDF, reduced size below Gemini limits. Ignore extracted DjVu content; missing tools/timeouts are operational failures.
 
 ## Evaluation evidence and validation
 

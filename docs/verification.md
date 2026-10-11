@@ -10,7 +10,7 @@ Review changed contracts, code, dependencies, and configuration; use `git diff -
 
 Pending CLI acceptance covers:
 
-- Idle launch, task/options selection, command/history pickers, settings validation, narrow-terminal resizing, and command recall.
+- Idle launch, task/options selection, command/history pickers, settings validation, narrow-terminal resizing, and command recall. Saved task defaults need acceptance for YAML preservation, external-edit/write failures, cancel/save behavior, and restart restoration.
 - Exclusive foreground ownership through finalization/output drain; history preserves that identity.
 - Redacted scrollback, responsive input, honest progress/provider waits, and invalidation after runtime-read failure.
 - Safe stop/restart, quit, repeated Ctrl-C exit 130, terminal restoration, and interrupted-run recovery.

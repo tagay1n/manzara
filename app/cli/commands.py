@@ -15,7 +15,7 @@ COMMANDS = (
     Command("task", "Select a task", "_select_task"),
     Command("run", "Start/resume the selected task", "_start"),
     Command("stop", "Stop safely and keep Manzara open", "_stop"),
-    Command("settings", "Edit candidate limit", "_settings"),
+    Command("settings", "Edit and save the selected task's defaults", "_settings"),
     Command("history", "Inspect the selected task's recent runs", "_history"),
     Command("summary", "Print the current run or latest saved summary", "_summary"),
     Command("gemini", "Show compact Gemini key exhaustion counts", "_gemini"),
@@ -44,8 +44,11 @@ def help_text() -> str:
             "  Outside pickers: Up/Down recall commands; valid slash commands survive restarts (latest 1,000).\n"
             "  Down past the newest restores your draft. Launch remembers the selected task; --task overrides it.\n"
             "  Task/history pickers: type to search; Esc dismisses.\n"
-            "  Settings: Tab changes focus; Enter/Ctrl-S saves; Esc cancels.\n"
+            "  Settings: Tab changes focus; Up/Down adjusts; Enter advances; Ctrl-S saves; Esc cancels.\n"
+            "  Save defaults updates the selected private YAML; task settings survive restarts.\n"
+            "  Extract metadata: response timeout (up to 900s), first pages, and last pages.\n"
             "  Ctrl-C: stop work and stay; press again while stopping/exiting to force exit.\n"
             "  At idle: Ctrl-C clears input, or exits when input is empty.\n"
-            "  Finished tasks ring the terminal bell once; PROMPT_TOOLKIT_BELL=false disables it.\n"
+            "  Successful tasks ring once; failed tasks twice; stopped/deferred tasks stay silent.\n"
+            "  PROMPT_TOOLKIT_BELL=false disables CLI bells.\n"
             "  New interactive logs live only in terminal scrollback; saved summaries use /history.")

@@ -120,11 +120,13 @@ class Progress:
 
 
 class Processor:
-    def __init__(self, context, mode, store, config, storage, models, version, checkpoints, progress, cooldown, known):
+    def __init__(self, context, mode, store, config, storage, models, version, checkpoints, progress, cooldown, known,
+                 extraction_settings):
         self.context, self.mode, self.store = context, mode, store
         self.config, self.storage, self.models = config, storage, models
         self.version, self.checkpoints, self.progress = version, checkpoints, progress
         self.flow, self.cooldown, self.known = FLOWS[mode], cooldown, known
+        self.extraction_settings = extraction_settings
         self.workspace = workspace_dir('library', 'metadata-' + mode, run_id=context.run_id)
         self.abort = False
         self.global_unavailable = False
@@ -163,7 +165,8 @@ class Processor:
     def _prepare(self, candidate, source, primary_s3):
         if self.mode == 'extract':
             request = prepare_metadata_request(candidate, workspace=self.workspace,
-                storage=self.storage, primary_s3=primary_s3)
+                storage=self.storage, primary_s3=primary_s3,
+                first_pages=self.extraction_settings['first_pages'], last_pages=self.extraction_settings['last_pages'])
             return list(request.contents), request.files, ExtractedMetadata, parse_metadata_response
         doc = EvaluationTask(md5=source['md5'], publication_id=source['publication_id'], schema_org=source['schema_org'])
         prompt, files = prepare_evaluation_request(candidate, source['schema_org'], workspace=self.workspace,
@@ -249,7 +252,9 @@ class Processor:
                 self.log(f'Gemini request publication_id={publication["publication_id"]} md5={source["md5"]} model={model}')
                 self.progress.attempt(model)
                 return generate_structured_json(api_key=api_key, model_name=model, contents=prompt,
-                    response_schema=response_schema, files=files, timeout_seconds=config_integer("gemini", "request", "metadata_timeout_seconds"))
+                    response_schema=response_schema, files=files,
+                    timeout_seconds=config_integer("gemini", "request", "metadata_timeout_seconds"),
+                    response_timeout_seconds=self.extraction_settings['response_timeout_seconds'] if self.mode == 'extract' else None)
 
             def failure(model_name, kind, error):
                 self.checkpoints.record_failure(**self._checkpoint_args(source), model_name=model_name,
@@ -260,6 +265,7 @@ class Processor:
             try:
                 result = run_ordered_model_pool(manager=manager, models=self.models, request=request, parse=parse,
                     record_failure=failure, run_id=self.context.run_id,
+                    yield_on_timeout=self.mode == 'extract',
                     already_attempted={row['model'] for row in attempts})
                 if self.stopped():
                     return
@@ -410,6 +416,16 @@ def execute(context, *, mode):
     cooldown = _cooldown(config)
     models = load_required_gemini_model_pool()
     version = PROMPT_VERSION if mode == 'extract' else EVALUATION_PROMPT_VERSION
+    extraction_settings = {}
+    if mode == 'extract':
+        for name, minimum, maximum in (('response_timeout_seconds', 1, 900), ('first_pages', 0, None), ('last_pages', 0, None)):
+            value = getattr(context.options, 'metadata_' + name)
+            extraction_settings[name] = (required_integer(config, 'metadata', name, minimum=minimum, maximum=maximum)
+                                         if value is None else value)
+        if extraction_settings['first_pages'] + extraction_settings['last_pages'] == 0:
+            raise ValueError('Select at least one first or last page')
+        version += f'/pages-{extraction_settings["first_pages"]}-{extraction_settings["last_pages"]}'
+        summary['extraction_settings'] = extraction_settings
     storage = load_document_storage_settings(config)
     checkpoints = AIItemCheckpointStore(context.db.local_state_path)
     skipped = Counter()
@@ -426,10 +442,14 @@ def execute(context, *, mode):
     progress = Progress(context, len(candidates))
     known = store.known_classifications() if mode == 'evaluate' and candidates else []
     prune_document_cache(storage.cache_path, max_bytes=storage.cache_max_bytes)
-    processor = Processor(context, mode, store, config, storage, models, version, checkpoints, progress, cooldown, known)
+    processor = Processor(context, mode, store, config, storage, models, version, checkpoints, progress, cooldown, known,
+                          extraction_settings)
     fatal = None
     try:
         if mode == 'extract':
+            context.log('Metadata extraction settings: response timeout=' + str(extraction_settings['response_timeout_seconds'])
+                        + 's, first pages=' + str(extraction_settings['first_pages'])
+                        + ', last pages=' + str(extraction_settings['last_pages']))
             context.log(f'Metadata processing: missing metadata only; fetching batches of up to {EXTRACTION_BATCH_SIZE} publications')
             _process_extraction_batches(processor, skipped, discovery)
         else:

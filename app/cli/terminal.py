@@ -16,6 +16,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.containers import (
     ConditionalContainer,
+    DynamicContainer,
     HSplit,
     VSplit,
     Window,
@@ -43,9 +44,17 @@ from app.cli.presentation import (
     summary_text,
 )
 from app.cli.state import CLIStateStore, append_command
+from app.cli.settings import configured_metadata_options, configured_task_limit, fields_for_task
 from app.db import Database
 from app.gemini_config import load_gemini_keys, load_required_gemini_model_pool
-from app.runtime_config import config_integer, config_number, config_text
+from app.runtime_config import (
+    config_integer,
+    config_number,
+    config_text,
+    load_runtime_config,
+    runtime_config_snapshot,
+    save_runtime_config,
+)
 from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTING
 from app.settings import load_settings
 from app.task_runtime.contracts import RunOptions
@@ -96,6 +105,11 @@ class Terminal:
         self._picker_generation = 0
         self.message = "Initializing local runtime…"
         self.form_error = ""
+        self.settings_busy = False
+        self.settings_snapshot = None
+        self.settings_fields = ()
+        self.settings_controls = {}
+        self.settings_form = HSplit([])
         self._recalling_command = False
         self.prompt = TextArea(height=Dimension(min=1, max=3), multiline=False, wrap_lines=True,
                                prompt="› ", history=InMemoryHistory())
@@ -105,8 +119,7 @@ class Terminal:
         self.prompt.buffer.on_text_changed += self._prompt_changed
         self.search = TextArea(height=1, multiline=False, prompt="Search › ")
         self.search.buffer.on_text_changed += self._search_changed
-        self.limit_input = TextArea(height=1, multiline=False)
-        self.save_button = Button("Save", handler=self._save_settings, width=8)
+        self.save_button = Button("Save defaults", handler=self._save_settings, width=16)
         self.cancel_button = Button("Cancel", handler=self._dismiss, width=8)
         self.picker_control = FormattedTextControl(self._picker_text)
         picker = ConditionalContainer(HSplit([
@@ -114,16 +127,8 @@ class Terminal:
             ConditionalContainer(self.search, filter=Condition(lambda: self.mode in ("task", "history"))),
             Window(self.picker_control, height=Dimension(min=1, max=6), wrap_lines=True),
         ]), filter=Condition(lambda: self.mode in ("commands", "task", "history")))
-        form = ConditionalContainer(HSplit([
-            Label(lambda: f"Settings · {self.task.title if self.task else ''}"),
-            Label("Candidate limit (blank = unlimited)"), self.limit_input,
-            ConditionalContainer(
-                Window(FormattedTextControl(lambda: [("class:warning", self.form_error)]),
-                       height=Dimension(min=1, max=3), wrap_lines=True),
-                filter=Condition(lambda: bool(self.form_error)),
-            ),
-            VSplit([self.save_button, self.cancel_button], padding=1),
-        ]), filter=Condition(lambda: self.mode == "settings"))
+        form = ConditionalContainer(DynamicContainer(lambda: self.settings_form),
+                                    filter=Condition(lambda: self.mode == "settings"))
         self.layout = Layout(HSplit([
             Window(FormattedTextControl(self._activity_text), height=Dimension(min=1),
                    dont_extend_height=True, wrap_lines=True),
@@ -136,7 +141,7 @@ class Terminal:
             layout=self.layout, key_bindings=self._keys(), full_screen=False,
             refresh_interval=0.2, min_redraw_interval=0.05,
             style=Style.from_dict({"selected": "bold ansicyan", "disabled": "ansibrightblack",
-                                  "warning": "ansiyellow", "activity": "ansigreen"}),
+                                  "warning": "ansiyellow", "activity": "ansigreen", "setting": "bg:ansibrightblack"}),
         )
 
     @property
@@ -145,7 +150,7 @@ class Terminal:
 
     @property
     def locked(self):
-        return self.foreground is not None or self.closing
+        return self.foreground is not None or self.closing or self.settings_busy
 
     def _spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -260,7 +265,7 @@ class Terminal:
 
     def _hint_text(self):
         if self.mode == "settings":
-            hint = "Tab move · Enter/Ctrl-S save · Esc cancel"
+            hint = "Tab move · ↑↓ adjust · Enter next · Ctrl-S save · Esc cancel"
         elif self.mode in ("task", "history", "commands"):
             hint = "↑↓ select · Enter choose · Esc dismiss"
         elif self.stopping or self.closing:
@@ -313,7 +318,9 @@ class Terminal:
         @keys.add("tab", filter=editing)
         @keys.add("s-tab", filter=editing)
         def form_tab(event):
-            targets = [self.limit_input, self.save_button, self.cancel_button]
+            if self.settings_busy:
+                return
+            targets = self._settings_targets()
             current = next((i for i, target in enumerate(targets) if self.layout.has_focus(target)), 0)
             step = -1 if event.key_sequence[0].key == "s-tab" else 1
             self.layout.focus(targets[(current + step) % len(targets)])
@@ -324,10 +331,35 @@ class Terminal:
 
         @keys.add("enter", filter=editing)
         def form_enter(event):
+            if self.settings_busy:
+                return
             if self.layout.has_focus(self.cancel_button):
                 self._dismiss()
-            else:
+            elif self.layout.has_focus(self.save_button):
                 self._save_settings()
+            else:
+                targets = self._settings_targets()
+                current = next((i for i, target in enumerate(targets) if self.layout.has_focus(target)), 0)
+                self.layout.focus(targets[(current + 1) % len(targets)])
+
+        @keys.add("up", filter=editing)
+        @keys.add("down", filter=editing)
+        def form_adjust(event):
+            if self.settings_busy:
+                return
+            for field in self.settings_fields:
+                control = self.settings_controls[field.option]
+                if self.layout.has_focus(control):
+                    try:
+                        value = field.parse(control.text)
+                    except ValueError:
+                        return
+                    value = (value if value is not None else 0) + (-1 if event.key_sequence[0].key == "down" else 1)
+                    if field.allow_blank and value < field.minimum:
+                        control.text = ""
+                    else:
+                        control.text = str(max(field.minimum, min(value, field.maximum) if field.maximum is not None else value))
+                    return
 
         @keys.add("escape")
         def dismiss(event):
@@ -340,6 +372,8 @@ class Terminal:
         return keys
 
     def _dismiss(self):
+        if self.settings_busy:
+            return
         self._picker_generation += 1
         self.mode = ""
         self.form_error = ""
@@ -360,7 +394,7 @@ class Terminal:
                 self._submit_command(f"/{value.name}")
         elif mode == "task":
             if self.locked:
-                self.message = "Task selection is locked until the foreground run finishes."
+                self.message = "Wait for the current run or settings save to finish."
                 return
             self.selected_id = value.task_id
             self._spawn(self._persist_cli_state("selection", {"task_id": value.task_id}))
@@ -395,7 +429,7 @@ class Terminal:
 
     async def _select_task(self, _argument):
         if self.locked:
-            await self._say("Task selection is locked until the foreground run finishes.")
+            await self._say("Wait for the current run or settings save to finish.")
             return
         self.mode = "task"
         self.search.text = ""
@@ -406,33 +440,100 @@ class Terminal:
         if self.locked:
             await self._say("Settings require an idle task.")
             return
-        options = self.options[self.task.task_id]
-        self.limit_input.text = str(options.limit) if options.limit is not None else ""
+        self.settings_busy = True
+        try:
+            snapshot = await asyncio.to_thread(runtime_config_snapshot)
+            if self.closing:
+                return
+            task = self.task
+            options = self.options[task.task_id]
+            if not task.requires_full_inventory:
+                options = replace(options, limit=configured_task_limit(snapshot[2], task.task_id))
+            if task.task_id == "library.metadata_extract":
+                options = replace(options, **configured_metadata_options(snapshot[2]))
+            self.settings_snapshot = snapshot
+            self.settings_fields = fields_for_task(task)
+            self.settings_controls = {}
+            rows = []
+            for field in self.settings_fields:
+                value = getattr(options, field.option)
+                control = TextArea(text=str(value) if value is not None else "", height=1, multiline=False,
+                                   width=Dimension(min=8, preferred=12, max=18), style="class:setting",
+                                   read_only=Condition(lambda: self.settings_busy))
+                control.buffer.on_text_changed += self._setting_changed
+                self.settings_controls[field.option] = control
+                rows.append(DynamicContainer(lambda field=field, control=control:
+                    HSplit([Label(field.label), control]) if self.app.output.get_size().columns < 55
+                    else VSplit([Label(field.label, width=29), control], padding=2)))
+            self.settings_form = HSplit([
+                Label(f"Settings · {task.title}"),
+                Label("Saved defaults · apply to future runs and survive restarts"),
+                Window(FormattedTextControl(lambda: [("class:disabled", "Config: " + redact(str(snapshot[0])))]),
+                       height=Dimension(min=1, max=2), wrap_lines=True),
+                *rows,
+                Window(FormattedTextControl(self._setting_hint), height=Dimension(min=1, max=3), wrap_lines=True),
+                ConditionalContainer(Window(FormattedTextControl(lambda: [("class:warning", self.form_error)]),
+                                            height=Dimension(min=1, max=3), wrap_lines=True),
+                                     filter=Condition(lambda: bool(self.form_error))),
+                VSplit([self.save_button, self.cancel_button] if self.settings_fields else [self.cancel_button], padding=2),
+            ])
+            self.form_error = ""
+            self.mode = "settings"
+            self.layout.focus(self._settings_targets()[0])
+        finally:
+            self.settings_busy = False
+
+    def _settings_targets(self):
+        controls = list(self.settings_controls.values())
+        return controls + ([self.save_button] if self.settings_fields else []) + [self.cancel_button]
+
+    def _setting_hint(self):
+        if self.settings_busy:
+            return [("class:disabled", "Saving defaults…")]
+        for field in self.settings_fields:
+            if self.layout.has_focus(self.settings_controls[field.option]):
+                return [("class:disabled", field.hint)]
+        return [("class:disabled", "This task requires the complete inventory; no editable run defaults."
+                 if not self.settings_fields else "Save defaults writes the config file. Cancel leaves it unchanged.")]
+
+    def _setting_changed(self, _buffer):
         self.form_error = ""
-        self.mode = "settings"
-        self.layout.focus(self.limit_input)
+        self.app.invalidate()
 
     def _save_settings(self):
+        if self.settings_busy or not self.settings_fields:
+            return
         try:
             if self.locked:
                 raise ValueError("Settings are locked until the foreground run finishes")
-            limit = self.limit_input.text.strip()
-            if limit and (not limit.isascii() or not limit.isdigit()):
-                raise ValueError("Limit must be a positive integer or blank")
-            if self.task.requires_full_inventory and limit:
-                raise ValueError(f"{self.task.title} requires the complete inventory; leave limit blank")
-            self.options[self.task.task_id] = replace(
-                self.options[self.task.task_id], limit=int(limit) if limit else None,
-            )
+            values = {}
+            for field in self.settings_fields:
+                self.layout.focus(self.settings_controls[field.option])
+                values[field.option] = field.parse(self.settings_controls[field.option].text)
+            options = replace(self.options[self.task.task_id], **values)
         except ValueError as exc:
             self.form_error = str(exc)
             return
-        self._dismiss()
-        self._spawn(self._say("Settings saved for the next run. Use /run to start."))
+        changes = {field.path: values[field.option] for field in self.settings_fields}
+        self.settings_busy = True
+        self._spawn(self._commit_settings(self.task, options, changes, self.settings_snapshot))
+
+    async def _commit_settings(self, task, options, changes, snapshot):
+        try:
+            await asyncio.to_thread(save_runtime_config, path=snapshot[0], revision=snapshot[1], changes=changes)
+        except Exception as exc:
+            self.form_error = redact(exc)
+        else:
+            self.options[task.task_id] = options
+            self.settings_busy = False
+            self._dismiss()
+            await self._say(f"Defaults saved · {task.title}. Changes survive restarts. Use /run to start.")
+        finally:
+            self.settings_busy = False
 
     async def _start(self, _argument):
         if self.locked:
-            await self._say("A foreground run is still active or finalizing; wait for its result.")
+            await self._say("Wait for the current run or settings save to finish.")
             return
         task = self.task
         # Claim the slot before any await, including printing or start_task I/O.
@@ -567,7 +668,9 @@ class Terminal:
             self._force_exit()
         elif self.foreground:
             self._request_stop()
-        elif self.mode == "settings" and self.limit_input.text:
+        elif self.settings_busy:
+            self._request_exit()
+        elif self.mode == "settings":
             self._dismiss()
         elif self.mode in ("task", "history") and self.search.text:
             self.search.text = ""
@@ -774,16 +877,23 @@ class Terminal:
         try:
             self.descriptors, self.selected_id, self._command_history = await asyncio.to_thread(self._initialize)
             self.descriptors.sort(key=lambda item: (item.group, item.title))
+            config = await asyncio.to_thread(load_runtime_config)
             for task in self.descriptors:
                 extraction = task.task_id == "library.extract_non_pdf"
+                metadata_options = configured_metadata_options(config) if task.task_id == "library.metadata_extract" else {}
+                saved_limit = configured_task_limit(config, task.task_id)
+                if task.requires_full_inventory and saved_limit is not None:
+                    raise ValueError(f"{task.title} requires the complete inventory; remove its saved candidate limit")
                 source_cohort = task.task_id == self.arguments.task and task.task_id in {
                     "library.extract_non_pdf", "library.generate_book_previews",
                 }
                 self.options[task.task_id] = RunOptions(
-                    limit=None if task.requires_full_inventory else self.arguments.limit,
+                    limit=None if task.requires_full_inventory else (
+                        self.arguments.limit if self.arguments.limit is not None else saved_limit),
                     per_mime_limit=self.arguments.per_mime_limit if extraction else None,
                     retry_known_failures=self.arguments.retry_known_failures if source_cohort else False,
                     only_md5s=tuple(dict.fromkeys(self.arguments.only_md5)) if source_cohort else (),
+                    **metadata_options,
                 )
             # Reset the toolkit loader while retaining the draft and commands
             # entered during initialization. History is never auto-submitted.

@@ -7,7 +7,7 @@ DEFINE_META_PROMPT_PDF_HEADER = """
 
 You are an expert in extracting bibliographic metadata using Schema.org in compact JSON-LD format.
 
-You are given a PDF document that contains the first {n} and last {n} pages of a book.
+You are given a PDF containing {page_count} unique pages selected from up to the first {first_pages} and last {last_pages} pages of the source document, in source order. Overlapping selections appear only once.
 """
 
 DEFINE_META_PROMPT_NON_PDF_HEADER = """

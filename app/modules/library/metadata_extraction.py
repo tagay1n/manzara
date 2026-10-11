@@ -38,7 +38,7 @@ from app.modules.library.runtime.metadata.schema import Book
 from app.modules.library.upstream_metadata import sanitize_upstream_metadata
 from app.runtime_config import config_integer
 
-PROMPT_VERSION = "prompt.v7"
+PROMPT_VERSION = "prompt.v8"
 _SUPPORTING_METADATA_FIELDS = (
     "author",
     "contributor",
@@ -109,9 +109,11 @@ class MetadataRequest:
     files: Mapping[Path, str]
 
 
-def select_pdf_pages(page_count: int, *, edge_pages: int | None = None) -> list[int]:
+def select_pdf_pages(page_count: int, *, first_pages: int | None = None, last_pages: int | None = None) -> list[int]:
     """Return unique first/last PDF page indexes in source order."""
-    return select_edge_pages(page_count, edge_pages=config_integer("metadata", "pdf_edge_pages") if edge_pages is None else edge_pages)
+    return select_edge_pages(page_count,
+        first_pages=config_integer("metadata", "first_pages", minimum=0) if first_pages is None else first_pages,
+        last_pages=config_integer("metadata", "last_pages", minimum=0) if last_pages is None else last_pages)
 
 
 def _filename_hint(source_filename: str | None) -> dict[str, str] | None:
@@ -178,12 +180,15 @@ def build_text_prompt(
 def build_pdf_prompt(
     slice_page_count: int,
     *,
+    first_pages: int,
+    last_pages: int,
     upstream_metadata: Mapping[str, Any] | None = None,
     source_filename: str | None = None,
 ) -> list[dict[str, str]]:
     """Build the monocorpus prompt for a representative PDF slice."""
     prompt = [
-        {"text": DEFINE_META_PROMPT_PDF_HEADER.format(n=int(slice_page_count / 2))},
+        {"text": DEFINE_META_PROMPT_PDF_HEADER.format(
+            page_count=slice_page_count, first_pages=first_pages, last_pages=last_pages)},
         {"text": DEFINE_META_PROMPT_BODY},
         {"text": DEFINE_META_PROMPT_TT_FOOTER},
     ]
@@ -214,7 +219,7 @@ def load_text_slice(
             return handle.read(config_integer("metadata", "text_slice_chars"))
 
 
-def create_pdf_slice(source: Path, destination: Path, *, edge_pages: int | None = None) -> int:
+def create_pdf_slice(source: Path, destination: Path, *, first_pages: int | None = None, last_pages: int | None = None) -> int:
     """Create a first/last-page PDF slice and return its page count."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -226,7 +231,7 @@ def create_pdf_slice(source: Path, destination: Path, *, edge_pages: int | None 
             raise PasswordProtectedDocumentError(
                 f"Password-protected PDF cannot be read: {source}"
             )
-        pages = select_pdf_pages(pdf.page_count, edge_pages=edge_pages)
+        pages = select_pdf_pages(pdf.page_count, first_pages=first_pages, last_pages=last_pages)
         if not pages:
             raise CorruptDocumentError(
                 "pdf_page_tree", f"PDF has no usable pages: {source}"
@@ -247,6 +252,8 @@ def prepare_metadata_request(
     workspace: Path,
     storage: DocumentStorageSettings,
     primary_s3: Any,
+    first_pages: int,
+    last_pages: int,
 ) -> MetadataRequest:
     """Prepare one text or shared-cache-backed PDF request."""
     is_djvu = candidate.mime_type == "image/vnd.djvu"
@@ -282,14 +289,16 @@ def prepare_metadata_request(
     )
     slice_path = doc_dir / "slice-for-meta.pdf"
     page_count = (
-        create_djvu_slice(source, slice_path, edge_pages=config_integer("metadata", "djvu_edge_pages"))
+        create_djvu_slice(source, slice_path, first_pages=first_pages, last_pages=last_pages)
         if is_djvu
-        else create_pdf_slice(source, slice_path)
+        else create_pdf_slice(source, slice_path, first_pages=first_pages, last_pages=last_pages)
     )
     return MetadataRequest(
         tuple(
             build_pdf_prompt(
                 page_count,
+                first_pages=first_pages,
+                last_pages=last_pages,
                 upstream_metadata=candidate.upstream_metadata,
                 source_filename=candidate.source_filename,
             )

@@ -16,10 +16,14 @@ class DjvuToolError(RuntimeError):
     """DjVu rendering could not run reliably on this host."""
 
 
-def select_edge_pages(page_count: int, *, edge_pages: int) -> list[int]:
-    count = max(0, int(page_count))
-    edge = max(1, int(edge_pages))
-    return sorted(set(range(min(edge, count))) | set(range(max(0, count - edge), count)))
+def select_edge_pages(page_count: int, *, first_pages: int, last_pages: int) -> list[int]:
+    for name, value in (("page_count", page_count), ("first_pages", first_pages), ("last_pages", last_pages)):
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{name} must be a nonnegative integer")
+    if first_pages + last_pages == 0:
+        raise ValueError("Select at least one first or last page")
+    return sorted(set(range(min(first_pages, page_count)))
+                  | set(range(max(0, page_count - last_pages), page_count)))
 
 
 def _run_djvu_command(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -41,7 +45,7 @@ def _run_djvu_command(command: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def create_djvu_slice(
-    source: Path, destination: Path, *, edge_pages: int
+    source: Path, destination: Path, *, first_pages: int, last_pages: int
 ) -> int:
     """Render unique edge pages from DjVu into a PDF and return their count."""
     result = _run_djvu_command(["djvused", str(source), "-e", "n"])
@@ -51,7 +55,7 @@ def create_djvu_slice(
         page_count = int(result.stdout.strip())
     except ValueError as exc:
         raise CorruptDocumentError("djvu_page_tree", "Invalid DjVu page count") from exc
-    pages = select_edge_pages(page_count, edge_pages=edge_pages)
+    pages = select_edge_pages(page_count, first_pages=first_pages, last_pages=last_pages)
     if not pages:
         raise CorruptDocumentError("djvu_page_tree", "DjVu has no usable pages")
 

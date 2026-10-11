@@ -12,7 +12,7 @@ python3 -m venv .venv
 .venv/bin/python -m app
 ```
 
-Execution requires a terminal; `--help` needs no configuration. Launch restores the last selected task, including tasks selected without running them. `--task TASK_ID` overrides and updates that selection; without a saved registered task, YAML `terminal.initial_task` supplies the default. `--limit N` sets the candidate limit; limits and other run options remain session-specific. Launch always remains idle until `/run`.
+Execution requires a terminal; `--help` needs no configuration. Launch restores the last selected task, including tasks selected without running them. `--task TASK_ID` overrides and updates that selection; without a saved registered task, YAML `terminal.initial_task` supplies the default. YAML `terminal.task_limits` supplies per-task candidate limits; omitted/null entries mean unlimited. `--limit N` overrides them for this launch; `/settings` can save the selected task's limit as a new default. Cohort/retry flags remain session-specific. Launch always remains idle until `/run`.
 
 | Interactive task ID | Contract / controls |
 | --- | --- |
@@ -34,7 +34,7 @@ Daily cleanup preparation and Yandex Sync use `python scripts/run_daily_maintena
 | Command | Behavior |
 | --- | --- |
 | `/task` | Search/select a task without starting it |
-| `/settings` | Edit limit; preserve cohort/retry options |
+| `/settings` | Save selected task's defaults to private YAML; Extract metadata also offers response timeout and first/last page counts; preserve cohort/retry options |
 | `/run` | Start/resume selected task |
 | `/stop` | Stop safely and remain open |
 | `/history` | Inspect selected task's latest 20 runs |
@@ -44,7 +44,9 @@ Daily cleanup preparation and Yandex Sync use `python scripts/run_daily_maintena
 | `/help` | Show commands and keyboard guidance |
 | `/quit` | Stop safely, drain output, exit |
 
-Type `/` for completion; arrows navigate, Enter chooses, Tab completes, Esc dismisses. Task/history pickers support search and scrolling; long labels wrap. Settings use Tab for focus, Enter/Ctrl-S to save, Esc to cancel. Outside pickers, Up/Down recall commands and restore unfinished input after the newest entry. Valid slash commands survive restarts, retaining the latest 1,000 entries and skipping consecutive duplicates. Unrecognized input stays in current-session recall only. Ordinary text, including `q`, is never executed as a shell command.
+Type `/` for completion; arrows navigate, Enter chooses, Tab completes, Esc dismisses. Task/history pickers support search and scrolling; long labels wrap. Settings use Tab/Shift-Tab to move, Up/Down to adjust numbers, Enter to advance or activate a button, Ctrl-S to save, and Esc to cancel. The focused field shows units/ranges/help; invalid input keeps the form open and focuses the field. Outside pickers, Up/Down recall commands and restore unfinished input after the newest entry. Valid slash commands survive restarts, retaining the latest 1,000 entries and skipping consecutive duplicates. Unrecognized input stays in current-session recall only. Ordinary text, including `q`, is never executed as a shell command.
+
+`/settings` belongs to the selected task. Save defaults writes the selected private YAML (`config.yaml` or `MANZARA_CONFIG_PATH`), preserves comments and unrelated values, and survives restarts. Cancel changes nothing. Saving requires an idle task; failed writes leave the form open without applying options, and external edits require reopening the form. Candidate limits are saved under `terminal.task_limits`; complete-inventory tasks offer no candidate limit. Extract metadata edits YAML `metadata.response_timeout_seconds`, `first_pages`, and `last_pages` directly. Response timeout is an integer from 1 to 900 seconds, covering generation start through the complete streamed Gemini response; preparation, uploads, provider waits, cleanup, and catalog saves are outside it. A timeout defers the publication for retry without consuming a content attempt. First/last counts are nonnegative integers with at least one page selected; visual PDF/DjVu evidence uses unique pages in source order. Text evidence retains its separate YAML character limit. Evaluation has separate evidence settings. Run summaries retain the effective extraction settings.
 
 Gemini exhaustion persists across quota-day rollover and restarts until `/reset`; requests have no midnight blackout. Reset preserves temporary cooldowns, model pauses, request spacing, leases, counters, and error history. It does not restart a finished/deferred task; use `/run` to resume. Provider errors after a reset can exhaust keys again. Both commands use local SQLite state without calling Gemini.
 

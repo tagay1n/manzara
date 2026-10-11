@@ -9,4 +9,5 @@ _artifacts/
 config.yaml
 config.local.yaml
 config copy.yaml
+.manzara-config-*.tmp
 .idea

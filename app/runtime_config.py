@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
+import tempfile
 from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
@@ -128,13 +130,7 @@ def _read_config(path: Path, signature: tuple[int, int, int]) -> Any:
 
 def load_runtime_config() -> Dict[str, Any]:
     """Load one explicit local YAML file; environment selects only its path."""
-    override = str(os.environ.get("MANZARA_CONFIG_PATH") or "").strip()
-    repo_root = Path(__file__).resolve().parent.parent
-    path = Path(override).expanduser() if override else repo_root / "config.yaml"
-    if path.resolve() == (repo_root / "config.example.yaml").resolve():
-        raise ValueError(
-            "config.example.yaml is documentation, not runtime configuration"
-        )
+    path = runtime_config_path()
     try:
         stat = path.stat()
         payload = deepcopy(
@@ -144,8 +140,121 @@ def load_runtime_config() -> Dict[str, Any]:
         raise RuntimeError(
             "Cannot read runtime config; provide config.yaml or MANZARA_CONFIG_PATH"
         ) from None
+    return _validate_config(payload)
+
+
+def runtime_config_path() -> Path:
+    """Resolve the single selected private YAML, including symlink targets."""
+    override = str(os.environ.get("MANZARA_CONFIG_PATH") or "").strip()
+    repo_root = Path(__file__).resolve().parent.parent
+    path = (Path(override).expanduser() if override else repo_root / "config.yaml").resolve()
+    if path == (repo_root / "config.example.yaml").resolve():
+        raise ValueError(
+            "config.example.yaml is documentation, not runtime configuration"
+        )
+    return path
+
+
+def _validate_config(payload: Any) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Runtime configuration must be a YAML mapping")
     if _contains_redacted(payload):
         raise ValueError("Replace masked runtime configuration values")
     return payload
+
+
+def _parse_config(source: str) -> dict:
+    try:
+        return _validate_config(yaml.load(source, Loader=RuntimeConfigLoader))
+    except yaml.YAMLError:
+        raise ValueError("Runtime configuration must be valid UTF-8 YAML (values suppressed)") from None
+
+
+def runtime_config_snapshot() -> tuple[Path, str, dict]:
+    """Read editable configuration and an opaque revision without logging values."""
+    path = runtime_config_path()
+    try:
+        source = path.read_bytes()
+        return path, hashlib.sha256(source).hexdigest(), _parse_config(source.decode("utf-8"))
+    except UnicodeError:
+        raise ValueError("Runtime configuration must be valid UTF-8 YAML (values suppressed)") from None
+    except OSError:
+        raise RuntimeError("Cannot read the selected private configuration") from None
+
+
+def _config_node(root, keys):
+    node = root
+    for key in keys:
+        if not isinstance(node, yaml.MappingNode):
+            raise ValueError(f"Config setting is not a mapping: {'.'.join(keys)}")
+        node = next((value for name, value in node.value if name.value == key), None)
+        if node is None:
+            raise ValueError(f"Missing required config value: {'.'.join(keys)}")
+    return node
+
+
+def save_runtime_config(*, path: Path, revision: str, changes: dict[tuple[str, ...], Any]) -> None:
+    """Atomically replace declared YAML values, preserving other bytes and comments."""
+    if path != runtime_config_path():
+        raise ValueError("Selected configuration changed; reopen /settings")
+    temporary = None
+    try:
+        original = path.read_bytes()
+        if hashlib.sha256(original).hexdigest() != revision:
+            raise ValueError("Configuration changed outside this form; reopen /settings")
+        source = original.decode("utf-8")
+        payload = _parse_config(source)
+        root = yaml.compose(source, Loader=RuntimeConfigLoader)
+        edits = []
+        for keys, value in changes.items():
+            if value is not None and type(value) is not int:
+                raise ValueError(f"Cannot edit config value: {'.'.join(keys)}")
+            replacement = "null" if value is None else str(value)
+            parent = payload
+            for key in keys[:-1]:
+                parent = parent[key]
+            parent_node = _config_node(root, keys[:-1])
+            if not isinstance(parent_node, yaml.MappingNode):
+                raise ValueError(f"Config setting is not a mapping: {'.'.join(keys[:-1])}")
+            node = next((child for key, child in parent_node.value if key.value == keys[-1]), None)
+            if node is not None:
+                if not isinstance(node, yaml.ScalarNode):
+                    raise ValueError(f"Config setting must be a scalar: {'.'.join(keys)}")
+                if node.start_mark.index == node.end_mark.index:
+                    replacement = " " + replacement
+                edits.append((node.start_mark.index, node.end_mark.index, replacement))
+            elif parent_node.flow_style:
+                values = {**parent, keys[-1]: value}
+                replacement = yaml.safe_dump(values, default_flow_style=True, width=100000).strip()
+                edits.append((parent_node.start_mark.index, parent_node.end_mark.index, replacement))
+            else:
+                last = parent_node.value[-1][1]
+                position = source.find("\n", last.end_mark.index)
+                prefix = "\n" if position < 0 else ""
+                position = len(source) if position < 0 else position + 1
+                newline = "\r\n" if "\r\n" in source else "\n"
+                replacement = f"{prefix}{' ' * parent_node.start_mark.column}{keys[-1]}: {replacement}{newline}"
+                edits.append((position, position, replacement))
+            parent[keys[-1]] = value
+        for start, end, replacement in sorted(edits, reverse=True):
+            source = source[:start] + replacement + source[end:]
+        if _parse_config(source) != payload:
+            raise ValueError("Cannot preserve configuration structure while saving")
+        descriptor, name = tempfile.mkstemp(prefix=".manzara-config-", suffix=".tmp", dir=path.parent)
+        temporary = Path(name)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(source.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(path.stat().st_mode & 0o777)
+        if path.read_bytes() != original:
+            raise ValueError("Configuration changed while saving; reopen /settings")
+        os.replace(temporary, path)
+        _read_config.cache_clear()
+    except yaml.YAMLError:
+        raise ValueError("Cannot preserve YAML structure while saving (values suppressed)") from None
+    except (OSError, UnicodeError):
+        raise RuntimeError("Cannot save private configuration; check its file and directory permissions") from None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)

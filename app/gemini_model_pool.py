@@ -92,6 +92,7 @@ def run_ordered_model_pool(
     run_id: int | None,
     already_attempted: Collection[str] = (),
     yield_on_transient: bool = False,
+    yield_on_timeout: bool = False,
 ) -> GeminiModelPoolResult[T]:
     """Use shared ready-model rotation while preserving bounded item attempts."""
     ordered = tuple(dict.fromkeys(str(m).strip() for m in models if str(m).strip()))
@@ -134,7 +135,7 @@ def run_ordered_model_pool(
         ) as exc:
             if selected is None:
                 raise GeminiModelPoolOperationalError(str(exc), retryable=True) from exc
-            if yield_on_transient:
+            if yield_on_transient or (yield_on_timeout and isinstance(exc, GeminiRequestTimeoutError)):
                 raise GeminiModelPoolOperationalError(
                     str(exc),
                     retryable=True,
