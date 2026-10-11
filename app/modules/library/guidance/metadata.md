@@ -30,7 +30,7 @@ Extraction's task-scoped `/settings` saves the Gemini response deadline (1–900
 
 Run workspaces retain `items.json` and corruption-plan artifacts. Summaries link publication outcomes, source MD5s, review IDs, and per-model attempts/successes; common stdout/progress/artifact policy lives in root/runtime rules.
 
-Extraction logs validated model-returned Schema.org as indented JSON, identified by publication ID, source MD5, and model, through shared redacted stdout logging before the guarded catalog save.
+Extraction logs validated model-returned Schema.org as indented JSON, identified by publication ID, source MD5, and model, through shared redacted stdout logging before the guarded catalog save. Evaluation logs its validated, normalized response the same way, including applicability, reason, metadata patch, DDC, and category path. These logs describe model results; the subsequent item outcome reports whether the guarded save succeeded or requires review.
 
 ## Extraction evidence and validation
 

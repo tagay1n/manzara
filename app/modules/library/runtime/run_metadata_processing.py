@@ -274,6 +274,11 @@ class Processor:
                     self.log(f'Extracted metadata publication_id={publication["publication_id"]} '
                              f'md5={source["md5"]} model={result.model_name}\n'
                              + json.dumps(schema, ensure_ascii=False, indent=2))
+                else:
+                    self.log(f'Evaluated metadata publication_id={publication["publication_id"]} '
+                             f'md5={source["md5"]} model={result.model_name}\n'
+                             + json.dumps(result.value.model_dump(mode='json', by_alias=True),
+                                          ensure_ascii=False, indent=2))
                 proposals = self.store.save(publication, source, schema, actor=self.context.task_id,
                     method=f'{result.model_name}/{self.version}', evaluation=evaluation)
                 for prior in publication['sources']:
