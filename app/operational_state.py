@@ -52,8 +52,10 @@ class OperationalStateStore:
     def keys(self, scope):
         """Snapshot local history names without loading attempt payloads."""
         with self.store.connect() as conn:
-            return [row['item_id'] for row in conn.execute(
-                'SELECT item_id FROM operational_items WHERE scope=? ORDER BY item_id', (scope,))]
+            rows = conn.execute(
+                'SELECT item_id FROM operational_items WHERE scope=? ORDER BY item_id', (scope,)
+            ).fetchall()
+        return [row['item_id'] for row in rows]
 
     def put(self, scope, item_id, payload, *, conn=None):
         if not isinstance(payload, dict):
