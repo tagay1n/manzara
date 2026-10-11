@@ -96,10 +96,13 @@ def _candidate_is_eligible(candidate, checkpoint):
     """Apply sole-local retry/content exclusions after SQL domain eligibility."""
     if not checkpoint:
         return True
-    current = (checkpoint.get('source_fingerprint') == personality_source_fingerprint(candidate)
+    source_unchanged = checkpoint.get('source_fingerprint') == personality_source_fingerprint(candidate)
+    if source_unchanged and checkpoint.get('state') == 'succeeded':
+        return False
+    current = (source_unchanged
                and checkpoint.get('prompt_version') == PERSONALITY_NORMALIZATION_PROMPT_VERSION
                and checkpoint.get('schema_version') == SCHEMA_VERSION)
-    if current and checkpoint.get('state') in {'succeeded', 'not_person', 'unusable'}:
+    if current and checkpoint.get('state') in {'not_person', 'unusable'}:
         return False
     recovered = any(isinstance(failure, dict) and failure.get('kind') == 'recovered_response'
                     for failure in _checkpoint_attempts_for_candidate(checkpoint, candidate).values())

@@ -42,15 +42,10 @@ def _text(value: Any) -> str | None:
 def _initials(value: str | None) -> str | None:
     if value is None:
         return None
-    # Explicit transliteration units discussed for this catalog: х, ш, ц, ю.
-    # They represent one initial, rather than an arbitrary multi-letter word.
-    transliterations = {"kh": "Kh", "sh": "Sh", "ts": "Ts", "ju": "Ju"}
     letter = value[:-1] if value.endswith(".") else value
-    if len(letter) == 1 and letter.isalpha():
-        return f"{letter.upper()}."
-    if letter.casefold() in transliterations:
-        return f"{transliterations[letter.casefold()]}."
-    raise ValueError("initial fields require one letter or Kh., Sh., Ts., Ju.")
+    if 1 <= len(letter) <= 2 and letter.isalpha():
+        return f"{letter[0].upper()}{letter[1:].lower()}."
+    raise ValueError("initial fields require one or two alphabetic characters")
 
 
 class PersonComponents(BaseModel):

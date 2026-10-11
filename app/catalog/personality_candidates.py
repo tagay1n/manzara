@@ -22,9 +22,10 @@ _DISCOVERY = """
 SELECT candidate.*, CASE WHEN checkpoint.raw_name IS NOT NULL THEN to_jsonb(checkpoint) END AS durable_checkpoint
 FROM ({{sources}}) candidate
 LEFT JOIN personality_normalization_checkpoints checkpoint USING(raw_name)
-WHERE NOT COALESCE(checkpoint.state IN ('succeeded','not_person','unusable')
-    AND checkpoint.source_fingerprint=candidate.source_fingerprint
-    AND checkpoint.prompt_version=:prompt_version AND checkpoint.schema_version=:schema_version,false)
+WHERE NOT COALESCE(checkpoint.source_fingerprint=candidate.source_fingerprint
+    AND (checkpoint.state='succeeded'
+        OR (checkpoint.state IN ('not_person','unusable')
+            AND checkpoint.prompt_version=:prompt_version AND checkpoint.schema_version=:schema_version)),false)
 ORDER BY CASE WHEN checkpoint.raw_name IS NULL AND NOT (candidate.raw_name=ANY(:local_names)) THEN 0 ELSE 1 END,
     casefold(candidate.raw_name COLLATE pg_unicode_fast) COLLATE "C", candidate.raw_name COLLATE "C"
 LIMIT :batch_size

@@ -40,10 +40,11 @@ An unfamiliar name, rare spelling or initials alone is not unusable.
 The sex field is only M, F,
 or null. Infer sex from the complete supplied name when the combined surname,
 given name, and father-name evidence makes it reasonably confident; otherwise
-use null. Initial fields contain one letter such as А., or a recognized Latin
-transliteration Kh., Sh., Ts., Ju. Preserve that spelling, with an uppercase first
-letter, lowercase remaining letters and one trailing dot. Never reduce Kh. to K.
-and never return several initials or arbitrary words in one field.
+use null. Each initial field represents one initial written with one or two
+alphabetic characters, such as J., Ja., Kh., Sh., Ts., Ju. Preserve the supplied
+letters, with an uppercase first letter, a lowercase second letter if present,
+and one trailing dot. Never reduce Kh. to K. or Ja. to J. Never return internal
+dots, spaces, several initials or arbitrary words in one field.
 father_name_full is the father's base given name, not an inflected patronymic. title is an honorific/rank, not
 identity. The application derives display text for normalized names.
 
