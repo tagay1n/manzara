@@ -15,6 +15,7 @@ from app.runtime_config import config_number
 from app.runtime_states import TASK_RUN_STATUS_COMPLETED, TASK_RUN_STATUS_STOPPED
 from app.task_runtime.contracts import RunOptions, TaskDescriptor
 from app.task_runtime.logging import RunLog, log_message, write_stdout
+from app.task_runtime.reporting import COMPLETION_BELL_INTERVAL_SECONDS, completion_bell_count
 from app.task_runtime.session import SessionLock
 from app.tasks import TaskRunner
 
@@ -70,8 +71,14 @@ def _run_stages(db, runner, descriptors, stop, deadline, on_result, console) -> 
         if run is None:
             raise RuntimeError(f"Run {run_id} is missing after execution")
         on_result(run)
+        failure = runner.get_run_error(run_id)
+        if sys.stdout.isatty():
+            for index in range(completion_bell_count(run, failure=failure)):
+                if index:
+                    time.sleep(COMPLETION_BELL_INTERVAL_SECONDS)
+                write_stdout("\a")
         if (run["status"] != TASK_RUN_STATUS_COMPLETED or run.get("exit_code") != 0
-                or run["summary"].get("outcome") == "deferred" or runner.get_run_error(run_id)):
+                or run["summary"].get("outcome") == "deferred" or failure):
             return 130 if stop.is_set() or run["status"] == TASK_RUN_STATUS_STOPPED else 1
     return 130 if stop.is_set() else 0
 

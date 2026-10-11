@@ -1,9 +1,25 @@
-"""Structured stdout results shared by scheduled workflow runners."""
+"""Final-result presentation shared by terminal and scheduled runners."""
 
 import json
 from typing import Any
 
+from app.runtime_states import TASK_RUN_STATUS_COMPLETED, TASK_RUN_STATUS_FAILED
 from app.task_runtime.logging import redact, write_stdout
+
+
+COMPLETION_BELL_INTERVAL_SECONDS = 0.2
+
+
+def completion_bell_count(run: dict[str, Any] | None, *, failure: str | None = None) -> int:
+    """One bell for success, two for failure, silence for deferred/stopped work."""
+    summary = (run or {}).get("summary") or {}
+    outcome = summary.get("outcome", "completed")
+    if failure or (run or {}).get("status") == TASK_RUN_STATUS_FAILED or outcome == "failed":
+        return 2
+    if (run and run.get("status") == TASK_RUN_STATUS_COMPLETED
+            and run.get("exit_code") == 0 and outcome == "completed"):
+        return 1
+    return 0
 
 
 def run_result(run: dict[str, Any]) -> dict[str, Any]:

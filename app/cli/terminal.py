@@ -49,6 +49,7 @@ from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTIN
 from app.settings import load_settings
 from app.task_runtime.contracts import RunOptions
 from app.task_runtime.logging import redact
+from app.task_runtime.reporting import COMPLETION_BELL_INTERVAL_SECONDS, completion_bell_count
 from app.task_runtime.session import SessionLock
 from app.tasks import TaskRunner
 
@@ -608,6 +609,7 @@ class Terminal:
         else:
             await self._say(summary_text(run, self.foreground.title, completion=True, failure=failure))
             await self._drain()
+        await self._signal_completion(run, failure=failure)
         self._release_foreground()
 
     async def _finish_without_snapshot(self, read_failure):
@@ -622,13 +624,24 @@ class Terminal:
         else:
             await self._say(text)
             await self._drain()
+        await self._signal_completion(None, failure=failure or read_failure)
         self._release_foreground()
         self.runtime_error = read_failure
 
-    def _release_foreground(self):
-        if self.foreground_run_id is not None and not self.output.failure:
-            # Final output has drained; stage one bell through the same writer.
+    async def _signal_completion(self, run, *, failure=None):
+        if not self.display.enable_bell:
+            return
+        for index in range(completion_bell_count(run, failure=failure)):
+            if self.output.failure:
+                return
+            if index:
+                await asyncio.sleep(COMPLETION_BELL_INTERVAL_SECONDS)
             self.display.bell()
+            # Keep physical writes on the terminal consumer and space delivered bells.
+            while self.display.pending and not self.output.failure:
+                await asyncio.sleep(config_number("terminal", "output_poll_seconds", minimum=0.001))
+
+    def _release_foreground(self):
         self.foreground = None
         self.foreground_run_id = None
         self.foreground_snapshot = None
