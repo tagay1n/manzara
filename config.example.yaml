@@ -58,6 +58,7 @@ gemini:
     capacity_poll_seconds: 1
     transient_attempts_per_model: 2
   request:
+    # Normalize personalities: task-specific /settings response deadline, 1–900 seconds.
     personality_timeout_seconds: 60
     metadata_timeout_seconds: 180
     file_activation_timeout_seconds: 60

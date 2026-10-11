@@ -49,6 +49,12 @@ class OperationalStateStore:
             ).fetchall()
         return {row["item_id"]: json.loads(row["payload_json"]) for row in rows}
 
+    def keys(self, scope):
+        """Snapshot local history names without loading attempt payloads."""
+        with self.store.connect() as conn:
+            return [row['item_id'] for row in conn.execute(
+                'SELECT item_id FROM operational_items WHERE scope=? ORDER BY item_id', (scope,))]
+
     def put(self, scope, item_id, payload, *, conn=None):
         if not isinstance(payload, dict):
             raise ValueError("operational payload must be an object")

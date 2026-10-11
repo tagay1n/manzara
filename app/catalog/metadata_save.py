@@ -6,10 +6,9 @@ from copy import deepcopy
 from pathlib import Path
 
 import psycopg2
-from psycopg2 import sql
-from psycopg2.extensions import TRANSACTION_STATUS_IDLE
 from psycopg2.extras import Json
 
+from app.catalog.command_batch import execute_catalog_batch
 from app.catalog.contracts import CatalogConflict, boolean, document_md5, nonblank
 from app.catalog.metadata import SCALARS, compose_metadata, decompose_metadata, items
 from app.catalog.metadata_store import RELATIONAL_FIELDS, comparable_credits, credit_signature, unmanaged_subjects
@@ -177,42 +176,14 @@ def _prepare(source, schema_org, *, actor, method, evaluation):
 
 def save_metadata_result(engine, schema, source, schema_org, *, actor, method, evaluation, snapshot_query):
     payload = _prepare(source, schema_org, actor=actor, method=method, evaluation=evaluation)
-    # The simple-query message has an implicit transaction spanning all its
-    # statements. Its final SELECT returns proposals before the server commits;
-    # execute() only succeeds after the complete message, including that commit.
-    statement = sql.SQL('SET TRANSACTION READ WRITE; SET LOCAL search_path TO {}, public;\n').format(sql.Identifier(schema))
-    statement += sql.SQL(_BATCH.replace('{{snapshot_query}}', snapshot_query))
-    pooled = engine.raw_connection()
-    connection = pooled.driver_connection
-    previous_autocommit = connection.autocommit
     try:
-        if connection.get_transaction_status() != TRANSACTION_STATUS_IDLE:
-            raise RuntimeError('Metadata batch requires an idle pooled PostgreSQL connection')
-        connection.autocommit = True
-        with connection.cursor() as cursor:
-            cursor.execute(statement, {
-                'payload': Json(payload, dumps=lambda value: json.dumps(value, ensure_ascii=False)),
-                'lock_timeout': f"{config_integer('postgres', 'lock_timeout_seconds') * 1000}ms",
-            })
-            proposals = cursor.fetchone()[0]
-        return proposals
+        return execute_catalog_batch(engine, schema, _BATCH.replace('{{snapshot_query}}', snapshot_query), {
+            'payload': Json(payload, dumps=lambda value: json.dumps(value, ensure_ascii=False)),
+            'lock_timeout': f"{config_integer('postgres', 'lock_timeout_seconds') * 1000}ms",
+        }, expected_errors=('MZ001', 'MZ002'))
     except psycopg2.Error as exc:
         if exc.pgcode == 'MZ001':
             raise CatalogConflict(exc.diag.message_primary) from None
         if exc.pgcode == 'MZ002':
             raise DocumentOperationBusy(exc.diag.message_primary) from None
-        # A missing commit acknowledgement is not permission to replay a write.
-        # Discard failed sessions; normal discovery reconciles durable metadata.
-        pooled.invalidate()
         raise
-    finally:
-        try:
-            if not connection.closed:
-                if connection.get_transaction_status() != TRANSACTION_STATUS_IDLE:
-                    connection.rollback()
-                connection.autocommit = previous_autocommit
-        except BaseException:
-            pooled.invalidate()
-            raise
-        finally:
-            pooled.close()

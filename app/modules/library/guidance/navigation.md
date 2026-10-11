@@ -5,7 +5,7 @@ Paths are relative to the repo root; all implementation rows below live in `app/
 | Concern | Owners |
 | --- | --- |
 | Task registration and launch | `tasks.py`, `collection_tasks.py`, `runtime/run_*.py` |
-| Normalization source reads / durable writes | `app/repositories/normalization.py`, `app/catalog/personality_normalization.py` |
+| Normalization source reads / durable writes | `app/repositories/normalization.py`, `app/catalog/personality_candidates.py` / `.sql`, `app/catalog/personality_normalization.py` / `.sql` |
 | Personality extraction and checkpoints | `personality_normalization.py`, `personality_normalization_prompt.py`, `runtime/run_normalize_personalities.py`; [contract](../../../../docs/personality-normalization.md) |
 | Publisher analysis / subprocess / proposals | `runtime/run_suggest_publisher_merges.py`, `publisher_merge_contract.py`, `publisher_codex.py`; catalog: `app/catalog/publisher_analysis.py`; database composition: `app/repositories/publisher_merges.py`; [contract](publisher-merges.md) |
 | Non-PDF orchestration / detection / checkpoints | `non_pdf_extraction.py`, `non_pdf_formats.py`, `non_pdf_types.py`, `non_pdf_repository.py`; durable catalog commands: `app/catalog/non_pdf.py`; [document rules](documents.md) |

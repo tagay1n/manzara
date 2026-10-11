@@ -19,7 +19,7 @@ from app.gemini_model_pool import (
 from app.gemini_requests import generate_structured_json
 from app.gemini_runtime import GeminiRuntimeManager, GeminiStopRequestedError
 from app.local_state import AIItemCheckpointStore
-from app.metadata_settings import resolve_metadata_settings
+from app.task_settings import resolve_task_settings
 from app.modules.library.corrupt_document import (
     CorruptDocumentError,
     build_corrupt_cleanup_plan,
@@ -52,7 +52,7 @@ from app.runtime_config import (
     required_integer,
 )
 from app.s3_transfer import create_s3_client
-from app.task_runtime.logging import redact
+from app.task_runtime.logging import format_result_json, redact
 
 EVALUATION_PROMPT_VERSION = 'prompt.v4'
 FLOWS = {'extract': 'library.metadata_extract.catalog.v1', 'evaluate': 'library.metadata_evaluate.catalog.v1'}
@@ -275,12 +275,11 @@ class Processor:
                 if self.mode == 'extract':
                     self.log(f'Extracted metadata publication_id={publication["publication_id"]} '
                              f'md5={source["md5"]} model={result.model_name}\n'
-                             + json.dumps(schema, ensure_ascii=False, indent=2))
+                             + format_result_json(schema))
                 else:
                     self.log(f'Evaluated metadata publication_id={publication["publication_id"]} '
                              f'md5={source["md5"]} model={result.model_name}\n'
-                             + json.dumps(result.value.model_dump(mode='json', by_alias=True),
-                                          ensure_ascii=False, indent=2))
+                             + format_result_json(result.value.model_dump(mode='json', by_alias=True)))
                 proposals = self.store.save(publication, source, schema, actor=self.context.task_id,
                     method=f'{result.model_name}/{self.version}', evaluation=evaluation)
                 for prior in publication['sources']:
@@ -387,7 +386,7 @@ def execute(context, *, mode):
     cooldown = _cooldown(config)
     models = load_required_gemini_model_pool()
     version = PROMPT_VERSION if mode == 'extract' else EVALUATION_PROMPT_VERSION
-    metadata_settings = resolve_metadata_settings(config, context.task_id, options=context.options)
+    metadata_settings = resolve_task_settings(config, context.task_id, options=context.options)
     version += f'/pages-{metadata_settings["first_pages"]}-{metadata_settings["last_pages"]}'
     summary['extraction_settings' if mode == 'extract' else 'evaluation_settings'] = metadata_settings
     storage = load_document_storage_settings(config)

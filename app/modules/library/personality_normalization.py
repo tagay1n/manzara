@@ -1,13 +1,12 @@
 """Pure contracts for Library personality normalization.
 
 Persistence and Gemini orchestration deliberately live in dedicated owners; this
-module keeps extraction and deterministic identity formatting independently
-testable.
+module keeps strict response contracts and deterministic identity formatting
+independent of PostgreSQL discovery.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass
 import hashlib
 import json
@@ -18,7 +17,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-_PERSON_ROLES = ("author", "editor", "translator", "illustrator", "contributor")
 _COMPONENT_FIELDS = (
     "surname_full",
     "surname_initial",
@@ -135,82 +133,6 @@ class PersonalityCandidate:
     document_languages: tuple[str, ...] = ()
 
 
-def _as_items(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else [value]
-
-
-def _types(value: dict[str, Any]) -> set[str]:
-    raw = value.get("@type", value.get("type"))
-    return {str(item).strip().casefold() for item in _as_items(raw) if str(item).strip()}
-
-
-def _person_name(value: Any) -> str | None:
-    if not isinstance(value, dict) or "person" not in _types(value):
-        return None
-    return _text(value.get("name"))
-
-
-def _relationship_people(value: Any) -> list[str]:
-    names: list[str] = []
-    for item in _as_items(value):
-        direct = _person_name(item)
-        if direct:
-            names.append(direct)
-            continue
-        if isinstance(item, dict) and "role" in _types(item):
-            for nested in _as_items(item.get("contributor")):
-                nested_name = _person_name(nested)
-                if nested_name:
-                    names.append(nested_name)
-    return names
-
-
-def _document_languages(schema_org: dict[str, Any]) -> tuple[str, ...]:
-    """Return safe BCP-47-like language hints from untrusted metadata."""
-    values = {
-        value
-        for item in _as_items(schema_org.get("inLanguage"))
-        if (value := _text(item)) and re.fullmatch(r"[A-Za-z0-9-]{1,35}", value)
-    }
-    return tuple(sorted(values, key=str.casefold))
-
-
-def extract_personality_candidates(documents: list[dict[str, Any]]) -> list[PersonalityCandidate]:
-    """Aggregate exact raw Person names from the supported JSON-LD relations."""
-    aggregate: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"documents": set(), "mentions": 0, "roles": set(), "languages": set()}
-    )
-    for document in documents:
-        schema_org = document.get("schema_org")
-        if isinstance(schema_org, str):
-            try:
-                schema_org = json.loads(schema_org)
-            except json.JSONDecodeError:
-                schema_org = None
-        if not isinstance(schema_org, dict):
-            continue
-        document_id = str(document.get("md5") or "")
-        document_languages = _document_languages(schema_org)
-        for role in _PERSON_ROLES:
-            for raw_name in _relationship_people(schema_org.get(role)):
-                item = aggregate[raw_name]
-                if document_id:
-                    item["documents"].add(document_id)
-                item["mentions"] += 1
-                item["roles"].add(role)
-                item["languages"].update(document_languages)
-    return [
-        PersonalityCandidate(
-            raw_name=raw_name,
-            document_count=len(item["documents"]),
-            mention_count=int(item["mentions"]),
-            roles=tuple(sorted(item["roles"])),
-            document_languages=tuple(sorted(item["languages"], key=str.casefold)),
-        )
-        for raw_name, item in sorted(aggregate.items(), key=lambda pair: pair[0].casefold())
-    ]
-
-
 def preprocess_personality_name_for_model(raw_name: str) -> str:
     """Repair leading OCR-confused Cyrillic З initials for model input only."""
     if not raw_name.startswith("3.") or not _CYRILLIC_NAME_WORD.search(raw_name[2:]):
@@ -282,7 +204,6 @@ __all__ = [
     "PersonalityResponse",
     "PersonalityCandidate",
     "build_canonical_name",
-    "extract_personality_candidates",
     "personality_identity_key",
     "personality_source_fingerprint",
     "preprocess_personality_name_for_model",

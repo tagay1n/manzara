@@ -7,12 +7,14 @@ Read the relevant owner and nearest `AGENTS.md`, then search symbols; do not pre
 | YAML settings/provisioning | `app/runtime_config.py`, `app/settings.py`, `scripts/prepare_workflow_config.py`, `.github/config/`; [configuration](operations.md#runtime-configuration) |
 | CLI composition/interaction | `app/__main__.py`, `app/cli/`; `task_registry.py` composes flow-owned typed registrations for CLI and scheduled stages |
 | CLI selection/command persistence | `app/cli/state.py` owns records in the existing local operational store; [local runtime state](operations.md#local-runtime-state) |
-| CLI saved task defaults | `app/cli/settings.py` owns editable numeric fields; `app/metadata_settings.py` owns independent metadata task paths and validation; `app/runtime_config.py` owns private-YAML snapshots and atomic writes; [configuration](operations.md#runtime-configuration) |
+| CLI saved task defaults | `app/cli/settings.py` owns the editor; `app/task_settings.py` owns task-specific paths, fields and validation; `app/runtime_config.py` owns private-YAML snapshots and atomic writes; [configuration](operations.md#runtime-configuration) |
 | Task contracts, session/batch lifecycle | `app/task_runtime/contracts.py`, `session.py`, `batch.py`; [task rules](../app/task_runtime/AGENTS.md) |
 | Execution, logs, artifacts, states | `app/tasks.py`, `app/task_runtime/logging.py`, `artifacts.py`, `reporting.py`, `app/runtime_states.py` |
 | PostgreSQL facade/repositories/pools | `app/db.py`, `app/repositories/`, `app/postgres_engine.py` |
 | Catalog commands/schema | `app/catalog/`; [catalog contract](catalog-model.md) |
 | Metadata extraction/evaluation atomic saves | `app/catalog/metadata_save.py`, `app/catalog/metadata_save.sql`; [metadata contract](../app/modules/library/guidance/metadata.md) |
+| Personality discovery/atomic decisions | `app/catalog/personality_candidates.py` / `.sql`, `app/catalog/personality_normalization.py` / `.sql`; [personality contract](personality-normalization.md) |
+| One-message pooled catalog commands | `app/catalog/command_batch.py`; metadata and personality commands share connection cleanup and uncertain-commit handling |
 | Preview discovery/atomic claims and publication | `app/catalog/book_previews.py`, `app/catalog/book_preview_preflight.sql`, `app/catalog/previews.py`, `app/catalog/previews.sql`; [preview contract](../app/modules/library/guidance/documents.md#sources-and-previews) |
 | Local orchestration/flow state | `app/local_state.py`, `app/operational_state.py`; personality store composition: `app/repositories/personality_checkpoints.py` |
 | Gemini quota/transport/pacing | `app/gemini_*.py`, `app/repositories/gemini*.py`; [contract](gemini-runtime.md) |

@@ -41,6 +41,10 @@ def progress_text(run: dict, width: int) -> str:
     total = progress.get("total")
     current = progress.get("current", 0) if run.get("task_id") == "library.extract_non_pdf" else progress.get("resolved", progress.get("current", 0))
     if not isinstance(total, int) or isinstance(total, bool) or total <= 0:
+        if (run.get('task_id') == 'library.normalize_personalities'
+                and type(current) is int and type(progress.get('eligible_total')) is int):
+            return (f"processing · {current} resolved · {progress['eligible_total']} eligible so far" if width >= 70
+                    else f"{current} resolved")
         return str(progress.get("phase") or "working")
     if not isinstance(current, int) or isinstance(current, bool):
         return str(progress.get("phase") or "working")
@@ -81,7 +85,13 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
         if all(type(settings.get(name)) is int for name in ("response_timeout_seconds", "first_pages", "last_pages")):
             lines.append(f"Gemini response timeout: {settings['response_timeout_seconds']}s · "
                          f"first pages: {settings['first_pages']} · last pages: {settings['last_pages']}")
-    keys = (("total", "eligible_total", "processed", "succeeded", "not_person", "unusable", "skipped", "failed", "deferred", "remaining")
+    if run.get("task_id") == "library.normalize_personalities":
+        timeout = summary.get("response_timeout_seconds", options.get("personality_response_timeout_seconds"))
+        if type(timeout) is int:
+            lines.append(f"Gemini response timeout: {timeout}s")
+        if summary.get("limit_reached"):
+            lines.append("Candidate limit reached; the remaining catalog count is unknown.")
+    keys = (("total", "discovered", "eligible_total", "processed", "succeeded", "not_person", "unusable", "skipped", "failed", "deferred", "remaining")
             if summary.get("kind") == "library.personality_normalization_summary"
             else ("cluster_count", "singleton_count", "unresolved_count", "conflicting_groups", "new_proposals")
             if summary.get("kind") == "library.publisher_merge_summary"
@@ -95,7 +105,7 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
             else ("total", "processed", "ready", "failed", "skipped", "selected_pages", "uploaded_objects")
             if summary.get("kind") == "library.catalog_preview_summary"
             else ("total", "processed", "ready", "failed", "deferred", "unsupported", "corrupted", "checkpoint_raced"))
-    counts = [f"{key.replace('_', ' ')}: {summary[key]}" for key in keys if key in summary]
+    counts = [f"{key.replace('_', ' ')}: {summary[key]}" for key in keys if key in summary and summary[key] is not None]
     if not counts:
         counts = [f"{key}: {value}" for key, value in (run.get("progress") or {}).items()
                   if isinstance(value, int) and not isinstance(value, bool) and key != "percent"]

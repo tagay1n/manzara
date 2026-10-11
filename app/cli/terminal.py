@@ -44,7 +44,8 @@ from app.cli.presentation import (
     summary_text,
 )
 from app.cli.state import CLIStateStore, append_command
-from app.cli.settings import configured_metadata_options, configured_task_limit, fields_for_task
+from app.cli.settings import configured_task_limit, fields_for_task
+from app.task_settings import configured_task_options
 from app.db import Database
 from app.gemini_config import load_gemini_keys, load_required_gemini_model_pool
 from app.runtime_config import (
@@ -449,7 +450,7 @@ class Terminal:
             options = self.options[task.task_id]
             if not task.requires_full_inventory:
                 options = replace(options, limit=configured_task_limit(snapshot[2], task.task_id))
-            options = replace(options, **configured_metadata_options(snapshot[2], task.task_id))
+            options = replace(options, **configured_task_options(snapshot[2], task.task_id))
             self.settings_snapshot = snapshot
             self.settings_fields = fields_for_task(task)
             self.settings_controls = {}
@@ -879,7 +880,7 @@ class Terminal:
             config = await asyncio.to_thread(load_runtime_config)
             for task in self.descriptors:
                 extraction = task.task_id == "library.extract_non_pdf"
-                metadata_options = configured_metadata_options(config, task.task_id)
+                task_options = configured_task_options(config, task.task_id)
                 saved_limit = configured_task_limit(config, task.task_id)
                 if task.requires_full_inventory and saved_limit is not None:
                     raise ValueError(f"{task.title} requires the complete inventory; remove its saved candidate limit")
@@ -892,7 +893,7 @@ class Terminal:
                     per_mime_limit=self.arguments.per_mime_limit if extraction else None,
                     retry_known_failures=self.arguments.retry_known_failures if source_cohort else False,
                     only_md5s=tuple(dict.fromkeys(self.arguments.only_md5)) if source_cohort else (),
-                    **metadata_options,
+                    **task_options,
                 )
             # Reset the toolkit loader while retaining the draft and commands
             # entered during initialization. History is never auto-submitted.

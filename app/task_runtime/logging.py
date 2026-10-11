@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import re
+import json
 import threading
 import sys
 from typing import Callable, Iterator, Protocol
@@ -23,6 +24,11 @@ class RunLogSink(Protocol):
 
 LOG_SINK: ContextVar[RunLogSink | None] = ContextVar("manzara_run_log", default=None)
 _STDOUT_LOCK = threading.Lock()
+
+
+def format_result_json(value: object) -> str:
+    """Pretty-print a validated result before routing it through redacted logging."""
+    return json.dumps(value, ensure_ascii=False, indent=2)
 
 
 _LOG_REDACTION_PATTERNS = (
