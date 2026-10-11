@@ -53,6 +53,46 @@ def _ready_candidate(
 class GeminiRepository(GeminiPacingRepository):
     """Machine-local SQLite operations for Gemini coordination."""
 
+    def get_gemini_exhaustion_counts(
+        self, *, key_ids: Sequence[str], models: Sequence[str]
+    ) -> Dict[str, int]:
+        """Read recorded exhaustion for the supplied configured keys/models."""
+        counts = dict.fromkeys(models, 0)
+        if not key_ids or not models:
+            return counts
+        key_placeholders = ",".join("?" for _ in key_ids)
+        model_placeholders = ",".join("?" for _ in models)
+        with self._runtime_connect() as conn:
+            rows = conn.execute(
+                f"""SELECT model_name, COUNT(*) AS exhausted_count
+                    FROM gemini_key_model_state
+                    WHERE key_id IN ({key_placeholders})
+                      AND model_name IN ({model_placeholders}) AND exhausted=1
+                    GROUP BY model_name""",
+                (*key_ids, *models),
+            ).fetchall()
+        counts.update({row["model_name"]: int(row["exhausted_count"]) for row in rows})
+        return counts
+
+    def reset_gemini_exhaustion(
+        self, *, key_ids: Sequence[str], models: Sequence[str]
+    ) -> int:
+        """Atomically clear only exhaustion for the supplied configured keys/models."""
+        if not key_ids or not models:
+            return 0
+        key_placeholders = ",".join("?" for _ in key_ids)
+        model_placeholders = ",".join("?" for _ in models)
+        with self._runtime_connect(immediate=True) as conn:
+            result = conn.execute(
+                f"""UPDATE gemini_key_model_state
+                    SET exhausted=0, exhausted_at=NULL, updated_at=?
+                    WHERE key_id IN ({key_placeholders})
+                      AND model_name IN ({model_placeholders})
+                      AND (exhausted=1 OR exhausted_at IS NOT NULL)""",
+                (utc_now(), *key_ids, *models),
+            )
+            return result.rowcount
+
     def claim_gemini_ready_request(
         self,
         *,
@@ -319,7 +359,7 @@ class GeminiRepository(GeminiPacingRepository):
         return int(cur.rowcount or 0)
 
     def ensure_gemini_runtime_cycle(self, cycle_label: str) -> None:
-        """Clear daily exhaustion atomically when the Pacific quota day changes."""
+        """Reset daily counters atomically when the Pacific quota day changes."""
         now = utc_now()
         with self._runtime_connect(immediate=True) as conn:
             row = conn.execute(
@@ -334,11 +374,10 @@ class GeminiRepository(GeminiPacingRepository):
                 (cycle_label, now),
             )
             conn.execute(
-                """UPDATE gemini_key_model_state SET exhausted=0, exhausted_at=NULL,
-                   cooldown_until=NULL, attempts_cycle=0, success_cycle=0, updated_at=?""",
+                """UPDATE gemini_key_model_state
+                   SET attempts_cycle=0, success_cycle=0, updated_at=?""",
                 (now,),
             )
-            conn.execute("DELETE FROM gemini_quota_domain_model_state")
 
     def get_gemini_quota_domain_model_state(
         self, quota_domain_id: str, model_name: str

@@ -8,11 +8,11 @@ Keys belong to owner accounts; quotas belong to configured Google project/domain
 
 One renewable owner-token lease per project spans all models; heartbeat/release are guarded and expired leases recover crashes. Configured project/model spacing advances at actual generation start after preparation/uploads under the lease. Each task sends one request at a time; lease support threads are allowed.
 
-Provider-led quota control uses spacing and responses, without billing ledgers, proactive quota tables, token-count calls, or a global ten-request/minute cap. Required `gemini.runtime` policies configure quota rotations, transient budgets, spacing/leases, waits, reset blackout, cooldowns, model pauses, and generic circuits. State is disposable SQLite.
+Provider-led quota control uses spacing and responses, without billing ledgers, proactive quota tables, token-count calls, or a global ten-request/minute cap. Required `gemini.runtime` policies configure quota rotations, transient budgets, spacing/leases, waits, cooldowns, model pauses, and generic circuits. State is disposable SQLite.
 
 | Outcome | Shared action |
 | --- | --- |
-| 429 with explicit per-day evidence | Exhaust domain/model until Pacific reset |
+| 429 with explicit per-day evidence | Exhaust domain/model until manual `/reset` |
 | Generic/RPM/TPM/rolling-spend/shared-capacity 429 | Persist cooldown; honor retry metadata or bounded exponential policy |
 | Distinct-domain generic 429 threshold/window | Pause model for configured circuit duration |
 | Success | Clear model generic-429 history and successful-domain cooldown history |
@@ -20,7 +20,9 @@ Provider-led quota control uses spacing and responses, without billing ledgers, 
 | 5xx | Configured model pause; share bounded transient budget with transport failures |
 | Authentication/configuration error | Fail task |
 
-Daily exhaustion clears at rollover; block new requests within configured blackout on both sides of Pacific reset. CLI exposes no reset/blackout overrides. Uploaded files receive best-effort cleanup. Shared redacted stdout logging and local provider-wait snapshots follow root/task-runtime rules.
+Exhaustion survives Pacific quota-day rollover and current-schema restarts. Rollover resets only daily attempt/success counters; requests have no midnight blackout. Temporary cooldowns and model pauses retain their normal expiry. Uploaded files receive best-effort cleanup. Shared redacted stdout logging and local provider-wait snapshots follow root/task-runtime rules.
+
+`/gemini` reads local state for the current YAML keys/model pool and prints only configured key/account totals and exhausted-key counts per model. Missing state records contribute no recorded exhaustion; the report does not initialize provider state or query remaining Google quota. `/reset` atomically clears exhaustion flags/timestamps for those keys/models and reports the number of key/model states cleared. It preserves cooldowns, pauses, leases, spacing, counters, and error history. Both commands work during a foreground run; later provider failures can exhaust keys again. Reset does not restart a finished/deferred task; use `/run` to resume it.
 
 ## Personality queue and pacing
 

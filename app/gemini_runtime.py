@@ -327,42 +327,6 @@ class GeminiRuntimeManager:
     def _cycle_label(now_utc: datetime) -> str:
         return now_utc.astimezone(_PACIFIC_TZ).date().isoformat()
 
-    def _blackout_window(self, now_utc: datetime) -> Dict[str, Any]:
-        pt_now = now_utc.astimezone(_PACIFIC_TZ)
-        midnight_today = datetime(
-            pt_now.year, pt_now.month, pt_now.day, tzinfo=_PACIFIC_TZ
-        )
-        midnight_next = midnight_today + timedelta(days=1)
-
-        prev_start = midnight_today - timedelta(seconds=self._limits.reset_blackout_seconds)
-        prev_end = midnight_today + timedelta(seconds=self._limits.reset_blackout_seconds)
-        next_start = midnight_next - timedelta(seconds=self._limits.reset_blackout_seconds)
-        next_end = midnight_next + timedelta(seconds=self._limits.reset_blackout_seconds)
-
-        active = False
-        reset_at = midnight_next
-        start = next_start
-        end = next_end
-
-        if prev_start <= pt_now < prev_end:
-            active = True
-            reset_at = midnight_today
-            start = prev_start
-            end = prev_end
-        elif next_start <= pt_now < next_end:
-            active = True
-            reset_at = midnight_next
-            start = next_start
-            end = next_end
-
-        return {
-            "active": active,
-            "start_utc": _iso_utc(start),
-            "end_utc": _iso_utc(end),
-            "reset_utc": _iso_utc(reset_at),
-            "wait_until_utc": _iso_utc(end) if active else None,
-        }
-
     def _ensure_cycle(self, now_utc: datetime) -> None:
         self.db.ensure_gemini_runtime_cycle(self._cycle_label(now_utc))
 
@@ -416,11 +380,6 @@ class GeminiRuntimeManager:
             if not keys:
                 raise GeminiAllKeysExhaustedError("No Gemini keys configured")
             self._ensure_cycle(now)
-            blackout = self._blackout_window(now)
-            if blackout["active"]:
-                self._set_wait(run_id, {"mode": "daily reset", "wait_until": blackout["wait_until_utc"]})
-                self._sleep_until(_parse_ts(blackout["wait_until_utc"]))
-                continue
             for model in pool_models or models:
                 self._ensure_model_rows(keys, model)
             cooldown = _iso_utc(now + timedelta(seconds=self._limits.project_model_spacing_seconds))

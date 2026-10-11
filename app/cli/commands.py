@@ -18,6 +18,8 @@ COMMANDS = (
     Command("settings", "Edit candidate limit", "_settings"),
     Command("history", "Inspect the selected task's recent runs", "_history"),
     Command("summary", "Print the current run or latest saved summary", "_summary"),
+    Command("gemini", "Show compact Gemini key exhaustion counts", "_gemini"),
+    Command("reset", "Clear Gemini key exhaustion", "_reset"),
     Command("help", "Print commands and keyboard guidance", "_help"),
     Command("quit", "Stop safely, drain output, and exit", "_quit"),
 )

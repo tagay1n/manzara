@@ -39,10 +39,14 @@ Daily cleanup preparation and Yandex Sync use `python scripts/run_daily_maintena
 | `/stop` | Stop safely and remain open |
 | `/history` | Inspect selected task's latest 20 runs |
 | `/summary` | Show foreground run or latest saved summary |
+| `/gemini` | Show configured key/account counts and exhaustion counts per model |
+| `/reset` | Clear exhaustion for configured Gemini keys/models, including during a run |
 | `/help` | Show commands and keyboard guidance |
 | `/quit` | Stop safely, drain output, exit |
 
 Type `/` for completion; arrows navigate, Enter chooses, Tab completes, Esc dismisses. Task/history pickers support search and scrolling; long labels wrap. Settings use Tab for focus, Enter/Ctrl-S to save, Esc to cancel. Outside pickers, Up/Down recall commands and restore unfinished input after the newest entry. Valid slash commands survive restarts, retaining the latest 1,000 entries and skipping consecutive duplicates. Unrecognized input stays in current-session recall only. Ordinary text, including `q`, is never executed as a shell command.
+
+Gemini exhaustion persists across quota-day rollover and restarts until `/reset`; requests have no midnight blackout. Reset preserves temporary cooldowns, model pauses, request spacing, leases, counters, and error history. It does not restart a finished/deferred task; use `/run` to resume. Provider errors after a reset can exhaust keys again. Both commands use local SQLite state without calling Gemini.
 
 One foreground run owns the CLI through worker finalization and output drain. Further starts and task/settings changes are rejected; history browsing preserves foreground identity. Activity animates through discovery, provider waits, stopping, and finalization; counters indicate progress. Runtime-read failure marks progress unavailable. Summaries distinguish completed, stopped, deferred, and failed outcomes. Successful finalized runs ring the terminal bell (`\a`) once; failures ring twice, spaced apart. Stopped/deferred runs stay silent. `PROMPT_TOOLKIT_BELL=false` disables CLI bells; audibility depends on terminal settings. Batch stages use the same patterns when stdout is a terminal and emit no bells into redirected or workflow output.
 

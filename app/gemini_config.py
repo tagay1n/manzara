@@ -35,7 +35,6 @@ class GeminiRuntimeLimits:
     project_lease_heartbeat_seconds: int
     max_wait_slice_seconds: int
     capacity_poll_seconds: int
-    reset_blackout_seconds: int
     transient_attempts_per_model: int
     generic_429_circuit_breaker_threshold: int
     generic_429_window_seconds: int

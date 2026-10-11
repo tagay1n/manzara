@@ -56,7 +56,6 @@ gemini:
     project_lease_heartbeat_seconds: 30
     max_wait_slice_seconds: 10
     capacity_poll_seconds: 1
-    reset_blackout_seconds: 3600
     transient_attempts_per_model: 2
   request:
     personality_timeout_seconds: 60

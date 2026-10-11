@@ -44,6 +44,7 @@ from app.cli.presentation import (
 )
 from app.cli.state import CLIStateStore, append_command
 from app.db import Database
+from app.gemini_config import load_gemini_keys, load_required_gemini_model_pool
 from app.runtime_config import config_integer, config_number, config_text
 from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTING
 from app.settings import load_settings
@@ -530,6 +531,30 @@ class Terminal:
             run = await asyncio.to_thread(self.db.get_latest_run_for_task, self.selected_id)
             failure = None
         await self._say(summary_text(run, title, failure=failure, presentation_status=presentation_status))
+
+    async def _gemini(self, _argument):
+        keys = await asyncio.to_thread(load_gemini_keys)
+        if not keys:
+            await self._say("No Gemini keys configured.")
+            return
+        models = await asyncio.to_thread(load_required_gemini_model_pool)
+        key_ids = tuple(dict.fromkeys(key.key_id for key in keys))
+        counts = await asyncio.to_thread(
+            self.db.get_gemini_exhaustion_counts, key_ids=key_ids, models=models,
+        )
+        accounts = len({key.account_id for key in keys})
+        lines = [f"Gemini · {len(key_ids)} keys · {accounts} accounts"]
+        lines.extend(f"{model}: {counts[model]}/{len(key_ids)} keys exhausted" for model in models)
+        await self._say("\n".join(lines))
+
+    async def _reset(self, _argument):
+        keys = await asyncio.to_thread(load_gemini_keys)
+        models = await asyncio.to_thread(load_required_gemini_model_pool)
+        cleared = await asyncio.to_thread(
+            self.db.reset_gemini_exhaustion,
+            key_ids=tuple(dict.fromkeys(key.key_id for key in keys)), models=models,
+        )
+        await self._say(f"Gemini exhaustion reset · {cleared} key/model states cleared.")
 
     async def _help(self, _argument):
         await self._say(help_text())
