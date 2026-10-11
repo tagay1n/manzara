@@ -3,3 +3,44 @@ checkpoints, views, functions, triggers, constraints, and pg_trgm; Python metada
 is incomplete. No corpus rows, local-state transfers, or historical installers.
 Future migrations descend from it. Bootstrap, historical upgrades, and recovery:
 ../docs/operations.md#database-tools.
+
+Catalog administration full-text indexes
+---------------------------------------
+20261011_0063 descends from the frozen baseline and adds GIN expression indexes
+for titles, editions, raw/confirmed names, collections, and classification text.
+The expressions use the explicit simple text-search configuration. They match
+Yaruq Admin's per-column full-text predicates; existing trigram indexes remain
+available for literal contains and PostgreSQL regex matching. This migration
+adds no generated columns and changes no publication/document contents.
+
+Use the separately configured Alembic workflow described in the database-tools
+section of ../docs/operations.md. Review the new migration, then apply it before
+rolling out the admin search feature:
+
+    PYTHONPATH=. .venv/bin/alembic upgrade head
+
+The admin application and Manzara task startup do not apply migrations.
+Concurrent index builds allow catalog writers to continue, but require schema
+ownership privileges and consume CPU/storage. Each build commits separately;
+completion advances alembic_version_manzara only after every build succeeds.
+There is no fixed duration guarantee. Monitor PostgreSQL's pg_stat_progress_create_index
+while an authorized build is running.
+
+If a build is interrupted or fails, leave the database version at its current
+revision. Inspect pg_index.indisvalid and pg_get_indexdef for the six index names
+listed in 20261011_0063_catalog_search_indexes.py. Review each existing definition
+against that migration, then explicitly DROP INDEX CONCURRENTLY for only these
+new indexes before retrying the upgrade. Run each drop outside a transaction;
+do not drop existing trigram indexes, modify catalog data, or stamp the revision.
+CREATE INDEX IF NOT EXISTS is deliberately avoided because it can skip invalid
+indexes and incorrectly make the migration appear complete.
+
+Downgrading this revision drops only these six indexes concurrently and returns
+to 20261008_0062; baseline rollback remains unavailable. SQL can be reviewed
+without applying it using the selected private configuration:
+
+    PYTHONPATH=. .venv/bin/alembic upgrade 20261008_0062:head --sql
+
+Follow ../docs/verification.md: the default checks are inspection and static
+verification. Database migration tests require an explicit owner request and
+an isolated PostgreSQL with test-only configuration.
