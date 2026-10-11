@@ -4,11 +4,13 @@ Owners: [navigation](navigation.md). Common logging/artifact/lifecycle rules are
 
 ## Sources and previews
 
-`library.generate_book_previews` processes an MD5-ordered cohort. `--limit` caps eligibility before request creation; repeated `--only-md5` restricts sources; `--retry-known-failures` creates new requests while preserving generations.
+`library.generate_book_previews` uses one discovery loop, querying at most 200 MD5-ordered candidates per iteration. PostgreSQL joins publications, primary locations, latest requests, successful generations, live leases, and cleanup exclusions; there is no inventory load, global count, or per-document discovery lookup. An empty batch ends the loop. The cursor advances past each fetched batch so failed/busy documents cannot spin in one run; a later run can revisit them. `--limit` caps fetched eligibility before request creation across all batches; repeated `--only-md5` restricts sources; `--retry-known-failures` creates new requests while preserving generations. Progress totals count discovered candidates so far.
 
 Eligible sources are complete unrestricted PDFs of included, unmerged publications, regardless of selection. Completeness means whole-publication content, not download integrity. Require verified `s3/primary` with known size and no active document cleanup plan. Recheck source/eligibility before publication.
 
 Skip current-recipe public successes, including zero selected pages, and known failures unless explicitly retried. Pending/expired claims resume with fresh tokens at document boundaries; live claims skip. Claim only the selected cohort. Catalog requests/pages own intent, leases, recipe, page count, and selected roles; attempts/errors are local.
+
+Startup schema/key checks are aggregated in one read-only PostgreSQL query. Under the document session lock, one implicit transaction/message validates the source, creates or resumes intent, audits creation, and claims it. Each upload uses one message on that same session to recheck public eligibility/source revisions and renew the lease; CPU/read boundaries renew only when one third of the configured lease has elapsed. Success uses one message for locked source/lease guards, bulk page insertion, ready status, and audit, including zero-page success. All SQL transactions close before remote work. Failure finalization is guarded separately and cannot replace a newer claim or success. Unknown write acknowledgements discard the session and stop the run without replay; later discovery reconciles durable state. No schema installation or migration is performed by the task.
 
 Use configured primary storage/cache and dedicated public `documents.primary_storage.bucket.book_previews`. Pool size must be at least two. Detector packages are pinned in `requirements.txt`; the YAML-selected checkpoint downloads on the first nonempty run. Empty cohorts initialize no model/storage clients.
 

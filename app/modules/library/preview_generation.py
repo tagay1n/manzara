@@ -270,6 +270,7 @@ def process_book(
     target_s3: Any,
     page_detector: Any,
     boundary: Callable[[], None],
+    publication_boundary: Callable[[], None],
     log: Callable[[str], None],
 ) -> BookPreviewResult:
     """Render one verified source; return explicit pages only after all uploads verify."""
@@ -315,7 +316,7 @@ def process_book(
                     object_alias=page.object_alias, output_dir=book_workspace,
                 )
             output = rendered[variant]
-            boundary()
+            publication_boundary()
             target_s3.upload_file(
                 str(output.path), settings.target_bucket, key,
                 ExtraArgs={

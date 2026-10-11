@@ -1,101 +1,90 @@
-"""Durable preview intent, leases, and immutable successful generations."""
+"""One-message preview commands on the lock-owning PostgreSQL session."""
 
-import uuid
-from contextlib import nullcontext
-from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
 
-from sqlalchemy import or_, select, text
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extensions import TRANSACTION_STATUS_IDLE
+from psycopg2.extras import Json
 
 from app.catalog.contracts import CatalogConflict, CatalogNotFound, integer, nonblank
+from app.document_operation_lock import DocumentOperationBusy, check_document_operation
+from app.runtime_config import config_integer
+
+_BATCH = Path(__file__).with_suffix('.sql').read_text(encoding='utf-8')
 
 
-class PreviewStore:
+def validate_pages(pages, source_page_count):
+    integer(source_page_count, 'source_page_count', minimum=0)
+    if not isinstance(pages, list):
+        raise ValueError('preview pages must be an array')
+    roles, numbers = set(), set()
+    for page in pages:
+        if not isinstance(page, dict) or set(page) != {'role', 'page_number', 'small_key', 'large_key'}:
+            raise ValueError('unsupported preview page')
+        if page['role'] not in {'first', 'second', 'last'} or page['role'] in roles:
+            raise ValueError('preview roles must be distinct')
+        number = integer(page['page_number'], 'page_number')
+        if number > source_page_count or number in numbers:
+            raise ValueError('preview pages must be distinct and within the document')
+        roles.add(page['role'])
+        numbers.add(number)
+        nonblank(page['small_key'], 'small_key')
+        nonblank(page['large_key'], 'large_key')
 
-    def claim_preview(self, worker, *, lease_seconds, request_id=None):
-        nonblank(worker, "worker")
-        if request_id is not None:
-            integer(request_id, "request_id")
-        integer(lease_seconds, "lease_seconds")
-        if lease_seconds > 3600:
-            raise ValueError("preview lease must not exceed one hour")
-        table = self.table("preview_requests")
-        now = datetime.now(timezone.utc)
-        with self.engine.begin() as conn:
-            conn.execute(text("SET TRANSACTION READ WRITE"))
-            # One active generation per document. Expired claims are retryable.
-            conn.exec_driver_sql("SELECT pg_advisory_xact_lock(hashtext('catalog-preview-claim'))")
-            active = select(table.c.md5).where(table.c.status == "processing", table.c.lease_until > now)
-            statement = select(table).where(
-                or_(table.c.status == "pending", (table.c.status == "processing") & (table.c.lease_until <= now)),
-                ~table.c.md5.in_(active),
-            )
-            if request_id is not None:
-                statement = statement.where(table.c.request_id == request_id)
-            row = conn.execute(statement.order_by(table.c.request_id).limit(1)
-                               .with_for_update(skip_locked=True)).mappings().first()
-            if row is None:
-                return None
-            doc = self._record(conn, "document", row["md5"])
-            return dict(conn.execute(table.update().where(table.c.request_id == row["request_id"]).values(
-                status="processing", claim_token=uuid.uuid4().hex,
-                lease_until=now + timedelta(seconds=lease_seconds), private=doc["restricted"],
-            ).returning(table)).mappings().one())
 
-    def finish_preview(self, request_id, claim_token, *, pages, source_page_count, actor, error=None, conn=None):
-        integer(request_id, "request_id")
-        integer(source_page_count, "source_page_count", minimum=0)
-        if not isinstance(pages, list):
-            raise ValueError("preview pages must be an array")
-        roles, page_numbers = set(), set()
-        for page in pages:
-            if not isinstance(page, dict) or set(page) - {"role", "page_number", "small_key", "large_key"}:
-                raise ValueError("unsupported preview page")
-            if page.get("role") not in {"first", "second", "last"} or page["role"] in roles:
-                raise ValueError("preview roles must be distinct")
-            number = integer(page.get("page_number"), "page_number")
-            if number > source_page_count or number in page_numbers:
-                raise ValueError("preview pages must be distinct and within the document")
-            roles.add(page["role"])
-            page_numbers.add(number)
-            if not error:
-                nonblank(page.get("small_key"), "small_key")
-                nonblank(page.get("large_key"), "large_key")
-        table, page_table = self.table("preview_requests"), self.table("preview_pages")
-        owns_transaction = conn is None
-        transaction = self.engine.begin() if owns_transaction else nullcontext(conn)
-        with transaction as conn:
-            if owns_transaction:
-                conn.execute(text("SET TRANSACTION READ WRITE"))
-            row = conn.execute(select(table).where(table.c.request_id == request_id).with_for_update()).mappings().one_or_none()
-            if row is None:
-                raise CatalogNotFound("preview request no longer exists")
-            if row["status"] != "processing" or row["claim_token"] != claim_token or row["lease_until"] <= datetime.now(timezone.utc):
-                raise CatalogConflict("preview claim expired or was replaced")
-            doc = self._record(conn, "document", row["md5"])
-            if not error and doc["restricted"] and not row["private"]:
-                raise CatalogConflict("document access changed; regenerate into private storage")
-            if not error:
-                for page in pages:
-                    conn.execute(page_table.insert().values(request_id=request_id, **page))
-            after = dict(conn.execute(table.update().where(table.c.request_id == request_id).values(
-                status="failed" if error else "ready", lease_until=None,
-                source_page_count=source_page_count,
-            ).returning(table)).mappings().one())
-            self._audit(conn, "preview", request_id, dict(row), after, actor)
-        return after
+def preview_command(engine, schema, payload, *, source_query, pending_query, operation=None):
+    """Implicit transaction: guards, mutations, audit, result and commit in one message.
 
-    def renew_preview(self, request_id, claim_token, *, lease_seconds):
-        integer(request_id, "request_id")
-        integer(lease_seconds, "lease_seconds")
-        if lease_seconds > 3600:
-            raise ValueError("preview lease must not exceed one hour")
-        table = self.table("preview_requests")
-        now = datetime.now(timezone.utc)
-        with self.engine.begin() as conn:
-            conn.execute(text("SET TRANSACTION READ WRITE"))
-            row = conn.execute(table.update().where(table.c.request_id == request_id,
-                table.c.status == "processing", table.c.claim_token == claim_token, table.c.lease_until > now,
-            ).values(lease_until=now + timedelta(seconds=lease_seconds)).returning(table)).mappings().first()
-            if row is None:
-                raise CatalogConflict("preview claim expired or was replaced")
-            return dict(row)
+    Success/renewal/claim use the reserved session that owns the document lock.
+    Failure finalization, after remote work has unwound, takes a transaction lock.
+    Failed/ambiguous writes are never automatically replayed.
+    """
+    if operation is not None:
+        check_document_operation(operation, probe=False, md5=payload['md5'])
+        if operation.engine is not engine:
+            raise CatalogConflict('Preview command requires the document lock-owning engine')
+        pooled = None
+        connection = operation.connection.driver_connection
+        invalidate = operation.invalidate
+    else:
+        if payload['action'] != 'fail':
+            raise CatalogConflict('Preview publication requires a document operation lock')
+        pooled = engine.raw_connection()
+        connection = pooled.driver_connection
+        invalidate = pooled.invalidate
+    previous_autocommit = connection.autocommit
+    statement = sql.SQL('SET TRANSACTION READ WRITE; SET LOCAL search_path TO {}, public;\n').format(sql.Identifier(schema))
+    statement += sql.SQL(_BATCH.replace('{{source_query}}', source_query).replace('{{pending_query}}', pending_query))
+    try:
+        if connection.get_transaction_status() != TRANSACTION_STATUS_IDLE:
+            raise RuntimeError('Preview batch requires an idle PostgreSQL session')
+        connection.autocommit = True
+        with connection.cursor() as cursor:
+            cursor.execute(statement, {
+                'payload': Json(payload, dumps=lambda value: json.dumps(value, default=lambda item: item.isoformat())),
+                'lock_timeout': f"{config_integer('postgres', 'lock_timeout_seconds') * 1000}ms",
+            })
+            return cursor.fetchone()[0]
+    except psycopg2.Error as exc:
+        errors = {'MZ001': CatalogConflict, 'MZ002': DocumentOperationBusy, 'MZ003': CatalogNotFound}
+        if exc.pgcode in errors:
+            raise errors[exc.pgcode](exc.diag.message_primary) from None
+        invalidate()
+        raise
+    except BaseException:
+        invalidate()
+        raise
+    finally:
+        try:
+            if not connection.closed:
+                if connection.get_transaction_status() != TRANSACTION_STATUS_IDLE:
+                    connection.rollback()
+                connection.autocommit = previous_autocommit
+        except BaseException:
+            invalidate()
+            raise
+        finally:
+            if pooled is not None:
+                pooled.close()

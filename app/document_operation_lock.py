@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+import sys
 
 from sqlalchemy import text
 
@@ -33,15 +34,23 @@ def lock_document_transaction(conn, md5):
         raise DocumentOperationBusy(f"Document {md5} is busy; retry after the current operation")
 
 
-def check_document_operation(conn):
+def check_document_operation(conn, *, probe=True, md5=None):
     """Do not reconnect an invalidated session and mistake it for ownership."""
+    if not isinstance(probe, bool):
+        raise ValueError("probe must be a boolean")
     owner = _OWNER.get()
     if owner is None or owner[2] is not conn:
         raise CatalogConflict("Document operation requires its lock-owning connection")
+    if md5 is not None and owner[1] != document_md5(md5):
+        raise CatalogConflict("Document operation owns a different document")
     if conn.closed or conn.invalidated:
         raise CatalogConflict("Document operation lost its database session")
     if conn.in_transaction():
         raise RuntimeError("Remote document boundaries require a closed SQL transaction")
+    if not probe:
+        # The caller must execute its own check on this exact session before
+        # remote writes. Never use this to replace a lost owning connection.
+        return
     try:
         conn.exec_driver_sql("SELECT 1")
         conn.rollback()
@@ -69,6 +78,7 @@ def document_operation(engine, md5):
         try:
             yield conn
         finally:
+            body_failed = sys.exc_info()[0] is not None
             _OWNER.reset(token)
             try:
                 if conn.closed or conn.invalidated:
@@ -81,4 +91,5 @@ def document_operation(engine, md5):
                     raise CatalogConflict("Document operation lock ownership was lost")
             except BaseException:
                 conn.invalidate()
-                raise
+                if not body_failed:
+                    raise

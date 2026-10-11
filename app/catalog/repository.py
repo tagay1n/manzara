@@ -15,7 +15,6 @@ from app.catalog.contracts import (
 )
 from app.catalog.metadata_store import MetadataStore
 from app.catalog.personality_normalization import PersonalityNormalizationStore
-from app.catalog.previews import PreviewStore
 from app.catalog.schema import build_metadata
 from app.document_operation_lock import lock_document_transaction
 
@@ -34,7 +33,7 @@ def snapshot(value: Any) -> Any:
     return json.loads(json.dumps(value, default=lambda item: item.isoformat()))
 
 
-class CatalogRepository(MetadataStore, PreviewStore, PersonalityNormalizationStore):
+class CatalogRepository(MetadataStore, PersonalityNormalizationStore):
     def __init__(self, engine, *, schema):
         self.engine = engine
         self.schema = schema
