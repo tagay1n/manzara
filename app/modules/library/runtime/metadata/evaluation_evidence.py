@@ -19,7 +19,8 @@ from app.modules.library.upstream_metadata import sanitize_upstream_metadata
 from app.runtime_config import config_integer
 
 
-def prepare_evaluation_request(candidate, schema_org, *, workspace, storage, primary_s3, known, log):
+def prepare_evaluation_request(candidate, schema_org, *, workspace, storage, primary_s3, known, log,
+                               first_pages, last_pages):
     excerpt = None
     files = {}
     is_djvu = candidate.mime_type == 'image/vnd.djvu'
@@ -40,11 +41,10 @@ def prepare_evaluation_request(candidate, schema_org, *, workspace, storage, pri
             document_url=candidate.document_url, expected_md5=candidate.md5,
             expected_size=candidate.primary_storage_size, extension='.djvu' if is_djvu else '.pdf')
         slice_path = workspace / candidate.md5 / 'slice-for-eval.pdf'
-        edge_pages = config_integer("metadata", "evaluation_edge_pages")
         if is_djvu:
-            create_djvu_slice(source, slice_path, first_pages=edge_pages, last_pages=edge_pages)
+            create_djvu_slice(source, slice_path, first_pages=first_pages, last_pages=last_pages)
         else:
-            create_pdf_slice(source, slice_path, first_pages=edge_pages, last_pages=edge_pages)
+            create_pdf_slice(source, slice_path, first_pages=first_pages, last_pages=last_pages)
         files[slice_path] = 'application/pdf'
     flat = extract_flat_fields(schema_org)
     payload = _drop_none_values({

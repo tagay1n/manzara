@@ -195,14 +195,17 @@ djvu:
   max_pdf_bytes: 49000000
 metadata:
   text_slice_chars: 20000
-  # Extract metadata: /settings edits these saved defaults directly.
+  # Extract metadata: independent saved defaults edited in /settings.
   # Total Gemini response deadline only; preparation/uploads/cleanup are outside it.
   response_timeout_seconds: 900
   first_pages: 4
   last_pages: 4
   evaluation_excerpt_chars: 500
   evaluation_excerpt_parts: 3
-  evaluation_edge_pages: 2
+  # Evaluate metadata: independent saved defaults edited in /settings.
+  evaluation_response_timeout_seconds: 900
+  evaluation_first_pages: 2
+  evaluation_last_pages: 2
   content_connect_timeout_seconds: 15
   content_read_timeout_seconds: 120
   content_chunk_bytes: 65536

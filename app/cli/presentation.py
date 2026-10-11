@@ -74,8 +74,8 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
     lines = [f"{prefix}{outcome.capitalize()} · {title} · run {run['run_id']} · {elapsed(run)}"]
     if summary.get("message"):
         lines.append(str(summary["message"]))
-    if run.get("task_id") == "library.metadata_extract":
-        settings = summary.get("extraction_settings") or {
+    if run.get("task_id") in {"library.metadata_extract", "maintenance.monocorpus_meta_evaluate"}:
+        settings = summary.get("extraction_settings") or summary.get("evaluation_settings") or {
             name: options.get("metadata_" + name) for name in ("response_timeout_seconds", "first_pages", "last_pages")
         }
         if all(type(settings.get(name)) is int for name in ("response_timeout_seconds", "first_pages", "last_pages")):

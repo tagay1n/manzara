@@ -449,8 +449,7 @@ class Terminal:
             options = self.options[task.task_id]
             if not task.requires_full_inventory:
                 options = replace(options, limit=configured_task_limit(snapshot[2], task.task_id))
-            if task.task_id == "library.metadata_extract":
-                options = replace(options, **configured_metadata_options(snapshot[2]))
+            options = replace(options, **configured_metadata_options(snapshot[2], task.task_id))
             self.settings_snapshot = snapshot
             self.settings_fields = fields_for_task(task)
             self.settings_controls = {}
@@ -880,7 +879,7 @@ class Terminal:
             config = await asyncio.to_thread(load_runtime_config)
             for task in self.descriptors:
                 extraction = task.task_id == "library.extract_non_pdf"
-                metadata_options = configured_metadata_options(config) if task.task_id == "library.metadata_extract" else {}
+                metadata_options = configured_metadata_options(config, task.task_id)
                 saved_limit = configured_task_limit(config, task.task_id)
                 if task.requires_full_inventory and saved_limit is not None:
                     raise ValueError(f"{task.title} requires the complete inventory; remove its saved candidate limit")

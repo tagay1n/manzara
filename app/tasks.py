@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from app.db import Database
+from app.metadata_settings import METADATA_TASK_PREFIXES
 from app.runtime_config import config_number
 from app.runtime_states import (
     TASK_RUN_STATUS_COMPLETED,
@@ -45,12 +46,12 @@ class TaskRunner:
             if any(handle.thread.is_alive() for handle in self._runs.values()):
                 raise ValueError("A foreground run is still active or finalizing; wait for its result")
             descriptor = self.descriptors[task_id]
-            if task_id != "library.metadata_extract" and any(
+            if task_id not in METADATA_TASK_PREFIXES and any(
                 value is not None for value in (
                     options.metadata_response_timeout_seconds, options.metadata_first_pages, options.metadata_last_pages,
                 )
             ):
-                raise ValueError("Metadata response/page settings apply only to Extract metadata")
+                raise ValueError("Metadata response/page settings apply only to Extract metadata or Evaluate metadata")
             if descriptor.requires_full_inventory and options.limit is not None:
                 raise ValueError(f"{descriptor.title} requires the complete inventory; clear the limit")
             active = self.db.get_active_run_for_task(task_id)
