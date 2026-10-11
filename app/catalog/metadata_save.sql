@@ -10,6 +10,17 @@ DECLARE
     actor_name text := request->>'actor';
     plan jsonb := request->'plan';
     desired jsonb := request->'expected';
+    evaluation jsonb := NULLIF(request->'evaluation', 'null'::jsonb);
+    expected_path jsonb := request->'expected_classification_path';
+    decision_changes jsonb;
+    expected_decision jsonb;
+    decision_retained boolean := false;
+    classification_key bigint;
+    taxonomy_parent bigint;
+    taxonomy_node bigint;
+    taxonomy_record jsonb;
+    taxonomy_label text;
+    validation_key text;
     old_publication jsonb;
     new_publication jsonb;
     old_document jsonb;
@@ -22,6 +33,9 @@ DECLARE
     proposal_key bigint;
     proposals jsonb := '[]'::jsonb;
 BEGIN
+    IF evaluation IS NOT NULL THEN
+        PERFORM pg_advisory_xact_lock(hashtext('catalog-taxonomy:' || current_schema()));
+    END IF;
     IF NOT pg_try_advisory_xact_lock(hashtext(current_schema()),
             hashtext('catalog-document-storage:' || document_key)) THEN
         RAISE EXCEPTION USING ERRCODE='MZ002',
@@ -38,8 +52,11 @@ BEGIN
             OR old_publication->>'merged_into_id' IS NOT NULL THEN
         RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Publication membership changed; resume with a fresh inventory';
     END IF;
-    IF (old_publication->>'metadata_present')::boolean THEN
+    IF evaluation IS NULL AND (old_publication->>'metadata_present')::boolean THEN
         RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Publication already has metadata; extraction only fills missing metadata';
+    END IF;
+    IF evaluation IS NOT NULL AND NOT (old_publication->>'metadata_present')::boolean THEN
+        RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Publication no longer has metadata; evaluation save rolled back';
     END IF;
     PERFORM location_id FROM catalog_locations WHERE md5=document_key ORDER BY location_id FOR UPDATE;
     SELECT to_jsonb(state) INTO fresh FROM ({{snapshot_query}}) state;
@@ -58,6 +75,44 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Publication metadata awaits review; resume after review';
     END IF;
     metadata_before := fresh->'sources'->0->'metadata_record';
+    expected_decision := jsonb_build_object('inclusion',old_publication->'inclusion',
+        'classification_id',old_publication->'classification_id','evaluation_method',old_publication->'evaluation_method');
+
+    IF evaluation IS NOT NULL AND (evaluation->>'applicable')::boolean THEN
+        FOR taxonomy_label IN SELECT value FROM jsonb_array_elements_text(evaluation->'path') LOOP
+            SELECT n.node_id INTO taxonomy_node FROM catalog_classification_nodes n
+                WHERE n.ddc=evaluation->>'ddc' AND lower(n.label_en)=lower(taxonomy_label)
+                    AND n.parent_id IS NOT DISTINCT FROM taxonomy_parent
+                ORDER BY n.node_id LIMIT 1 FOR SHARE;
+            IF taxonomy_node IS NULL THEN
+                INSERT INTO catalog_classification_nodes(ddc,label_en,parent_id)
+                    VALUES(evaluation->>'ddc',taxonomy_label,taxonomy_parent)
+                    RETURNING node_id,to_jsonb(catalog_classification_nodes) INTO taxonomy_node,taxonomy_record;
+                INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
+                    VALUES('classification_node',taxonomy_node::text,actor_name,NULL,taxonomy_record);
+            END IF;
+            taxonomy_parent := taxonomy_node;
+        END LOOP;
+        SELECT c.classification_id INTO classification_key FROM catalog_classifications c
+            WHERE c.node_id=taxonomy_parent FOR SHARE;
+        IF classification_key IS NULL THEN
+            INSERT INTO catalog_classifications(node_id,status,created_by)
+                VALUES(taxonomy_parent,'pending','gemini')
+                RETURNING classification_id,to_jsonb(catalog_classifications) INTO classification_key,taxonomy_record;
+            INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
+                VALUES('classification',classification_key::text,actor_name,NULL,taxonomy_record);
+        END IF;
+        expected_path := catalog_path(taxonomy_parent);
+        IF expected_path->>'ddc' IS DISTINCT FROM evaluation->>'ddc'
+                OR (SELECT jsonb_agg(lower(value) ORDER BY ordinality)
+                    FROM jsonb_array_elements_text(expected_path->'path_en') WITH ORDINALITY)
+                    IS DISTINCT FROM (SELECT jsonb_agg(lower(value) ORDER BY ordinality)
+                    FROM jsonb_array_elements_text(evaluation->'path') WITH ORDINALITY) THEN
+            RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Classification path differs from the evaluated path; save rolled back';
+        END IF;
+    ELSIF evaluation IS NOT NULL THEN
+        expected_path := 'null'::jsonb;
+    END IF;
 
     IF plan->'decision_proposal'<>'{}'::jsonb THEN
         INSERT INTO catalog_proposals(kind,publication_id,evidence,field_changes)
@@ -73,6 +128,7 @@ BEGIN
         INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
             VALUES('publication',publication_key::text,actor_name,old_publication,new_publication);
         old_publication := new_publication;
+        expected_decision := jsonb_build_object('inclusion','pending','classification_id',NULL,'evaluation_method',NULL);
         metadata_before := jsonb_set(metadata_before,'{revision}',new_publication->'revision');
     END IF;
     IF plan->'blocked'<>'{}'::jsonb THEN
@@ -191,10 +247,52 @@ BEGIN
         WHERE publication_id=publication_key RETURNING to_jsonb(catalog_publications) INTO new_publication;
     INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
         VALUES('publication',publication_key::text,actor_name,old_publication,new_publication);
-    UPDATE catalog_documents SET meta_extraction_method=request->>'method',revision=revision+1,updated_at=clock_timestamp()
-        WHERE md5=document_key RETURNING to_jsonb(catalog_documents) INTO new_document;
-    INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-        VALUES('document',document_key,actor_name,old_document,new_document);
+    IF evaluation IS NULL THEN
+        UPDATE catalog_documents SET meta_extraction_method=request->>'method',revision=revision+1,updated_at=clock_timestamp()
+            WHERE md5=document_key RETURNING to_jsonb(catalog_documents) INTO new_document;
+        INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
+            VALUES('document',document_key,actor_name,old_document,new_document);
+    ELSE
+        old_publication := new_publication;
+        SELECT COALESCE(jsonb_object_agg(change.key,change.value),'{}'::jsonb) INTO decision_changes
+            FROM jsonb_each(jsonb_build_object(
+                'inclusion',CASE WHEN (evaluation->>'applicable')::boolean THEN 'included' ELSE 'excluded' END,
+                'classification_id',classification_key,'evaluation_method',request->>'method')) change
+            WHERE old_publication->change.key IS DISTINCT FROM change.value;
+        IF decision_changes<>'{}'::jsonb THEN
+            IF request->'snapshot'->'source'->'publication_protections'
+                    ?| ARRAY['inclusion','classification_id','evaluation_method'] THEN
+                INSERT INTO catalog_proposals(kind,publication_id,evidence,field_changes)
+                    VALUES('metadata',publication_key,jsonb_build_object('actor',actor_name,'md5',document_key,
+                        'publication_revision',old_publication->'revision',
+                        'document_revision',request->'snapshot'->'source'->'revision'),decision_changes)
+                    RETURNING proposal_id INTO proposal_key;
+                proposals := proposals || jsonb_build_array(proposal_key);
+                decision_retained := true;
+                expected_path := request->'expected_classification_path';
+            ELSE
+                UPDATE catalog_publications SET
+                    inclusion=CASE WHEN (evaluation->>'applicable')::boolean THEN 'included' ELSE 'excluded' END,
+                    classification_id=classification_key,evaluation_method=request->>'method',
+                    revision=revision+1,updated_at=clock_timestamp()
+                    WHERE publication_id=publication_key RETURNING to_jsonb(catalog_publications) INTO new_publication;
+                INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
+                    VALUES('publication',publication_key::text,actor_name,old_publication,new_publication);
+            END IF;
+        END IF;
+        IF NOT decision_retained THEN
+            expected_decision := jsonb_build_object(
+                'inclusion',CASE WHEN (evaluation->>'applicable')::boolean THEN 'included' ELSE 'excluded' END,
+                'classification_id',classification_key,'evaluation_method',request->>'method');
+        END IF;
+        INSERT INTO catalog_evidence(md5,record_kind,record_key,source,payload)
+            VALUES(document_key,'publication',publication_key::text,actor_name,evaluation);
+        validation_key := CASE WHEN decision_retained THEN 'retained' ELSE 'accepted' END;
+        IF jsonb_array_length(request->'evaluation_validation'->validation_key)>0
+                AND jsonb_array_length(proposals)=0 THEN
+            RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Protected or retained metadata requires review; save rolled back';
+        END IF;
+    END IF;
 
     SELECT to_jsonb(state) INTO fresh FROM ({{snapshot_query}}) state;
     metadata_after := fresh->'sources'->0->'metadata_record';
@@ -205,7 +303,11 @@ BEGIN
     actual := (metadata_after - 'publication_id' - 'revision') || jsonb_build_object('credits',actual);
     -- Parenthesize JSON paths before subtracting keys: - binds more tightly than ->.
     IF metadata_after IS NULL OR actual IS DISTINCT FROM desired
-            OR fresh->'sources'->0->'classification_path' IS DISTINCT FROM request->'expected_classification_path'
+            OR fresh->'sources'->0->'classification_path' IS DISTINCT FROM expected_path
+            OR jsonb_build_object('inclusion',fresh->'inclusion','classification_id',fresh->'classification_id',
+                'evaluation_method',fresh->'evaluation_method') IS DISTINCT FROM expected_decision
+            OR (evaluation IS NOT NULL AND fresh->'sources'->0->'meta_extraction_method'
+                IS DISTINCT FROM request->'snapshot'->'source'->'meta_extraction_method')
             OR ((fresh->'sources'->0) - ARRAY['revision','updated_at','meta_extraction_method','publication_record','metadata_record','classification_path'])
                 IS DISTINCT FROM ((request->'snapshot'->'source') - ARRAY['revision','updated_at','meta_extraction_method','publication_record','metadata_record','classification_path']) THEN
         RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Stored metadata differs from the validated result; save rolled back';

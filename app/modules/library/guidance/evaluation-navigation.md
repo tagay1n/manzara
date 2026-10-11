@@ -5,8 +5,9 @@ Paths are relative to the repository root. Policy: [metadata contract](metadata.
 | Concern | Owner |
 | --- | --- |
 | Interactive entry points | `app/modules/library/runtime/run_meta_evaluate.py`, `app/modules/library/runtime/run_metadata_extract.py` |
-| Fixed publication inventory, sequential processing, retries, progress, artifacts | `app/modules/library/runtime/run_metadata_processing.py` |
-| Catalog snapshots, source guards, inclusion and taxonomy writes | `app/catalog/metadata_processing.py` |
+| Shared bounded publication loop, sequential processing, retries, progress, artifacts | `app/modules/library/runtime/run_metadata_processing.py` |
+| Aggregated candidate/evidence/classification discovery, source guards, inclusion and taxonomy writes | `app/catalog/metadata_processing.py`, `app/catalog/metadata_evaluation.sql`, shared envelope: `app/catalog/metadata_extraction.sql` |
+| Single-request guarded metadata/decision/taxonomy/evidence saves | `app/catalog/metadata_save.py`, `app/catalog/metadata_save.sql` |
 | Normalized bibliographic reads/writes, protections, reviewed contributions | `app/catalog/metadata_store.py` |
 | Verified text/PDF/DjVu evidence | `app/modules/library/runtime/metadata/evaluation_evidence.py`, `app/modules/library/metadata_extraction.py` |
 | Prompt | `app/modules/library/runtime/prompts/metadata_evaluation.py` |

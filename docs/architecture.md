@@ -12,6 +12,7 @@ Read the relevant owner and nearest `AGENTS.md`, then search symbols; do not pre
 | Execution, logs, artifacts, states | `app/tasks.py`, `app/task_runtime/logging.py`, `artifacts.py`, `reporting.py`, `app/runtime_states.py` |
 | PostgreSQL facade/repositories/pools | `app/db.py`, `app/repositories/`, `app/postgres_engine.py` |
 | Catalog commands/schema | `app/catalog/`; [catalog contract](catalog-model.md) |
+| Metadata extraction/evaluation atomic saves | `app/catalog/metadata_save.py`, `app/catalog/metadata_save.sql`; [metadata contract](../app/modules/library/guidance/metadata.md) |
 | Local orchestration/flow state | `app/local_state.py`, `app/operational_state.py`; personality store composition: `app/repositories/personality_checkpoints.py` |
 | Gemini quota/transport/pacing | `app/gemini_*.py`, `app/repositories/gemini*.py`; [contract](gemini-runtime.md) |
 | Library flows | [Library rules](../app/modules/library/AGENTS.md), [owner lookup](../app/modules/library/guidance/navigation.md) |

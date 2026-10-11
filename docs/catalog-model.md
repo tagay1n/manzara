@@ -32,7 +32,7 @@ PostgreSQL owns domain facts and safety-critical checkpoints; SQLite owns dispos
 | Non-PDF | Outputs, unsupported decisions, verified MIME/recipes | Attempts/errors/deferrals |
 | Cleanup | Plans, reviews, phases, cancellation/completion | Counts, run IDs, errors |
 | Previews | Requests, leases, generations/pages | Attempts/errors |
-| Metadata | Normalized facts, reviews, evidence/audits | AI attempts/exclusions, quality caches |
+| Metadata | Normalized facts, reviews, evidence/audits | AI attempts/errors/deferrals/exclusions |
 | Publisher / collection | Catalog proposals; publisher response checkpoints | Run/progress; collection features rebuilt in memory |
 
 No fallback or dual-write. Retired physical `document`, `metadata`, `classification`, `normalization_canonicals`, `normalization_aliases`, `library_collections`, and `library_collection_items` are adapter views. They store no duplicate rows; legacy upserts require strict `catalog_upsert` because views have no unique indexes.

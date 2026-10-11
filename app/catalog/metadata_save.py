@@ -1,6 +1,7 @@
-"""Prepare guarded extraction writes and submit one atomic PostgreSQL batch."""
+"""Prepare guarded extraction/evaluation writes and submit one PostgreSQL batch."""
 
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -9,10 +10,10 @@ from psycopg2 import sql
 from psycopg2.extensions import TRANSACTION_STATUS_IDLE
 from psycopg2.extras import Json
 
-from app.catalog.contracts import CatalogConflict, document_md5, nonblank
+from app.catalog.contracts import CatalogConflict, boolean, document_md5, nonblank
 from app.catalog.metadata import SCALARS, compose_metadata, decompose_metadata, items
 from app.catalog.metadata_store import RELATIONAL_FIELDS, comparable_credits, credit_signature, unmanaged_subjects
-from app.catalog.schema_org import metadata_contract_issues
+from app.catalog.schema_org import is_english_facet, metadata_contract_issues
 from app.document_operation_lock import DocumentOperationBusy
 from app.runtime_config import config_integer
 
@@ -56,12 +57,12 @@ def _decision(publication, protected):
     return changes, {}
 
 
-def _merge(snapshot, incoming):
+def _merge(snapshot, incoming, *, reset_evaluation):
     source = snapshot['source']
     before = source['metadata_record']
     protected = set(source['publication_protections'])
     doc_protected = set(source['document_protections'])
-    decision, decision_proposal = _decision(snapshot['publication'], protected)
+    decision, decision_proposal = _decision(snapshot['publication'], protected) if reset_evaluation else ({}, {})
     prior = {(row['role'], row['position'], row['nested_position']): row for row in before['credits']}
     for credit in incoming['credits']:
         old = prior.get((credit['role'], credit['position'], credit['nested_position']))
@@ -109,26 +110,60 @@ def _merge(snapshot, incoming):
     }
 
 
-def _prepare(source, schema_org, *, actor, method):
-    if 'save_snapshot' not in source:
-        raise CatalogConflict('Extraction snapshot is missing; resume with a fresh inventory')
-    saved = source['save_snapshot']
-    incoming = decompose_metadata(deepcopy(schema_org))
-    incoming['subjects'] = unmanaged_subjects(incoming['subjects'])
-    merged, plan = _merge(saved, incoming)
-    merged = _projected_record(merged)
-    schema = compose_metadata(merged)
-    path = saved['source']['classification_path'] if not plan['decision'] else None
+def _classified_schema(record, path):
+    schema = compose_metadata(record)
     if path is not None:
-        schema['about'] = unmanaged_subjects(merged['subjects']) + [
+        schema['about'] = unmanaged_subjects(record['subjects']) + [
             {'@type': 'DefinedTerm', 'termCode': value,
              'inDefinedTermSet': {'@type': 'DefinedTermSet', 'name': termset}}
             for termset, value in (('DDC', path['ddc']), ('CategoryPath', ' > '.join(path['path_en'])))
         ]
-    issues = metadata_contract_issues(schema)
-    if issues and not (plan['blocked'] or plan['decision_proposal']):
+    return schema
+
+
+def _evaluation(evaluation):
+    if evaluation is None:
+        return None
+    applicable = boolean(evaluation['applicable'], 'applicable')
+    reason = nonblank(evaluation['reason'], 'evaluation reason')
+    ddc, path = evaluation['ddc'], evaluation['path']
+    if applicable:
+        if not isinstance(ddc, str) or not re.fullmatch(r'\d{3}(?:\.\d+)?', ddc):
+            raise ValueError('Applicable evaluation requires a valid DDC')
+        if not isinstance(path, list) or not 2 <= len(path) <= 8 or any(not is_english_facet(label) for label in path):
+            raise ValueError('Applicable evaluation requires a valid category path')
+    elif ddc is not None or path is not None:
+        raise ValueError('Excluded evaluation requires null DDC and category path')
+    return {'applicable': applicable, 'reason': reason, 'ddc': ddc, 'path': deepcopy(path)}
+
+
+def _prepare(source, schema_org, *, actor, method, evaluation):
+    if 'save_snapshot' not in source:
+        raise CatalogConflict('Metadata save snapshot is missing; resume with a fresh batch')
+    saved = source['save_snapshot']
+    evaluation = _evaluation(evaluation)
+    incoming = decompose_metadata(deepcopy(schema_org))
+    incoming['subjects'] = unmanaged_subjects(incoming['subjects'])
+    merged, plan = _merge(saved, incoming, reset_evaluation=evaluation is None)
+    merged = _projected_record(merged)
+    path = saved['source']['classification_path'] if not plan['decision'] else None
+    validation = {}
+    if evaluation is not None:
+        # The server resolves taxonomy IDs and decides whether protections retain
+        # the old decision. Validate both resulting envelopes before that request.
+        accepted = {'ddc': evaluation['ddc'], 'path_en': evaluation['path']} if evaluation['applicable'] else None
+        validation = {name: sorted({issue['code'] for issue in metadata_contract_issues(_classified_schema(merged, value))})
+                      for name, value in (('accepted', accepted), ('retained', path))}
+        decision_protected = bool(set(source['publication_protections']) &
+                                  {'inclusion', 'classification_id', 'evaluation_method'})
+        issues = validation['accepted']
+        review_possible = bool(plan['blocked']) or decision_protected
+    else:
+        issues = sorted({issue['code'] for issue in metadata_contract_issues(_classified_schema(merged, path))})
+        review_possible = bool(plan['blocked'] or plan['decision_proposal'])
+    if issues and not review_possible:
         raise CatalogConflict('Protected or retained metadata requires review: ' +
-                              ', '.join(sorted({issue['code'] for issue in issues})))
+                              ', '.join(issues))
     prior = {credit_signature(row): row['contribution_id'] for row in saved['source']['metadata_record']['credits']}
     plan['retained_credits'] = [prior[credit_signature(row)] for row in merged['credits']
                                if credit_signature(row) in prior]
@@ -136,12 +171,12 @@ def _prepare(source, schema_org, *, actor, method):
         'snapshot': saved, 'md5': document_md5(source['md5']),
         'actor': nonblank(actor, 'actor'), 'method': nonblank(method, 'method'),
         'schema_org': schema_org, 'expected': comparable_record(merged), 'plan': plan,
-        'expected_classification_path': path,
+        'expected_classification_path': path, 'evaluation': evaluation, 'evaluation_validation': validation,
     }
 
 
-def save_extracted_metadata(engine, schema, source, schema_org, *, actor, method, snapshot_query):
-    payload = _prepare(source, schema_org, actor=actor, method=method)
+def save_metadata_result(engine, schema, source, schema_org, *, actor, method, evaluation, snapshot_query):
+    payload = _prepare(source, schema_org, actor=actor, method=method, evaluation=evaluation)
     # The simple-query message has an implicit transaction spanning all its
     # statements. Its final SELECT returns proposals before the server commits;
     # execute() only succeeds after the complete message, including that commit.

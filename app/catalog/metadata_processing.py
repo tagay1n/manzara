@@ -12,13 +12,13 @@ from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 
-from sqlalchemy import func, inspect, select, text
+from sqlalchemy import inspect, select, text
 
-from app.catalog.contracts import CatalogConflict, boolean, integer
-from app.catalog.metadata import compose_metadata, decompose_metadata
+from app.catalog.contracts import CatalogConflict, integer
+from app.catalog.metadata import compose_metadata
+from app.catalog.metadata_save import save_metadata_result
 from app.catalog.metadata_store import unmanaged_subjects
 from app.catalog.repository import CatalogRepository
-from app.catalog.schema_org import is_english_facet, metadata_contract_issues
 
 SOURCE_FROM = """
  FROM catalog_documents d
@@ -44,9 +44,9 @@ SOURCES = """
  LEFT JOIN library_upstream_metadata u ON u.md5=d.md5
 """ + SOURCE_WHERE
 METADATA_TASK_ACTORS = ('library.metadata_extract', 'maintenance.monocorpus_meta_evaluate')
-EXTRACTION_PUBLICATIONS = """
+PUBLICATION_BATCH = """
  SELECT p.* FROM catalog_publications p
- WHERE p.merged_into_id IS NULL AND p.metadata_present IS FALSE
+ WHERE p.merged_into_id IS NULL AND ({{eligibility}})
    AND p.publication_id > :after_id
    AND EXISTS (SELECT 1
 """ + SOURCE_FROM + SOURCE_WHERE + """
@@ -57,10 +57,22 @@ EXTRACTION_PUBLICATIONS = """
        AND q.evidence->>'actor'=ANY(:actors))
  ORDER BY p.publication_id LIMIT :batch_size
 """
-EXTRACTION_BATCH_SIZE = 200
+METADATA_BATCH_SIZE = 200
 METADATA_ENVELOPE_QUERY = Path(__file__).with_name('metadata_extraction.sql').read_text(encoding='utf-8')
 EXTRACTION_BATCH_QUERY = (METADATA_ENVELOPE_QUERY
-    .replace('{{publications}}', EXTRACTION_PUBLICATIONS).replace('{{sources}}', SOURCES))
+    .replace('{{publications}}', PUBLICATION_BATCH.replace('{{eligibility}}', 'p.metadata_present IS FALSE'))
+    .replace('{{sources}}', SOURCES))
+EVALUATION_PUBLICATIONS = PUBLICATION_BATCH.replace('{{eligibility}}', """
+    p.metadata_present IS TRUE
+    AND (p.inclusion='pending'
+         OR (p.inclusion='included' AND p.classification_id IS NULL)
+         OR (p.inclusion='excluded' AND p.classification_id IS NOT NULL))
+    AND EXISTS (SELECT 1 FROM catalog_publication_languages language
+        WHERE language.publication_id=p.publication_id AND language.language=ANY(:languages))
+""")
+EVALUATION_BATCH_QUERY = (Path(__file__).with_name('metadata_evaluation.sql').read_text(encoding='utf-8')
+    .replace('{{envelope}}', METADATA_ENVELOPE_QUERY
+        .replace('{{publications}}', EVALUATION_PUBLICATIONS).replace('{{sources}}', SOURCES)))
 SOURCE_FIELDS = (
     'md5', 'publication_id', 'revision', 'mime_type', 'selected',
     'primary_revision', 'source_revision', 'content_revision', 'document_url',
@@ -138,18 +150,22 @@ class MetadataProcessingStore:
             path = conn.execute(text('SELECT catalog_path(:node)'), {'node': node}).scalar_one()
         return _compose_schema(record, path)
 
-    def extraction_batch(self, should_stop, *, after_id=0, batch_size=EXTRACTION_BATCH_SIZE):
+    def _batch(self, query, should_stop, *, after_id, batch_size, parameters=None):
         """Fetch a bounded candidate/source/metadata envelope in one PostgreSQL statement."""
         integer(after_id, 'after_id', minimum=0)
         integer(batch_size, 'batch_size')
-        if batch_size > EXTRACTION_BATCH_SIZE:
-            raise ValueError(f'batch_size must not exceed {EXTRACTION_BATCH_SIZE}')
+        if batch_size > METADATA_BATCH_SIZE:
+            raise ValueError(f'batch_size must not exceed {METADATA_BATCH_SIZE}')
         if should_stop():
             raise InterruptedError('Metadata discovery stopped')
         with self.engine.connect() as conn:
-            rows = conn.execute(text(EXTRACTION_BATCH_QUERY), {
+            rows = conn.execute(text(query), {
                 'after_id': after_id, 'batch_size': batch_size, 'actors': list(METADATA_TASK_ACTORS),
+                **(parameters or {}),
             }).mappings().all()
+        return rows
+
+    def _publications(self, rows, should_stop):
         publications = []
         for row in rows:
             if should_stop():
@@ -166,69 +182,25 @@ class MetadataProcessingStore:
             publications.append(publication)
         return publications
 
-    def inventory(self, should_stop):
-        publications = self.catalog.table('publications')
-        with self.engine.begin() as conn:
-            conn.execute(text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'))
-            rows = [dict(row) for row in conn.execute(select(publications).where(
-                publications.c.merged_into_id.is_(None)).order_by(publications.c.publication_id)).mappings()]
-            by_id = {row['publication_id']: {**row, 'sources': []} for row in rows}
-            for source in conn.execute(text(SOURCES + ' ORDER BY d.publication_id, d.selected DESC, d.md5')).mappings():
-                if should_stop():
-                    raise InterruptedError('Metadata inventory stopped')
-                if source['publication_id'] not in by_id:
-                    continue
-                source = dict(source)
-                source['schema_org'] = self._schema(conn, source)
-                publication = by_id[source['publication_id']]
-                source['checkpoint_id'] = checkpoint_identity(publication, source)
-                publication['sources'].append(source)
-            documents = self.catalog.table('documents')
-            for document in conn.execute(select(documents.c.md5, documents.c.publication_id)
-                    .order_by(documents.c.selected.desc(), documents.c.md5)).mappings():
-                publication = by_id.get(document['publication_id'])
-                if publication is not None and 'schema_org' not in publication:
-                    if should_stop():
-                        raise InterruptedError('Metadata inventory stopped')
-                    publication['schema_org'] = (publication['sources'][0]['schema_org'] if publication['sources']
-                                                 else self._schema(conn, document))
-            languages = self.catalog.table('publication_languages')
-            for row in conn.execute(select(languages).order_by(languages.c.position)).mappings():
-                if row['publication_id'] in by_id:
-                    by_id[row['publication_id']].setdefault('languages', []).append(row['language'])
-            protections = self.catalog.table('protections')
-            for row in conn.execute(select(protections).where(protections.c.record_kind == 'publication')).mappings():
-                key = int(row['record_key'])
-                if key in by_id:
-                    by_id[key].setdefault('protections', set()).add(row['field'])
-            proposals = self.catalog.table('proposals')
-            for row in conn.execute(select(proposals).where(proposals.c.kind == 'metadata',
-                    proposals.c.status.in_(('pending', 'deferred')))).mappings():
-                if row['publication_id'] in by_id and row['evidence'].get('actor') in METADATA_TASK_ACTORS:
-                    by_id[row['publication_id']]['awaiting_review'] = True
-            return list(by_id.values())
+    def extraction_batch(self, should_stop, *, after_id=0, batch_size=METADATA_BATCH_SIZE):
+        rows = self._batch(EXTRACTION_BATCH_QUERY, should_stop, after_id=after_id, batch_size=batch_size)
+        return self._publications(rows, should_stop)
 
-    def known_classifications(self, limit=None):
-        if limit is None:
-            limit = config_integer("metadata", "known_classification_limit")
-        with self.engine.begin() as conn:
-            conn.execute(text('SET TRANSACTION READ ONLY'))
-            return [dict(row) for row in conn.execute(text('''
-                SELECT c.classification_id AS id, catalog_path(c.node_id)->>'ddc' AS ddc,
-                       catalog_path(c.node_id)->'path_en' AS path
-                FROM catalog_classifications c LEFT JOIN catalog_publications p USING(classification_id)
-                GROUP BY c.classification_id, c.node_id
-                ORDER BY COUNT(p.publication_id) DESC, ddc, c.classification_id LIMIT :limit
-            '''), {'limit': limit}).mappings()]
+    def evaluation_batch(self, should_stop, *, languages, after_id=0, batch_size=METADATA_BATCH_SIZE):
+        if not isinstance(languages, (list, tuple)) or any(
+                not isinstance(language, str) or not language.strip() for language in languages):
+            raise ValueError('Evaluation languages must be a list of nonblank language codes')
+        rows = self._batch(EVALUATION_BATCH_QUERY, should_stop, after_id=after_id, batch_size=batch_size,
+            parameters={'languages': list(languages),
+                        'known_classification_limit': config_integer('metadata', 'known_classification_limit')})
+        envelope = rows[0]
+        return self._publications(envelope['publications'], should_stop), envelope['known_classifications']
 
     @contextmanager
-    def mutation(self, publication, source, *, taxonomy=False):
+    def mutation(self, publication, source):
         with self.engine.begin() as conn:
             conn.execute(text('SET TRANSACTION READ WRITE'))
             conn.execute(text(configured_timeout_sql("lock_timeout", "lock_timeout_seconds")))
-            if taxonomy:
-                conn.execute(text('SELECT pg_advisory_xact_lock(hashtext(:key))'),
-                             {'key': f'catalog-taxonomy:{self.schema}'})
             document = self.catalog._record(conn, 'document', source['md5'], revision=source['revision'])
             if document['publication_id'] != publication['publication_id']:
                 raise CatalogConflict('Evidence document moved to another publication; resume with a fresh snapshot')
@@ -245,75 +217,12 @@ class MetadataProcessingStore:
                 raise CatalogConflict('Metadata evidence changed; resume with a fresh snapshot')
             yield conn, current
 
-    def _proposal(self, conn, publication, source, changes, actor):
-        return conn.execute(self.catalog.table('proposals').insert().values(
-            kind='metadata', publication_id=publication['publication_id'],
-            evidence={'actor': actor, 'md5': source['md5'], 'publication_revision': publication['revision'],
-                      'document_revision': source['revision']}, field_changes=changes,
-        ).returning(self.catalog.table('proposals').c.proposal_id)).scalar_one()
-
-    def _decision(self, conn, publication, source, changes, actor):
-        changes = {key: value for key, value in changes.items() if publication[key] != value}
-        protected = self.catalog._protected(conn, 'publication', publication['publication_id'])
-        # Inclusion/classification/method are one reviewed decision, never a partial update.
-        if changes and protected & {'inclusion', 'classification_id', 'evaluation_method'}:
-            return self._proposal(conn, publication, source, changes, actor)
-        if changes:
-            self.catalog._update(conn, 'publication', publication['publication_id'], publication, changes, actor)
-        return None
-
     def save(self, publication, source, schema_org, *, actor, method, evaluation=None):
-        if evaluation is None:
-            from app.catalog.metadata_extraction_save import save_extracted_metadata
-
-            snapshot_query = (METADATA_ENVELOPE_QUERY
-                .replace('{{publications}}', "SELECT * FROM catalog_publications WHERE publication_id=publication_key")
-                .replace('{{sources}}', SOURCES + ' AND d.md5=document_key'))
-            return save_extracted_metadata(self.engine, self.schema, source, schema_org,
-                                           actor=actor, method=method, snapshot_query=snapshot_query)
-        incoming = decompose_metadata(deepcopy(schema_org))
-        incoming['subjects'] = unmanaged_subjects(incoming['subjects'])
-        with self.mutation(publication, source, taxonomy=True) as (conn, current):
-            before_proposals = self._proposal_ids(conn, publication['publication_id'])
-            self.catalog._apply_metadata(conn, source['md5'], incoming, schema_org, actor, True, current['revision'])
-            applicable = boolean(evaluation['applicable'], 'applicable')
-            classification = self._classification(conn, evaluation['ddc'], evaluation['path'], actor) if applicable else None
-            current = self.catalog._record(conn, 'publication', publication['publication_id'])
-            self._decision(conn, current, source, {'inclusion': 'included' if applicable else 'excluded',
-                'classification_id': classification, 'evaluation_method': method}, actor)
-            conn.execute(self.catalog.table('evidence').insert().values(md5=source['md5'], record_kind='publication',
-                record_key=str(publication['publication_id']), source=actor, payload=evaluation))
-            # Validate actual retained fields after protections, not just the incoming payload.
-            fresh = self._schema(conn, source)
-            proposal_ids = sorted(self._proposal_ids(conn, publication['publication_id']) - before_proposals)
-            if (issues := metadata_contract_issues(fresh)) and not proposal_ids:
-                raise CatalogConflict('Protected or retained metadata requires review: ' +
-                                      ', '.join(sorted({issue['code'] for issue in issues})))
-            return proposal_ids
-
-    def _proposal_ids(self, conn, publication_id):
-        table = self.catalog.table('proposals')
-        return set(conn.execute(select(table.c.proposal_id).where(table.c.publication_id == publication_id)).scalars())
-
-    def _classification(self, conn, ddc, path, actor):
-        if not isinstance(ddc, str) or not re.fullmatch(r'\d{3}(?:\.\d+)?', ddc):
-            raise ValueError('Applicable evaluation requires a valid DDC')
-        if not isinstance(path, list) or not 2 <= len(path) <= 8 or any(not is_english_facet(label) for label in path):
-            raise ValueError('Applicable evaluation requires a valid category path')
-        conn.execute(text('SELECT pg_advisory_xact_lock(hashtext(:key))'), {'key': f'catalog-taxonomy:{self.schema}'})
-        nodes = self.catalog.table('classification_nodes')
-        parent = None
-        for label in path:
-            row = conn.execute(select(nodes).where(nodes.c.ddc == ddc, func.lower(nodes.c.label_en) == label.casefold(),
-                nodes.c.parent_id.is_(None) if parent is None else nodes.c.parent_id == parent)
-                .order_by(nodes.c.node_id).limit(1)).mappings().one_or_none()
-            if row is None:
-                row = conn.execute(nodes.insert().values(ddc=ddc, label_en=label, parent_id=parent).returning(nodes)).mappings().one()
-                self.catalog._audit(conn, 'classification_node', row['node_id'], None, dict(row), actor)
-            parent = row['node_id']
-        table = self.catalog.table('classifications')
-        row = conn.execute(select(table).where(table.c.node_id == parent)).mappings().one_or_none()
-        if row is None:
-            row = conn.execute(table.insert().values(node_id=parent, status='pending', created_by='gemini').returning(table)).mappings().one()
-            self.catalog._audit(conn, 'classification', row['classification_id'], None, dict(row), actor)
-        return row['classification_id']
+        snapshot = source.get('save_snapshot')
+        if not snapshot or publication['publication_id'] != snapshot['publication']['publication_id']:
+            raise CatalogConflict('Metadata save publication does not match the selected snapshot')
+        snapshot_query = (METADATA_ENVELOPE_QUERY
+            .replace('{{publications}}', "SELECT * FROM catalog_publications WHERE publication_id=publication_key")
+            .replace('{{sources}}', SOURCES + ' AND d.md5=document_key'))
+        return save_metadata_result(self.engine, self.schema, source, schema_org, actor=actor, method=method,
+                                    evaluation=evaluation, snapshot_query=snapshot_query)
