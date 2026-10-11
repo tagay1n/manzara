@@ -2,7 +2,7 @@
 
 ## Status
 
-The owner reports migration complete at `20261008_0062`. Retained CLI/workflow handlers use catalog-native reads/writes; credential-backed execution has not established operational readiness. [Architecture](architecture.md) locates owners, [verification](verification.md) defines limits, and [operations](operations.md#database-tools) owns bootstrap/historical recovery. Do not rerun import/retirement to fix backend behavior; inspect deployed revisions/relations/constraints/manifests read-only and repair the affected operation.
+Retained schema history starts at `20261008_0062`; forward migrations extend that baseline. Retained CLI/workflow handlers use catalog-native reads/writes. Catalog inspection and migration do not establish CLI/provider/storage operational readiness. [Architecture](architecture.md) locates owners, [verification](verification.md) defines limits, and [operations](operations.md#database-tools) owns bootstrap/historical recovery. Do not rerun import/retirement to fix backend behavior; inspect deployed revisions/relations/constraints/manifests read-only and repair the affected operation.
 
 ## Durable model
 
@@ -17,6 +17,8 @@ The owner reports migration complete at `20261008_0062`. Retained CLI/workflow h
 | Evidence / proposal / revision | Source/review snapshots, pending changes, transactional audit |
 
 Sync creates one pending publication per new MD5 and preserves existing membership; it never infers edition equivalence. Multiple files may share a publication; cleanup can leave it empty. ISBN equality requires review, not automatic grouping. Inclusion never overrides privacy/completeness; unknown privacy fails closed.
+
+The legacy file-level `metadata.lib` privacy projection and adapter-write contract are documented in [the database reference](database-reference.md#primary-tables-and-fields).
 
 Human confirmation is distinct from active/merged status and AI success. One spelling may belong to multiple identities; linking an alias never resolves all matching mentions. Contributions identify reviewed occurrences. Publisher types derive from publisher mentions, then aliases.
 

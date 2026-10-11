@@ -39,7 +39,28 @@ Downgrading this revision drops only these six indexes concurrently and returns
 to 20261008_0062; baseline rollback remains unavailable. SQL can be reviewed
 without applying it using the selected private configuration:
 
-    PYTHONPATH=. .venv/bin/alembic upgrade 20261008_0062:head --sql
+    PYTHONPATH=. .venv/bin/alembic upgrade 20261008_0062:20261011_0063 --sql
+
+File-level library privacy
+--------------------------
+20261011_0064 replaces public.metadata's lib projection and its write adapter.
+Existing restricted files immediately report lib=false, with no domain-row
+backfill or publication exclusion. Future reads and adapter RETURNING use the
+same privacy gate. Restricted-row writes cannot mark a file public or propagate
+their privacy-derived false value to a shared publication. The contract lives
+in ../docs/database-reference.md#primary-tables-and-fields.
+
+Apply through the normal Alembic chain. Databases at 0062 first run the existing
+0063 concurrent search-index builds; inspect/recover them as described above if
+interrupted. The 0064 view/function replacement is transactional and retains the
+view's grants, columns, dependencies, and triggers. It requires ownership of the
+view and function. No document/publication facts or local SQLite state change.
+Downgrade is refused because it would restore restricted-file inclusion; any
+rollback requires explicit owner review.
+
+Review just this revision's SQL without connecting to PostgreSQL:
+
+    PYTHONPATH=. .venv/bin/alembic upgrade 20261011_0063:20261011_0064 --sql
 
 Follow ../docs/verification.md: the default checks are inspection and static
 verification. Database migration tests require an explicit owner request and

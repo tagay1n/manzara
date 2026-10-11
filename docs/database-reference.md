@@ -106,6 +106,10 @@ Credit roles supported by the metadata envelope are `author`, `editor`, `transla
 
 `has_metadata` determines whether the legacy metadata record exists. `metadata_present` determines whether its Schema.org payload is present. The legacy `public.metadata` view has no row when `has_metadata=false`, and can have a row with a null payload when `metadata_present=false`. Use the publication/document tables for complete inventory.
 
+From revision `20261011_0064`, `public.metadata.lib` is file-level inclusion: restricted or unknown-privacy files always return `false`; unrestricted files reflect their publication's `inclusion` (`included` → `true`, `excluded` → `false`, `pending` → null). This privacy gate does not change publication inclusion or document selection. Files of one publication can therefore report different `lib` values. Public export additionally requires selection, completeness, verified public storage, and no active cleanup; see [export eligibility](../app/modules/library/guidance/site-export.md#eligibility-and-publication).
+
+The legacy metadata write adapter rejects `lib=true` on restricted files. Writing `false` or null through a restricted row preserves publication inclusion, including unrestricted siblings. Change publication inclusion through the publication record; unrestricted adapter rows retain their existing inclusion-write behavior. Adapter `RETURNING lib` uses the same privacy gate as reads.
+
 ### Ordered metadata relations
 
 Editable lists are stored in child rows, not inside a master JSON document. Preserve `position`, repeated values, nested groups, and absent-versus-empty distinctions when reading and writing.
