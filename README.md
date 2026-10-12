@@ -23,7 +23,7 @@ Execution requires a terminal; `--help` needs no configuration. Launch restores 
 | `library.suggest_publisher_merges` | [Publisher proposals](app/modules/library/guidance/publisher-merges.md); complete inventory, subscription-authenticated Codex |
 | `library.collection_detect` | [Collection proposals](app/modules/library/guidance/collections.md); complete inventory, deterministic |
 | `library.metadata_extract` | [Metadata](app/modules/library/guidance/metadata.md); missing metadata only, one SQL query per batch of up to 200 publications; limit counts publications |
-| `maintenance.monocorpus_meta_evaluate` | [Metadata](app/modules/library/guidance/metadata.md); pending/inconsistent evaluations, one SQL query per batch of up to 200 publications; limit counts publications |
+| `maintenance.monocorpus_meta_evaluate` | [Metadata](app/modules/library/guidance/metadata.md); pending file inclusion/classification, one SQL query per batch of up to 200 files; limit counts files |
 
 Complete-inventory tasks reject candidate limits. Publisher and collection tasks generate proposals; review/apply commands are unavailable.
 

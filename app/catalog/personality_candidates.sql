@@ -6,7 +6,7 @@ WITH observations AS (
     JOIN catalog_publications p USING(publication_id)
     JOIN catalog_documents d USING(publication_id)
     WHERE n.kind='person' AND c.role IN ('author','editor','translator','illustrator','contributor')
-      AND p.inclusion='included' AND p.has_metadata AND p.metadata_present
+      AND d.inclusion='included' AND p.has_metadata AND p.metadata_present
 ), selected_observations AS (
     SELECT * FROM observations WHERE raw_name<>'' AND ({{name_filter}})
 ), people AS (

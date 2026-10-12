@@ -1,4 +1,4 @@
-"""Explicit CLI orchestration for publication metadata extraction/evaluation."""
+"""Sequential publication metadata extraction and individual file evaluation."""
 
 import json
 from collections import Counter
@@ -54,7 +54,7 @@ from app.runtime_config import (
 from app.s3_transfer import create_s3_client
 from app.task_runtime.logging import format_result_json, redact
 
-EVALUATION_PROMPT_VERSION = 'prompt.v5'
+EVALUATION_PROMPT_VERSION = 'prompt.v6/file-inclusion'
 FLOWS = {'extract': 'library.metadata_extract.catalog.v1', 'evaluate': 'library.metadata_evaluate.catalog.v1'}
 
 
@@ -206,7 +206,9 @@ class Processor:
             self._process_sources(publication, self.manager, primary_s3)
         except BaseException as exc:
             self.abort = True
-            recorded = any(row['publication_id'] == publication['publication_id'] for row in self.results)
+            recorded = any(row['publication_id'] == publication['publication_id']
+                           and (self.mode == 'extract' or row.get('md5') == publication['evidence_md5'])
+                           for row in self.results)
             if not recorded:
                 self.finish(publication, 'failed', error=exc)
             raise
@@ -331,6 +333,8 @@ def _retry_eligible(publication, *, mode, checkpoints, version, models):
 
 def _process_batches(processor, skipped, discovery):
     after_id = 0
+    after_md5 = ''
+    processed_publications = set()
     limit = processor.context.options.limit
     while not processor.stopped():
         remaining = limit - processor.progress.total if limit is not None else METADATA_BATCH_SIZE
@@ -339,18 +343,20 @@ def _process_batches(processor, skipped, discovery):
         processor.context.progress({'phase': 'discovering', 'scanned': discovery['scanned'],
             'eligible': processor.progress.total, 'current': processor.progress.current,
             'total': processor.progress.total}, force=True)
-        batch_options = {'after_id': after_id, 'batch_size': min(remaining, METADATA_BATCH_SIZE)}
+        batch_options = {'batch_size': min(remaining, METADATA_BATCH_SIZE)}
         if processor.mode == 'extract':
-            batch = processor.store.extraction_batch(processor.stopped, **batch_options)
+            batch = processor.store.extraction_batch(processor.stopped, after_id=after_id, **batch_options)
         else:
             batch, processor.known = processor.store.evaluation_batch(processor.stopped,
-                languages=processor.config['sup_langs']['tt']['codes'], **batch_options)
+                languages=processor.config['sup_langs']['tt']['codes'], after_md5=after_md5, **batch_options)
         if not batch:
             discovery['inventory_exhausted'] = True
             processor.log(f'Metadata {processor.mode}: no further candidates returned; finishing run')
             return
         # Advance even when every item is deferred locally, so a run cannot cycle on one batch.
         after_id = batch[-1]['publication_id']
+        if processor.mode == 'evaluate':
+            after_md5 = batch[-1]['evidence_md5']
         discovery['scanned'] += len(batch)
         candidates = []
         for publication in batch:
@@ -370,14 +376,31 @@ def _process_batches(processor, skipped, discovery):
         for publication in candidates:
             if processor.stopped():
                 return
+            if processor.mode == 'evaluate' and publication['publication_id'] in processed_publications:
+                publication = processor.store.refresh_evaluation(publication['evidence_md5'], processor.stopped,
+                    languages=processor.config['sup_langs']['tt']['codes'])
+                if publication is None:
+                    skipped['no_longer_pending'] += 1
+                    processor.progress.total -= 1
+                    continue
+                if _needs_extraction(publication['schema_org']):
+                    skipped['unusable_metadata'] += 1
+                    processor.progress.total -= 1
+                    continue
+                if not _retry_eligible(publication, mode=processor.mode, checkpoints=processor.checkpoints,
+                                      version=processor.version, models=processor.models):
+                    skipped['retry_excluded'] += 1
+                    processor.progress.total -= 1
+                    continue
             processor.process(publication)
+            processed_publications.add(publication['publication_id'])
 
 
 def execute(context, *, mode):
     if context.options.per_mime_limit is not None or context.options.only_md5s or context.options.retry_known_failures:
-        raise ValueError('Metadata tasks support a publication limit; clear MIME/source/retry options')
+        raise ValueError('Metadata tasks support a candidate limit; clear MIME/source/retry options')
     summary = {'kind': 'library.metadata_extraction_summary' if mode == 'extract' else 'library.metadata_evaluation_summary',
-               'unit': 'publication', 'checkpoint_namespace': FLOWS[mode]}
+               'unit': 'publication' if mode == 'extract' else 'document', 'checkpoint_namespace': FLOWS[mode]}
     if context.should_stop():
         return {**summary, 'outcome': 'stopped', 'stopped': True}
     store = MetadataProcessingStore(get_postgres_engine(context.db.database_url, schema=context.db.schema), schema=context.db.schema)
@@ -403,7 +426,7 @@ def execute(context, *, mode):
         context.log(f'Metadata {label} settings: response timeout=' + str(metadata_settings['response_timeout_seconds'])
                     + 's, first pages=' + str(metadata_settings['first_pages'])
                     + ', last pages=' + str(metadata_settings['last_pages']))
-        context.log(f'Metadata processing: mode={mode}; fetching batches of up to {METADATA_BATCH_SIZE} publications')
+        context.log(f'Metadata processing: mode={mode}; fetching batches of up to {METADATA_BATCH_SIZE} {summary["unit"]}s')
         _process_batches(processor, skipped, discovery)
     except InterruptedError as exc:
         if not processor.stopped():

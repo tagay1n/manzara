@@ -45,13 +45,13 @@ def _projected_record(record):
     return result
 
 
-def _decision(publication, protected):
-    if publication['evaluation_method'] is None:
+def _decision(document, protected):
+    if document['evaluation_method'] is None:
         return {}, {}
     changes = {field: value for field, value in {
-        'inclusion': 'pending', 'classification_id': None, 'evaluation_method': None,
-    }.items() if publication[field] != value}
-    if protected & {'inclusion', 'classification_id', 'evaluation_method'}:
+        'inclusion': 'pending', 'evaluation_method': None,
+    }.items() if document[field] != value}
+    if protected & {'inclusion', 'evaluation_method'}:
         return {}, changes
     return changes, {}
 
@@ -61,7 +61,7 @@ def _merge(snapshot, incoming, *, reset_evaluation):
     before = source['metadata_record']
     protected = set(source['publication_protections'])
     doc_protected = set(source['document_protections'])
-    decision, decision_proposal = _decision(snapshot['publication'], protected) if reset_evaluation else ({}, {})
+    decision, decision_proposal = _decision(source, doc_protected) if reset_evaluation else ({}, {})
     prior = {(row['role'], row['position'], row['nested_position']): row for row in before['credits']}
     for credit in incoming['credits']:
         old = prior.get((credit['role'], credit['position'], credit['nested_position']))
@@ -145,16 +145,16 @@ def _prepare(source, schema_org, *, actor, method, evaluation):
     incoming['subjects'] = unmanaged_subjects(incoming['subjects'])
     merged, plan = _merge(saved, incoming, reset_evaluation=evaluation is None)
     merged = _projected_record(merged)
-    path = saved['source']['classification_path'] if not plan['decision'] else None
+    path = saved['source']['classification_path']
     validation = {}
     if evaluation is not None:
         # The server resolves taxonomy IDs and decides whether protections retain
         # the old decision. Validate both resulting envelopes before that request.
-        accepted = {'ddc': evaluation['ddc'], 'path_en': evaluation['path']} if evaluation['applicable'] else None
+        accepted = {'ddc': evaluation['ddc'], 'path_en': evaluation['path']} if evaluation['applicable'] else path
         validation = {name: sorted({issue['code'] for issue in metadata_contract_issues(_classified_schema(merged, value))})
                       for name, value in (('accepted', accepted), ('retained', path))}
-        decision_protected = bool(set(source['publication_protections']) &
-                                  {'inclusion', 'classification_id', 'evaluation_method'})
+        decision_protected = bool(set(source['publication_protections']) & {'classification_id'}
+                                  or set(source['document_protections']) & {'inclusion', 'evaluation_method'})
         issues = validation['accepted']
         review_possible = bool(plan['blocked']) or decision_protected
     else:

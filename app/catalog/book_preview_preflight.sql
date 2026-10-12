@@ -44,10 +44,10 @@ WITH required AS (
             WHERE c.conrelid=r.oid AND c.contype='f' AND c.confdeltype='c'
                 AND c.column_names=ARRAY[f.column_name] AND parent.relname=f.parent AND n.nspname=:schema)
     UNION ALL
-    SELECT 'Book previews require catalog revision 20261008_0062 or later'
+    SELECT 'Book previews require catalog revision 20261012_0067 or later'
         WHERE (SELECT count(*) FROM deployed)<>1 OR NOT EXISTS (
             SELECT 1 FROM deployed WHERE CASE WHEN revision ~ '^\d{8}_\d{4}$'
-                THEN split_part(revision,'_',2)::integer>=62 ELSE false END)
+                THEN split_part(revision,'_',2)::integer>=67 ELSE false END)
 ), envelope AS (
     {{candidate_query}} LIMIT 0
 )

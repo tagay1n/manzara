@@ -27,7 +27,7 @@ SOURCES = """
         FROM catalog_preview_requests r WHERE r.md5=d.md5 AND r.recipe=:recipe
         ORDER BY r.request_id DESC LIMIT 1
     ) latest ON TRUE
-    WHERE p.inclusion='included' AND p.merged_into_id IS NULL
+    WHERE d.inclusion='included' AND p.merged_into_id IS NULL
       AND d.mime_type='application/pdf' AND d.complete IS TRUE AND d.restricted IS FALSE
       AND NULLIF(BTRIM(s.locator),'') IS NOT NULL AND s.size IS NOT NULL
       AND s.verified_at IS NOT NULL
@@ -58,8 +58,8 @@ class BookPreviewCatalogStore:
     def preflight(self, *, recipe):
         """Read deployed columns, key constraints and the actual candidate envelope."""
         required = {
-            "catalog_documents": {"md5", "publication_id", "revision", "updated_at", "mime_type", "complete", "restricted", "selected", "content_extraction_method", "meta_extraction_method"},
-            "catalog_publications": {"publication_id", "revision", "inclusion", "merged_into_id"},
+            "catalog_documents": {"md5", "publication_id", "revision", "updated_at", "mime_type", "complete", "restricted", "selected", "inclusion", "content_extraction_method", "meta_extraction_method"},
+            "catalog_publications": {"publication_id", "revision", "merged_into_id"},
             "catalog_locations": {"location_id", "md5", "provider", "purpose", "revision", "locator", "size", "etag", "verified_at"},
             "catalog_preview_requests": {"request_id", "md5", "recipe", "idempotency_key", "status", "private", "actor", "claim_token", "lease_until", "source_page_count", "created_at"},
             "catalog_preview_pages": {"request_id", "role", "page_number", "small_key", "large_key"},

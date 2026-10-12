@@ -4,7 +4,7 @@ The separate public site consumes only `library.site_export` bundles, never Manz
 
 ## Eligibility and publication
 
-Export complete unrestricted selected files of included, unmerged publications with verified primary locations in the configured public bucket and no active cleanup. Verification means catalog checkpoints, not remote probes. One read-only repeatable-read snapshot includes ordered bibliography/accessibility/references, identities, taxonomy, collections, and successful preview assets. Collection publication is independent; content URLs require verified configured content-bucket locations.
+Export included complete unrestricted selected files of unmerged publications with verified primary locations in the configured public bucket and no active cleanup. Verification means catalog checkpoints, not remote probes. One read-only repeatable-read snapshot includes ordered bibliography/accessibility/references, identities, taxonomy, collections, and successful preview assets. Collection publication is independent; content URLs require verified configured content-bucket locations.
 
 Exclude source paths/upstream evidence, private/encrypted/signed URLs, credentials/checksums/workflow state. Invalid metadata remains repair state; restricted previews never export. Manzara owns eligibility, Schema.org validation, contextual identity resolution, joins, and public URLs.
 

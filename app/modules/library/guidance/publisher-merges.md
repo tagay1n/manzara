@@ -6,7 +6,7 @@
 
 Read normalized entities/names/linked alias reviews/publisher contributions. Group one entry per active publisher with display name and linked aliases; only spellings outside the combined name set become candidates. Confirmation/contextual resolution do not change grouping. Generation never changes identities/aliases/confirmation/credits.
 
-All scopes include every active publisher under canonical projection rules. Included publications with metadata supply observed spellings/distinct MD5 counts; aliases do not double-count. Analyze uncovered spellings once with every associated name ID. Durable keys are `entity:<id>` / `name:<id>`; prompt IDs are snapshot-local.
+All scopes include every active publisher under canonical projection rules. Included files of publications with metadata supply observed spellings/distinct MD5 counts; aliases do not double-count. Analyze uncovered spellings once with every associated name ID. Durable keys are `entity:<id>` / `name:<id>`; prompt IDs are snapshot-local.
 
 `auto` uses `all` until a current-contract checkpoint exists, then `new`. `new` includes skipped unresolved names and requires a new cluster member plus at most one existing identity, preserving its ID/name. `all` permits existing-identity merge proposals. Empty inventory/no new candidates finishes without inference.
 

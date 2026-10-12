@@ -16,16 +16,19 @@ from app.postgres_engine import acquire_postgres_engine, release_postgres_engine
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _COHORT = """
     WITH export_publications AS (
-        SELECT * FROM {catalog}catalog_publications
-        WHERE inclusion='included' AND merged_into_id IS NULL
+        SELECT p.* FROM {catalog}catalog_publications p
+        WHERE p.merged_into_id IS NULL AND EXISTS (
+            SELECT 1 FROM {catalog}catalog_documents d
+            WHERE d.publication_id=p.publication_id AND d.inclusion='included')
     ), export_documents AS (
         SELECT d.* FROM {catalog}catalog_documents d
         JOIN export_publications p USING(publication_id)
+        WHERE d.inclusion='included'
     )
 """
 _REQUIRED = {
-    "catalog_documents": {"md5", "publication_id", "mime_type", "complete", "restricted", "selected"},
-    "catalog_publications": {"publication_id", "inclusion", "merged_into_id", "has_metadata", "metadata_present",
+    "catalog_documents": {"md5", "publication_id", "mime_type", "complete", "restricted", "selected", "inclusion"},
+    "catalog_publications": {"publication_id", "merged_into_id", "has_metadata", "metadata_present",
                              "classification_id", "collection_id", "audience_array", *SCALARS.values()},
     "catalog_locations": {"md5", "provider", "purpose", "locator", "size", "verified_at"},
     "catalog_collections": {"collection_id", "title", "include_in_library"},
@@ -52,7 +55,7 @@ _REQUIRED = {
     "document_cleanup_queue": {"md5", "scope", "status"},
 }
 _CANDIDATES = """
-    SELECT d.md5,d.publication_id,d.mime_type,d.complete,d.restricted,d.selected,
+    SELECT d.md5,d.publication_id,d.mime_type,d.complete,d.restricted,d.selected,d.inclusion,
            p.has_metadata,p.metadata_present,p.work_type,p.name,p.description,p.edition,
            p.date_published,p.page_count,p.audience_array,p.classification_id,p.collection_id,
            s.locator AS document_url,s.size AS primary_storage_size,
@@ -261,8 +264,8 @@ class LibrarySiteExportRepository:
         revision = str(conn.execute(text(
             f'SELECT version_num FROM "{version_schema}".alembic_version_manzara'
         )).scalar_one())
-        if not re.fullmatch(r"\d{8}_\d{4}", revision) or int(revision.split("_")[1]) < 62:
-            raise RuntimeError("Static Library export requires catalog revision 20261008_0062 or later; apply migrations separately")
+        if not re.fullmatch(r"\d{8}_\d{4}", revision) or int(revision.split("_")[1]) < 67:
+            raise RuntimeError("Static Library export requires catalog revision 20261012_0067 or later; apply migrations separately")
 
     def load_snapshot(self, *, should_stop=lambda: False, log=lambda _message: None):
         """Read normalized facts and exact identities without any catalog mutation."""

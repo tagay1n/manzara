@@ -82,8 +82,8 @@ class DocumentSyncStore:
     def preflight(self) -> None:
         """Inspect the deployed schema before any storage or catalog mutation."""
         required = {
-            "catalog_publications": {"publication_id", "inclusion", "has_metadata", "metadata_present", "revision"},
-            "catalog_documents": {"md5", "publication_id", "mime_type", "complete", "restricted", "selected", "revision", "updated_at"},
+            "catalog_publications": {"publication_id", "has_metadata", "metadata_present", "revision"},
+            "catalog_documents": {"md5", "publication_id", "mime_type", "complete", "restricted", "selected", "inclusion", "revision", "updated_at"},
             "catalog_locations": {"location_id", "md5", "provider", "purpose", "source_path", "resource_id", "public_url", "public_key", "locator", "size", "etag", "verified_at", "revision", "updated_at"},
             "catalog_protections": {"record_kind", "record_key", "field"},
             "library_non_pdf_extraction_state": {"md5", "verified_source_mime"},
@@ -105,8 +105,8 @@ class DocumentSyncStore:
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", version_schema):
                 raise ValueError("Invalid migration version schema")
             revision = str(conn.execute(text(f'SELECT version_num FROM "{version_schema}".alembic_version_manzara')).scalar_one())
-            if not re.fullmatch(r"\d{8}_\d{4}", revision) or int(revision.split('_')[1]) < 62:
-                raise RuntimeError("Sync requires catalog revision 20261008_0062 or later")
+            if not re.fullmatch(r"\d{8}_\d{4}", revision) or int(revision.split('_')[1]) < 67:
+                raise RuntimeError("Sync requires catalog revision 20261012_0067 or later")
             pk = inspector.get_pk_constraint("catalog_documents", schema=self.schema)
             if pk['constrained_columns'] != ['md5']:
                 raise RuntimeError("Sync requires an unambiguous document MD5 primary key")
@@ -239,7 +239,7 @@ class DocumentSyncStore:
             outcomes[md5] = 'created' if before is None else 'updated' if changed else 'unchanged'
         identities = reserve_publications(conn, [row['md5'] for row in new_documents])
         insert_records(conn, 'publication', [{'publication_id': identity, 'has_metadata': False,
-                                             'metadata_present': False, 'inclusion': 'pending'}
+                                             'metadata_present': False}
                                             for identity in identities.values()])
         insert_records(conn, 'document', [{**row, 'publication_id': identities[row['md5']]}
                                          for row in new_documents])

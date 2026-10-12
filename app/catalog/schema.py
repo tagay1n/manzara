@@ -46,15 +46,12 @@ def build_metadata(schema: str) -> MetaData:
           Column("description", Text), Column("edition", Text), Column("date_published", Text),
           Column("page_count", Integer),
           Column("audience_array", Boolean, nullable=False, server_default="false"),
-          Column("inclusion", Text, nullable=False, server_default="pending"),
-          Column("evaluation_method", Text),
           foreign("classification_id", "classifications.classification_id", nullable=True),
           foreign("collection_id", "collections.collection_id", nullable=True),
           Column("collection_item_title", Text), Column("collection_created_at", Text), Column("collection_updated_at", Text),
           Column("has_metadata", Boolean, nullable=False, server_default="true"),
           Column("metadata_present", Boolean, nullable=False, server_default="true"),
           foreign("merged_into_id", "publications.publication_id", nullable=True),
-          CheckConstraint("inclusion IN ('pending','included','excluded')"),
           CheckConstraint("page_count IS NULL OR page_count > 0"),
           CheckConstraint("date_published IS NULL OR date_published ~ '^[0-9]{4}$'",
                           name="ck_catalog_publication_year"),
@@ -63,8 +60,14 @@ def build_metadata(schema: str) -> MetaData:
                  Column("mime_type", Text), Column("complete", Boolean, nullable=False, server_default="true"),
                  Column("restricted", Boolean, nullable=False, server_default="false"),
                  Column("selected", Boolean, nullable=False, server_default="true"),
-                 Column("content_extraction_method", Text), Column("meta_extraction_method", Text), versioned=True)
+                 Column("content_extraction_method", Text), Column("meta_extraction_method", Text),
+                 Column("inclusion", Text, nullable=False, server_default="pending"),
+                 Column("evaluation_method", Text),
+                 CheckConstraint("inclusion IN ('pending','included','excluded')", name="ck_catalog_document_inclusion"),
+                 CheckConstraint("NOT restricted OR inclusion='excluded'", name="ck_catalog_document_library_privacy"), versioned=True)
     Index("idx_catalog_documents_publication", docs.c.publication_id)
+    Index("idx_catalog_documents_included_publication", docs.c.publication_id,
+          postgresql_where=docs.c.inclusion == "included")
     table("locations", identifier("location_id"),
           Column("md5", Text, ForeignKey(docs.c.md5, ondelete="CASCADE"), nullable=False),
           Column("provider", Text, nullable=False), Column("purpose", Text, nullable=False),

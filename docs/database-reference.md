@@ -2,7 +2,7 @@
 
 This is the entry point for an agent building the library administration service in a separate repository. Manzara owns the existing catalog and its operations; this repository currently exposes a terminal CLI and workflow runners, with no retained HTTP API. The new service will need a backend database integration.
 
-This reference describes the checked-in schema and code at baseline `20261008_0062`. The owner reports the catalog migration complete, but this documentation task did not connect to the database or inspect live records. Verify the deployed revision and relations before implementing against them. The [catalog contract](catalog-model.md) owns domain and mutation rules; [operations](operations.md#database-tools) owns bootstrap and recovery.
+This reference describes the retained baseline `20261008_0062` and forward migrations. Verify the applied revision; file inclusion moves to documents at `20261012_0067`. Verify the deployed revision and relations before implementing against them. The [catalog contract](catalog-model.md) owns domain and mutation rules; [operations](operations.md#database-tools) owns bootstrap and recovery.
 
 ## How to connect
 
@@ -48,7 +48,7 @@ try:
             select(
                 publications.c.publication_id,
                 publications.c.name,
-                publications.c.inclusion,
+                publications.c.metadata_present,
                 publications.c.revision,
             ).order_by(publications.c.publication_id).limit(20)
         ).mappings().all()
@@ -84,8 +84,8 @@ All tables in this section live in `database_schema`. Integer IDs are PostgreSQL
 
 | Table / primary key | Contents and important fields |
 | --- | --- |
-| `catalog_publications` / `publication_id` | Bibliography: `name`, `work_type`, `description`, `edition`, `date_published`, `page_count`. Decisions: `inclusion`, `evaluation_method`. Nullable links: `classification_id`, `collection_id`, `merged_into_id`. Also `audience_array`, `has_metadata`, `metadata_present`, collection item title/timestamps, revision/timestamp. |
-| `catalog_documents` / `md5` | Required `publication_id`; `mime_type`, `complete`, `restricted`, `selected`, `content_extraction_method`, `meta_extraction_method`, revision/timestamp. Bibliographic title, ISBN, language, and credits belong to its publication. |
+| `catalog_publications` / `publication_id` | Bibliography: `name`, `work_type`, `description`, `edition`, `date_published`, `page_count`. Nullable links: `classification_id`, `collection_id`, `merged_into_id`. Also `audience_array`, `has_metadata`, `metadata_present`, collection item title/timestamps, revision/timestamp. |
+| `catalog_documents` / `md5` | Required `publication_id`; `mime_type`, `complete`, `restricted`, `selected`, `inclusion`, `evaluation_method`, `content_extraction_method`, `meta_extraction_method`, revision/timestamp. Bibliographic title, ISBN, language, and credits belong to its publication. |
 | `catalog_locations` / `location_id` | File location and integrity checkpoint: `md5`, `provider`, `purpose`, `locator`, `source_path`, `resource_id`, `public_url`, `public_key`, `size`, `etag`, `verified_at`, revision/timestamp. Unique `(md5, provider, purpose)`; size is bytes and can be unknown. File bytes are outside PostgreSQL. |
 | `catalog_collections` / `collection_id` | `title`, `notes`, independent `include_in_library` boolean, derived `normalized_title`, `metadata_template_json` (JSON encoded as text), source/application timestamps, revision/timestamp. |
 | `catalog_classification_nodes` / `node_id` | Taxonomy tree: `parent_id`, `ddc`, `label_en`, `label_tt`, revision/timestamp. Triggers prevent cycles and enforce DDC consistency. |
@@ -98,7 +98,7 @@ All tables in this section live in `database_schema`. Integer IDs are PostgreSQL
 | `catalog_credit_groups` / `(publication_id, role, position)` | Outer credit group and optional custom `role_name`. Positions preserve the bibliographic grouping. |
 | `catalog_contributions` / `contribution_id` | A particular credit occurrence: `publication_id`, `role`, `position`, `nested_position`, required `name_id`, nullable resolved `entity_id`, `resolution`, revision/timestamp. Unique `(publication_id, role, position, nested_position)`; references its parent credit group. |
 
-`inclusion` is `pending`, `included`, or `excluded`. Entity `kind` is `person`, `organization`, or `unknown`; entity `status` is `active`, `merged`, or `archived`. Entity/alias `approval` and contribution `resolution` are independently `unconfirmed` or `confirmed`. A confirmed contribution requires an entity ID; a merged entity requires a merge target. Active status and successful AI processing do not mean human confirmation.
+`catalog_documents.inclusion` is `pending`, `included`, or `excluded`. PostgreSQL requires restricted files to be `excluded`; restricting a previously included file revokes its inclusion, and explicitly including a restricted file is rejected. Removing a restriction does not automatically include the file. New unrestricted files start pending. Publication inclusion is derived with `EXISTS` over included files; no `inclusion` or `evaluation_method` column remains on `catalog_publications`. Entity `kind` is `person`, `organization`, or `unknown`; entity `status` is `active`, `merged`, or `archived`. Entity/alias `approval` and contribution `resolution` are independently `unconfirmed` or `confirmed`. A confirmed contribution requires an entity ID; a merged entity requires a merge target. Active status and successful AI processing do not mean human confirmation.
 
 Credit roles supported by the metadata envelope are `author`, `editor`, `translator`, `illustrator`, `publisher`, and `contributor`. A custom role label belongs to the credit group. Resolving one contribution does not resolve every occurrence of its spelling, and adding an alias does not automatically resolve matching credits.
 
@@ -106,9 +106,11 @@ Credit roles supported by the metadata envelope are `author`, `editor`, `transla
 
 `has_metadata` determines whether the legacy metadata record exists. `metadata_present` determines whether its Schema.org payload is present. The legacy `public.metadata` view has no row when `has_metadata=false`, and can have a row with a null payload when `metadata_present=false`. Use the publication/document tables for complete inventory.
 
-From revision `20261011_0064`, `public.metadata.lib` is file-level inclusion: restricted or unknown-privacy files always return `false`; unrestricted files reflect their publication's `inclusion` (`included` → `true`, `excluded` → `false`, `pending` → null). This privacy gate does not change publication inclusion or document selection. Files of one publication can therefore report different `lib` values. Public export additionally requires selection, completeness, verified public storage, and no active cleanup; see [export eligibility](../app/modules/library/guidance/site-export.md#eligibility-and-publication).
+From revision `20261012_0067`, `public.metadata.lib` reflects only the individual file's `inclusion` (`included` → `true`, `excluded` → `false`, `pending` → null), with a defensive privacy gate. `lib_eval_method` comes from that file's `evaluation_method`. Files of one publication can have different decisions. Public export additionally requires selection, completeness, verified public storage, and no active cleanup; see [export eligibility](../app/modules/library/guidance/site-export.md#eligibility-and-publication).
 
-The legacy metadata write adapter rejects `lib=true` on restricted files. Writing `false` or null through a restricted row preserves publication inclusion, including unrestricted siblings. Change publication inclusion through the publication record; unrestricted adapter rows retain their existing inclusion-write behavior. Adapter `RETURNING lib` uses the same privacy gate as reads.
+`catalog_publication_metadata.inclusion` remains a derived, read-only legacy projection: `included` if any file is included, otherwise `pending` if any file is pending, otherwise `excluded` (including empty publications). Its legacy `evaluation_method` selects one non-null file method, preferring included files then MD5; use the file field for exact provenance. These view values store no duplicate decisions. All other editable publication facts remain publication-owned.
+
+Writing `public.metadata.lib` changes only that file, never its siblings. Restricted files reject `true` and retain `excluded` for false/null writes. Use `catalog_documents.inclusion` for normalized backend commands; attempts to write derived inclusion/evaluation through publication commands fail. `RETURNING` uses the same file projection as reads. Migration 0067 preserves unrestricted files' previous decisions, excludes restricted files, and moves evaluation provenance/protections to files. Metadata, classification, locations and artifacts remain intact.
 
 ### Ordered metadata relations
 
@@ -140,7 +142,7 @@ Current location combinations include:
 
 A locator is not necessarily an anonymously fetchable URL. Restricted documents can use encrypted `enc:` locators. Interpret them through [app/document_storage.py](../app/document_storage.py) and the [document contract](../app/modules/library/guidance/documents.md); storage credentials and encryption settings are separate from the database connection.
 
-Inclusion does not override `restricted`, `complete`, `selected`, or collection decisions. Raw location rows can contain sensitive links even when a document is restricted. The legacy `public.document` projection suppresses restricted Yandex public links, but direct table reads need backend access control. Unknown source privacy fails closed. Restricted documents and previews require private storage and authenticated delivery; never return raw locators or tokens to a public client.
+File inclusion does not override `restricted`, `complete`, `selected`, or collection decisions. Raw location rows can contain sensitive links even when a document is restricted. The legacy `public.document` projection suppresses restricted Yandex public links, but direct table reads need backend access control. Unknown source privacy fails closed. Restricted documents and previews require private storage and authenticated delivery; never return raw locators or tokens to a public client.
 
 ## Reviews, provenance, and previews
 
@@ -204,10 +206,13 @@ These SQL snippets assume a connection with the configured `search_path` and a r
 Publication with its files and independently controlled collection:
 
 ```sql
-SELECT p.publication_id, p.name, p.date_published, p.inclusion,
+SELECT p.publication_id, p.name, p.date_published,
+       EXISTS(SELECT 1 FROM catalog_documents included
+              WHERE included.publication_id=p.publication_id
+                AND included.inclusion='included') AS publication_in_library,
        p.revision AS publication_revision,
        c.collection_id, c.title AS collection_title, c.include_in_library,
-       d.md5, d.mime_type, d.complete, d.restricted, d.selected,
+       d.md5, d.mime_type, d.complete, d.restricted, d.selected, d.inclusion,
        d.revision AS document_revision
 FROM catalog_publications p
 LEFT JOIN catalog_collections c ON c.collection_id = p.collection_id

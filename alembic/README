@@ -128,3 +128,43 @@ Review the Python migration source without connecting to PostgreSQL:
 After an authorized upgrade, inspect the deployed revision, the validated
 ck_catalog_publication_year constraint, and remaining non-YYYY values read-only.
 Follow ../docs/verification.md for verification limits.
+
+File-owned library inclusion
+----------------------------
+20261012_0067 moves inclusion and evaluation_method from catalog_publications
+into catalog_documents. Unrestricted files inherit their former publication
+status/method; restricted files become excluded. Publication metadata keeps a
+read-only status derived from files: any included file makes it included,
+otherwise any pending file makes it pending, otherwise it is excluded.
+Empty publications are excluded. There is no stored publication decision.
+
+This is a resumable forward migration. Staging columns and backfill batches of
+at most 500 files commit independently while the old publication fields/views
+remain authoritative. The final schema cutover is transactional and briefly
+locks documents/publications and review controls with a ten-second lock timeout.
+Unresolved inclusion/evaluation proposals stop the cutover. If old writers
+change decisions during backfill, the cutover refuses to proceed; pause writers
+and resume to reconcile the remaining files. New readers require revision 0067
+and cannot use partially staged file decisions. Existing protections move to
+each member file.
+The document privacy trigger revokes inclusion when a file becomes restricted,
+and the validated constraint prevents every writer from including a restricted
+file. Removing a restriction leaves the file excluded until explicitly changed.
+Metadata, classification, source/primary/content checkpoints and objects remain
+untouched. Changed file revisions advance to invalidate old snapshots.
+Publication rows are not rewritten.
+
+Coordinate deployment with all catalog writers: the old physical publication
+inclusion/evaluation columns are removed, so external admin services must switch
+to document fields and derived EXISTS queries. Retained legacy views keep their
+column identities/grants; their publication status/method fields are derived
+and not writable. See ../docs/database-reference.md for these contracts.
+Scheduled runners need the matching code; they do not apply this migration.
+The data-dependent backfill requires online mode. Review its bounded UPDATE
+and the final DDL without changing PostgreSQL:
+
+    sed -n '1,180p' alembic/versions/20261012_0067_file_library_inclusion.py
+    sed -n '1,260p' alembic/sql/file_library_inclusion_0067.sql
+
+Downgrade refuses to collapse independent file decisions. Follow
+../docs/verification.md; no tests are authorized by a migration implementation.

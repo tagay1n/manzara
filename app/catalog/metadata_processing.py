@@ -3,7 +3,7 @@ from app.postgres_engine import configured_timeout_sql
 from app.runtime_config import config_integer
 from app.settings import configured_schema
 
-"""Publication metadata snapshots and catalog-native task commands."""
+"""Publication metadata and file-evaluation snapshots with guarded catalog commands."""
 
 import hashlib
 import json
@@ -14,7 +14,7 @@ from pathlib import Path
 
 from sqlalchemy import inspect, select, text
 
-from app.catalog.contracts import CatalogConflict, integer
+from app.catalog.contracts import CatalogConflict, document_md5, integer
 from app.catalog.metadata import compose_metadata
 from app.catalog.metadata_save import save_metadata_result
 from app.catalog.metadata_store import unmanaged_subjects
@@ -62,21 +62,32 @@ METADATA_ENVELOPE_QUERY = Path(__file__).with_name('metadata_extraction.sql').re
 EXTRACTION_BATCH_QUERY = (METADATA_ENVELOPE_QUERY
     .replace('{{publications}}', PUBLICATION_BATCH.replace('{{eligibility}}', 'p.metadata_present IS FALSE'))
     .replace('{{sources}}', SOURCES))
-EVALUATION_PUBLICATIONS = PUBLICATION_BATCH.replace('{{eligibility}}', """
-    p.metadata_present IS TRUE
-    AND (p.inclusion='pending'
-         OR (p.inclusion='included' AND p.classification_id IS NULL)
-         OR (p.inclusion='excluded' AND p.classification_id IS NOT NULL))
-    AND EXISTS (SELECT 1 FROM catalog_publication_languages language
-        WHERE language.publication_id=p.publication_id AND language.language=ANY(:languages))
-""")
+EVALUATION_FILES = "SELECT p.*,d.md5 AS evidence_md5\n" + SOURCE_FROM + """
+ JOIN catalog_publications p ON p.publication_id=d.publication_id
+""" + SOURCE_WHERE + """
+   AND p.merged_into_id IS NULL AND p.metadata_present IS TRUE
+   AND (d.inclusion='pending' OR (d.inclusion='included' AND p.classification_id IS NULL))
+   AND d.md5>:after_md5
+   AND EXISTS (SELECT 1 FROM catalog_publication_languages language
+       WHERE language.publication_id=p.publication_id AND language.language=ANY(:languages))
+   AND NOT EXISTS (SELECT 1 FROM catalog_proposals q WHERE q.publication_id=p.publication_id
+       AND q.kind='metadata' AND q.status IN ('pending','deferred')
+       AND q.evidence->>'actor'=ANY(:actors))
+ ORDER BY d.md5 LIMIT :batch_size
+"""
+EVALUATION_ENVELOPE_QUERY = (METADATA_ENVELOPE_QUERY
+    .replace('AND d.publication_id IN (SELECT publication_id FROM candidates)',
+             'AND d.md5 IN (SELECT evidence_md5 FROM candidates)')
+    .replace('WHERE source.publication_id=p.publication_id',
+             'WHERE source.publication_id=p.publication_id AND source.md5=p.evidence_md5')
+    .replace('ORDER BY p.publication_id', 'ORDER BY p.evidence_md5'))
 EVALUATION_BATCH_QUERY = (Path(__file__).with_name('metadata_evaluation.sql').read_text(encoding='utf-8')
-    .replace('{{envelope}}', METADATA_ENVELOPE_QUERY
-        .replace('{{publications}}', EVALUATION_PUBLICATIONS).replace('{{sources}}', SOURCES)))
+    .replace('{{envelope}}', EVALUATION_ENVELOPE_QUERY
+        .replace('{{publications}}', EVALUATION_FILES).replace('{{sources}}', SOURCES)))
 SOURCE_FIELDS = (
     'md5', 'publication_id', 'revision', 'mime_type', 'selected',
     'primary_revision', 'source_revision', 'content_revision', 'document_url',
-    'primary_storage_size', 'content_url', 'source_path', 'upstream_metadata',
+    'primary_storage_size', 'content_url', 'source_path', 'upstream_metadata', 'inclusion', 'evaluation_method',
 )
 
 
@@ -96,6 +107,13 @@ def _compose_schema(record, path=None):
         ]
     # Automation reads observed spellings, not an inferred canonical identity.
     return compose_metadata(record)
+
+
+def _evaluation_languages(languages):
+    if not isinstance(languages, (list, tuple)) or any(
+            not isinstance(language, str) or not language.strip() for language in languages):
+        raise ValueError('Evaluation languages must be a list of nonblank language codes')
+    return list(languages)
 
 
 class MetadataProcessingStore:
@@ -128,8 +146,8 @@ class MetadataProcessingStore:
             if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', version_schema):
                 raise ValueError('Invalid migration version schema')
             revision = str(conn.execute(text(f'SELECT version_num FROM "{version_schema}".alembic_version_manzara')).scalar_one())
-            if not re.fullmatch(r'\d{8}_\d{4}', revision) or int(revision.split('_')[1]) < 62:
-                raise RuntimeError('Metadata processing requires catalog revision 20261008_0062 or later')
+            if not re.fullmatch(r'\d{8}_\d{4}', revision) or int(revision.split('_')[1]) < 67:
+                raise RuntimeError('Metadata processing requires catalog revision 20261012_0067 or later')
             for name, key in (('catalog_documents', ['md5']), ('catalog_publications', ['publication_id'])):
                 if inspector.get_pk_constraint(name, schema=self.schema)['constrained_columns'] != key:
                     raise RuntimeError(f'Metadata processing requires the {name} primary key {key}')
@@ -150,7 +168,7 @@ class MetadataProcessingStore:
             path = conn.execute(text('SELECT catalog_path(:node)'), {'node': node}).scalar_one()
         return _compose_schema(record, path)
 
-    def _batch(self, query, should_stop, *, after_id, batch_size, parameters=None):
+    def _batch(self, query, should_stop, *, after_id=0, batch_size, parameters=None):
         """Fetch a bounded candidate/source/metadata envelope in one PostgreSQL statement."""
         integer(after_id, 'after_id', minimum=0)
         integer(batch_size, 'batch_size')
@@ -186,15 +204,40 @@ class MetadataProcessingStore:
         rows = self._batch(EXTRACTION_BATCH_QUERY, should_stop, after_id=after_id, batch_size=batch_size)
         return self._publications(rows, should_stop)
 
-    def evaluation_batch(self, should_stop, *, languages, after_id=0, batch_size=METADATA_BATCH_SIZE):
-        if not isinstance(languages, (list, tuple)) or any(
-                not isinstance(language, str) or not language.strip() for language in languages):
-            raise ValueError('Evaluation languages must be a list of nonblank language codes')
-        rows = self._batch(EVALUATION_BATCH_QUERY, should_stop, after_id=after_id, batch_size=batch_size,
-            parameters={'languages': list(languages),
+    def evaluation_batch(self, should_stop, *, languages, after_md5='', batch_size=METADATA_BATCH_SIZE):
+        languages = _evaluation_languages(languages)
+        if not isinstance(after_md5, str):
+            raise ValueError('Evaluation cursor must be an MD5 string or empty string')
+        if after_md5:
+            document_md5(after_md5)
+        rows = self._batch(EVALUATION_BATCH_QUERY, should_stop, batch_size=batch_size,
+            parameters={'languages': languages,
+                        'after_md5': after_md5,
                         'known_classification_limit': config_integer('metadata', 'known_classification_limit')})
         envelope = rows[0]
         return self._publications(envelope['publications'], should_stop), envelope['known_classifications']
+
+    def refresh_evaluation(self, md5, should_stop, *, languages):
+        """Refresh a sibling after this run changed their shared bibliography."""
+        document_md5(md5)
+        languages = _evaluation_languages(languages)
+        query = EVALUATION_ENVELOPE_QUERY.replace('{{publications}}',
+            "SELECT p.*,:md5 AS evidence_md5 FROM catalog_publications p "
+            "JOIN catalog_documents d USING(publication_id) WHERE d.md5=:md5 AND p.merged_into_id IS NULL "
+            "AND p.metadata_present IS TRUE AND (d.inclusion='pending' "
+            "OR (d.inclusion='included' AND p.classification_id IS NULL)) "
+            "AND EXISTS(SELECT 1 FROM catalog_publication_languages l "
+            "WHERE l.publication_id=p.publication_id AND l.language=ANY(:languages)) "
+            "AND NOT EXISTS(SELECT 1 FROM catalog_proposals q WHERE q.publication_id=p.publication_id "
+            "AND q.kind='metadata' AND q.status IN ('pending','deferred') "
+            "AND q.evidence->>'actor'=ANY(:actors))").replace('{{sources}}', SOURCES)
+        if should_stop():
+            raise InterruptedError('Metadata discovery stopped')
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(query), {'md5': md5, 'actors': list(METADATA_TASK_ACTORS),
+                                             'languages': languages}).mappings().all()
+        items = self._publications(rows, should_stop)
+        return items[0] if items else None
 
     @contextmanager
     def mutation(self, publication, source):
@@ -221,8 +264,11 @@ class MetadataProcessingStore:
         snapshot = source.get('save_snapshot')
         if not snapshot or publication['publication_id'] != snapshot['publication']['publication_id']:
             raise CatalogConflict('Metadata save publication does not match the selected snapshot')
-        snapshot_query = (METADATA_ENVELOPE_QUERY
-            .replace('{{publications}}', "SELECT * FROM catalog_publications WHERE publication_id=publication_key")
+        publication_query = "SELECT * FROM catalog_publications WHERE publication_id=publication_key"
+        if evaluation is not None:
+            publication_query = "SELECT p.*,document_key AS evidence_md5 FROM catalog_publications p WHERE publication_id=publication_key"
+        snapshot_query = ((EVALUATION_ENVELOPE_QUERY if evaluation is not None else METADATA_ENVELOPE_QUERY)
+            .replace('{{publications}}', publication_query)
             .replace('{{sources}}', SOURCES + ' AND d.md5=document_key'))
         return save_metadata_result(self.engine, self.schema, source, schema_org, actor=actor, method=method,
                                     evaluation=evaluation, snapshot_query=snapshot_query)

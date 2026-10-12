@@ -6,7 +6,7 @@ Owners: [navigation](navigation.md). Common logging/artifact/lifecycle rules are
 
 `library.generate_book_previews` uses one discovery loop, querying at most 200 MD5-ordered candidates per iteration. PostgreSQL joins publications, primary locations, latest requests, successful generations, live leases, and cleanup exclusions; there is no inventory load, global count, or per-document discovery lookup. An empty batch ends the loop. The cursor advances past each fetched batch so failed/busy documents cannot spin in one run; a later run can revisit them. `--limit` caps fetched eligibility before request creation across all batches; repeated `--only-md5` restricts sources; `--retry-known-failures` creates new requests while preserving generations. Progress totals count discovered candidates so far.
 
-Eligible sources are complete unrestricted PDFs of included, unmerged publications, regardless of selection. Completeness means whole-publication content, not download integrity. Require verified `s3/primary` with known size and no active document cleanup plan. Recheck source/eligibility before publication.
+Eligible sources are included complete unrestricted PDFs of unmerged publications, regardless of selection. Completeness means whole-publication content, not download integrity. Require verified `s3/primary` with known size and no active document cleanup plan. Recheck source/eligibility before publication.
 
 Skip current-recipe public successes, including zero selected pages, and known failures unless explicitly retried. Pending/expired claims resume with fresh tokens at document boundaries; live claims skip. Claim only the selected cohort. Catalog requests/pages own intent, leases, recipe, page count, and selected roles; attempts/errors are local.
 

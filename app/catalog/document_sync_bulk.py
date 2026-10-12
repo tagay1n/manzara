@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 
 _RECORDS = {
-    'publication': ('catalog_publications', 'publication_id', ('has_metadata', 'metadata_present', 'inclusion')),
+    'publication': ('catalog_publications', 'publication_id', ('has_metadata', 'metadata_present')),
     'document': ('catalog_documents', 'md5', ('mime_type', 'complete', 'restricted')),
     'source': ('catalog_locations', 'location_id', ('source_path', 'resource_id', 'public_url', 'public_key', 'size')),
     'primary': ('catalog_locations', 'location_id', ('locator', 'size', 'etag', 'verified_at')),

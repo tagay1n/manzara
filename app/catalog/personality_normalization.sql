@@ -45,7 +45,9 @@ BEGIN
         JOIN catalog_publications p USING(publication_id)
         WHERE n.kind='person' AND {{compact_name}}=raw
           AND c.role IN ('author','editor','translator','illustrator','contributor')
-          AND p.inclusion='included' AND p.has_metadata AND p.metadata_present;
+          AND p.has_metadata AND p.metadata_present
+          AND EXISTS(SELECT 1 FROM catalog_documents d
+              WHERE d.publication_id=p.publication_id AND d.inclusion='included');
     PERFORM d.md5 FROM catalog_documents d WHERE d.publication_id=ANY(publications) ORDER BY d.md5 FOR UPDATE;
     PERFORM p.publication_id FROM catalog_publications p
         WHERE p.publication_id=ANY(publications) ORDER BY p.publication_id FOR UPDATE;

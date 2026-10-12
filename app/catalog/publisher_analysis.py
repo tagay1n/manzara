@@ -72,8 +72,8 @@ class PublisherCatalogStore:
             revision = conn.execute(text(
                 f'SELECT version_num FROM "{version_schema}".alembic_version_manzara'
             )).scalar_one()
-            if not re.fullmatch(r"\d{8}_\d{4}", str(revision)) or int(str(revision).split("_")[1]) < 62:
-                raise RuntimeError("Catalog revision 20261008_0062 or later is required; apply migrations separately.")
+            if not re.fullmatch(r"\d{8}_\d{4}", str(revision)) or int(str(revision).split("_")[1]) < 67:
+                raise RuntimeError("Catalog revision 20261012_0067 or later is required; apply migrations separately.")
 
     def _inventory(self, conn, *, lock=False):
         table = self.catalog.table
@@ -102,7 +102,7 @@ class PublisherCatalogStore:
         observed = conn.execute(select(names, documents.c.md5).select_from(credits)
             .join(names).join(publications, publications.c.publication_id == credits.c.publication_id)
             .join(documents, documents.c.publication_id == publications.c.publication_id)
-            .where(credits.c.role == "publisher", publications.c.inclusion == "included",
+            .where(credits.c.role == "publisher", documents.c.inclusion == "included",
                    publications.c.has_metadata.is_(True), publications.c.metadata_present.is_(True))
             .order_by(names.c.name_id, documents.c.md5)).mappings()
         mentions, observed_names = {}, {}

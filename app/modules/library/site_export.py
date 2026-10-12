@@ -193,6 +193,8 @@ def _exclusion_reason(row: Mapping[str, Any], storage: ExportStorage) -> str | N
     digest = str(row.get("md5") or "").strip().lower()
     if not _MD5_RE.fullmatch(digest):
         return "invalid_md5"
+    if row.get("inclusion") != "included":
+        return "not_included"
     if row.get("selected") is not True:
         return "not_selected"
     if row.get("has_active_cleanup") is True:

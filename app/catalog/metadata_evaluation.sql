@@ -12,7 +12,7 @@ WITH batch AS MATERIALIZED (
         ORDER BY usage_count DESC, ddc, c.classification_id LIMIT :known_classification_limit
     ) known
 )
-SELECT COALESCE((SELECT jsonb_agg(to_jsonb(batch) ORDER BY publication_id) FROM batch), '[]'::jsonb)
+SELECT COALESCE((SELECT jsonb_agg(to_jsonb(batch) ORDER BY evidence_md5) FROM batch), '[]'::jsonb)
            AS publications,
        known_classifications.value AS known_classifications
 FROM known_classifications

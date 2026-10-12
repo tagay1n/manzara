@@ -8,17 +8,17 @@ Retained schema history starts at `20261008_0062`; forward migrations extend tha
 
 | Object | Responsibility |
 | --- | --- |
-| Publication | Edition/translation/issue; inclusion, bibliography, languages, identifiers, subjects/audiences, credits, one source-work reference, classification, and primary collection |
-| Document | Stable MD5 file identity; selection, completeness, restrictions, MIME, accessibility, locations |
+| Publication | Edition/translation/issue; bibliography, languages, identifiers, subjects/audiences, credits, one source-work reference, classification, and primary collection |
+| Document | Stable MD5 file identity; library inclusion/evaluation, selection, completeness, restrictions, MIME, accessibility, locations |
 | Entity / name / alias / contribution | People/organizations, observed spellings, identity aliases, contextual credit resolution |
 | Classification | Parent-child taxonomy, stable classification IDs, generated paths/DDC |
 | Collection | Grouping and independent publication switch |
 | Preview request / page | Intent, leases, successful generations, selected assets |
 | Evidence / proposal | Source/review snapshots and pending changes |
 
-Sync creates one pending publication per new MD5 and preserves existing membership; it never infers edition equivalence. Multiple files may share a publication; cleanup can leave it empty. ISBN equality requires review, not automatic grouping. Inclusion never overrides privacy/completeness; unknown privacy fails closed.
+Sync creates one publication and a pending file per new MD5 (restricted files start excluded) and preserves existing membership; it never infers edition equivalence. Multiple files may share a publication; cleanup can leave it empty. ISBN equality requires review, not automatic grouping. File inclusion never overrides privacy/completeness; unknown privacy fails closed. Publications have no stored inclusion decision: they are included exactly when at least one member file is included. Empty publications are not included.
 
-The legacy file-level `metadata.lib` privacy projection and adapter-write contract are documented in [the database reference](database-reference.md#primary-tables-and-fields).
+The file inclusion, derived publication status, and legacy `metadata.lib` adapter-write contract are documented in [the database reference](database-reference.md#primary-tables-and-fields).
 
 Human confirmation is distinct from active/merged status and AI success. One spelling may belong to multiple identities; linking an alias never resolves all matching mentions. Contributions identify reviewed occurrences. Publisher types derive from publisher mentions, then aliases.
 

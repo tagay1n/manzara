@@ -213,9 +213,9 @@ class CoreRepository:
     def check_personality_catalog(self) -> None:
         """Read-only preflight for the supported normalized catalog contract."""
         required = {
-            "catalog_publications": {"publication_id", "inclusion", "has_metadata", "metadata_present"},
+            "catalog_publications": {"publication_id", "has_metadata", "metadata_present"},
             "catalog_publication_languages": {"publication_id", "position", "language"},
-            "catalog_documents": {"md5", "publication_id"},
+            "catalog_documents": {"md5", "publication_id", "inclusion"},
             "catalog_names": {"name_id", "kind", "raw_name"},
             "catalog_entities": {"entity_id", "kind", "approval", "identity_key", "revision"},
             "catalog_aliases": {"alias_id", "name_id", "entity_id", "approval", "revision"},
@@ -244,8 +244,8 @@ class CoreRepository:
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", version_schema):
                 raise ValueError("Invalid migration version schema")
             revision = conn.execute(f'SELECT version_num FROM "{version_schema}".alembic_version_manzara').scalar()
-            if not re.fullmatch(r"\d{8}_\d{4}", str(revision)) or int(str(revision).split("_")[1]) < 62:
-                raise RuntimeError("Catalog revision 20261008_0062 or later is required; apply migrations separately.")
+            if not re.fullmatch(r"\d{8}_\d{4}", str(revision)) or int(str(revision).split("_")[1]) < 67:
+                raise RuntimeError("Catalog revision 20261012_0067 or later is required; apply migrations separately.")
 
 
     def _decode_summary(self, raw_summary: Any) -> Dict[str, Any]:
