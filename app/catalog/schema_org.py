@@ -9,7 +9,8 @@ from typing import Any, Mapping
 from urllib.parse import urlparse
 
 
-CONTRACT_VERSION = "schema-org.v3"
+CONTRACT_VERSION = "schema-org.v4"
+PUBLICATION_YEAR_PATTERN = r"^[0-9]{4}$"
 SCHEMA_CONTEXT = "https://schema.org"
 SUPPORTED_TYPES = frozenset(
     {
@@ -29,7 +30,7 @@ SUPPORTED_TYPES = frozenset(
 ACCESS_MODES = frozenset({"auditory", "tactile", "textual", "visual"})
 
 _ENGLISH_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &'()/:,+.\-]*$")
-_DATE_RE = re.compile(r"^\d{4}(?:-\d{2})?(?:-\d{2})?$")
+_PUBLICATION_YEAR_RE = re.compile(PUBLICATION_YEAR_PATTERN)
 _BCP47_RE = re.compile(
     r"^[A-Za-z]{2,8}(?:-[A-Za-z]{4})?(?:-[A-Za-z]{2}|-\d{3})?"
     r"(?:-[A-Za-z0-9]{5,8}|-\d[A-Za-z0-9]{3})*(?:-x(?:-[A-Za-z0-9]{1,8})+)?$"
@@ -398,10 +399,10 @@ def metadata_contract_issues(schema_org: Any) -> list[dict[str, str]]:
 
     date_published = schema_org.get("datePublished")
     if date_published is not None and (
-        not isinstance(date_published, str) or not _DATE_RE.fullmatch(date_published)
+        not isinstance(date_published, str) or not _PUBLICATION_YEAR_RE.fullmatch(date_published)
     ):
         issues.append(
-            _issue("date_published", "$.datePublished", "invalid publication date")
+            _issue("date_published", "$.datePublished", "publication year must be YYYY")
         )
     for field in ("numberOfPages",):
         value = schema_org.get(field)
@@ -546,6 +547,7 @@ def reshape_english_contributor_roles(
 __all__ = [
     "ACCESS_MODES",
     "CONTRACT_VERSION",
+    "PUBLICATION_YEAR_PATTERN",
     "SCHEMA_CONTEXT",
     "SUPPORTED_TYPES",
     "is_english_facet",

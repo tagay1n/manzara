@@ -367,13 +367,13 @@ def _normalize_is_based_on(value):
 
 
 def _normalize_date_published(value):
-    raw = _clean_text(value, max_len=40)
-    if not raw:
+    """Keep only a certain publication year, discarding month/day precision."""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
         return None
-    raw = raw.replace("/", "-")
-    if re.fullmatch(r"\d{4}(-\d{2})?(-\d{2})?", raw):
+    raw = str(value).strip().replace("/", "-")
+    if re.fullmatch(r"[0-9]{4}(?:-[0-9]{2}(?:-[0-9]{2})?)?", raw):
         year = int(raw[:4])
-        return raw if 1500 <= year <= 2100 else None
+        return raw[:4] if 1500 <= year <= 2100 else None
     return None
 
 

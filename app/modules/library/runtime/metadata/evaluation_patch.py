@@ -7,12 +7,13 @@ import re
 from typing import Any
 
 from app.catalog.isbn import canonicalize_isbn_values
+from app.modules.library.metadata_normalization import (
+    _normalize_date_published as _normalize_publication_year,
+)
 from app.modules.library.runtime.metadata.schema import MetadataPatch
 from app.modules.library.runtime.metadata.url_utils import normalize_url_list
 
 from .evaluation_text import _clean_text, _extract_candidate_strings
-
-YEAR_RE = re.compile(r"(1[5-9]\d{2}|20\d{2})")
 
 
 def _collect_patch_fields(schema_org: dict | str | None) -> list[str]:
@@ -116,27 +117,11 @@ def _normalize_isbn_values(value: Any) -> list[str] | None:
 
 
 def _normalize_date_published(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        if isinstance(value, float) and not value.is_integer():
+    if isinstance(value, float):
+        if not value.is_integer():
             return None
-        year = int(value)
-        return str(year) if 1500 <= year <= 2100 else None
-    raw = _clean_text(value, max_len=40)
-    if not raw:
-        return None
-    raw = raw.replace("/", "-")
-    if re.fullmatch(r"\d{4}(-\d{2})?(-\d{2})?", raw):
-        year = int(raw[:4])
-        return raw if 1500 <= year <= 2100 else None
-    match = YEAR_RE.search(raw)
-    if not match:
-        return None
-    year = int(match.group(1))
-    return str(year) if 1500 <= year <= 2100 else None
+        value = int(value)
+    return _normalize_publication_year(value)
 
 
 def _normalize_number_of_pages(value: Any) -> int | None:

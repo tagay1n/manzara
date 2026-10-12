@@ -10,7 +10,7 @@ This initials-only relaxation preserves the existing checkpoint contract version
 
 Strict responses require every field:
 
-- `normalized`: usable components, null reason; derive canonical name/key locally and atomically persist identity/alias hypotheses, review evidence, audit, and durable checkpoint. AI associations stay unconfirmed.
+- `normalized`: usable components, null reason; derive canonical name/key locally and atomically persist identity/alias hypotheses, review evidence and durable checkpoint. AI associations stay unconfirmed.
 - `not_person`: organization, website, or other non-person.
 - `unusable`: unsafe ambiguous/corrupted personal input.
 
@@ -28,7 +28,7 @@ Preserve `recovered_response` / `previous_failure` evidence; item HTTP 400 close
 
 Reuse an exact-compatible active identity, preferring the checkpoint target; otherwise ambiguity requires review or a new unconfirmed identity is created. Preserve human approvals/reviewed associations. Multiple active alias targets require explicit resolution; normalization never resolves contributions.
 
-Check review ownership before alias insertion. If its trigger creates a new owner-labeled placeholder, fill it with AI evidence and audit transactionally; restore pre-existing human review fields changed by the alias trigger.
+Check review ownership before alias insertion. If its trigger creates a new owner-labeled placeholder, fill it with AI evidence transactionally; restore pre-existing human review fields changed by the alias trigger.
 
 ## Queue and reporting
 

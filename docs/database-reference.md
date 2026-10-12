@@ -56,7 +56,7 @@ finally:
     release_postgres_engine(engine)
 ```
 
-This example is for browsing, not for editing metadata. Constructing SQLAlchemy table objects does not initialize the deployed schema. Do not call `create_all()` or run migrations during service startup; migrations are separate owner-managed operations.
+This example is for browsing, not for editing metadata. Constructing SQLAlchemy table objects does not initialize the deployed schema. Do not call `create_all()`. Interactive CLI startup applies the retained Alembic chain through `app/migrations.py`; task preflights and scheduled runners do not migrate. [Operations](operations.md#database-tools) owns startup and manual migration procedures.
 
 ## Main relationships
 
@@ -102,7 +102,7 @@ All tables in this section live in `database_schema`. Integer IDs are PostgreSQL
 
 Credit roles supported by the metadata envelope are `author`, `editor`, `translator`, `illustrator`, `publisher`, and `contributor`. A custom role label belongs to the credit group. Resolving one contribution does not resolve every occurrence of its spelling, and adding an alias does not automatically resolve matching credits.
 
-`date_published` is text to preserve year/month/day precision (`YYYY`, `YYYY-MM`, or `YYYY-MM-DD`), rather than forcing an exact date. `page_count` must be positive when supplied. Some source/historical timestamp fields are text; inspect actual column types before imposing a single timestamp serializer.
+`date_published` is nullable text projected as Schema.org `datePublished`. Metadata extraction and evaluation normalize new values to a four-digit publication year (`YYYY`). Revision `20261011_0066` converts existing `YYYY-MM` and `YYYY-MM-DD` values in committed batches of at most 500, then adds `ck_catalog_publication_year` to reject other precision for all writers. Existing years and nulls remain unchanged. Until that revision is applied, the PostgreSQL column still permits month/day values. The owner retired per-change audit snapshots in the preceding revision. `page_count` must be positive when supplied. Some source/historical timestamp fields are text; inspect actual column types before imposing a single timestamp serializer.
 
 `has_metadata` determines whether the legacy metadata record exists. `metadata_present` determines whether its Schema.org payload is present. The legacy `public.metadata` view has no row when `has_metadata=false`, and can have a row with a null payload when `metadata_present=false`. Use the publication/document tables for complete inventory.
 
@@ -147,7 +147,6 @@ Inclusion does not override `restricted`, `complete`, `selected`, or collection 
 | Table / primary key | Responsibility |
 | --- | --- |
 | `catalog_evidence` / `evidence_id` | Source/review payload `payload` (JSONB), `source`, `record_kind`, text `record_key`, optional `md5`, creation timestamp. |
-| `catalog_revisions` / `revision_id` | Transactional audit: `record_kind`, text `record_key`, `actor`, JSONB `before`/`after`, creation timestamp. This is distinct from a row's numeric `revision`. |
 | `catalog_protections` / `(record_kind, record_key, field)` | Human-protected fields and responsible `actor`. |
 | `catalog_proposals` / `proposal_id` | Pending changes: `kind`, `status`, `display_name`, JSONB `evidence`/`field_changes`, optional `publication_id`, revision/timestamp. Metadata, identity/publisher, and current collection discovery use catalog proposals. Inspect the kind/source contract before interpreting payloads. |
 | `catalog_proposal_members` / `member_id` | Proposal member snapshot and `reviewed_revision`; exactly one of `entity_id` or `name_id` is present. Partial unique indexes prevent duplicate members of either type within a proposal. |
@@ -172,8 +171,10 @@ These PostgreSQL records are checkpoints, review evidence, or preserved history.
 | `personality_normalization_checkpoints` | `raw_name`; source fingerprint, contract versions, decision/evidence, nullable `canonical_id` referencing an entity, successful model/timestamps. |
 | `publisher_merge_analyses` | `analysis_id`; inventory/fingerprint, scope, metadata, response, durable analysis state. |
 | `publisher_review_draft`, `publisher_separations` | Preserved publisher review draft and explicit separation evidence. |
-| `normalization_events`, `normalization_suggestions` | Preserved normalization history/review contracts. Identity facts live in catalog entities/names/aliases/contributions. |
-| `library_collection_events`, `library_collection_signatures`, `library_collection_proposals`, `library_collection_proposal_items` | Preserved collection history and former proposal/validation contracts. Current discovery writes `catalog_proposals`; these historical proposal tables are not its active inbox. |
+| `normalization_suggestions` | Preserved normalization review contract. Identity facts live in catalog entities/names/aliases/contributions. |
+| `library_collection_signatures`, `library_collection_proposals`, `library_collection_proposal_items` | Preserved former proposal/validation contracts. Current discovery writes `catalog_proposals`; these historical proposal tables are not its active inbox. |
+
+Revision `20261011_0065` removes `catalog_revisions`, `normalization_events`, and `library_collection_events`, including their contents. Current writers and adapter functions do not create audit snapshots. Row revision counters, protections, review evidence, proposals, and safety-critical checkpoints retain their existing contracts.
 
 Local SQLite, at `local_state_path`, contains `runs`, Gemini coordination tables, `ai_item_checkpoints`, and `operational_items`. It owns run options/progress/errors, retry/model exclusions, CLI state, and reproducible caches. PostgreSQL owns domain facts and safety-critical checkpoints. There is no fallback or dual-write between the stores; an administration service must not use a machine's SQLite file as shared library truth. See [store ownership](catalog-model.md#store-ownership) for the workflow split.
 
@@ -192,7 +193,7 @@ Local SQLite, at `local_state_path`, contains `runs`, Gemini coordination tables
 | `public.document`, `public.metadata`, `public.classification` | Legacy adapter views; no independent domain rows. |
 | `normalization_canonicals`, `normalization_aliases`, `library_collections`, `library_collection_items` | Legacy adapter views in the catalog schema. |
 
-Schema.org JSON is generated transport, not the authoritative document to overwrite. [app/catalog/metadata.py](../app/catalog/metadata.py) maps supported envelope fields to normalized relations; [app/catalog/schema_org.py](../app/catalog/schema_org.py) validates the envelope. JSONB remains appropriate for evidence, proposals, snapshots, manifests, and audit data.
+Schema.org JSON is generated transport, not the authoritative document to overwrite. [app/catalog/metadata.py](../app/catalog/metadata.py) maps supported envelope fields to normalized relations; [app/catalog/schema_org.py](../app/catalog/schema_org.py) validates the envelope. JSONB remains appropriate for evidence, proposals, snapshots, and manifests.
 
 Adapter views have trigger-backed command contracts and no unique indexes for ordinary `ON CONFLICT` upserts. New admin code should use normalized relations and reviewed backend commands rather than relying on legacy writes. Python table metadata does not describe every deployed function, trigger, view, or historical table; consult the frozen SQL as well.
 
@@ -256,13 +257,13 @@ WHERE table_schema = :schema
 ORDER BY table_name, ordinal_position;
 ```
 
-For the deployed migration revision, read `"<migration_version_schema>".alembic_version_manzara.version_num`, replacing the schema with the validated configured identifier. Schema/table identifiers cannot be value-bound. [alembic/env.py](../alembic/env.py) defines the version table. The current collection-discovery preflight still queries `alembic_version` instead; treat that as a code discrepancy to investigate, not as a reason to create another version table or restamp the database.
+For the deployed migration revision, read `"<migration_version_schema>".alembic_version_manzara.version_num`, replacing the schema with the validated configured identifier. Schema/table identifiers cannot be value-bound. [app/migrations.py](../app/migrations.py) defines the shared version-table name; [alembic/env.py](../alembic/env.py) configures it for Alembic. The current collection-discovery preflight still queries `alembic_version` instead; treat that as a code discrepancy to investigate, not as a reason to create another version table or restamp the database.
 
 ## Implementing administration writes
 
 Use [app/catalog/repository.py](../app/catalog/repository.py) and the focused [app/catalog/](../app/catalog/) stores as the implementation reference. `CatalogRepository` composes metadata, personality, and preview stores over the shared engine; [app/db.py](../app/db.py) is the operations facade and also handles local SQLite, so it is not a ready-made webservice data layer. Some metadata primitives are private methods intended for existing flow composition; this repository has no general admin or metadata-proposal review API/CLI to call.
 
-An admin write handler must validate its controls, check reviewed revisions, acquire the appropriate row/document locks, preserve protected fields and confirmed contributions, update normalized children in order, advance the owning record revision, and write audit/evidence in the same transaction. [app/catalog/contracts.py](../app/catalog/contracts.py) defines validation and `CatalogConflict`/`CatalogNotFound`; on a stale revision, reload and request a fresh review. Direct SQL updates bypass application protections/audits even when database constraints still pass. Automatic changes to protected facts become proposals rather than silently replacing reviewed values.
+An admin write handler must validate its controls, check reviewed revisions, acquire the appropriate row/document locks, preserve protected fields and confirmed contributions, update normalized children in order, advance the owning record revision, and write evidence in the same transaction. [app/catalog/contracts.py](../app/catalog/contracts.py) defines validation and `CatalogConflict`/`CatalogNotFound`; on a stale revision, reload and request a fresh review. Direct SQL updates bypass application protections even when database constraints still pass. Automatic changes to protected facts become proposals rather than silently replacing reviewed values.
 
 Deletion needs explicit domain handling: publication references from documents use `ON DELETE RESTRICT`; document-owned locations/accessibility/previews cascade; publication-owned metadata children cascade; referenced identities are generally restricted. Cleanup and storage operations also coordinate through [app/document_operation_lock.py](../app/document_operation_lock.py). Do not infer that deleting a database row deletes remote file objects.
 

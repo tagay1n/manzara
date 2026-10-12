@@ -4,6 +4,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
+from app.catalog.schema_org import PUBLICATION_YEAR_PATTERN
+
 
 class PersonOrOrganization(BaseModel):
     """Schema.org Person or Organization reference."""
@@ -108,7 +110,10 @@ class Book(BaseModel):
     translator: Optional[list[PersonOrOrganization]] = None
     illustrator: Optional[list[PersonOrOrganization]] = None
     publisher: Optional[PersonOrOrganization] = None
-    datePublished: Optional[str] = None
+    datePublished: Optional[str] = Field(
+        default=None, pattern=PUBLICATION_YEAR_PATTERN, min_length=4, max_length=4,
+        description="Four-digit publication year (YYYY); omit month and day.",
+    )
     isbn: Optional[list[str]] = None
     inLanguage: Optional[str] = None
     description: Optional[str] = None

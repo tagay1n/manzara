@@ -48,6 +48,7 @@ from app.cli.settings import configured_task_limit, fields_for_task
 from app.task_settings import configured_task_options
 from app.db import Database
 from app.gemini_config import load_gemini_keys, load_required_gemini_model_pool
+from app.migrations import apply_catalog_migrations
 from app.runtime_config import (
     config_integer,
     config_number,
@@ -104,7 +105,7 @@ class Terminal:
         self.picker_index = 0
         self.history_rows = []
         self._picker_generation = 0
-        self.message = "Initializing local runtime…"
+        self.message = "Initializing runtime and applying database migrations…"
         self.form_error = ""
         self.settings_busy = False
         self.settings_snapshot = None
@@ -854,6 +855,7 @@ class Terminal:
         self.session.acquire()
         self.db = Database(settings.database_url, schema=settings.database_schema,
                            pool_size=settings.database_pool_size, local_state_path=settings.local_state_path)
+        apply_catalog_migrations(settings, write=self.output.write)
         self.db.init_local_state()
         descriptors = self.descriptor_factory()
         self.cli_state = CLIStateStore(settings.local_state_path)
@@ -980,4 +982,4 @@ class Terminal:
                                 for signum, handler in previous_handlers.items():
                                     loop.remove_signal_handler(signum)
                                     signal.signal(signum, handler)
-        return 1 if self.output.failure else 0
+        return 1 if self.output.failure or not self.ready else 0

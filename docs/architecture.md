@@ -23,7 +23,7 @@ Read the relevant owner and nearest `AGENTS.md`, then search symbols; do not pre
 | Maintenance flows | [Maintenance rules](../app/modules/maintenance/AGENTS.md); sync: `app/catalog/document_sync.py`, `document_sync_bulk.py`, `app/modules/maintenance/runtime/sync_monocorpus.py` |
 | Document transfer/coordination | `app/catalog/document_transfer.py`, `app/document_operation_lock.py`, `app/modules/maintenance/runtime/sync_documents_s3.py`, `scripts/run_backblaze_transfer.py` |
 | Source integrity/eligibility | `app/document_storage.py`, `app/s3_transfer.py` (caller-owned S3 clients and sequential transfer policy), `app/document_sync_filter.py`, `app/document_cleanup_paths.py` |
-| Schema/bootstrap | `alembic/versions/`, `alembic/sql/baseline_0062.sql`; [database tools](operations.md#database-tools) |
+| Schema/bootstrap and CLI startup upgrades | `app/migrations.py`, `alembic/env.py`, `alembic/versions/`, `alembic/sql/baseline_0062.sql`; [database tools](operations.md#database-tools) |
 | Backups/Sheets | `.github/workflows/`, `scripts/backup_postgres_to_b2.py`, `app/modules/maintenance/dump_state.py`, `app/catalog/export.py`; [recovery](postgres-backup-recovery.md) |
 | Daily composition | `scripts/run_daily_maintenance.py`; [scheduled operations](operations.md#scheduled-sync-and-cleanup) |
 
@@ -37,4 +37,4 @@ Repositories share `app/postgres_engine.py`'s bounded engine per database/schema
 | Backblaze transfer / previews | 2 | Document operation lock |
 | Publisher clustering | 2 | Session advisory lock |
 
-Per-document locks serialize conflicting storage/catalog changes while unrelated documents may proceed. Startup initializes SQLite only; interactive tasks, daily maintenance, and transfer check the catalog read-only. Alembic changes durable schemas separately; `app/local_state.py` owns SQLite initialization. Inspect deployment rather than inferring it from migration files. [Verification](verification.md) records readiness limits. Update this map when ownership moves.
+Per-document locks serialize conflicting storage/catalog changes while unrelated documents may proceed. Interactive CLI startup uses Alembic to apply pending PostgreSQL migrations before enabling tasks and initializing SQLite. Task preflights, daily maintenance, and transfer inspect the catalog read-only; scheduled runners do not migrate. `app/migrations.py` owns interactive upgrades; `app/local_state.py` owns SQLite initialization. Inspect deployment rather than inferring it from migration files. [Verification](verification.md) records readiness limits. Update this map when ownership moves.

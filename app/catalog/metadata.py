@@ -7,7 +7,7 @@ from copy import deepcopy
 import re
 from typing import Any
 
-from app.catalog.schema_org import metadata_contract_issues
+from app.catalog.schema_org import PUBLICATION_YEAR_PATTERN, metadata_contract_issues
 
 
 SCALARS = {
@@ -43,8 +43,8 @@ def decompose_metadata(source: dict) -> dict:
                 raise ValueError("page_count must be a positive integer")
         elif not isinstance(value, str):
             raise ValueError(f"{key} must be text")
-    if "date_published" in scalars and not re.fullmatch(r"\d{4}(?:-\d{2}(?:-\d{2})?)?", scalars["date_published"]):
-        raise ValueError("date_published must preserve year/month/day precision")
+    if "date_published" in scalars and not re.fullmatch(PUBLICATION_YEAR_PATTERN, scalars["date_published"]):
+        raise ValueError("date_published must be a four-digit year (YYYY)")
     credits = []
     for role in sorted(RELATIONS):
         for position, item in enumerate(items(source.get(role))):

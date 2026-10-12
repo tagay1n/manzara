@@ -60,7 +60,9 @@ Use the `Book` schema where appropriate, but apply a more specific `@type` if a 
 - `contributor`: Secondary contributors without an inline `role` property. Use standard
   schema.org properties `editor`, `translator`, or `illustrator` when those roles are explicit.
 - `inLanguage`: Use BCP 47 with script as listed above
-- `datePublished`: Use full date format if found: `"YYYY-MM-DD"`
+- `datePublished`: Return only the four-digit publication year as text: `"YYYY"`.
+  If the source gives a month or full date, discard the month and day, e.g.
+  `2024-05-17` becomes `"2024"`. Never include month/day information in this field.
 - `publisher`: `"@type": "Organization"` if identified
 - `isbn`: array of ISBN numbers if available
 - `numberOfPages`: If identified

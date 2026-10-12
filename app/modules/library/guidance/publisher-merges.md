@@ -24,7 +24,7 @@ Drain both subprocess pipes into bounded structured diagnostics without raw forw
 
 `clusters`, `singleton_ids`, `unresolved_ids` must cover all inventory IDs. Reject missing/unknown/duplicate group IDs, singleton/unresolved overlap, incompatible kinds, invalid scope/separation claims, and >200 members per proposal. Never infer omitted singletons. Preserve singleton/unresolved names and otherwise-valid overlapping clusters for review without joining/selecting winners.
 
-PostgreSQL `publisher_merge_analyses` owns response checkpoints; `catalog_proposals` owns proposal/member snapshots and audits, projected by `catalog_publisher_proposals`. Generation never changes review drafts.
+PostgreSQL `publisher_merge_analyses` owns response checkpoints; `catalog_proposals` owns proposal/member snapshots, projected by `catalog_publisher_proposals`. Generation never changes review drafts.
 
 Checkpoint validated output before atomic idempotent import. Under catalog review lock recheck identity snapshots, linked names, and separation decisions, including suppressed aliases. Document-count changes alone do not invalidate identity review. Preserve owner edits/pending/deferred proposals; deduplicate unchanged member snapshots/kind/name. Different names for overlapping groups stay separate. Changed identities/decisions reject checkpoint without partial import; grouping/separation contradictions fail before inference and need association review.
 

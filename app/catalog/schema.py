@@ -56,6 +56,8 @@ def build_metadata(schema: str) -> MetaData:
           foreign("merged_into_id", "publications.publication_id", nullable=True),
           CheckConstraint("inclusion IN ('pending','included','excluded')"),
           CheckConstraint("page_count IS NULL OR page_count > 0"),
+          CheckConstraint("date_published IS NULL OR date_published ~ '^[0-9]{4}$'",
+                          name="ck_catalog_publication_year"),
           CheckConstraint("merged_into_id IS NULL OR merged_into_id <> publication_id", name="ck_catalog_publication_merge_target"), versioned=True)
     docs = table("documents", Column("md5", Text, primary_key=True), foreign("publication_id", "publications.publication_id"),
                  Column("mime_type", Text), Column("complete", Boolean, nullable=False, server_default="true"),
@@ -173,10 +175,6 @@ def build_metadata(schema: str) -> MetaData:
           Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")))
     table("protections", Column("record_kind", Text, primary_key=True), Column("record_key", Text, primary_key=True),
           Column("field", Text, primary_key=True), Column("actor", Text, nullable=False))
-    table("revisions", identifier("revision_id"), Column("record_kind", Text, nullable=False),
-          Column("record_key", Text, nullable=False), Column("actor", Text, nullable=False),
-          Column("before", JSONB), Column("after", JSONB),
-          Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")))
     table("proposals", identifier("proposal_id"), Column("kind", Text, nullable=False),
           Column("status", Text, nullable=False, server_default="pending"), Column("display_name", Text),
           Column("evidence", JSONB, nullable=False, server_default="{}"),

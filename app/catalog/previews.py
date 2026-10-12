@@ -35,7 +35,7 @@ def validate_pages(pages, source_page_count):
 
 
 def preview_command(engine, schema, payload, *, source_query, pending_query, operation=None):
-    """Implicit transaction: guards, mutations, audit, result and commit in one message.
+    """Implicit transaction: guards, mutations, result and commit in one message.
 
     Success/renewal/claim use the reserved session that owns the document lock.
     Failure finalization, after remote work has unwound, takes a transaction lock.

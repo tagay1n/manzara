@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any, Mapping
 
@@ -38,10 +37,6 @@ _DOCUMENTS = """
     LEFT JOIN library_non_pdf_extraction_state state ON state.md5=d.md5
 """
 _SNAPSHOT_FIELDS = ("publication_id", "document_revision", "source_revision")
-
-
-def _json(value: Any) -> str:
-    return json.dumps(value, default=lambda item: item.isoformat(), ensure_ascii=False)
 
 
 def discovery_values(payload):
@@ -91,7 +86,6 @@ class DocumentSyncStore:
             "catalog_documents": {"md5", "publication_id", "mime_type", "complete", "restricted", "selected", "revision", "updated_at"},
             "catalog_locations": {"location_id", "md5", "provider", "purpose", "source_path", "resource_id", "public_url", "public_key", "locator", "size", "etag", "verified_at", "revision", "updated_at"},
             "catalog_protections": {"record_kind", "record_key", "field"},
-            "catalog_revisions": {"record_kind", "record_key", "actor", "before", "after"},
             "library_non_pdf_extraction_state": {"md5", "verified_source_mime"},
             "library_upstream_metadata": {"md5"},
             "library_isbn_duplicate_reviews": {"review_id", "status", "candidates_json", "evidence_json", "keep_md5s_json"},
@@ -153,11 +147,6 @@ class DocumentSyncStore:
                      {"md5": md5}).all()
         return dict(row) if row else None
 
-    def _audit(self, conn, kind, key, before, after):
-        conn.execute(text('''INSERT INTO catalog_revisions(record_kind,record_key,actor,"before","after")
-            VALUES(:kind,:key,'task',CAST(:before AS JSONB),CAST(:after AS JSONB))'''),
-            {"kind": kind, "key": str(key), "before": _json(before), "after": _json(after)})
-
     def _lock_batch(self, conn, md5s):
         conn.execute(text('''SELECT pg_advisory_xact_lock(hashtext(current_schema()), hashtext(identity))
             FROM (SELECT 'catalog-document:' || md5 AS identity
@@ -172,7 +161,7 @@ class DocumentSyncStore:
         return documents, locations
 
     def sync_documents(self, conn, commands):
-        """Revalidate and apply one bounded batch with set-based writes and audits."""
+        """Revalidate and apply one bounded batch with set-based writes."""
         if len(commands) > config_integer("maintenance", "sync_batch_size"):
             raise ValueError(f'Sync batch must contain at most {config_integer("maintenance", "sync_batch_size")} documents')
         prepared = {}
@@ -254,11 +243,10 @@ class DocumentSyncStore:
                                             for identity in identities.values()])
         insert_records(conn, 'document', [{**row, 'publication_id': identities[row['md5']]}
                                          for row in new_documents])
-        update_records(conn, 'document', updates['document'], documents)
+        update_records(conn, 'document', updates['document'])
         insert_records(conn, 'source', new_sources)
-        before_locations = {row['location_id']: row for row in locations}
         for kind in ('source', 'primary'):
-            update_records(conn, kind, updates[kind], before_locations)
+            update_records(conn, kind, updates[kind])
         after = {row['md5']: dict(row) for row in conn.execute(
             text(_DOCUMENTS + ' WHERE d.md5=ANY(:md5s)'), {'md5s': list(outcomes)}).mappings()}
         return {'results': {md5: {'outcome': outcome, 'document': after[md5]}
@@ -272,7 +260,7 @@ class DocumentSyncStore:
             raise CatalogConflict(f'Document {md5} became restricted; publication refused')
 
     def delete_document(self, conn, md5: str, *, expected: Mapping[str, Any] | None):
-        """Delete file-owned facts, retaining publication metadata and all history."""
+        """Delete file-owned facts, retaining publication metadata and review evidence."""
         document_md5(md5)
         before = self._lock(conn, md5)
         current = self._snapshot(conn, md5)
@@ -281,11 +269,9 @@ class DocumentSyncStore:
         conn.execute(text("DELETE FROM library_upstream_metadata WHERE md5=:md5"), {"md5": md5})
         if not before:
             return
-        locations = conn.execute(text("SELECT * FROM catalog_locations WHERE md5=:md5"), {"md5": md5}).mappings().all()
+        locations = conn.execute(text("SELECT location_id FROM catalog_locations WHERE md5=:md5"), {"md5": md5}).mappings().all()
         for location in locations:
-            self._audit(conn, 'location', location['location_id'], dict(location), None)
             conn.execute(text("DELETE FROM catalog_protections WHERE record_kind='location' AND record_key=:key"),
                          {"key": str(location['location_id'])})
-        self._audit(conn, 'document', md5, before, None)
         conn.execute(text("DELETE FROM catalog_protections WHERE record_kind='document' AND record_key=:md5"), {"md5": md5})
         conn.execute(text("DELETE FROM catalog_documents WHERE md5=:md5"), {"md5": md5})

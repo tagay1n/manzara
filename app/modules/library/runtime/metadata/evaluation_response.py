@@ -14,6 +14,7 @@ from app.modules.library.metadata_contract import (
 from .evaluation_classification import _normalize_library_classification
 from .evaluation_patch import (
     _apply_metadata_patch,
+    _normalize_date_published,
     _normalize_metadata_patch,
     _sanitize_schema_urls,
 )
@@ -32,7 +33,15 @@ def _parse_evaluation_response(
     if not str(raw_response or "").strip():
         raise GeminiModelResponseError("metadata evaluation response is empty")
     try:
-        evaluation = Evaluation.model_validate_json(raw_response)
+        decoded = json.loads(raw_response)
+        patch = decoded.get("metadata_patch") if isinstance(decoded, dict) else None
+        if isinstance(patch, dict) and "datePublished" in patch:
+            year = _normalize_date_published(patch["datePublished"])
+            if year is None:
+                patch.pop("datePublished")
+            else:
+                patch["datePublished"] = year
+        evaluation = Evaluation.model_validate(decoded)
     except Exception as exc:  # noqa: BLE001
         raise GeminiModelResponseError(
             f"metadata evaluation response is invalid: {exc}"

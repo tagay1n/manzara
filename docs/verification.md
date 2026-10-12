@@ -6,7 +6,13 @@
 
 Review changed contracts, code, dependencies, and configuration; use `git diff --check`. For documentation, inspect local links and owner paths. Do not start the backend or apply migrations to validate docs. Static checks do not establish terminal behavior, provider connectivity, catalog mutations, recovery, or operational readiness.
 
+## Publication-year migration verification
+
+After applying `20261011_0066`, reconcile the configured Alembic revision, the validated `ck_catalog_publication_year` constraint, and the absence of non-null publication dates outside `YYYY` using read-only queries. The backfill commits batches of at most 500; interrupted upgrades can leave some dates normalized while the version remains at `0065`. Resume from the remaining month/day values after restoring normal writes. Inspect Aiven service disk usage separately: database size excludes WAL and other service files. Migration completion does not establish extraction/evaluation task acceptance.
+
 ## Coverage available on request
+
+Interactive startup migration application was reviewed through source inspection, Python syntax checks, and offline Alembic rendering. Startup waiting, advisory-lock cleanup, migration failure/uncertain-commit handling, and upgrades with autocommit index builds require explicitly requested runtime verification; implementation inspection does not establish that pending revisions have been applied to the live database.
 
 Pending CLI acceptance covers:
 

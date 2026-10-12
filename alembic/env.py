@@ -6,15 +6,15 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import DDL, create_engine, pool, text
 
 from alembic import context
+from app.migrations import VERSION_TABLE
 from app.settings import configured_schema, load_settings
 
 config = context.config
 
-if config.config_file_name is not None:
+if config.config_file_name is not None and config.attributes.get("configure_logging", True):
     fileConfig(config.config_file_name)
 
 target_metadata = None
-VERSION_TABLE = "alembic_version_manzara"
 
 
 def _resolve_schema() -> str:

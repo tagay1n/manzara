@@ -11,7 +11,6 @@ from app.catalog.contracts import (
     CatalogConflict,
     CatalogNotFound,
     integer,
-    nonblank,
 )
 from app.catalog.metadata_store import MetadataStore
 from app.catalog.personality_normalization import PersonalityNormalizationStore
@@ -29,7 +28,7 @@ RECORDS = {
 
 
 def snapshot(value: Any) -> Any:
-    """Serialize audit timestamps without leaking object representations."""
+    """Serialize snapshot timestamps without leaking object representations."""
     return json.loads(json.dumps(value, default=lambda item: item.isoformat()))
 
 
@@ -54,12 +53,6 @@ class CatalogRepository(MetadataStore, PersonalityNormalizationStore):
             raise CatalogConflict(f"{kind} changed; reload before applying")
         return dict(row)
 
-    def _audit(self, conn, kind, key, before, after, actor):
-        conn.execute(self.table("revisions").insert().values(
-            record_kind=kind, record_key=str(key), actor=nonblank(actor, "actor"),
-            before=snapshot(before), after=snapshot(after),
-        ))
-
     def _protect(self, conn, kind, key, fields, actor):
         table = self.table("protections")
         for field in fields:
@@ -72,7 +65,7 @@ class CatalogRepository(MetadataStore, PersonalityNormalizationStore):
         table = self.table("protections")
         return set(conn.execute(select(table.c.field).where(table.c.record_kind == kind, table.c.record_key == str(key))).scalars())
 
-    def _update(self, conn, kind, key, before, changes, actor):
+    def _update(self, conn, kind, key, before, changes):
         name, column = RECORDS[kind]
         table = self.table(name)
         if kind == "entity" and "display_name" in changes:
@@ -86,5 +79,4 @@ class CatalogRepository(MetadataStore, PersonalityNormalizationStore):
         row = conn.execute(table.update().where(table.c[column] == key).values(
             **changes, revision=before["revision"] + 1, updated_at=datetime.now(timezone.utc),
         ).returning(table)).mappings().one()
-        self._audit(conn, kind, key, before, dict(row), actor)
         return dict(row)

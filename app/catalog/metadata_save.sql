@@ -18,15 +18,12 @@ DECLARE
     classification_key bigint;
     taxonomy_parent bigint;
     taxonomy_node bigint;
-    taxonomy_record jsonb;
     taxonomy_label text;
     validation_key text;
     old_publication jsonb;
     new_publication jsonb;
     old_document jsonb;
-    new_document jsonb;
     fresh jsonb;
-    metadata_before jsonb;
     metadata_after jsonb;
     actual jsonb;
     reference jsonb;
@@ -74,7 +71,6 @@ BEGIN
             AND evidence->>'actor' IN ('library.metadata_extract','maintenance.monocorpus_meta_evaluate')) THEN
         RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Publication metadata awaits review; resume after review';
     END IF;
-    metadata_before := fresh->'sources'->0->'metadata_record';
     expected_decision := jsonb_build_object('inclusion',old_publication->'inclusion',
         'classification_id',old_publication->'classification_id','evaluation_method',old_publication->'evaluation_method');
 
@@ -87,9 +83,7 @@ BEGIN
             IF taxonomy_node IS NULL THEN
                 INSERT INTO catalog_classification_nodes(ddc,label_en,parent_id)
                     VALUES(evaluation->>'ddc',taxonomy_label,taxonomy_parent)
-                    RETURNING node_id,to_jsonb(catalog_classification_nodes) INTO taxonomy_node,taxonomy_record;
-                INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-                    VALUES('classification_node',taxonomy_node::text,actor_name,NULL,taxonomy_record);
+                    RETURNING node_id INTO taxonomy_node;
             END IF;
             taxonomy_parent := taxonomy_node;
         END LOOP;
@@ -98,9 +92,7 @@ BEGIN
         IF classification_key IS NULL THEN
             INSERT INTO catalog_classifications(node_id,status,created_by)
                 VALUES(taxonomy_parent,'pending','gemini')
-                RETURNING classification_id,to_jsonb(catalog_classifications) INTO classification_key,taxonomy_record;
-            INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-                VALUES('classification',classification_key::text,actor_name,NULL,taxonomy_record);
+                RETURNING classification_id INTO classification_key;
         END IF;
         expected_path := catalog_path(taxonomy_parent);
         IF expected_path->>'ddc' IS DISTINCT FROM evaluation->>'ddc'
@@ -125,11 +117,8 @@ BEGIN
         UPDATE catalog_publications SET inclusion='pending', classification_id=NULL, evaluation_method=NULL,
             has_metadata=true, metadata_present=true, revision=revision+1, updated_at=clock_timestamp()
             WHERE publication_id=publication_key RETURNING to_jsonb(catalog_publications) INTO new_publication;
-        INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-            VALUES('publication',publication_key::text,actor_name,old_publication,new_publication);
         old_publication := new_publication;
         expected_decision := jsonb_build_object('inclusion','pending','classification_id',NULL,'evaluation_method',NULL);
-        metadata_before := jsonb_set(metadata_before,'{revision}',new_publication->'revision');
     END IF;
     IF plan->'blocked'<>'{}'::jsonb THEN
         INSERT INTO catalog_proposals(kind,publication_id,evidence,field_changes)
@@ -231,10 +220,7 @@ BEGIN
     END IF;
     IF jsonb_array_length(plan->'file_changes')>0 THEN
         UPDATE catalog_documents SET revision=revision+1,updated_at=clock_timestamp()
-            WHERE md5=document_key RETURNING to_jsonb(catalog_documents) INTO new_document;
-        INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-            VALUES('document',document_key,actor_name,old_document,new_document);
-        old_document := new_document;
+            WHERE md5=document_key;
     END IF;
     INSERT INTO catalog_evidence(md5,record_kind,record_key,source,payload)
         VALUES(document_key,'publication',publication_key::text,actor_name,request->'schema_org');
@@ -245,13 +231,9 @@ BEGIN
         audience_array=(desired->>'audience_array')::boolean,
         has_metadata=true,metadata_present=true,revision=revision+1,updated_at=clock_timestamp()
         WHERE publication_id=publication_key RETURNING to_jsonb(catalog_publications) INTO new_publication;
-    INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-        VALUES('publication',publication_key::text,actor_name,old_publication,new_publication);
     IF evaluation IS NULL THEN
         UPDATE catalog_documents SET meta_extraction_method=request->>'method',revision=revision+1,updated_at=clock_timestamp()
-            WHERE md5=document_key RETURNING to_jsonb(catalog_documents) INTO new_document;
-        INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-            VALUES('document',document_key,actor_name,old_document,new_document);
+            WHERE md5=document_key;
     ELSE
         old_publication := new_publication;
         SELECT COALESCE(jsonb_object_agg(change.key,change.value),'{}'::jsonb) INTO decision_changes
@@ -275,9 +257,7 @@ BEGIN
                     inclusion=CASE WHEN (evaluation->>'applicable')::boolean THEN 'included' ELSE 'excluded' END,
                     classification_id=classification_key,evaluation_method=request->>'method',
                     revision=revision+1,updated_at=clock_timestamp()
-                    WHERE publication_id=publication_key RETURNING to_jsonb(catalog_publications) INTO new_publication;
-                INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-                    VALUES('publication',publication_key::text,actor_name,old_publication,new_publication);
+                    WHERE publication_id=publication_key;
             END IF;
         END IF;
         IF NOT decision_retained THEN
@@ -312,8 +292,6 @@ BEGIN
                 IS DISTINCT FROM ((request->'snapshot'->'source') - ARRAY['revision','updated_at','meta_extraction_method','publication_record','metadata_record','classification_path']) THEN
         RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Stored metadata differs from the validated result; save rolled back';
     END IF;
-    INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-        VALUES('metadata',publication_key::text,actor_name,metadata_before,metadata_after);
     PERFORM set_config('manzara.metadata_save_result',proposals::text,true);
 END;
 $manzara_metadata_save$;

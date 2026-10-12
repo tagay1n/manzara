@@ -16,11 +16,8 @@ DECLARE
     observed_name bigint;
     target_count bigint;
     role_added bigint;
-    alias_after jsonb;
-    entity_before jsonb;
-    entity_after jsonb;
+    alias_added bigint;
     review_before jsonb;
-    review_after jsonb;
     protected_reviews jsonb;
     protected_review jsonb;
     checkpoint_before jsonb;
@@ -91,9 +88,7 @@ BEGIN
             VALUES('person',request->>'display_name','unconfirmed',identity,'active',stamp,
                 components->>'surname_full',components->>'surname_initials',components->>'name_full',components->>'name_initials',
                 components->>'father_name_full',components->>'father_name_initials',components->>'title',components->>'sex')
-            RETURNING entity_id,to_jsonb(catalog_entities) INTO entity_key,entity_after;
-            INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-                VALUES('entity',entity_key::text,'task',NULL,entity_after);
+            RETURNING entity_id INTO entity_key;
         END IF;
         INSERT INTO catalog_entity_roles(entity_id,role) VALUES(entity_key,'personality')
             ON CONFLICT DO NOTHING RETURNING entity_id INTO role_added;
@@ -107,24 +102,13 @@ BEGIN
             WHERE r.entity_type='personality' AND r.name_id=observed_name FOR UPDATE;
         write_review := review_before IS NULL OR review_before->>'source'='gemini_personality_normalizer';
         INSERT INTO catalog_aliases(name_id,entity_id,approval) VALUES(observed_name,entity_key,'unconfirmed')
-            ON CONFLICT DO NOTHING RETURNING to_jsonb(catalog_aliases) INTO alias_after;
-        IF alias_after IS NOT NULL THEN
-            INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-                VALUES('alias',alias_after->>'alias_id','task',NULL,alias_after);
-        END IF;
-        IF alias_after IS NOT NULL OR role_added IS NOT NULL THEN
-            SELECT to_jsonb(e) INTO entity_before FROM catalog_entities e WHERE e.entity_id=entity_key;
-            UPDATE catalog_entities SET revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE entity_id=entity_key
-                RETURNING to_jsonb(catalog_entities) INTO entity_after;
-            INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-                VALUES('entity',entity_key::text,'task',entity_before,entity_after);
+            ON CONFLICT DO NOTHING RETURNING alias_id INTO alias_added;
+        IF alias_added IS NOT NULL OR role_added IS NOT NULL THEN
+            UPDATE catalog_entities SET revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE entity_id=entity_key;
         END IF;
         SELECT count(*) INTO target_count FROM catalog_aliases a JOIN catalog_entities e USING(entity_id)
             WHERE a.name_id=observed_name AND e.status='active';
         IF write_review THEN
-            -- Read the trigger-created placeholder as the actual audited before row.
-            SELECT to_jsonb(r) INTO review_before FROM catalog_alias_reviews r
-                WHERE r.entity_type='personality' AND r.name_id=observed_name FOR UPDATE;
             INSERT INTO catalog_alias_reviews(entity_type,name_id,entity_id,normalized_name,script_label,decision_status,
                 docs_count,mentions_count,marker_count,confidence,source,reason,successful_model,prompt_version,schema_version,
                 source_roles,created_at,updated_at,surname_full,surname_initials,name_full,name_initials,
@@ -142,10 +126,7 @@ BEGIN
                 prompt_version=excluded.prompt_version,schema_version=excluded.schema_version,source_roles=excluded.source_roles,
                 updated_at=excluded.updated_at,surname_full=excluded.surname_full,surname_initials=excluded.surname_initials,
                 name_full=excluded.name_full,name_initials=excluded.name_initials,father_name_full=excluded.father_name_full,
-                father_name_initials=excluded.father_name_initials,title=excluded.title,sex=excluded.sex
-            RETURNING to_jsonb(catalog_alias_reviews) INTO review_after;
-            INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-                VALUES('alias_review',review_after->>'alias_id','task',review_before,review_after);
+                father_name_initials=excluded.father_name_initials,title=excluded.title,sex=excluded.sex;
         END IF;
         -- The alias trigger refreshes every review for this name, including other
         -- entity types. Preserve every decision not owned by this normalizer.
@@ -168,8 +149,6 @@ BEGIN
         successful_model=excluded.successful_model,decision_evidence=excluded.decision_evidence,canonical_id=excluded.canonical_id,
         updated_at=excluded.updated_at,completed_at=excluded.completed_at
     RETURNING to_jsonb(personality_normalization_checkpoints) INTO checkpoint_after;
-    INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-        VALUES('personality_checkpoint',raw,'task',checkpoint_before,checkpoint_after);
     PERFORM set_config('manzara.personality_result',jsonb_build_object('state',state_name,'canonical_id',entity_key,
         'reason',reason_text,'durable_checkpoint',checkpoint_after)::text,true);
 END;

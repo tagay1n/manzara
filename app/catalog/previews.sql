@@ -52,9 +52,7 @@ BEGIN
         ELSE
             INSERT INTO catalog_preview_requests(md5,recipe,actor,private,idempotency_key)
                 VALUES(document_key,recipe_key,actor_name,false,command->>'idempotency_key')
-                RETURNING request_id,to_jsonb(catalog_preview_requests) INTO request_key,new_request;
-            INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-                VALUES('preview',request_key::text,actor_name,NULL,new_request);
+                RETURNING request_id INTO request_key;
         END IF;
         UPDATE catalog_preview_requests SET status='processing',private=false,
             claim_token=command->>'claim_token',
@@ -91,8 +89,6 @@ BEGIN
             UPDATE catalog_preview_requests SET status=CASE WHEN action='fail' THEN 'failed' ELSE 'ready' END,
                 lease_until=NULL,source_page_count=(command->>'source_page_count')::integer
                 WHERE request_id=request_key RETURNING to_jsonb(catalog_preview_requests) INTO new_request;
-            INSERT INTO catalog_revisions(record_kind,record_key,actor,before,after)
-                VALUES('preview',request_key::text,actor_name,old_request,new_request);
         ELSE
             RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Unsupported preview command';
         END IF;

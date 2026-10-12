@@ -38,7 +38,7 @@ from app.modules.library.runtime.metadata.schema import Book
 from app.modules.library.upstream_metadata import sanitize_upstream_metadata
 from app.runtime_config import config_integer
 
-PROMPT_VERSION = "prompt.v8"
+PROMPT_VERSION = "prompt.v9"
 _SUPPORTING_METADATA_FIELDS = (
     "author",
     "contributor",

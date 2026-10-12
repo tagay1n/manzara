@@ -19,7 +19,8 @@ rolling out the admin search feature:
 
     PYTHONPATH=. .venv/bin/alembic upgrade head
 
-The admin application and Manzara task startup do not apply migrations.
+Interactive Manzara CLI startup applies pending revisions before enabling tasks.
+Task handlers, scheduled runners, and the admin application do not migrate.
 Concurrent index builds allow catalog writers to continue, but require schema
 ownership privileges and consume CPU/storage. Each build commits separately;
 completion advances alembic_version_manzara only after every build succeeds.
@@ -65,3 +66,65 @@ Review just this revision's SQL without connecting to PostgreSQL:
 Follow ../docs/verification.md: the default checks are inspection and static
 verification. Database migration tests require an explicit owner request and
 an isolated PostgreSQL with test-only configuration.
+
+Retired application audit storage
+---------------------------------
+20261011_0065 descends from 0064 and removes catalog_revisions,
+normalization_events, and library_collection_events, including their contents,
+owned indexes, and sequences. This is owner-authorized data retirement, not an
+archive operation. Downgrade is refused; historical contents require a backup.
+The frozen baseline remains unchanged, so fresh bootstrap runs this successor.
+
+The same transaction replaces catalog_task_patch and
+catalog_publisher_proposal_command without audit inserts, preserving their
+protection, proposal, revision, and trigger contracts. It also drops the retired
+catalog_install_lean_adapters and catalog_activate_task_adapters installers when
+present, preventing reinstatement of audit-writing adapters. DROP uses RESTRICT;
+unexpected dependencies fail the transaction rather than cascading into domain
+data. Table drops reclaim the retired storage without a table rewrite.
+
+Stop catalog task workers and deploy the updated writers before the migration;
+restart long-lived processes afterward so cached SQL is refreshed. For a
+storage-recovery rollout, use manual Alembic to apply only this cleanup revision
+first; interactive CLI startup applies all pending revisions. Inspect the cleanup
+version, table absence, adapter bodies, and database size read-only before
+starting the CLI or considering the year backfill:
+
+    PYTHONPATH=. .venv/bin/alembic upgrade 20261011_0065
+
+This cleanup needs a read-write transaction. An explicitly authorized cleanup
+may use a supplied Alembic connection beginning with SET TRANSACTION READ WRITE
+to reclaim space under a read-only disk safeguard; retain role/database defaults.
+Do not enable general task writes or run the year backfill while disk pressure
+persists. SQL can be reviewed offline:
+
+    PYTHONPATH=. .venv/bin/alembic upgrade 20261011_0064:20261011_0065 --sql
+
+Year-only publication metadata
+------------------------------
+20261011_0066 descends from the audit-removal revision and applies the year-only
+publication contract documented in ../docs/database-reference.md. It reduces
+YYYY-MM and YYYY-MM-DD to YYYY, including owner-authorized protected dates,
+and adds the nullable YYYY check. Changed publications advance their revision
+and timestamp; field protections and source/review evidence remain intact.
+No per-change audit snapshots are created under the owner's retirement policy.
+Unknown date formats abort the transaction; review them before retrying.
+
+Pause catalog writers before applying, then restart them with the year-only
+metadata code. The migration commits each UPDATE of at most 500 publications,
+so a lost connection leaves completed batches in place and a retry continues
+from the remaining month/day values. The `0066` revision and validated check
+constraint commit only after the backfill finishes. It requires table ownership
+and adequate storage headroom for updates and WAL. The final constraint step
+briefly locks `catalog_publications`. Reconcile the revision, constraint, and
+stored dates read-only after a lost connection. Downgrade refuses to restore
+month/day precision automatically.
+
+Read ../docs/verification.md for rollout readiness before applying the backfill.
+Review the Python migration source without connecting to PostgreSQL:
+
+    sed -n '1,180p' alembic/versions/20261011_0066_publication_year.py
+
+After an authorized upgrade, inspect the deployed revision, the validated
+ck_catalog_publication_year constraint, and remaining non-YYYY values read-only.
+Follow ../docs/verification.md for verification limits.

@@ -3,7 +3,7 @@ from app.postgres_engine import configured_timeout_sql
 from app.runtime_config import config_integer
 from app.settings import configured_schema
 
-"""Publication metadata snapshots and audited, catalog-native task commands."""
+"""Publication metadata snapshots and catalog-native task commands."""
 
 import hashlib
 import json
@@ -108,7 +108,7 @@ class MetadataProcessingStore:
         names = ('publications', 'documents', 'locations', 'publication_languages', 'credit_groups',
                  'contributions', 'names', 'entities', 'identifiers', 'genres', 'subjects', 'audiences',
                  'document_access_modes', 'sufficient_modes', 'sufficient_mode_items', 'references',
-                 'reference_urls', 'reference_authors', 'protections', 'proposals', 'revisions',
+                 'reference_urls', 'reference_authors', 'protections', 'proposals',
                  'evidence', 'classifications', 'classification_nodes')
         with self.engine.begin() as conn:
             conn.execute(text('SET TRANSACTION READ ONLY'))

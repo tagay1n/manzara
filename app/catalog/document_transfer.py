@@ -120,10 +120,9 @@ class DocumentTransferStore:
                 WHERE md5=:md5 AND provider='s3' AND purpose='primary'"""), expected).mappings().one_or_none()
             values = {key: payload[key] for key in ('locator', 'size', 'etag', 'verified_at')}
             if before:
-                update_records(conn, 'primary', [{**before, **values}], {before['location_id']: dict(before)})
+                update_records(conn, 'primary', [{**before, **values}])
             else:
-                after = dict(conn.execute(text("""INSERT INTO catalog_locations
+                conn.execute(text("""INSERT INTO catalog_locations
                     (md5,provider,purpose,locator,size,etag,verified_at)
-                    VALUES (:md5,'s3','primary',:locator,:size,:etag,:verified_at) RETURNING *"""),
-                    {'md5': expected['md5'], **values}).mappings().one())
-                self.catalog._audit(conn, 'location', after['location_id'], None, after)
+                    VALUES (:md5,'s3','primary',:locator,:size,:etag,:verified_at)"""),
+                    {'md5': expected['md5'], **values})

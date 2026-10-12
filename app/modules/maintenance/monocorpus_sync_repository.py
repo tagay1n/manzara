@@ -253,7 +253,7 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
                 raise CatalogConflict('Filename repair catalog facts changed; inspect the plan')
             before = dict(conn.execute(text('''SELECT * FROM catalog_locations
                 WHERE md5=:md5 AND provider='yandex' AND purpose='source' '''), {'md5': md5}).mappings().one())
-            update_records(conn, 'source', [{**before, 'source_path': target}], {before['location_id']: before})
+            update_records(conn, 'source', [{**before, 'source_path': target}])
 
     def validate_publication(self, expected: Mapping[str, Any]) -> None:
         with self.engine.connect() as conn:

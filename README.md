@@ -54,7 +54,7 @@ One foreground run owns the CLI through worker finalization and output drain. Fu
 
 Ctrl-C during work requests safe stop. At idle it clears input, or exits when input is empty. A second Ctrl-C while stopping/exiting forces exit 130 and restores input mode without waiting for output; unfinished checkpoints and final summaries may be skipped. The next launch recovers interrupted runs. Slow output applies bounded backpressure while controls remain responsive; output failure requests safe shutdown and exits 1. Normal shutdown drains output.
 
-One CLI session owns each local runtime store. Startup initializes SQLite and checks PostgreSQL read-only; it never applies migrations. [Local reset policy](docs/operations.md#local-runtime-state) governs older SQLite schemas. Tasks run sequentially, log to redacted stdout, and save JSON results under the configured artifact root for summaries/history. Provider I/O timeouts do not bound total streaming duration.
+One CLI session owns each local runtime store. Interactive startup applies pending PostgreSQL migrations and waits for completion before enabling tasks, then initializes SQLite. Migration failures keep tasks unavailable. [Database tools](docs/operations.md#database-tools) describes migration ownership and recovery; [local reset policy](docs/operations.md#local-runtime-state) governs older SQLite schemas. Tasks run sequentially, log to redacted stdout, and save JSON results under the configured artifact root for summaries/history. Provider I/O timeouts do not bound total streaming duration.
 
 ## Documentation
 

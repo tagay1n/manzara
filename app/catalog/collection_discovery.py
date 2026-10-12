@@ -30,7 +30,6 @@ _REQUIRED = {
     "entities": {"entity_id", "kind", "display_name", "approval", "status", "revision"},
     "proposals": {"proposal_id", "kind", "status", "display_name", "evidence", "field_changes",
                   "publication_id", "revision", "updated_at"},
-    "revisions": {"revision_id", "record_kind", "record_key", "actor", "before", "after"},
 }
 
 
@@ -225,7 +224,6 @@ class CollectionDiscoveryStore:
                 else:
                     statement = table.insert().values(kind="collection", field_changes={}, **values)
                 after = dict(conn.execute(statement.returning(table)).mappings().one())
-                self.catalog._audit(conn, "proposal", after["proposal_id"], before, after, "task")
                 counts["proposals_updated" if before else "proposals_created"] += 1
                 counts["proposal_ids"].append(after["proposal_id"])
             for before in previous:
@@ -235,7 +233,6 @@ class CollectionDiscoveryStore:
                 after = dict(conn.execute(table.update().where(table.c.proposal_id == before["proposal_id"])
                     .values(status="superseded", revision=before["revision"] + 1, updated_at=datetime.now(timezone.utc))
                     .returning(table)).mappings().one())
-                self.catalog._audit(conn, "proposal", after["proposal_id"], before, after, "task")
                 counts["proposals_superseded"] += 1
                 counts["superseded_proposal_ids"].append(after["proposal_id"])
             should_stop()

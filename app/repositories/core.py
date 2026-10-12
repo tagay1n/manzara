@@ -224,7 +224,6 @@ class CoreRepository:
             "catalog_contributions": {"contribution_id", "publication_id", "name_id", "role", "position", "nested_position"},
             "catalog_credit_groups": {"publication_id", "role", "position"},
             "catalog_protections": {"record_kind", "record_key", "field"},
-            "catalog_revisions": {"record_kind", "record_key", "actor", "before", "after"},
             "personality_normalization_checkpoints": {"raw_name", "canonical_id", "source_fingerprint", "state", "decision_reason", "decision_evidence"},
         }
         with self._connect() as conn:

@@ -63,7 +63,6 @@ class BookPreviewCatalogStore:
             "catalog_locations": {"location_id", "md5", "provider", "purpose", "revision", "locator", "size", "etag", "verified_at"},
             "catalog_preview_requests": {"request_id", "md5", "recipe", "idempotency_key", "status", "private", "actor", "claim_token", "lease_until", "source_page_count", "created_at"},
             "catalog_preview_pages": {"request_id", "role", "page_number", "small_key", "large_key"},
-            "catalog_revisions": {"record_kind", "record_key", "actor", "before", "after"},
             "document_cleanup_queue": {"md5", "scope", "status"},
         }
         if self.engine.pool.size() < 2:

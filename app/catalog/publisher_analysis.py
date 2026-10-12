@@ -49,7 +49,7 @@ class PublisherCatalogStore:
                 self.analyses, *(self.catalog.table(name) for name in (
                     "publications", "documents", "contributions", "credit_groups", "entities",
                     "entity_roles", "names", "aliases", "alias_reviews", "proposals",
-                    "proposal_members", "separations", "revisions",
+                    "proposal_members", "separations",
                 )),
             )
         }
@@ -270,7 +270,6 @@ class PublisherCatalogStore:
                 for entry in selected:
                     for member in entry["members"]:
                         conn.execute(members.insert().values(proposal_id=proposal["proposal_id"], **member))
-                self.catalog._audit(conn, "proposal", proposal["proposal_id"], None, proposal, "task")
                 ids.append(proposal["proposal_id"])
             conn.execute(self.analyses.update().where(self.analyses.c.analysis_id == analysis_id).values(
                 state="imported", updated_at=datetime.now(timezone.utc).isoformat()))

@@ -52,7 +52,6 @@ class NonPdfCatalogStore:
             "catalog_documents": {"md5", "publication_id", "mime_type", "restricted", "revision", "updated_at", "content_extraction_method"},
             "catalog_locations": {"location_id", "md5", "provider", "purpose", "source_path", "locator", "size", "etag", "verified_at", "revision", "updated_at"},
             "catalog_protections": {"record_kind", "record_key", "field"},
-            "catalog_revisions": {"record_kind", "record_key", "actor", "before", "after"},
             "library_non_pdf_extraction_state": {"md5", "extractor_version", "detected_format", "status", "generated_at", "verified_source_mime", "decision_reason", "created_at", "updated_at"},
             "document_cleanup_queue": {"cleanup_id", "scope", "action", "reason", "md5", "source_resource_id", "source_path", "target_path", "status", "evidence_json"},
         }
@@ -161,7 +160,7 @@ class NonPdfCatalogStore:
         if blocked:
             raise CatalogConflict(f"Protected document fields changed for {before['md5']}: {sorted(blocked)}")
         if changes or touch:
-            self.catalog._update(conn, "document", before['md5'], before, changes, "task")
+            self.catalog._update(conn, "document", before['md5'], before, changes)
 
     def save_success(self, conn, expected, *, version, detected_format, content_url, size, etag):
         self._check(conn, expected)
@@ -169,16 +168,13 @@ class NonPdfCatalogStore:
         # Every new generation changes the document's optimistic revision, even
         # when its formatter recipe is unchanged and only its location changes.
         self._patch_document(conn, before, {"content_extraction_method": version}, touch=True)
-        old_location = conn.execute(text("""SELECT * FROM catalog_locations
-            WHERE md5=:md5 AND provider='s3' AND purpose='content'"""), {'md5': expected['md5']}).mappings().one_or_none()
-        after = dict(conn.execute(text("""INSERT INTO catalog_locations
+        conn.execute(text("""INSERT INTO catalog_locations
             (md5,provider,purpose,locator,size,etag,verified_at)
             VALUES(:md5,'s3','content',:url,:size,:etag,CURRENT_TIMESTAMP)
             ON CONFLICT(md5,provider,purpose) DO UPDATE SET locator=excluded.locator,
                 size=excluded.size,etag=excluded.etag,verified_at=excluded.verified_at,
-                revision=catalog_locations.revision+1,updated_at=CURRENT_TIMESTAMP
-            RETURNING *"""), {'md5': expected['md5'], 'url': content_url, 'size': size, 'etag': etag}).mappings().one())
-        self.catalog._audit(conn, "location", after['location_id'], dict(old_location) if old_location else None, after, "task")
+                revision=catalog_locations.revision+1,updated_at=CURRENT_TIMESTAMP"""),
+            {'md5': expected['md5'], 'url': content_url, 'size': size, 'etag': etag})
         conn.execute(text("""INSERT INTO library_non_pdf_extraction_state
             (md5,extractor_version,detected_format,status,generated_at)
             VALUES(:md5,:version,:format,'ready',CURRENT_TIMESTAMP)

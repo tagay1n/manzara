@@ -247,11 +247,9 @@ class MetadataStore:
             for position, mode in enumerate(incoming["access_modes"]):
                 conn.execute(access.insert().values(md5=md5, position=position, mode=mode))
         if file_changes.keys() - doc_protected:
-            self._update(conn, "document", md5, doc, {}, actor)
+            self._update(conn, "document", md5, doc, {})
         if not automated:
             self._protect(conn, "document", md5, {"access_modes", "sufficient_modes"}, actor)
         conn.execute(self.table("evidence").insert().values(md5=md5, record_kind="publication", record_key=str(key), source=actor, payload=source))
-        self._update(conn, "publication", key, pub, values, actor)
-        after = self._metadata(conn, md5)
-        self._audit(conn, "metadata", key, before, after, actor)
-        return after
+        self._update(conn, "publication", key, pub, values)
+        return self._metadata(conn, md5)

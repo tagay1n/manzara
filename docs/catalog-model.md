@@ -14,7 +14,7 @@ Retained schema history starts at `20261008_0062`; forward migrations extend tha
 | Classification | Parent-child taxonomy, stable classification IDs, generated paths/DDC |
 | Collection | Grouping and independent publication switch |
 | Preview request / page | Intent, leases, successful generations, selected assets |
-| Evidence / proposal / revision | Source/review snapshots, pending changes, transactional audit |
+| Evidence / proposal | Source/review snapshots and pending changes |
 
 Sync creates one pending publication per new MD5 and preserves existing membership; it never infers edition equivalence. Multiple files may share a publication; cleanup can leave it empty. ISBN equality requires review, not automatic grouping. Inclusion never overrides privacy/completeness; unknown privacy fails closed.
 
@@ -22,7 +22,7 @@ The legacy file-level `metadata.lib` privacy projection and adapter-write contra
 
 Human confirmation is distinct from active/merged status and AI success. One spelling may belong to multiple identities; linking an alias never resolves all matching mentions. Contributions identify reviewed occurrences. Publisher types derive from publisher mentions, then aliases.
 
-Editable facts live in normalized relations; Schema.org is generated transport. JSONB holds evidence, snapshots, proposals, manifests, and audits. Sparse import evidence plus external backup preserves provenance without duplicating all source payloads.
+Editable facts live in normalized relations; Schema.org is generated transport. JSONB holds evidence, snapshots, proposals, and manifests. Sparse import evidence plus external backup preserves provenance without duplicating all source payloads. Revision counters remain optimistic concurrency controls; the owner retired per-change audit snapshots and legacy normalization/collection event logs in revision `20261011_0065`.
 
 ## Store ownership
 
@@ -34,7 +34,7 @@ PostgreSQL owns domain facts and safety-critical checkpoints; SQLite owns dispos
 | Non-PDF | Outputs, unsupported decisions, verified MIME/recipes | Attempts/errors/deferrals |
 | Cleanup | Plans, reviews, phases, cancellation/completion | Counts, run IDs, errors |
 | Previews | Requests, leases, generations/pages | Attempts/errors |
-| Metadata | Normalized facts, reviews, evidence/audits | AI attempts/errors/deferrals/exclusions |
+| Metadata | Normalized facts, reviews, evidence | AI attempts/errors/deferrals/exclusions |
 | Publisher / collection | Catalog proposals; publisher response checkpoints | Run/progress; collection features rebuilt in memory |
 
 No fallback or dual-write. Retired physical `document`, `metadata`, `classification`, `normalization_canonicals`, `normalization_aliases`, `library_collections`, and `library_collection_items` are adapter views. They store no duplicate rows; legacy upserts require strict `catalog_upsert` because views have no unique indexes.
@@ -60,7 +60,7 @@ Read projections `catalog_publication_metadata`, `catalog_document_metadata`, `c
 
 ## Mutations and privacy
 
-Schema owners are Alembic frozen SQL and `app/catalog/schema.py`; Python metadata alone is incomplete. Shared commands live in `app/catalog/`. Mutations check source/reviewed revisions and write audits transactionally; stale snapshots raise `CatalogConflict`. Metadata needs publication/document revisions and preserves protected fields and confirmed contributions. Protected publication changes become review proposals; file/privacy/collection conflicts require explicit resolution. No general admin or metadata-proposal review CLI exists.
+Schema owners are Alembic frozen SQL and `app/catalog/schema.py`; Python metadata alone is incomplete. Shared commands live in `app/catalog/`. Mutations check source/reviewed revisions and commit domain facts, review evidence, and checkpoints transactionally; stale snapshots raise `CatalogConflict`. Metadata needs publication/document revisions and preserves protected fields and confirmed contributions. Protected publication changes become review proposals; file/privacy/collection conflicts require explicit resolution. No general admin or metadata-proposal review CLI exists.
 
 Preview leases/claim tokens are durable; expired claims recover and failed regeneration retains prior success. Restricted outputs require private storage/authenticated delivery. Restricted files lose public preview eligibility; old object deletion remains guarded Maintenance work. Public automatic previews and static export follow [document](../app/modules/library/guidance/documents.md) and [bundle](../app/modules/library/guidance/site-export.md) contracts.
 

@@ -51,7 +51,10 @@ LIBRARY_CLASSIFICATION_RULES_TEXT = (
 
 MISSING_FIELD_REQUESTS = {
     "isbn": "Please add `isbn` (array of ISBN values) or return null.",
-    "datePublished": "Please add `datePublished` (YYYY or YYYY-MM-DD) or return null.",
+    "datePublished": (
+        "Please add `datePublished` as a four-digit year string (YYYY) or return null. "
+        "Discard month and day even when a full publication date is present in the evidence."
+    ),
     "numberOfPages": "Please add `numberOfPages` (integer) or return null.",
     "name": "Please add `name` (document title) or return null.",
     "author": "Please add `author` (schema.org Person/Organization list) or return null.",

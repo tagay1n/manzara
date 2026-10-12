@@ -18,7 +18,7 @@ Read normalized relations in a repeatable-read snapshot after read-only schema/r
 
 Evidence source `catalog.collection_discovery`, contract `catalog.collection-discovery.v1`, records candidate key/fingerprint, type (`new_collection` / `attach_to_collection`), optional target/revision, scores/evidence, and publication revision/metadata/document/contextual-credit snapshots. Identity comprises contract, type, optional target ID, and sorted publication IDs.
 
-A transaction-scoped discovery lock serializes refresh. Lock/recheck source snapshots; changed input fails with rerun guidance. Refresh/audit atomically. Identical pending candidates reuse IDs without revision churn; changed candidates refresh; superseded candidates can return to pending. Other decisions stay intact. Only a complete successful scan supersedes disappeared pending candidates.
+A transaction-scoped discovery lock serializes refresh. Lock/recheck source snapshots; changed input fails with rerun guidance. Refresh atomically. Identical pending candidates reuse IDs without revision churn; changed candidates refresh; superseded candidates can return to pending. Other decisions stay intact. Only a complete successful scan supersedes disappeared pending candidates.
 
 Stop/failure before commit rolls back; stop after commit preserves proposals. Rebuild features in memory on rerun, without feature caches/checkpoints. Historical collection proposals/items/signatures/events/validation attempts remain untouched and unused; no migration/fallback/dual-write.
 
