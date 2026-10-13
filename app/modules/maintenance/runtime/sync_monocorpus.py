@@ -419,7 +419,8 @@ def run_monocorpus_sync(*, repository: MonocorpusSyncRepository, yadisk: Any, pr
         'discovered', 'created', 'updated', 'unchanged', 'published', 'duplicate_resources_queued',
         'corrupted_zero_detected', 'corrupted_plans_created', 'corrupted_plans_reused', 'filtered',
         'cleanups_completed', 'cleanups_canceled', 'cleanups_failed', 'cleanups_deferred', 'objects_removed', 'failed',
-        'catalog_planned', 'catalog_applied', 'catalog_pending', 'publications_pending'), 0)
+        'catalog_planned', 'catalog_applied', 'catalog_pending', 'publications_pending',
+        'empty_publications_removed'), 0)
     error = None
     planned = {}
     context.log(f'sync start run_id={context.run_id}')
@@ -439,6 +440,20 @@ def run_monocorpus_sync(*, repository: MonocorpusSyncRepository, yadisk: Any, pr
             _progress(context, counters, item['source_path'], stage='cleanup', current=number + 1, total=len(items))
         if context.should_stop():
             return _finish(context, counters, planned)
+        empty_publications = repository.list_empty_publications()
+        for number, publication_id in enumerate(empty_publications):
+            if context.should_stop():
+                return _finish(context, counters, planned)
+            _progress(context, counters, stage='empty_publication_cleanup', current=number, total=len(empty_publications))
+            try:
+                if repository.delete_empty_publication(publication_id):
+                    counters['empty_publications_removed'] += 1
+                    context.log(f'sync empty publication removed publication_id={publication_id}')
+            except Exception as exc:
+                if is_transient_postgres_error(exc):
+                    raise
+                counters['failed'] += 1
+                context.log(f'sync empty publication cleanup failed publication_id={publication_id} error={redact(exc)}')
         # Do not rediscover files whose pending or failed cleanup still owns them.
         active = repository.list_active_cleanup()
         excluded_paths = {cleanup_source_path(item) for item in active}

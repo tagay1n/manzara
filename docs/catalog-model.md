@@ -16,7 +16,7 @@ Retained schema history starts at `20261008_0062`; forward migrations extend tha
 | Preview request / page | Intent, leases, successful generations, selected assets |
 | Evidence / proposal | Source/review snapshots and pending changes |
 
-Sync creates one publication and a pending file per new MD5 (restricted files start excluded) and preserves existing membership; it never infers edition equivalence. Multiple files may share a publication; cleanup can leave it empty. ISBN equality requires review, not automatic grouping. File inclusion never overrides privacy/completeness; unknown privacy fails closed. Publications have no stored inclusion decision: they are included exactly when at least one member file is included. Empty publications are not included.
+Sync creates one publication and a pending file per new MD5 (restricted files start excluded) and preserves existing membership; it never infers edition equivalence. Multiple files may share a publication; cleanup deletes the publication and its owned bibliography when its last file is deleted. Sync also removes existing empty publications under the [cleanup contract](../app/modules/maintenance/guidance/cleanup.md). ISBN equality requires review, not automatic grouping. File inclusion never overrides privacy/completeness; unknown privacy fails closed. Publications have no stored inclusion decision: they are included exactly when at least one member file is included.
 
 The file inclusion, derived publication status, and legacy `metadata.lib` adapter-write contract are documented in [the database reference](database-reference.md#primary-tables-and-fields).
 

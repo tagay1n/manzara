@@ -1,4 +1,4 @@
-"""Catalog-native file discovery and deletion; publication identity is retained."""
+"""Catalog-native file discovery and deletion of files and empty publications."""
 
 from __future__ import annotations
 
@@ -86,6 +86,7 @@ class DocumentSyncStore:
             "catalog_documents": {"md5", "publication_id", "mime_type", "complete", "restricted", "selected", "inclusion", "revision", "updated_at"},
             "catalog_locations": {"location_id", "md5", "provider", "purpose", "source_path", "resource_id", "public_url", "public_key", "locator", "size", "etag", "verified_at", "revision", "updated_at"},
             "catalog_protections": {"record_kind", "record_key", "field"},
+            "catalog_proposals": {"publication_id"},
             "library_non_pdf_extraction_state": {"md5", "verified_source_mime"},
             "library_upstream_metadata": {"md5"},
             "library_isbn_duplicate_reviews": {"review_id", "status", "candidates_json", "evidence_json", "keep_md5s_json"},
@@ -121,6 +122,13 @@ class DocumentSyncStore:
                            and item['constrained_columns'] == ['md5']
                            and item['options'].get('ondelete') == 'CASCADE' for item in foreign_keys):
                     raise RuntimeError(f"Sync requires file-owned cascade for {relation}")
+            for relation in ("catalog_publication_languages", "catalog_identifiers", "catalog_subjects",
+                             "catalog_genres", "catalog_audiences", "catalog_credit_groups", "catalog_references"):
+                foreign_keys = inspector.get_foreign_keys(relation, schema=self.schema)
+                if not any(item['referred_table'] == 'catalog_publications'
+                           and item['constrained_columns'] == ['publication_id']
+                           and item['options'].get('ondelete') == 'CASCADE' for item in foreign_keys):
+                    raise RuntimeError(f"Sync requires publication-owned cascade for {relation}")
 
     def list_documents(self) -> dict[str, dict[str, Any]]:
         with self.engine.connect() as conn:
@@ -260,8 +268,9 @@ class DocumentSyncStore:
             raise CatalogConflict(f'Document {md5} became restricted; publication refused')
 
     def delete_document(self, conn, md5: str, *, expected: Mapping[str, Any] | None):
-        """Delete file-owned facts, retaining publication metadata and review evidence."""
+        """Delete file-owned facts and the publication when its last file disappears."""
         document_md5(md5)
+        self._lock_publication_topology(conn)
         before = self._lock(conn, md5)
         current = self._snapshot(conn, md5)
         if current and (expected is None or any(current[key] != expected[key] for key in _SNAPSHOT_FIELDS)):
@@ -275,3 +284,35 @@ class DocumentSyncStore:
                          {"key": str(location['location_id'])})
         conn.execute(text("DELETE FROM catalog_protections WHERE record_kind='document' AND record_key=:md5"), {"md5": md5})
         conn.execute(text("DELETE FROM catalog_documents WHERE md5=:md5"), {"md5": md5})
+        self.delete_empty_publication(conn, before['publication_id'])
+
+    def _lock_publication_topology(self, conn):
+        # Use the same lock as the publication topology trigger, before row locks.
+        conn.execute(text("""SELECT pg_advisory_xact_lock(hashtextextended(
+            'catalog-topology:' || current_schema() || ':catalog_publications', 0))"""))
+
+    def list_empty_publications(self) -> list[int]:
+        with self.engine.connect() as conn:
+            return list(conn.execute(text("""SELECT p.publication_id FROM catalog_publications p
+                WHERE NOT EXISTS (SELECT 1 FROM catalog_documents d
+                                  WHERE d.publication_id=p.publication_id)
+                ORDER BY p.publication_id""")).scalars())
+
+    def delete_empty_publication(self, conn, publication_id: int) -> bool:
+        """Recheck emptiness under a parent lock; retain cleanup/ISBN audit rows."""
+        integer(publication_id, 'publication_id')
+        self._lock_publication_topology(conn)
+        values = {'publication_id': publication_id}
+        present = conn.execute(text("""SELECT publication_id FROM catalog_publications
+            WHERE publication_id=:publication_id FOR UPDATE"""), values).scalar_one_or_none()
+        if present is None or conn.execute(text("""SELECT EXISTS (SELECT 1 FROM catalog_documents
+            WHERE publication_id=:publication_id)"""), values).scalar_one():
+            return False
+        if conn.execute(text("""SELECT EXISTS (SELECT 1 FROM catalog_publications
+            WHERE merged_into_id=:publication_id)"""), values).scalar_one():
+            raise CatalogConflict(f'Empty publication {publication_id} is a merge target; resolve its incoming merges before cleanup')
+        conn.execute(text("DELETE FROM catalog_proposals WHERE publication_id=:publication_id"), values)
+        conn.execute(text("""DELETE FROM catalog_protections
+            WHERE record_kind='publication' AND record_key=CAST(:publication_id AS TEXT)"""), values)
+        conn.execute(text("DELETE FROM catalog_publications WHERE publication_id=:publication_id"), values)
+        return True

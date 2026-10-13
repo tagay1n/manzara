@@ -53,6 +53,13 @@ class MonocorpusSyncRepository(DocumentCleanupRepository):
     def list_documents(self) -> dict[str, dict[str, Any]]:
         return self.catalog.list_documents()
 
+    def list_empty_publications(self) -> list[int]:
+        return self.catalog.list_empty_publications()
+
+    def delete_empty_publication(self, publication_id: int) -> bool:
+        with self.write_transaction() as conn:
+            return self.catalog.delete_empty_publication(conn, publication_id)
+
     @contextmanager
     def cleanup_operation(self, cleanup_id):
         with self.engine.connect() as conn:
