@@ -39,7 +39,7 @@ from app.modules.library.runtime.metadata.schema import Book
 from app.modules.library.upstream_metadata import sanitize_upstream_metadata
 from app.runtime_config import config_integer
 
-PROMPT_VERSION = "prompt.v10"
+PROMPT_VERSION = "prompt.v11"
 _SUPPORTING_METADATA_FIELDS = (
     "author",
     "contributor",
@@ -63,7 +63,10 @@ class ExtractedMetadata(Book):
 
     inLanguage: str = Field(
         min_length=1,
-        description=f"BCP 47 language tag; use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar.",
+        description=(
+            "BCP 47 language tag; Tatar requires an explicit script. "
+            f"Use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar; never use bare tt or tat."
+        ),
     )
 
 

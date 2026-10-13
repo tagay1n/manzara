@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from app.catalog.languages import LEGACY_ZAMANALIF_LANGUAGE_TAGS, ZAMANALIF_LANGUAGE_TAG
 
 
-CONTRACT_VERSION = "schema-org.v5"
+CONTRACT_VERSION = "schema-org.v6"
 PUBLICATION_YEAR_PATTERN = r"^[0-9]{4}$"
 SCHEMA_CONTEXT = "https://schema.org"
 SUPPORTED_TYPES = frozenset(
@@ -275,6 +275,12 @@ def _language_issues(value: Any, *, path: str) -> list[dict[str, str]]:
         return [_issue("language_tag", path, f"use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif")]
     if any(not _BCP47_RE.fullmatch(tag) for tag in tags):
         return [_issue("language_tag", path, "invalid BCP 47 language tag")]
+    if any(
+        tag.split("-", 1)[0].casefold() in {"tt", "tat"}
+        and not re.match(r"^(?:tt|tat)-[A-Za-z]{4}(?:-|$)", tag, re.IGNORECASE)
+        for tag in tags
+    ):
+        return [_issue("language_script", path, "Tatar language tags must specify a script")]
     return []
 
 

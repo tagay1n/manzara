@@ -81,7 +81,10 @@ class CreativeWork(BaseModel):
     author: Optional[list[PersonOrOrganization]] = None
     inLanguage: Optional[str] = Field(
         default=None,
-        description=f"BCP 47 language tag; use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar.",
+        description=(
+            "BCP 47 language tag; Tatar requires an explicit script. "
+            f"Use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar; never use bare tt or tat."
+        ),
     )
     url: Optional[list[str]] = None
 
@@ -121,7 +124,10 @@ class Book(BaseModel):
     isbn: Optional[list[str]] = None
     inLanguage: Optional[str] = Field(
         default=None,
-        description=f"BCP 47 language tag; use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar.",
+        description=(
+            "BCP 47 language tag; Tatar requires an explicit script. "
+            f"Use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar; never use bare tt or tat."
+        ),
     )
     description: Optional[str] = None
     numberOfPages: Optional[StrictInt] = None

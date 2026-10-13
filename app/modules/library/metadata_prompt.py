@@ -120,6 +120,12 @@ Text may appear in different scripts. Automatically detect the **primary languag
 - Tatar in Arabic script → use `"tt-Arab"`
 - Russian in Cyrillic script → use `"ru-Cyrl"`
 
+Tatar tags must include the detected script. Never return bare `"tt"` or `"tat"`,
+or a Tatar tag containing a region/private-use value without a script subtag.
+Do not infer Cyrillic merely because the language is Tatar; identify the script
+from the document evidence. Apply this rule to each Tatar tag in multilingual
+metadata and to any `isBasedOn.inLanguage` value.
+
 ### Exact Tatar Latin alphabets
 - Yanalif: `Aa Bʙ Cc Çç Dd Ee Əə Ff Gg Ƣƣ Hh Ii Jj Kk Ll Mm Nn Ꞑꞑ Oo Ɵɵ Pp Qq Rr Ss Şş Tt Uu Vv Xx Yy Zz Ƶƶ Ьь`
 - Zamanalif: `Aa Ää Bb Cc Çç Dd Ee Ff Gg Ğğ Hh Iı İi Jj Kk Ll Mm Nn Ññ Oo Öö Pp Qq Rr Ss Şş Tt Uu Üü Vv Ww Xx Yy Zz`
