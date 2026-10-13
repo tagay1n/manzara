@@ -54,7 +54,7 @@ from app.runtime_config import (
 from app.s3_transfer import create_s3_client
 from app.task_runtime.logging import format_result_json, redact
 
-EVALUATION_PROMPT_VERSION = 'prompt.v8/tatar-script'
+EVALUATION_PROMPT_VERSION = 'prompt.v9/tatar-latin-variant'
 FLOWS = {'extract': 'library.metadata_extract.catalog.v1', 'evaluate': 'library.metadata_evaluate.catalog.v1'}
 
 

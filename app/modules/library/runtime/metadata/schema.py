@@ -83,7 +83,8 @@ class CreativeWork(BaseModel):
         default=None,
         description=(
             "BCP 47 language tag; Tatar requires an explicit script. "
-            f"Use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar; never use bare tt or tat."
+            f"Use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif or tt-Latn-x-yanalif for Yanalif. "
+            "Never use bare tt, tat, tt-Latn, or tat-Latn."
         ),
     )
     url: Optional[list[str]] = None
@@ -126,7 +127,8 @@ class Book(BaseModel):
         default=None,
         description=(
             "BCP 47 language tag; Tatar requires an explicit script. "
-            f"Use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar; never use bare tt or tat."
+            f"Use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif or tt-Latn-x-yanalif for Yanalif. "
+            "Never use bare tt, tat, tt-Latn, or tat-Latn."
         ),
     )
     description: Optional[str] = None

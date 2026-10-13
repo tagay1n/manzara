@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from app.catalog.languages import LEGACY_ZAMANALIF_LANGUAGE_TAGS, ZAMANALIF_LANGUAGE_TAG
 
 
-CONTRACT_VERSION = "schema-org.v6"
+CONTRACT_VERSION = "schema-org.v7"
 PUBLICATION_YEAR_PATTERN = r"^[0-9]{4}$"
 SCHEMA_CONTEXT = "https://schema.org"
 SUPPORTED_TYPES = frozenset(
@@ -281,6 +281,13 @@ def _language_issues(value: Any, *, path: str) -> list[dict[str, str]]:
         for tag in tags
     ):
         return [_issue("language_script", path, "Tatar language tags must specify a script")]
+    if any(tag.casefold() in {"tt-latn", "tat-latn"} for tag in tags):
+        return [
+            _issue(
+                "language_variant", path,
+                f"use {ZAMANALIF_LANGUAGE_TAG} or tt-Latn-x-yanalif for Latin Tatar",
+            )
+        ]
     return []
 
 

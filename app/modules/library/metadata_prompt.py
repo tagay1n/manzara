@@ -126,6 +126,11 @@ Do not infer Cyrillic merely because the language is Tatar; identify the script
 from the document evidence. Apply this rule to each Tatar tag in multilingual
 metadata and to any `isBasedOn.inLanguage` value.
 
+Never return generic `"tt-Latn"` or `"tat-Latn"`. Identify the Latin orthography
+from source evidence and use `"tt-Latn-x-zaman"` or `"tt-Latn-x-yanalif"`.
+Do not guess an orthography solely to replace a generic language tag in supplied
+metadata. This rule also applies to multilingual values and source-work references.
+
 ### Exact Tatar Latin alphabets
 - Yanalif: `Aa Bʙ Cc Çç Dd Ee Əə Ff Gg Ƣƣ Hh Ii Jj Kk Ll Mm Nn Ꞑꞑ Oo Ɵɵ Pp Qq Rr Ss Şş Tt Uu Vv Xx Yy Zz Ƶƶ Ьь`
 - Zamanalif: `Aa Ää Bb Cc Çç Dd Ee Ff Gg Ğğ Hh Iı İi Jj Kk Ll Mm Nn Ññ Oo Öö Pp Qq Rr Ss Şş Tt Uu Üü Vv Ww Xx Yy Zz`
