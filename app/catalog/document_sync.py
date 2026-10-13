@@ -289,7 +289,8 @@ class DocumentSyncStore:
     def _lock_publication_topology(self, conn):
         # Use the same lock as the publication topology trigger, before row locks.
         conn.execute(text("""SELECT pg_advisory_xact_lock(hashtextextended(
-            'catalog-topology:' || current_schema() || ':catalog_publications', 0))"""))
+            :prefix || current_schema() || :suffix, 0))"""),
+            {'prefix': 'catalog-topology:', 'suffix': ':catalog_publications'})
 
     def list_empty_publications(self) -> list[int]:
         with self.engine.connect() as conn:
