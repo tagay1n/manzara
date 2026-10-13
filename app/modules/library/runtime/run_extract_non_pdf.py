@@ -62,6 +62,7 @@ from app.repositories.document_cleanup import (
     DocumentCleanupRepository,
 )
 from app.runtime_config import config_integer, config_text, load_runtime_config
+from app.s3_cleanup import iter_s3_versions, purge_s3_history
 from app.s3_transfer import create_s3_client, sequential_transfer_config
 from app.task_runtime.contracts import RunContext
 
@@ -275,26 +276,11 @@ def _delete_stale_assets(
     generation_id: str,
 ) -> int:
     prefix = f"{md5}/{generation_id}/"
-    existing: list[str] = []
-    continuation: str | None = None
-    while True:
-        request: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
-        if continuation:
-            request["ContinuationToken"] = continuation
-        response = s3.list_objects_v2(**request)
-        existing.extend(
-            str(item.get("Key") or "")
-            for item in response.get("Contents", [])
-            if str(item.get("Key") or "")
-        )
-        if not response.get("IsTruncated"):
-            break
-        continuation = str(response.get("NextContinuationToken") or "")
-        if not continuation:
-            raise RuntimeError(f"Missing continuation token for image prefix {prefix}")
-    stale = sorted(set(existing) - set(expected_keys))
+    stale = sorted({key for key, _ in iter_s3_versions(
+        s3, bucket, prefix, kinds=("Versions", "DeleteMarkers"))
+        if key.startswith(prefix) and key not in expected_keys})
     for key in stale:
-        s3.delete_object(Bucket=bucket, Key=key)
+        purge_s3_history(s3, bucket, key, key_matches=lambda candidate: candidate == key)
     return len(stale)
 
 

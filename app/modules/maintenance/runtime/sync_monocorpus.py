@@ -44,6 +44,7 @@ from app.modules.maintenance.document_cleanup_executor import execute_yandex_cle
 from app.modules.maintenance.monocorpus_sync_repository import MonocorpusSyncRepository
 from app.postgres_engine import is_transient_postgres_error
 from app.runtime_config import config_integer, load_runtime_config
+from app.s3_cleanup import purge_s3_history
 from app.s3_transfer import create_s3_client
 from app.task_runtime.contracts import RunContext
 from app.task_runtime.logging import redact
@@ -128,64 +129,9 @@ def _ensure_yandex_directory(yadisk: Any, directory: str) -> None:
             continue
 
 
-def _managed_versions(s3: Any, bucket: str, prefix: str, *, kinds: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
-    """Read a bounded batch of exact managed keys, including hidden history."""
-    parameters = {'Bucket': bucket, 'Prefix': prefix, 'MaxKeys': config_integer("maintenance", "s3_listing_page_size", maximum=1000)}
-    seen_markers = set()
-    while True:
-        page = s3.list_object_versions(**parameters)
-        versions = []
-        for kind in kinds:
-            for item in page.get(kind, []):
-                key = item['Key']
-                if key != prefix and not key.startswith((prefix + '.', prefix.rstrip('/') + '/')):
-                    continue
-                version_id = item.get('VersionId')
-                if not isinstance(version_id, str) or not version_id.strip():
-                    raise RuntimeError(f'Managed S3 object has no version ID bucket={bucket} key={key}')
-                versions.append((key, version_id))
-        if versions:
-            return tuple(sorted(versions))
-        if not page.get('IsTruncated'):
-            return ()
-        marker = (page.get('NextKeyMarker'), page.get('NextVersionIdMarker'))
-        if not marker[0] or marker in seen_markers:
-            raise RuntimeError('Managed S3 version pagination did not advance')
-        seen_markers.add(marker)
-        parameters['KeyMarker'] = marker[0]
-        if marker[1] is not None:
-            parameters['VersionIdMarker'] = marker[1]
-        else:
-            parameters.pop('VersionIdMarker', None)
-
-
 def _delete_prefix(s3: Any, bucket: str, prefix: str) -> int:
-    """Permanently remove versions first, then markers, and verify absence."""
-    deleted = 0
-    # Keep hidden data hidden until all its versions have been removed.
-    for kind in ('Versions', 'DeleteMarkers'):
-        previous = ()
-        while True:
-            versions = _managed_versions(s3, bucket, prefix, kinds=(kind,))
-            if not versions:
-                break
-            if versions == previous:
-                raise RuntimeError(f'Managed S3 versions remain after deletion bucket={bucket} prefix={prefix}')
-            previous = versions
-            response = s3.delete_objects(Bucket=bucket, Delete={
-                'Objects': [{'Key': key, 'VersionId': version_id} for key, version_id in versions],
-                'Quiet': False,
-            })
-            if response.get('Errors'):
-                raise RuntimeError(f'Managed S3 permanent deletion failed bucket={bucket} prefix={prefix}: '
-                                   f'{json.dumps(response["Errors"], sort_keys=True)}')
-            confirmed = {(item.get('Key'), item.get('VersionId')) for item in response.get('Deleted', [])}
-            if confirmed != set(versions):
-                raise RuntimeError(f'Managed S3 permanent deletion was not fully acknowledged bucket={bucket} prefix={prefix}')
-            deleted += len(versions)
-    if _managed_versions(s3, bucket, prefix, kinds=('Versions', 'DeleteMarkers')):
-        raise RuntimeError(f'Managed S3 history remains after deletion bucket={bucket} prefix={prefix}')
-    return deleted
+    return purge_s3_history(s3, bucket, prefix, key_matches=lambda key:
+        key == prefix or key.startswith((prefix + '.', prefix.rstrip('/') + '/')))
 
 
 def _cleanup_managed_storage(md5: str, *, primary_s3: Any, settings: DocumentStorageSettings) -> int:

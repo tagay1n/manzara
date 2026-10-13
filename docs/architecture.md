@@ -22,7 +22,7 @@ Read the relevant owner and nearest `AGENTS.md`, then search symbols; do not pre
 | Cleanup planning/review | `app/modules/library/document_cleanup*.py`, `cleanup_cli.py`, shared `app/repositories/document_cleanup.py`; [review contract](document-cleanup.md) |
 | Maintenance flows | [Maintenance rules](../app/modules/maintenance/AGENTS.md); sync: `app/catalog/document_sync.py`, `document_sync_bulk.py`, `app/modules/maintenance/runtime/sync_monocorpus.py` |
 | Document transfer/coordination | `app/catalog/document_transfer.py`, `app/document_operation_lock.py`, `app/modules/maintenance/runtime/sync_documents_s3.py`, `scripts/run_backblaze_transfer.py` |
-| Source integrity/eligibility | `app/document_storage.py`, `app/s3_transfer.py` (caller-owned S3 clients and sequential transfer policy), `app/document_sync_filter.py`, `app/document_cleanup_paths.py` |
+| Source integrity/eligibility | `app/document_storage.py`, `app/s3_transfer.py` (caller-owned S3 clients and sequential transfer policy), `app/s3_cleanup.py` (permanent version deletion; caller-owned domain guards/key selection), `app/document_sync_filter.py`, `app/document_cleanup_paths.py` |
 | Schema/bootstrap and CLI startup upgrades | `app/migrations.py`, `alembic/env.py`, `alembic/versions/`, `alembic/sql/baseline_0062.sql`; [database tools](operations.md#database-tools) |
 | Backups/Sheets | `.github/workflows/`, `scripts/backup_postgres_to_b2.py`, `app/modules/maintenance/dump_state.py`, `app/catalog/export.py`; [recovery](postgres-backup-recovery.md) |
 | Daily composition | `scripts/run_daily_maintenance.py`; [scheduled operations](operations.md#scheduled-sync-and-cleanup) |

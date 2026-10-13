@@ -35,6 +35,7 @@ from app.modules.maintenance.document_sync_repository import (
 )
 from app.modules.runtime_shared_utils import encrypt
 from app.runtime_config import config_integer, load_runtime_config
+from app.s3_cleanup import delete_s3_versions, iter_s3_versions, purge_s3_history
 from app.s3_transfer import create_s3_client, sequential_transfer_config
 from app.task_runtime.contracts import RunContext
 from app.task_runtime.logging import redact
@@ -50,14 +51,17 @@ def _etag(value: Any) -> str:
     return str(value or "").strip().strip('"')
 
 
-def _head_object_or_none(s3: Any, bucket: str, key: str) -> dict[str, Any] | None:
+def _head_object_or_none(s3: Any, bucket: str, key: str, *, version_id: str | None = None) -> dict[str, Any] | None:
     try:
-        return dict(s3.head_object(Bucket=bucket, Key=key))
+        parameters = {'Bucket': bucket, 'Key': key}
+        if version_id is not None:
+            parameters['VersionId'] = version_id
+        return dict(s3.head_object(**parameters))
     except KeyError:
         return None
     except ClientError as exc:
         code = str(exc.response.get("Error", {}).get("Code", ""))
-        if code in {"404", "NoSuchKey", "NotFound"}:
+        if code in {"404", "NoSuchKey", "NoSuchVersion", "NotFound"}:
             return None
         raise
 
@@ -132,10 +136,6 @@ def _abort_incomplete_uploads(s3: Any, bucket: str, key: str, log) -> int:
     return aborted
 
 
-def _public_object_removed(s3: Any, bucket: str, key: str) -> bool:
-    return _head_object_or_none(s3, bucket, key) is None
-
-
 def _target(row, settings):
     md5 = document_md5(row['md5'])
     restricted = row['sharing_restricted']
@@ -201,8 +201,8 @@ def _progress(context, counters, *, stage, total, processed, md5='', **values):
                       'current_size': 0, 'current_md5': md5, **counters, **values})
 
 
-def _cleanup_stale_upload(repository, conn, row, settings, s3, bucket, key, counters, log):
-    # Only an object absent before this attempt can belong to this attempt.
+def _cleanup_stale_upload(repository, conn, row, settings, s3, bucket, key, counters, log, *, version_id, size):
+    # HEAD absence can conceal older versions: remove only our confirmed upload.
     # Never delete a now-checkpointed object, even if our commit response was lost.
     check_document_operation(conn)
     with conn.begin():
@@ -214,10 +214,32 @@ def _cleanup_stale_upload(repository, conn, row, settings, s3, bucket, key, coun
             log(f"stale upload retained md5={row['md5']} reason=current checkpoint uses object")
             return
     check_document_operation(conn)
-    s3.delete_object(Bucket=bucket, Key=key)
-    if not _public_object_removed(s3, bucket, key):
-        raise RuntimeError('Stale attempt object remains after deletion')
+    if not isinstance(version_id, str) or not version_id.strip():
+        raise RuntimeError('Stale upload cleanup requires the confirmed upload version ID')
+    remote = _head_object_or_none(s3, bucket, key, version_id=version_id)
+    if remote is not None:
+        if not _remote_matches(remote, md5=row['md5'], size=size):
+            raise CatalogConflict('Stale upload version identity changed; refusing deletion')
+        delete_s3_versions(s3, bucket, ((key, version_id),))
+    if any(candidate == key and candidate_version == version_id
+           for candidate, candidate_version in iter_s3_versions(
+               s3, bucket, key, kinds=('Versions', 'DeleteMarkers'))):
+        raise RuntimeError('Stale attempt version remains after permanent deletion')
     counters['stale_upload_cleaned'] += 1
+
+
+def _cleanup_public_history(repository, conn, row, settings, s3, key, size):
+    def guard(kind, versions):
+        repository.revalidate(conn, row)
+        if kind == 'Versions':
+            for version_key, version_id in versions:
+                remote = _head_object_or_none(s3, settings.public_bucket, version_key, version_id=version_id)
+                if not _remote_matches(remote, md5=row['md5'], size=size):
+                    raise CatalogConflict('Public version identity is insufficient for restricted-object cleanup')
+        check_document_operation(conn)
+
+    return purge_s3_history(s3, settings.public_bucket, key,
+        key_matches=lambda candidate: candidate == key, before_delete=guard)
 
 
 def _upload_source(source, *, s3, bucket, key, row, size, context,
@@ -249,6 +271,7 @@ def _transfer_one(row, *, repository, conn, settings, yadisk, s3, cache_index,
     remote = _head_object_or_none(s3, bucket, key)
     created = False
     confirmed = False
+    uploaded_version_id = None
     size = row['source_size']
     try:
         if not _remote_matches(remote, md5=row['md5'], size=size):
@@ -267,6 +290,7 @@ def _transfer_one(row, *, repository, conn, settings, yadisk, s3, cache_index,
                                       total=total, processed=processed)
                 created = remote is None
                 remote = head
+                uploaded_version_id = head.get('VersionId')
                 confirmed = True
                 counters['uploaded'] += 1
                 counters['reuploaded'] += int(not created)
@@ -277,15 +301,7 @@ def _transfer_one(row, *, repository, conn, settings, yadisk, s3, cache_index,
             counters['recovered_existing'] += 1
         repository.revalidate(conn, row)
         if row['sharing_restricted']:
-            public_remote = _head_object_or_none(s3, settings.public_bucket, key)
-            if public_remote is not None:
-                # Refuse to delete a foreign/corrupt object based solely on its name.
-                if not _remote_matches(public_remote, md5=row['md5'], size=size):
-                    raise CatalogConflict('Public object identity is insufficient for restricted-object cleanup')
-                repository.revalidate(conn, row)
-                s3.delete_object(Bucket=settings.public_bucket, Key=key)
-                if not _public_object_removed(s3, settings.public_bucket, key):
-                    raise RuntimeError('Obsolete public object remains after deletion')
+            if _cleanup_public_history(repository, conn, row, settings, s3, key, size):
                 counters['private_cleaned'] += 1
         locator = row['document_url']
         if not str(locator or '').strip():
@@ -303,7 +319,8 @@ def _transfer_one(row, *, repository, conn, settings, yadisk, s3, cache_index,
     except CatalogConflict:
         counters['checkpoint_raced'] += 1
         if created and confirmed:
-            _cleanup_stale_upload(repository, conn, row, settings, s3, bucket, key, counters, context.log)
+            _cleanup_stale_upload(repository, conn, row, settings, s3, bucket, key, counters, context.log,
+                                  version_id=uploaded_version_id, size=size)
         raise
 
 
