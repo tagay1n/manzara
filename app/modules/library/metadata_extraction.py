@@ -13,6 +13,7 @@ import pymupdf
 import requests
 from pydantic import Field
 
+from app.catalog.languages import ZAMANALIF_LANGUAGE_TAG
 from app.document_storage import (
     DocumentStorageSettings,
     download_cached_primary_document,
@@ -38,7 +39,7 @@ from app.modules.library.runtime.metadata.schema import Book
 from app.modules.library.upstream_metadata import sanitize_upstream_metadata
 from app.runtime_config import config_integer
 
-PROMPT_VERSION = "prompt.v9"
+PROMPT_VERSION = "prompt.v10"
 _SUPPORTING_METADATA_FIELDS = (
     "author",
     "contributor",
@@ -60,7 +61,10 @@ _SUPPORTING_METADATA_FIELDS = (
 class ExtractedMetadata(Book):
     """Gemini extraction result, which must identify the document language."""
 
-    inLanguage: str = Field(min_length=1)
+    inLanguage: str = Field(
+        min_length=1,
+        description=f"BCP 47 language tag; use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar.",
+    )
 
 
 def _has_value(value: Any) -> bool:

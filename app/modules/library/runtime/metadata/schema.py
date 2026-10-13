@@ -4,6 +4,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
+from app.catalog.languages import ZAMANALIF_LANGUAGE_TAG
 from app.catalog.schema_org import PUBLICATION_YEAR_PATTERN
 
 
@@ -78,7 +79,10 @@ class CreativeWork(BaseModel):
     type: str = Field(alias="@type")
     name: Optional[str] = None
     author: Optional[list[PersonOrOrganization]] = None
-    inLanguage: Optional[str] = None
+    inLanguage: Optional[str] = Field(
+        default=None,
+        description=f"BCP 47 language tag; use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar.",
+    )
     url: Optional[list[str]] = None
 
 
@@ -115,7 +119,10 @@ class Book(BaseModel):
         description="Four-digit publication year (YYYY); omit month and day.",
     )
     isbn: Optional[list[str]] = None
-    inLanguage: Optional[str] = None
+    inLanguage: Optional[str] = Field(
+        default=None,
+        description=f"BCP 47 language tag; use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif Tatar.",
+    )
     description: Optional[str] = None
     numberOfPages: Optional[StrictInt] = None
     bookEdition: Optional[str] = None

@@ -127,7 +127,7 @@ yandex:
 # Supported language codes for metadata evaluation
 sup_langs:
   tt:
-    codes: ['tt-Latn-x-zamanalif', 'tt-Cyrl', 'tt-Latn-x-yanalif', 'tt-Arab', 'tt-Latn']
+    codes: ['tt-Latn-x-zaman', 'tt-Cyrl', 'tt-Latn-x-yanalif', 'tt-Arab', 'tt-Latn']
 
 # Database and local orchestration policies.
 postgres:

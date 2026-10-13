@@ -54,7 +54,7 @@ from app.runtime_config import (
 from app.s3_transfer import create_s3_client
 from app.task_runtime.logging import format_result_json, redact
 
-EVALUATION_PROMPT_VERSION = 'prompt.v6/file-inclusion'
+EVALUATION_PROMPT_VERSION = 'prompt.v7/zaman-language'
 FLOWS = {'extract': 'library.metadata_extract.catalog.v1', 'evaluate': 'library.metadata_evaluate.catalog.v1'}
 
 

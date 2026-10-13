@@ -145,7 +145,9 @@ def build_metadata(schema: str) -> MetaData:
           Column("position", Integer, nullable=False), Column("language", Text, nullable=False),
           PrimaryKeyConstraint("publication_id", "position"),
           CheckConstraint("position >= 0", name="ck_catalog_language_position"),
-          CheckConstraint("btrim(language) <> ''", name="ck_catalog_language_value"))
+          CheckConstraint("btrim(language) <> ''", name="ck_catalog_language_value"),
+          CheckConstraint("language IS NULL OR language !~* '(^|,)[[:space:]]*tt-latn-x-zaman(alif|-alif)[[:space:]]*(,|$)'",
+                          name="ck_catalog_publication_language_zaman"))
     table("document_access_modes", Column("md5", Text, ForeignKey(docs.c.md5, ondelete="CASCADE"), nullable=False),
           Column("position", Integer, nullable=False), Column("mode", Text, nullable=False),
           PrimaryKeyConstraint("md5", "position"),
@@ -164,7 +166,9 @@ def build_metadata(schema: str) -> MetaData:
           CheckConstraint("mode IN ('auditory','tactile','textual','visual')", name="ck_catalog_sufficient_mode_value"))
     table("references", foreign("publication_id", "publications.publication_id", ondelete="CASCADE"),
           Column("work_type", Text), Column("name", Text), Column("language", Text),
-          Column("urls_present", Boolean, nullable=False, server_default="false"), PrimaryKeyConstraint("publication_id"))
+          Column("urls_present", Boolean, nullable=False, server_default="false"), PrimaryKeyConstraint("publication_id"),
+          CheckConstraint("language IS NULL OR language !~* '(^|,)[[:space:]]*tt-latn-x-zaman(alif|-alif)[[:space:]]*(,|$)'",
+                          name="ck_catalog_reference_language_zaman"))
     table("reference_urls", foreign("publication_id", "references.publication_id", ondelete="CASCADE", onupdate="CASCADE"),
           Column("position", Integer, nullable=False), Column("url", Text, nullable=False),
           PrimaryKeyConstraint("publication_id", "position"),

@@ -8,8 +8,10 @@ from copy import deepcopy
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
+from app.catalog.languages import LEGACY_ZAMANALIF_LANGUAGE_TAGS, ZAMANALIF_LANGUAGE_TAG
 
-CONTRACT_VERSION = "schema-org.v4"
+
+CONTRACT_VERSION = "schema-org.v5"
 PUBLICATION_YEAR_PATTERN = r"^[0-9]{4}$"
 SCHEMA_CONTEXT = "https://schema.org"
 SUPPORTED_TYPES = frozenset(
@@ -182,7 +184,7 @@ def _description_matches_language(description: str, in_language: str) -> bool:
         expected_script = "latin"
         expected_compatibility_letters = _YANALIF_ALPHABET
         competing_scripts = {"cyrillic", "arabic"}
-    elif lowered in {"tt-latn-x-zaman-alif", "tt-latn-x-zamanalif"}:
+    elif lowered == ZAMANALIF_LANGUAGE_TAG.casefold():
         expected_script = "latin"
         expected_compatibility_letters = _ZAMANALIF_ALPHABET
         competing_scripts = {"cyrillic", "arabic"}
@@ -263,6 +265,19 @@ def _validate_defined_term(value: Any, *, path: str) -> list[dict[str, str]]:
     return issues
 
 
+def _language_issues(value: Any, *, path: str) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, str):
+        return [_issue("language_tag", path, "invalid BCP 47 language tag")]
+    tags = [part.strip() for part in value.split(",")]
+    if any(tag.casefold() in LEGACY_ZAMANALIF_LANGUAGE_TAGS for tag in tags):
+        return [_issue("language_tag", path, f"use {ZAMANALIF_LANGUAGE_TAG} for Zamanalif")]
+    if any(not _BCP47_RE.fullmatch(tag) for tag in tags):
+        return [_issue("language_tag", path, "invalid BCP 47 language tag")]
+    return []
+
+
 def metadata_contract_issues(schema_org: Any) -> list[dict[str, str]]:
     """Return stable issue records for one schema.org payload."""
     if not isinstance(schema_org, Mapping):
@@ -289,13 +304,7 @@ def metadata_contract_issues(schema_org: Any) -> list[dict[str, str]]:
                     )
                 )
     in_language = schema_org.get("inLanguage")
-    if in_language is not None and (
-        not isinstance(in_language, str)
-        or any(not _BCP47_RE.fullmatch(part.strip()) for part in in_language.split(","))
-    ):
-        issues.append(
-            _issue("language_tag", "$.inLanguage", "invalid BCP 47 language tag")
-        )
+    issues.extend(_language_issues(in_language, path="$.inLanguage"))
     description = schema_org.get("description")
     if description is not None:
         if not isinstance(description, str) or not description.strip():
@@ -474,6 +483,10 @@ def metadata_contract_issues(schema_org: Any) -> list[dict[str, str]]:
         issues.extend(_validate_defined_term(item, path=f"$.about[{index}]"))
     based_on = schema_org.get("isBasedOn")
     if based_on is not None:
+        if isinstance(based_on, Mapping):
+            issues.extend(
+                _language_issues(based_on.get("inLanguage"), path="$.isBasedOn.inLanguage")
+            )
         if not isinstance(based_on, Mapping) or set(based_on) - {
             "@type",
             "name",

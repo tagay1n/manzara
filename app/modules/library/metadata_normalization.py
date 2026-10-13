@@ -12,6 +12,7 @@ from app.modules.library.metadata_contract import (
     reshape_english_contributor_roles,
 )
 from app.catalog.isbn import canonicalize_isbn_values
+from app.catalog.languages import canonical_language_tag
 from app.modules.library.runtime.metadata.url_utils import normalize_url_list
 
 UNKNOWN_VALUES = {"", "unknown", "неизвестно", "none", "null", "n/a"}
@@ -98,9 +99,13 @@ def sanitize_schema_org_contract(schema_org: dict) -> tuple[dict, bool]:
     if updated.get("@type") == "New sArticl e":
         updated["@type"] = "NewsArticle"
         changed = True
-    if str(updated.get("inLanguage") or "").casefold() == "tt-latn-x-zamanalif":
-        updated["inLanguage"] = "tt-Latn-x-zaman-alif"
-        changed = True
+    if isinstance(updated.get("inLanguage"), str):
+        language = ", ".join(
+            canonical_language_tag(tag) for tag in updated["inLanguage"].split(",")
+        )
+        if language != updated["inLanguage"]:
+            updated["inLanguage"] = language
+            changed = True
     if updated.get("genre") == []:
         updated.pop("genre")
         changed = True
@@ -401,7 +406,7 @@ def _normalize_in_language(value):
     text = _clean_text(value, max_len=200)
     if not text:
         return None
-    codes = [part.strip() for part in text.split(",")]
+    codes = [canonical_language_tag(part) for part in text.split(",")]
     codes = [code for code in codes if code]
     if not codes:
         return None

@@ -12,6 +12,8 @@ After applying `20261011_0066`, reconcile the configured Alembic revision, the v
 
 ## Coverage available on request
 
+After applying the Zamanalif language revision `20261013_0068`, inspect the deployed revision, validated publication/reference language constraints, normalized language rows, generated Schema.org projections, and structured historical JSON language fields read-only. This establishes the stored spelling, not provider behavior or task acceptance.
+
 Interactive startup migration application was reviewed through source inspection, Python syntax checks, and offline Alembic rendering. Startup waiting, advisory-lock cleanup, migration failure/uncertain-commit handling, and upgrades with autocommit index builds require explicitly requested runtime verification; implementation inspection does not establish that pending revisions have been applied to the live database.
 
 Pending CLI acceptance covers:
