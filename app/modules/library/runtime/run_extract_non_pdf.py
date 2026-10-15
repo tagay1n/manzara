@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import zipfile
 from collections import Counter, defaultdict
 from contextlib import ExitStack
@@ -65,6 +66,7 @@ from app.runtime_config import config_integer, config_text, load_runtime_config
 from app.s3_cleanup import iter_s3_versions, purge_s3_history
 from app.s3_transfer import create_s3_client, sequential_transfer_config
 from app.task_runtime.contracts import RunContext
+from app.task_runtime.logging import log_message
 
 TASK_ID = "library.extract_non_pdf"
 
@@ -151,12 +153,39 @@ def _matching_object(
     return head
 
 
-def _public_object_available(url: str) -> bool:
-    try:
-        response = requests.head(url, allow_redirects=True, timeout=(config_integer("non_pdf", "link_connect_timeout_seconds"), config_integer("non_pdf", "link_read_timeout_seconds")))
-        return response.status_code == 200
-    except requests.RequestException:
-        return False
+def _require_public_object(url: str, *, label: str, key: str) -> None:
+    """Verify anonymous access, allowing bounded retries for transient failures."""
+    attempts = config_integer("non_pdf", "link_total_attempts", maximum=10)
+    backoff = config_integer("non_pdf", "link_retry_backoff_seconds", maximum=60)
+    timeout = (
+        config_integer("non_pdf", "link_connect_timeout_seconds"),
+        config_integer("non_pdf", "link_read_timeout_seconds"),
+    )
+    for attempt in range(1, attempts + 1):
+        try:
+            with requests.head(url, allow_redirects=True, timeout=timeout) as response:
+                status = response.status_code
+            if status == 200:
+                return
+            reason = f"HTTP {status}"
+            # A newly uploaded object can briefly be unavailable anonymously.
+            retryable = status in {403, 404, 408, 425, 429} or 500 <= status < 600
+        except requests.RequestException as exc:
+            # Exception messages can contain credential-bearing redirect URLs.
+            reason = type(exc).__name__
+            retryable = isinstance(exc, (requests.ConnectionError, requests.Timeout))
+        if not retryable or attempt == attempts:
+            raise RuntimeError(
+                f"{label} is not publicly readable: {key}; "
+                f"{reason} after {attempt} attempt(s)"
+            )
+        delay = min(backoff * 2 ** (attempt - 1), 60)
+        log_message(
+            f"Public access check retry key={key} attempt={attempt}/{attempts} "
+            f"reason={reason} delay_seconds={delay}",
+            level="WARNING",
+        )
+        time.sleep(delay)
 
 
 def _write_content_archive(md5: str, markdown: str, destination: Path) -> Path:
@@ -244,8 +273,7 @@ def _upload_assets(
         url = object_url(
             storage.primary.endpoint_url, storage.content_images_bucket, key
         )
-        if not _public_object_available(url):
-            raise RuntimeError(f"Embedded image is not publicly readable: {key}")
+        _require_public_object(url, label="Embedded image", key=key)
         urls[asset.source_ref] = url
     return urls, uploaded, reused
 
@@ -462,8 +490,7 @@ class _ExtractionProcessor:
             else:
                 self.counters["reused_archives"] += 1
             url = object_url(self.storage.primary.endpoint_url, self.storage.content_bucket, key)
-            if not _public_object_available(url):
-                raise RuntimeError(f"Content archive is not publicly readable: {key}")
+            _require_public_object(url, label="Content archive", key=key)
             self.repository.save_success(
                 state.candidate, conn=conn, extractor_version=state.extractor_version,
                 detected_format=state.detected_format, content_url=url,
@@ -722,6 +749,8 @@ def execute(context: RunContext) -> dict[str, Any]:
         storage = load_document_storage_settings(load_runtime_config())
         if not storage.content_bucket or not storage.content_images_bucket:
             raise RuntimeError("documents.primary_storage.bucket.content and content_images are required")
+        config_integer("non_pdf", "link_total_attempts", maximum=10)
+        config_integer("non_pdf", "link_retry_backoff_seconds", maximum=60)
         require_converter_binaries()
         if context.should_stop():
             return {"kind": "library.non_pdf_extraction_summary", "outcome": "stopped"}
