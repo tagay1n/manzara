@@ -10,6 +10,7 @@ from app.modules.library.metadata_contract import (
     CONTRACT_VERSION,
     metadata_contract_issues,
 )
+from app.modules.library.metadata_normalization import normalize_publisher_name
 
 from .evaluation_classification import _normalize_library_classification
 from .evaluation_patch import (
@@ -35,6 +36,9 @@ def _parse_evaluation_response(
     try:
         decoded = json.loads(raw_response)
         patch = decoded.get("metadata_patch") if isinstance(decoded, dict) else None
+        publisher = patch.get("publisher") if isinstance(patch, dict) else None
+        if isinstance(publisher, dict) and isinstance(publisher.get("name"), str):
+            publisher["name"] = normalize_publisher_name(publisher["name"]) or ""
         if isinstance(patch, dict) and "datePublished" in patch:
             year = _normalize_date_published(patch["datePublished"])
             if year is None:

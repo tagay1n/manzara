@@ -9,6 +9,7 @@ from typing import Any
 from app.catalog.isbn import canonicalize_isbn_values
 from app.modules.library.metadata_normalization import (
     _normalize_date_published as _normalize_publication_year,
+    normalize_publisher_name,
 )
 from app.modules.library.runtime.metadata.schema import MetadataPatch
 from app.modules.library.runtime.metadata.url_utils import normalize_url_list
@@ -165,10 +166,10 @@ def _normalize_author(value: Any) -> list[dict[str, str]] | None:
 
 def _normalize_publisher(value: Any) -> dict[str, str] | None:
     if isinstance(value, dict):
-        name = _clean_text(value.get("name"), max_len=400)
+        name = normalize_publisher_name(value.get("name"))
         kind = value.get("@type", "Organization")
     else:
-        name = _clean_text(value, max_len=400)
+        name = normalize_publisher_name(value)
         kind = "Organization"
     if not name or kind not in {"Person", "Organization"}:
         return None

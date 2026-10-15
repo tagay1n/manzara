@@ -64,6 +64,9 @@ Use the `Book` schema where appropriate, but apply a more specific `@type` if a 
   If the source gives a month or full date, discard the month and day, e.g.
   `2024-05-17` becomes `"2024"`. Never include month/day information in this field.
 - `publisher`: `"@type": "Organization"` if identified
+  Return the publisher name without any double quotation marks anywhere in it:
+  remove straight quotes, guillemets, curly quotes, corner quotes, and fullwidth quotes
+  (`"`, `« »`, `“ ” „ ‟`, `「 」 『 』`, `＂`). Preserve apostrophes and square brackets.
 - `isbn`: array of ISBN numbers if available
 - `numberOfPages`: If identified
 - `about`: Use schema.org `DefinedTerm` items for auxiliary metadata previously placed in `additionalProperty`

@@ -17,6 +17,8 @@ from app.modules.library.runtime.metadata.url_utils import normalize_url_list
 
 UNKNOWN_VALUES = {"", "unknown", "неизвестно", "none", "null", "n/a"}
 WHITESPACE_RE = re.compile(r"\s+")
+PUBLISHER_DOUBLE_QUOTES = '"«»“”„‟「」『』＂'
+_PUBLISHER_QUOTE_TRANSLATION = str.maketrans("", "", PUBLISHER_DOUBLE_QUOTES)
 BOOK_ONLY_FIELDS = {"bookEdition", "illustrator", "isbn", "numberOfPages"}
 STANDARD_AUTHOR_ROLES = {
     "author": "author",
@@ -341,12 +343,20 @@ def _termset_name(value) -> str:
 
 def _normalize_publisher(value):
     if isinstance(value, dict):
-        name = _clean_text(value.get("name"), max_len=400)
+        name = _clean_text(normalize_publisher_name(value.get("name")), max_len=400)
     else:
-        name = _clean_text(value, max_len=400)
+        name = _clean_text(normalize_publisher_name(value), max_len=400)
     if not name:
         return None
     return {"@type": "Organization", "name": name}
+
+
+def normalize_publisher_name(value):
+    """Remove double quotes and normalize whitespace in a publisher spelling."""
+    if value is None:
+        return None
+    text = WHITESPACE_RE.sub(" ", str(value).translate(_PUBLISHER_QUOTE_TRANSLATION)).strip()
+    return text[:400] or None
 
 
 def _normalize_is_based_on(value):
@@ -422,4 +432,4 @@ def _normalize_in_language(value):
 
 normalize_base_schema_org = _normalize_base_schema_org
 
-__all__ = ["normalize_base_schema_org", "sanitize_schema_org_contract"]
+__all__ = ["normalize_base_schema_org", "normalize_publisher_name", "sanitize_schema_org_contract"]

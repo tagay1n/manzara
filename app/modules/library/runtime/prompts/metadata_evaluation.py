@@ -58,7 +58,11 @@ MISSING_FIELD_REQUESTS = {
     "numberOfPages": "Please add `numberOfPages` (integer) or return null.",
     "name": "Please add `name` (document title) or return null.",
     "author": "Please add `author` (schema.org Person/Organization list) or return null.",
-    "publisher": "Please add `publisher` (schema.org Organization) or return null.",
+    "publisher": (
+        "Please add `publisher` (schema.org Organization) or return null. "
+        'Remove all double quotation marks anywhere in the publisher name: " « » “ ” „ ‟ 「 」 『 』 ＂. '
+        "Preserve apostrophes and square brackets."
+    ),
     "genre": "Please normalize `genre` (array) from evidence, or return null if unknown.",
     "description": "Please add `description` (1-3 concise sentences) or return null.",
 }
