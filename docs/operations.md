@@ -42,7 +42,7 @@ The shared batch runtime owns local session locking/recovery, read-only prefligh
 
 `scripts/run_backblaze_transfer.py` is an internal Actions runner, absent from CLI selectors. It uses the same maintenance profile/runtime and `maintenance.transfer_budget_seconds` within a six-hour job. It reads missing/incomplete PostgreSQL primary checkpoints directly, verifies B2 before download, processes one document at a time, and removes owned temporary bytes. Complete checkpoints are skipped; invalid/protected/privacy-inconsistent checkpoints need review. [Storage guidance](../app/modules/maintenance/guidance/storage.md) owns integrity, recovery, and cache details.
 
-Independent item failures continue but leave unresolved work and return nonzero; busy documents defer. Empty work succeeds. Confirmed uploads with failed commits can recover from deterministic objects without redownload when identity/size evidence suffices. Sync needs at least three pool connections, transfer two; profiles supply the bound. Shared document locks coordinate conflicting operations across machines.
+Unavailable Yandex sources are skipped without failing the workflow, counted as `skipped_download`, and left pending for a later run; the workflow summary reports these skips. Other independent item failures continue but return nonzero; busy documents defer. Empty work succeeds. Confirmed uploads with failed commits can recover from deterministic objects without redownload when identity/size evidence suffices. Sync needs at least three pool connections, transfer two; profiles supply the bound. Shared document locks coordinate conflicting operations across machines.
 
 ## Maintenance workflow diagnostics
 

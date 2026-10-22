@@ -171,7 +171,12 @@ def _acquire_source(row, *, cache_index, yadisk, workspace, log):
     path = row.get('ya_path')
     if not path:
         raise YandexDownloadUnavailable('Persisted Yandex source path is missing; refresh catalog discovery')
-    meta = resource_meta(yadisk, path)
+    try:
+        meta = resource_meta(yadisk, path)
+    except Exception as exc:
+        raise YandexDownloadUnavailable(f'Yandex metadata request failed: {type(exc).__name__}: {exc}') from exc
+    if meta is None or resource_value(meta, 'type') != 'file':
+        raise YandexDownloadUnavailable('Persisted Yandex source file is unavailable; refresh catalog discovery')
     verify_resource(meta, md5=row['md5'], resource_id=row['ya_resource_id'])
     size = integer(resource_value(meta, 'size'), 'Yandex source size', minimum=0)
     if row['source_size'] is not None and size != row['source_size']:
@@ -368,7 +373,7 @@ def run_document_upload(*, repository, yadisk, primary_s3, settings, context):
             except YandexDownloadUnavailable as exc:
                 counters['skipped_download'] += 1
                 result.update(outcome='source_unavailable', error=redact(exc))
-                context.log(f"document source unavailable md5={row['md5']} error={exc}", level='ERROR')
+                context.log(f"document source unavailable md5={row['md5']} error={exc}", level='WARNING')
             except Exception as exc:
                 counters['failed'] += 1
                 result.update(outcome='failed', error=redact(exc))
@@ -377,7 +382,7 @@ def run_document_upload(*, repository, yadisk, primary_s3, settings, context):
             processed += 1
             _progress(context, counters, stage='transferring', total=total, processed=processed)
     stopped = context.should_stop()
-    unresolved = counters['failed'] + counters['deferred'] + counters['skipped_download']
+    unresolved = counters['failed'] + counters['deferred']
     outcome = 'failed' if unresolved else 'stopped' if stopped else 'completed'
     summary = {'kind': 'maintenance.document_s3_upload_summary', 'outcome': outcome,
                'pending_before': total, 'pending_after': repository.count_pending_documents(),

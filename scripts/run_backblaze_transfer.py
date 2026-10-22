@@ -45,6 +45,9 @@ def _summary(results, exit_code):
             handle.write('| Counter | Value |\n| --- | --- |\n')
             for key, value in result['counters'].items():
                 handle.write(f'| {key} | {value} |\n')
+            if result['counters'].get('skipped_download', 0):
+                handle.write('\nUnavailable Yandex sources were skipped and remain pending for a later run. '
+                             'These skips do not fail the workflow.\n')
         handle.write('\nDetailed logs are in Actions stdout; structured results are retained as diagnostics.\n')
 
 
