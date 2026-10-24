@@ -25,10 +25,10 @@ from app.modules.library.corrupt_document import (
     build_corrupt_cleanup_plan,
 )
 from app.modules.library.metadata_contract import metadata_contract_issues
+from app.modules.library.metadata_evidence import MetadataExtractionCandidate
 from app.modules.library.metadata_extraction import (
     PROMPT_VERSION,
     ExtractedMetadata,
-    MetadataExtractionCandidate,
     metadata_quality_issue,
     parse_metadata_response,
     prepare_metadata_request,

@@ -16,9 +16,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.containers import (
     ConditionalContainer,
-    DynamicContainer,
     HSplit,
-    VSplit,
     Window,
 )
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -29,22 +27,23 @@ from prompt_toolkit.utils import (
     get_bell_environment_variable,
     get_term_environment_variable,
 )
-from prompt_toolkit.widgets import Button, Label, TextArea
+from prompt_toolkit.widgets import TextArea
 
-from app.cli.commands import COMMANDS, help_text, parse_command
+from app.cli.commands import help_text, parse_command
 from app.cli.display import InlineApplication, TerminalDisplay, emergency_notice
 from app.cli.output import OutputFailure, TerminalOutput
+from app.cli.picker import Picker
 from app.cli.presentation import (
     duration,
     elapsed,
     progress_text,
     provider_wait,
     restrictions,
-    status,
     summary_text,
 )
 from app.cli.state import CLIStateStore, append_command
-from app.cli.settings import configured_task_limit, fields_for_task
+from app.cli.settings import configured_task_limit
+from app.cli.settings_form import SettingsForm
 from app.task_settings import configured_task_options
 from app.db import Database
 from app.gemini_config import load_gemini_keys, load_required_gemini_model_pool
@@ -102,16 +101,11 @@ class Terminal:
         self._operations = set()
         self._stop_pending = False
         self.mode = ""
-        self.picker_index = 0
         self.history_rows = []
         self._picker_generation = 0
         self.message = "Initializing runtime and applying database migrations…"
-        self.form_error = ""
         self.settings_busy = False
         self.settings_snapshot = None
-        self.settings_fields = ()
-        self.settings_controls = {}
-        self.settings_form = HSplit([])
         self._recalling_command = False
         self.prompt = TextArea(height=Dimension(min=1, max=3), multiline=False, wrap_lines=True,
                                prompt="› ", history=InMemoryHistory())
@@ -119,22 +113,22 @@ class Terminal:
         # single-command input while letting wrapped text use a few rows.
         self.prompt.window.height = Dimension(min=1, max=3)
         self.prompt.buffer.on_text_changed += self._prompt_changed
-        self.search = TextArea(height=1, multiline=False, prompt="Search › ")
-        self.search.buffer.on_text_changed += self._search_changed
-        self.save_button = Button("Save defaults", handler=self._save_settings, width=16)
-        self.cancel_button = Button("Cancel", handler=self._dismiss, width=8)
-        self.picker_control = FormattedTextControl(self._picker_text)
-        picker = ConditionalContainer(HSplit([
-            Window(FormattedTextControl(self._picker_title), height=1),
-            ConditionalContainer(self.search, filter=Condition(lambda: self.mode in ("task", "history"))),
-            Window(self.picker_control, height=Dimension(min=1, max=6), wrap_lines=True),
-        ]), filter=Condition(lambda: self.mode in ("commands", "task", "history")))
-        form = ConditionalContainer(DynamicContainer(lambda: self.settings_form),
+        self.picker = Picker(
+            mode=lambda: self.mode, command_text=lambda: self.prompt.text,
+            descriptors=lambda: self.descriptors, history_rows=lambda: self.history_rows,
+            task_title=lambda: self.task.title if self.task else "",
+        )
+        self.settings_form = SettingsForm(
+            busy=lambda: self.settings_busy, columns=lambda: self.app.output.get_size().columns,
+            has_focus=lambda target: self.layout.has_focus(target), focus=lambda target: self.layout.focus(target),
+            invalidate=lambda: self.app.invalidate(), save=self._save_settings, cancel=self._dismiss,
+        )
+        form = ConditionalContainer(self.settings_form.container,
                                     filter=Condition(lambda: self.mode == "settings"))
         self.layout = Layout(HSplit([
             Window(FormattedTextControl(self._activity_text), height=Dimension(min=1),
                    dont_extend_height=True, wrap_lines=True),
-            picker, form,
+            self.picker.container, form,
             ConditionalContainer(self.prompt, filter=Condition(lambda: self.mode not in ("settings", "task", "history"))),
             Window(FormattedTextControl(self._hint_text), height=Dimension(min=1, max=2), wrap_lines=True),
         ]), focused_element=self.prompt)
@@ -192,51 +186,7 @@ class Terminal:
             return
         text = self.prompt.text
         self.mode = "commands" if text.startswith("/") and not any(char.isspace() for char in text) else ""
-        self.picker_index = 0
-
-    def _search_changed(self, _buffer):
-        self.picker_index = 0
-
-    def _picker_items(self):
-        if self.mode == "commands":
-            query = self.prompt.text.removeprefix("/").lower()
-            return [(command, f"/{command.name}  {command.description}")
-                    for command in COMMANDS if command.name.startswith(query)]
-        query = self.search.text.casefold()
-        if self.mode == "task":
-            return [(task, f"{task.title} · {task.group}")
-                    for task in self.descriptors
-                    if query in f"{task.title} {task.task_id} {task.group}".casefold()]
-        if self.mode == "history":
-            return [(run, f"Run {run['run_id']} · {status(run)} · {elapsed(run)} · {run['started_at']}")
-                    for run in self.history_rows
-                    if query in f"{run['run_id']} {status(run)} {run['started_at']}".casefold()]
-        return []
-
-    def _picker_title(self):
-        titles = {"commands": "Commands", "task": "Tasks · select, then /run",
-                  "history": f"Recent runs · {self.task.title if self.task else ''} (latest 20)"}
-        title = titles.get(self.mode, "")
-        items = self._picker_items()
-        if items:
-            title += f" · {min(self.picker_index, len(items) - 1) + 1} of {len(items)}"
-        return [("", title)]
-
-    def _picker_text(self):
-        items = self._picker_items()
-        if not items:
-            return [("class:disabled", "No matches")]
-        self.picker_index = min(self.picker_index, len(items) - 1)
-        rows = []
-        for index, (_, label) in enumerate(items):
-            if index:
-                rows.append(("", "\n"))
-            if index == self.picker_index:
-                # Let Window keep the selection visible and scroll at viewport edges.
-                rows.append(("[SetCursorPosition]", ""))
-            style = "class:selected" if index == self.picker_index else ""
-            rows.append((style, f"{'›' if index == self.picker_index else ' '} {redact(label)}"))
-        return rows
+        self.picker.index = 0
 
     def _activity_text(self):
         if self.foreground is None:
@@ -285,9 +235,7 @@ class Terminal:
         @keys.add("up", filter=picking)
         @keys.add("down", filter=picking)
         def move(event):
-            count = len(self._picker_items())
-            if count:
-                self.picker_index = (self.picker_index + (-1 if event.key_sequence[0].key == "up" else 1)) % count
+            self.picker.move(-1 if event.key_sequence[0].key == "up" else 1)
 
         recalling = ~picking & ~editing & Condition(lambda: self.layout.has_focus(self.prompt))
 
@@ -305,7 +253,7 @@ class Terminal:
 
         @keys.add("enter", filter=~editing)
         def enter(event):
-            if self.mode in ("task", "history") or (self.mode == "commands" and self._picker_items()):
+            if self.mode in ("task", "history") or (self.mode == "commands" and self.picker.items()):
                 self._choose_picker()
             else:
                 self._submit_command(self.prompt.text)
@@ -320,12 +268,7 @@ class Terminal:
         @keys.add("tab", filter=editing)
         @keys.add("s-tab", filter=editing)
         def form_tab(event):
-            if self.settings_busy:
-                return
-            targets = self._settings_targets()
-            current = next((i for i, target in enumerate(targets) if self.layout.has_focus(target)), 0)
-            step = -1 if event.key_sequence[0].key == "s-tab" else 1
-            self.layout.focus(targets[(current + step) % len(targets)])
+            self.settings_form.move_focus(-1 if event.key_sequence[0].key == "s-tab" else 1)
 
         @keys.add("c-s", filter=editing)
         def save(event):
@@ -333,35 +276,12 @@ class Terminal:
 
         @keys.add("enter", filter=editing)
         def form_enter(event):
-            if self.settings_busy:
-                return
-            if self.layout.has_focus(self.cancel_button):
-                self._dismiss()
-            elif self.layout.has_focus(self.save_button):
-                self._save_settings()
-            else:
-                targets = self._settings_targets()
-                current = next((i for i, target in enumerate(targets) if self.layout.has_focus(target)), 0)
-                self.layout.focus(targets[(current + 1) % len(targets)])
+            self.settings_form.enter()
 
         @keys.add("up", filter=editing)
         @keys.add("down", filter=editing)
         def form_adjust(event):
-            if self.settings_busy:
-                return
-            for field in self.settings_fields:
-                control = self.settings_controls[field.option]
-                if self.layout.has_focus(control):
-                    try:
-                        value = field.parse(control.text)
-                    except ValueError:
-                        return
-                    value = (value if value is not None else 0) + (-1 if event.key_sequence[0].key == "down" else 1)
-                    if field.allow_blank and value < field.minimum:
-                        control.text = ""
-                    else:
-                        control.text = str(max(field.minimum, min(value, field.maximum) if field.maximum is not None else value))
-                    return
+            self.settings_form.adjust(-1 if event.key_sequence[0].key == "down" else 1)
 
         @keys.add("escape")
         def dismiss(event):
@@ -378,15 +298,15 @@ class Terminal:
             return
         self._picker_generation += 1
         self.mode = ""
-        self.form_error = ""
+        self.settings_form.error = ""
         self.message = ""
         self.layout.focus(self.prompt)
 
     def _choose_picker(self, *, complete=False):
-        items = self._picker_items()
+        items = self.picker.items()
         if not items:
             return
-        value, _ = items[min(self.picker_index, len(items) - 1)]
+        value, _ = items[min(self.picker.index, len(items) - 1)]
         mode = self.mode
         self._dismiss()
         if mode == "commands":
@@ -434,9 +354,9 @@ class Terminal:
             await self._say("Wait for the current run or settings save to finish.")
             return
         self.mode = "task"
-        self.search.text = ""
-        self.picker_index = 0
-        self.layout.focus(self.search)
+        self.picker.search.text = ""
+        self.picker.index = 0
+        self.layout.focus(self.picker.search)
 
     async def _settings(self, _argument):
         if self.locked:
@@ -453,69 +373,24 @@ class Terminal:
                 options = replace(options, limit=configured_task_limit(snapshot[2], task.task_id))
             options = replace(options, **configured_task_options(snapshot[2], task.task_id))
             self.settings_snapshot = snapshot
-            self.settings_fields = fields_for_task(task)
-            self.settings_controls = {}
-            rows = []
-            for field in self.settings_fields:
-                value = getattr(options, field.option)
-                control = TextArea(text=str(value) if value is not None else "", height=1, multiline=False,
-                                   width=Dimension(min=8, preferred=12, max=18), style="class:setting",
-                                   read_only=Condition(lambda: self.settings_busy))
-                control.buffer.on_text_changed += self._setting_changed
-                self.settings_controls[field.option] = control
-                rows.append(DynamicContainer(lambda field=field, control=control:
-                    HSplit([Label(field.label), control]) if self.app.output.get_size().columns < 55
-                    else VSplit([Label(field.label, width=29), control], padding=2)))
-            self.settings_form = HSplit([
-                Label(f"Settings · {task.title}"),
-                Label("Saved defaults · apply to future runs and survive restarts"),
-                Window(FormattedTextControl(lambda: [("class:disabled", "Config: " + redact(str(snapshot[0])))]),
-                       height=Dimension(min=1, max=2), wrap_lines=True),
-                *rows,
-                Window(FormattedTextControl(self._setting_hint), height=Dimension(min=1, max=3), wrap_lines=True),
-                ConditionalContainer(Window(FormattedTextControl(lambda: [("class:warning", self.form_error)]),
-                                            height=Dimension(min=1, max=3), wrap_lines=True),
-                                     filter=Condition(lambda: bool(self.form_error))),
-                VSplit([self.save_button, self.cancel_button] if self.settings_fields else [self.cancel_button], padding=2),
-            ])
-            self.form_error = ""
+            self.settings_form.open(task, options, snapshot[0])
             self.mode = "settings"
-            self.layout.focus(self._settings_targets()[0])
+            self.layout.focus(self.settings_form.targets()[0])
         finally:
             self.settings_busy = False
 
-    def _settings_targets(self):
-        controls = list(self.settings_controls.values())
-        return controls + ([self.save_button] if self.settings_fields else []) + [self.cancel_button]
-
-    def _setting_hint(self):
-        if self.settings_busy:
-            return [("class:disabled", "Saving defaults…")]
-        for field in self.settings_fields:
-            if self.layout.has_focus(self.settings_controls[field.option]):
-                return [("class:disabled", field.hint)]
-        return [("class:disabled", "This task requires the complete inventory; no editable run defaults."
-                 if not self.settings_fields else "Save defaults writes the config file. Cancel leaves it unchanged.")]
-
-    def _setting_changed(self, _buffer):
-        self.form_error = ""
-        self.app.invalidate()
-
     def _save_settings(self):
-        if self.settings_busy or not self.settings_fields:
+        if self.settings_busy or not self.settings_form.fields:
             return
         try:
             if self.locked:
                 raise ValueError("Settings are locked until the foreground run finishes")
-            values = {}
-            for field in self.settings_fields:
-                self.layout.focus(self.settings_controls[field.option])
-                values[field.option] = field.parse(self.settings_controls[field.option].text)
+            values = self.settings_form.values()
             options = replace(self.options[self.task.task_id], **values)
         except ValueError as exc:
-            self.form_error = str(exc)
+            self.settings_form.error = str(exc)
             return
-        changes = {field.path: values[field.option] for field in self.settings_fields}
+        changes = {field.path: values[field.option] for field in self.settings_form.fields}
         self.settings_busy = True
         self._spawn(self._commit_settings(self.task, options, changes, self.settings_snapshot))
 
@@ -523,7 +398,7 @@ class Terminal:
         try:
             await asyncio.to_thread(save_runtime_config, path=snapshot[0], revision=snapshot[1], changes=changes)
         except Exception as exc:
-            self.form_error = redact(exc)
+            self.settings_form.error = redact(exc)
         else:
             self.options[task.task_id] = options
             self.settings_busy = False
@@ -603,9 +478,9 @@ class Terminal:
     async def _history(self, _argument):
         self.mode = "history"
         self.history_rows = []
-        self.search.text = ""
-        self.picker_index = 0
-        self.layout.focus(self.search)
+        self.picker.search.text = ""
+        self.picker.index = 0
+        self.layout.focus(self.picker.search)
         self._picker_generation += 1
         generation = self._picker_generation
         task_id = self.selected_id
@@ -673,8 +548,8 @@ class Terminal:
             self._request_exit()
         elif self.mode == "settings":
             self._dismiss()
-        elif self.mode in ("task", "history") and self.search.text:
-            self.search.text = ""
+        elif self.mode in ("task", "history") and self.picker.search.text:
+            self.picker.search.text = ""
         elif self.prompt.text:
             self.prompt.buffer.reset()
             self._dismiss()
@@ -719,7 +594,6 @@ class Terminal:
             raise RuntimeError(f"Run {run_id} is missing")
         failure = self.runner.get_run_error(run_id) if run_id is not None else None
         return run, idle, failure, finalizing
-
 
     async def _drain(self):
         try:

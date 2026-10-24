@@ -467,7 +467,7 @@ def resolve_document_object_location(
     if not source:
         return None
     if source.startswith("enc:"):
-        from app.modules.runtime_shared_utils import decrypt
+        from app.document_sharing import decrypt
 
         source = decrypt(source, {"encryption_key": encryption_key})
     return parse_object_url(source, endpoint_url)

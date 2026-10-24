@@ -8,8 +8,8 @@ from contextlib import contextmanager, nullcontext
 from sqlalchemy import inspect, text
 
 from app.catalog.contracts import CatalogConflict
+from app.catalog.document_locks import lock_document_rows
 from app.catalog.repository import CatalogRepository
-from app.document_operation_lock import lock_document_transaction
 from app.postgres_engine import configured_timeout_sql
 from app.settings import configured_schema
 
@@ -105,15 +105,7 @@ class NonPdfCatalogStore:
         return dict(row) if row else None
 
     def _lock(self, conn, md5):
-        lock_document_transaction(conn, md5)
-        # Same order and document lock identity as catalog sync/cleanup.
-        conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(current_schema()), hashtext(:identity))"),
-                     {"identity": f"catalog-document:{md5}"})
-        row = conn.execute(text("SELECT * FROM catalog_documents WHERE md5=:md5 FOR UPDATE"),
-                           {"md5": md5}).mappings().one_or_none()
-        conn.execute(text("SELECT location_id FROM catalog_locations WHERE md5=:md5 ORDER BY location_id FOR UPDATE"),
-                     {"md5": md5}).all()
-        return dict(row) if row else None
+        return lock_document_rows(conn, md5)
 
     def _check(self, conn, expected):
         current = self._source(conn, expected['md5'])

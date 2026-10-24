@@ -33,7 +33,7 @@ from app.document_storage import (
 from app.modules.maintenance.document_sync_repository import (
     PostgresDocumentSyncRepository,
 )
-from app.modules.runtime_shared_utils import encrypt
+from app.document_sharing import encrypt
 from app.runtime_config import config_integer, load_runtime_config
 from app.s3_cleanup import delete_s3_versions, iter_s3_versions, purge_s3_history
 from app.s3_transfer import create_s3_client, sequential_transfer_config

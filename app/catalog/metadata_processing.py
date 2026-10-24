@@ -59,9 +59,6 @@ PUBLICATION_BATCH = """
 """
 METADATA_BATCH_SIZE = 200
 METADATA_ENVELOPE_QUERY = Path(__file__).with_name('metadata_extraction.sql').read_text(encoding='utf-8')
-EXTRACTION_BATCH_QUERY = (METADATA_ENVELOPE_QUERY
-    .replace('{{publications}}', PUBLICATION_BATCH.replace('{{eligibility}}', 'p.metadata_present IS FALSE'))
-    .replace('{{sources}}', SOURCES))
 EVALUATION_FILES = "SELECT p.*,d.md5 AS evidence_md5\n" + SOURCE_FROM + """
  JOIN catalog_publications p ON p.publication_id=d.publication_id
 """ + SOURCE_WHERE + """
@@ -75,15 +72,35 @@ EVALUATION_FILES = "SELECT p.*,d.md5 AS evidence_md5\n" + SOURCE_FROM + """
        AND q.evidence->>'actor'=ANY(:actors))
  ORDER BY d.md5 LIMIT :batch_size
 """
-EVALUATION_ENVELOPE_QUERY = (METADATA_ENVELOPE_QUERY
-    .replace('AND d.publication_id IN (SELECT publication_id FROM candidates)',
-             'AND d.md5 IN (SELECT evidence_md5 FROM candidates)')
-    .replace('WHERE source.publication_id=p.publication_id',
-             'WHERE source.publication_id=p.publication_id AND source.md5=p.evidence_md5')
-    .replace('ORDER BY p.publication_id', 'ORDER BY p.evidence_md5'))
-EVALUATION_BATCH_QUERY = (Path(__file__).with_name('metadata_evaluation.sql').read_text(encoding='utf-8')
-    .replace('{{envelope}}', EVALUATION_ENVELOPE_QUERY
-        .replace('{{publications}}', EVALUATION_FILES).replace('{{sources}}', SOURCES)))
+
+
+def _render_query(template, **fragments):
+    """Fill declared SQL slots with code-owned fragments, never runtime values."""
+    slots = set(re.findall(r'\{\{([a-z_]+)\}\}', template))
+    if slots != fragments.keys():
+        raise ValueError('SQL template fragments do not match declared slots')
+    query = re.sub(r'\{\{([a-z_]+)\}\}', lambda match: fragments[match[1]], template)
+    if '{{' in query or '}}' in query:
+        raise ValueError('SQL template contains unresolved slots')
+    return query
+
+
+def _metadata_envelope(publications, *, sources=SOURCES, evaluate=False):
+    """Share the metadata projection with explicit task-specific source guards."""
+    return _render_query(METADATA_ENVELOPE_QUERY,
+        publications=publications, sources=sources,
+        source_eligibility=('AND d.md5 IN (SELECT evidence_md5 FROM candidates)' if evaluate
+                            else 'AND d.publication_id IN (SELECT publication_id FROM candidates)'),
+        source_match=('WHERE source.publication_id=p.publication_id AND source.md5=p.evidence_md5' if evaluate
+                      else 'WHERE source.publication_id=p.publication_id'),
+        ordering='ORDER BY p.evidence_md5' if evaluate else 'ORDER BY p.publication_id')
+
+
+EXTRACTION_BATCH_QUERY = _metadata_envelope(
+    _render_query(PUBLICATION_BATCH, eligibility='p.metadata_present IS FALSE'))
+EVALUATION_BATCH_QUERY = _render_query(
+    Path(__file__).with_name('metadata_evaluation.sql').read_text(encoding='utf-8'),
+    envelope=_metadata_envelope(EVALUATION_FILES, evaluate=True))
 SOURCE_FIELDS = (
     'md5', 'publication_id', 'revision', 'mime_type', 'selected',
     'primary_revision', 'source_revision', 'content_revision', 'document_url',
@@ -221,7 +238,7 @@ class MetadataProcessingStore:
         """Refresh a sibling after this run changed their shared bibliography."""
         document_md5(md5)
         languages = _evaluation_languages(languages)
-        query = EVALUATION_ENVELOPE_QUERY.replace('{{publications}}',
+        query = _metadata_envelope(
             "SELECT p.*,:md5 AS evidence_md5 FROM catalog_publications p "
             "JOIN catalog_documents d USING(publication_id) WHERE d.md5=:md5 AND p.merged_into_id IS NULL "
             "AND p.metadata_present IS TRUE AND (d.inclusion='pending' "
@@ -230,7 +247,7 @@ class MetadataProcessingStore:
             "WHERE l.publication_id=p.publication_id AND l.language=ANY(:languages)) "
             "AND NOT EXISTS(SELECT 1 FROM catalog_proposals q WHERE q.publication_id=p.publication_id "
             "AND q.kind='metadata' AND q.status IN ('pending','deferred') "
-            "AND q.evidence->>'actor'=ANY(:actors))").replace('{{sources}}', SOURCES)
+            "AND q.evidence->>'actor'=ANY(:actors))", evaluate=True)
         if should_stop():
             raise InterruptedError('Metadata discovery stopped')
         with self.engine.connect() as conn:
@@ -267,8 +284,7 @@ class MetadataProcessingStore:
         publication_query = "SELECT * FROM catalog_publications WHERE publication_id=publication_key"
         if evaluation is not None:
             publication_query = "SELECT p.*,document_key AS evidence_md5 FROM catalog_publications p WHERE publication_id=publication_key"
-        snapshot_query = ((EVALUATION_ENVELOPE_QUERY if evaluation is not None else METADATA_ENVELOPE_QUERY)
-            .replace('{{publications}}', publication_query)
-            .replace('{{sources}}', SOURCES + ' AND d.md5=document_key'))
+        snapshot_query = _metadata_envelope(publication_query,
+            sources=SOURCES + ' AND d.md5=document_key', evaluate=evaluation is not None)
         return save_metadata_result(self.engine, self.schema, source, schema_org, actor=actor, method=method,
                                     evaluation=evaluation, snapshot_query=snapshot_query)

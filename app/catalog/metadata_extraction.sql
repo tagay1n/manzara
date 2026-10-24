@@ -2,7 +2,7 @@ WITH candidates AS MATERIALIZED (
     {{publications}}
 ), eligible_sources AS MATERIALIZED (
     {{sources}}
-    AND d.publication_id IN (SELECT publication_id FROM candidates)
+    {{source_eligibility}}
 )
 SELECT p.*, source_batch.sources
 FROM candidates p
@@ -104,6 +104,6 @@ JOIN LATERAL (
         ) items ON TRUE
         WHERE groups.md5=source.md5
     ) sufficient_modes ON TRUE
-    WHERE source.publication_id=p.publication_id
+    {{source_match}}
 ) source_batch ON TRUE
-ORDER BY p.publication_id
+{{ordering}}

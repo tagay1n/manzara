@@ -5,7 +5,7 @@ from app.document_storage import (
     verify_primary_document_object,
 )
 from app.modules.library.djvu_slicing import create_djvu_slice
-from app.modules.library.metadata_extraction import create_pdf_slice, load_text_slice
+from app.modules.library.metadata_evidence import create_pdf_slice, load_text_slice
 from app.modules.library.runtime.metadata.evaluation_patch import _collect_patch_fields
 from app.modules.library.runtime.metadata.evaluation_text import (
     _build_content_excerpt,
