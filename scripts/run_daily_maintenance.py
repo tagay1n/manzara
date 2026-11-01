@@ -62,7 +62,7 @@ def _github_summary(results, exit_code: int) -> None:
         for title, task_id in (("Cleanup preparation", "library.prepare_document_cleanup"),
                                ("Sync and cleanup execution", "maintenance.monocorpus_sync")):
             result = next((item for item in results if item["task_id"] == task_id), None)
-            status = result["status"] if result else "not run"
+            status = result["outcome"] if result else "not run"
             counters = ", ".join(f"{key}={value}" for key, value in result["counters"].items()) if result else ""
             handle.write(f"| {title} | {status} | {counters} |\n")
         handle.write("\nDetailed diagnostics are in Actions stdout and structured result artifacts.\n")

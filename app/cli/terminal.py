@@ -56,7 +56,7 @@ from app.runtime_config import (
     runtime_config_snapshot,
     save_runtime_config,
 )
-from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTING
+from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTING, TASK_RUN_STATUS_STOPPED
 from app.settings import load_settings
 from app.task_runtime.contracts import RunOptions
 from app.task_runtime.logging import redact
@@ -432,6 +432,7 @@ class Terminal:
             if self.stopping or self.closing:
                 await self._say(f"Stopped · {task.title} · start cancelled before execution.")
                 await self._drain()
+                await self._signal_completion({"status": TASK_RUN_STATUS_STOPPED})
                 self._release_foreground()
                 return
             result = await asyncio.to_thread(self.runner.start_task, task.task_id, options=options)
@@ -445,6 +446,7 @@ class Terminal:
             await self._say(f"Start/stop failed: {redact(exc)}")
             if self.foreground_run_id is None:
                 await self._drain()
+                await self._signal_completion(None, failure=redact(exc) or type(exc).__name__)
                 self._release_foreground()
         finally:
             self.starting = False

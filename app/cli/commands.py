@@ -49,6 +49,6 @@ def help_text() -> str:
             "  Extract metadata: response timeout (up to 900s), first pages, and last pages.\n"
             "  Ctrl-C: stop work and stay; press again while stopping/exiting to force exit.\n"
             "  At idle: Ctrl-C clears input, or exits when input is empty.\n"
-            "  Successful tasks ring once; failed tasks twice; stopped/deferred tasks stay silent.\n"
-            "  PROMPT_TOOLKIT_BELL=false disables CLI bells.\n"
+            "  Completed, stopped, and deferred tasks ring once; failures (including start failures) twice.\n"
+            "  PROMPT_TOOLKIT_BELL=false disables task bells; sound depends on terminal settings.\n"
             "  New interactive logs live only in terminal scrollback; saved summaries use /history.")

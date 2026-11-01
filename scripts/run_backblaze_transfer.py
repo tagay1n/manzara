@@ -41,7 +41,7 @@ def _summary(results, exit_code):
     with Path(target).open('a', encoding='utf-8') as handle:
         handle.write(f'## Backblaze document transfer\n\nCommand exit code: {exit_code}\n\n')
         for result in results:
-            handle.write(f"Run {result['run_id']}: **{result['status']}**\n\n")
+            handle.write(f"Run {result['run_id']}: **{result['outcome']}**\n\n")
             handle.write('| Counter | Value |\n| --- | --- |\n')
             for key, value in result['counters'].items():
                 handle.write(f'| {key} | {value} |\n')

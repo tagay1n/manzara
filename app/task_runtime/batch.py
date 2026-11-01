@@ -10,12 +10,18 @@ import time
 from contextlib import ExitStack
 from typing import Any, Callable
 
+from prompt_toolkit.utils import get_bell_environment_variable
+
 from app.db import Database
 from app.runtime_config import config_number
-from app.runtime_states import TASK_RUN_STATUS_COMPLETED, TASK_RUN_STATUS_STOPPED
+from app.runtime_states import TASK_RUN_STATUS_STOPPED
 from app.task_runtime.contracts import RunOptions, TaskDescriptor
 from app.task_runtime.logging import RunLog, log_message, write_stdout
-from app.task_runtime.reporting import COMPLETION_BELL_INTERVAL_SECONDS, completion_bell_count
+from app.task_runtime.reporting import (
+    COMPLETION_BELL_INTERVAL_SECONDS,
+    completion_bell_count,
+    run_outcome,
+)
 from app.task_runtime.session import SessionLock
 from app.tasks import TaskRunner
 
@@ -42,6 +48,15 @@ def _print_status(db, run_id, started_at, last_log_output) -> None:
         "provider_wait": run["provider_wait"],
     }
     log_message(json.dumps(snapshot, ensure_ascii=True))
+
+
+def _signal_completion(run, *, failure=None) -> None:
+    if not sys.stdout.isatty() or not get_bell_environment_variable():
+        return
+    for index in range(completion_bell_count(run, failure=failure)):
+        if index:
+            time.sleep(COMPLETION_BELL_INTERVAL_SECONDS)
+        write_stdout("\a")
 
 
 def _run_stages(db, runner, descriptors, stop, deadline, on_result, console) -> int:
@@ -72,13 +87,8 @@ def _run_stages(db, runner, descriptors, stop, deadline, on_result, console) -> 
             raise RuntimeError(f"Run {run_id} is missing after execution")
         on_result(run)
         failure = runner.get_run_error(run_id)
-        if sys.stdout.isatty():
-            for index in range(completion_bell_count(run, failure=failure)):
-                if index:
-                    time.sleep(COMPLETION_BELL_INTERVAL_SECONDS)
-                write_stdout("\a")
-        if (run["status"] != TASK_RUN_STATUS_COMPLETED or run.get("exit_code") != 0
-                or run["summary"].get("outcome") == "deferred" or failure):
+        _signal_completion(run, failure=failure)
+        if run_outcome(run, failure=failure) != "completed":
             return 130 if stop.is_set() or run["status"] == TASK_RUN_STATUS_STOPPED else 1
     return 130 if stop.is_set() else 0
 
@@ -94,7 +104,10 @@ def run_batch(
     """Own local state and stop cooperatively between sequential task stages."""
     stop = threading.Event()
     deadline = time.monotonic() + budget_seconds
-    with ExitStack() as resources:
+    with ExitStack() as completion, ExitStack() as resources:
+        # Register outside runtime resources so failures ring only after worker
+        # shutdown and log draining, including start/preflight/read failures.
+        completion.push(_signal_batch_failure)
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous = signal.signal(signum, lambda _signum, _frame: stop.set())
             resources.callback(signal.signal, signum, previous)
@@ -116,3 +129,11 @@ def run_batch(
             return 130
         preflight(db)
         return _run_stages(db, runner, descriptors, stop, deadline, on_result, console)
+
+
+def _signal_batch_failure(exc_type, exc, traceback) -> None:
+    if exc_type is not None:
+        try:
+            _signal_completion(None, failure="Batch execution failed")
+        except Exception:
+            pass  # A broken terminal must preserve the original failure.

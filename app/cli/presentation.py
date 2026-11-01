@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import math
 
-from app.runtime_states import TASK_RUN_STATUS_COMPLETED
 from app.task_runtime.logging import redact
+from app.task_runtime.reporting import run_outcome
 
 
 def elapsed(run: dict) -> str:
@@ -24,9 +24,7 @@ def duration(seconds: int) -> str:
 
 
 def status(run: dict) -> str:
-    summary = run.get("summary") or {}
-    return ("deferred" if run.get("status") == TASK_RUN_STATUS_COMPLETED and summary.get("outcome") == "deferred"
-            else str(run.get("status", "unknown")))
+    return run_outcome(run)
 
 
 def progress_text(run: dict, width: int) -> str:
@@ -73,7 +71,7 @@ def summary_text(run: dict | None, title: str, *, completion: bool = False,
         return f"{title} · no saved run summary yet."
     summary = run.get("summary") or {}
     options = summary.get("options") or {}
-    outcome = "failed" if failure else presentation_status or status(run)
+    outcome = "failed" if failure else presentation_status or run_outcome(run)
     prefix = "" if completion else "Summary · "
     lines = [f"{prefix}{outcome.capitalize()} · {title} · run {run['run_id']} · {elapsed(run)}"]
     if summary.get("message"):
