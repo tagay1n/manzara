@@ -1,6 +1,6 @@
 # Static Library export
 
-The separate public site consumes only `library.site_export` bundles, never Manzara tables. The task requires complete inventory, rejects source/retry controls, checks catalog schema/revision read-only, and mutates no catalog/remote storage. Only public endpoint/bucket settings are needed, without credentials. Owners: `site_export.py`, `site_export_repository.py`, `runtime/run_site_export.py`.
+The separate public site consumes only `library.site_export` bundles, never Manzara tables. The task requires complete inventory, rejects source/retry controls, checks catalog schema/revision read-only, and mutates no catalog/remote storage. Only public endpoint/bucket settings are needed, without credentials. Owners: `site_export.py` (public records), `site_export_bundle.py` (archives/verification), `site_export_repository.py`, `runtime/run_site_export.py`.
 
 ## Eligibility and publication
 
@@ -16,4 +16,4 @@ Stable member order: `manifest.json`, `documents.jsonl`, `entities.jsonl`, `coll
 
 Documents use `work` for JSON-LD and `file`/`relations`/`facets`/optional `preview` for build data. IDs are opaque namespaced strings; stable MD5/short suffix distinguish paths. Contributor/publisher routes remain role projections of `catalog_entities`; contributor role never changes organization kind. Only confirmed active entities plus confirmed contributions receive canonical names/entity relations; unresolved credits retain observed names. Alias lists contain confirmed aliases and never resolve credits by spelling. At most one collection/classification per document. Latest successful public previews survive failed regeneration.
 
-Additive optional fields/ignorable records are compatible; removed fields/semantic changes require a new version. `site_export.py:verify_export_bundle` verifies an existing bundle without database/storage/site build access.
+Additive optional fields/ignorable records are compatible; removed fields/semantic changes require a new version. `site_export_bundle.py:verify_export_bundle` verifies an existing bundle without database/storage/site build access.

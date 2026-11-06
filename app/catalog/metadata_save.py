@@ -8,10 +8,11 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extras import Json
 
+from app.catalog.metadata_projection import compose_classified_metadata
 from app.catalog.metadata_records import MetadataSaveSnapshot, MetadataSource
 from app.catalog.command_batch import execute_catalog_batch
 from app.catalog.contracts import CatalogConflict, boolean, document_md5, nonblank
-from app.catalog.metadata import SCALARS, compose_metadata, decompose_metadata, items
+from app.catalog.metadata import SCALARS, decompose_metadata, items
 from app.catalog.metadata_store import RELATIONAL_FIELDS, comparable_credits, credit_signature, unmanaged_subjects
 from app.catalog.schema_org import is_english_facet, metadata_contract_issues
 from app.document_operation_lock import DocumentOperationBusy
@@ -110,17 +111,6 @@ def _merge(snapshot: MetadataSaveSnapshot, incoming, *, reset_evaluation):
     }
 
 
-def _classified_schema(record, path):
-    schema = compose_metadata(record)
-    if path is not None:
-        schema['about'] = unmanaged_subjects(record['subjects']) + [
-            {'@type': 'DefinedTerm', 'termCode': value,
-             'inDefinedTermSet': {'@type': 'DefinedTermSet', 'name': termset}}
-            for termset, value in (('DDC', path['ddc']), ('CategoryPath', ' > '.join(path['path_en'])))
-        ]
-    return schema
-
-
 def _evaluation(evaluation):
     if evaluation is None:
         return None
@@ -156,14 +146,14 @@ def _prepare(source: MetadataSource, schema_org, *, actor, method, evaluation):
         # The server resolves taxonomy IDs and decides whether protections retain
         # the old decision. Validate both resulting envelopes before that request.
         accepted = {'ddc': evaluation['ddc'], 'path_en': evaluation['path']} if evaluation['applicable'] and not locked else path
-        validation = {name: sorted({issue['code'] for issue in metadata_contract_issues(_classified_schema(merged, value))})
+        validation = {name: sorted({issue['code'] for issue in metadata_contract_issues(compose_classified_metadata(merged, value))})
                       for name, value in (('accepted', accepted), ('retained', path))}
         decision_protected = bool(set(source['publication_protections']) & {'classification_id'}
                                   or set(source['document_protections']) & {'inclusion', 'evaluation_method'})
         issues = validation['accepted']
         review_possible = bool(plan['blocked']) or decision_protected
     else:
-        issues = sorted({issue['code'] for issue in metadata_contract_issues(_classified_schema(merged, path))})
+        issues = sorted({issue['code'] for issue in metadata_contract_issues(compose_classified_metadata(merged, path))})
         review_possible = bool(plan['blocked'] or plan['decision_proposal'])
     if issues and not review_possible:
         raise CatalogConflict('Protected or retained metadata requires review: ' +

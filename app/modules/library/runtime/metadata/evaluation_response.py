@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from app.gemini_model_pool import GeminiModelResponseError
-from app.modules.library.metadata_contract import (
+from app.catalog.schema_org import (
     CONTRACT_VERSION,
     metadata_contract_issues,
 )

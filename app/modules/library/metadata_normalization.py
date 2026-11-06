@@ -6,7 +6,7 @@ from copy import deepcopy
 import re
 from urllib.parse import urlparse
 
-from app.modules.library.metadata_contract import (
+from app.catalog.schema_org import (
     ACCESS_MODES,
     SUPPORTED_TYPES,
     reshape_english_contributor_roles,

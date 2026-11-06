@@ -17,7 +17,7 @@ from app.document_storage import (
 )
 from app.gemini_model_pool import GeminiModelResponseError
 from app.modules.library.djvu_slicing import create_djvu_slice
-from app.modules.library.metadata_contract import (
+from app.catalog.schema_org import (
     metadata_contract_issues,
 )
 from app.modules.library.metadata_evidence import (

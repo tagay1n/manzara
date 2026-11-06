@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.modules.library.metadata_contract import is_english_facet
+from app.catalog.schema_org import is_english_facet
 
 from .evaluation_text import _clean_text
 

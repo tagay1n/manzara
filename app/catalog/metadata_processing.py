@@ -11,14 +11,14 @@ import re
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
+from typing import cast
 
 from sqlalchemy import inspect, select, text
 
 from app.catalog.contracts import CatalogConflict, document_md5, integer
-from app.catalog.metadata_records import MetadataPublication, MetadataSource
-from app.catalog.metadata import compose_metadata
+from app.catalog.metadata_records import MetadataPublication, MetadataSource, DiscoveredMetadataSource
+from app.catalog.metadata_projection import compose_classified_metadata
 from app.catalog.metadata_save import save_metadata_result
-from app.catalog.metadata_store import unmanaged_subjects
 from app.catalog.repository import CatalogRepository
 
 SOURCE_FROM = """
@@ -122,17 +122,6 @@ def checkpoint_identity(publication: MetadataPublication, source: MetadataSource
     return f"{publication['publication_id']}:{digest}"
 
 
-def _compose_schema(record, path=None):
-    if path is not None:
-        record['subjects'] = unmanaged_subjects(record['subjects']) + [
-            {'@type': 'DefinedTerm', 'termCode': value,
-             'inDefinedTermSet': {'@type': 'DefinedTermSet', 'name': termset}}
-            for termset, value in (('DDC', path['ddc']), ('CategoryPath', ' > '.join(path['path_en'])))
-        ]
-    # Automation reads observed spellings, not an inferred canonical identity.
-    return compose_metadata(record)
-
-
 def _evaluation_languages(languages):
     if not isinstance(languages, (list, tuple)) or any(
             not isinstance(language, str) or not language.strip() for language in languages):
@@ -190,7 +179,7 @@ class MetadataProcessingStore:
             table = self.catalog.table('classifications')
             node = conn.execute(select(table.c.node_id).where(table.c.classification_id == classification)).scalar_one()
             path = conn.execute(text('SELECT catalog_path(:node)'), {'node': node}).scalar_one()
-        return _compose_schema(record, path)
+        return compose_classified_metadata(record, path)
 
     def _batch(self, query, should_stop, *, after_id=0, batch_size, parameters=None):
         """Fetch a bounded candidate/source/metadata envelope in one PostgreSQL statement."""
@@ -212,16 +201,17 @@ class MetadataProcessingStore:
         for row in rows:
             if should_stop():
                 raise InterruptedError('Metadata discovery stopped')
-            publication: MetadataPublication = dict(row)
-            for source in publication['sources']:
+            publication = dict(row)
+            for discovered in cast(list[DiscoveredMetadataSource], publication['sources']):
+                source = cast(MetadataSource, discovered)
                 source['save_snapshot'] = {
                     'publication': deepcopy(source['publication_record']),
-                    'source': deepcopy(source),
+                    'source': deepcopy(cast(DiscoveredMetadataSource, source)),
                 }
-                source['schema_org'] = _compose_schema(deepcopy(source['metadata_record']), source['classification_path'])
+                source['schema_org'] = compose_classified_metadata(deepcopy(source['metadata_record']), source['classification_path'])
                 source['checkpoint_id'] = checkpoint_identity(publication, source)
             publication['schema_org'] = publication['sources'][0]['schema_org']
-            publications.append(publication)
+            publications.append(cast(MetadataPublication, publication))
         return publications
 
     def extraction_ceiling(self):

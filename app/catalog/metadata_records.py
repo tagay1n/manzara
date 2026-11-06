@@ -11,12 +11,58 @@ from typing import Any, NotRequired, TypedDict
 JSONRecord = dict[str, Any]
 
 
+class MetadataCredit(TypedDict):
+    role: str
+    role_name: str | None
+    position: int
+    nested_position: int
+    raw_name: str
+    kind: str
+    contribution_id: NotRequired[int]
+    resolution: NotRequired[str]
+    display_name: NotRequired[str | None]
+
+
+class NormalizedMetadata(TypedDict):
+    publication_id: NotRequired[int]
+    revision: NotRequired[int]
+    scalars: JSONRecord
+    languages: list[str]
+    credits: list[MetadataCredit]
+    identifiers: list[str]
+    genres: list[str]
+    subjects: list[JSONRecord]
+    audiences: list[JSONRecord]
+    audience_array: bool
+    access_modes: list[str]
+    sufficient_modes: list[list[str]]
+    based_on: JSONRecord | None
+
+
+class ClassificationPath(TypedDict):
+    ddc: str
+    path_en: list[str]
+
+
+class PublicationSnapshot(TypedDict):
+    publication_id: int
+    revision: int
+    metadata_present: bool
+    metadata_review_order: int
+    work_type: str | None
+    name: str | None
+    description: str | None
+    edition: str | None
+    date_published: str | None
+    page_count: int | None
+
+
 class MetadataSaveSnapshot(TypedDict):
-    publication: JSONRecord
-    source: MetadataSource
+    publication: PublicationSnapshot
+    source: DiscoveredMetadataSource
 
 
-class MetadataSource(TypedDict):
+class DiscoveredMetadataSource(TypedDict):
     md5: str
     publication_id: int
     revision: int
@@ -32,14 +78,19 @@ class MetadataSource(TypedDict):
     upstream_metadata: JSONRecord | None
     inclusion: str
     evaluation_method: str | None
-    publication_record: JSONRecord
-    metadata_record: JSONRecord
-    classification_path: JSONRecord | None
+    publication_record: PublicationSnapshot
+    metadata_record: NormalizedMetadata
+    classification_path: ClassificationPath | None
     publication_protections: list[str]
     document_protections: list[str]
-    save_snapshot: NotRequired[MetadataSaveSnapshot]
-    schema_org: NotRequired[JSONRecord]
-    checkpoint_id: NotRequired[str]
+
+
+class MetadataSource(DiscoveredMetadataSource):
+    """Prepared evidence with a frozen discovery snapshot and checkpoint identity."""
+
+    save_snapshot: MetadataSaveSnapshot
+    schema_org: JSONRecord
+    checkpoint_id: str
 
 
 class MetadataPublication(TypedDict):
@@ -49,5 +100,5 @@ class MetadataPublication(TypedDict):
     metadata_review_order: int
     name: str | None
     sources: list[MetadataSource]
-    schema_org: NotRequired[JSONRecord]
+    schema_org: JSONRecord
     evidence_md5: NotRequired[str]

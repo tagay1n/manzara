@@ -36,6 +36,8 @@ Run workspaces retain `items.json` and corruption-plan artifacts. Summaries link
 
 Extraction logs validated model-returned Schema.org as indented JSON, identified by publication ID, source MD5, and model, through shared redacted stdout logging before the guarded catalog save. Evaluation logs its validated, normalized response the same way, including applicability, reason, metadata patch, DDC, and category path. These logs describe model results; the subsequent item outcome reports whether the guarded save succeeded or requires review.
 
+Request assembly and reassessment parsing live in `runtime/metadata/processing_request.py`; the runner owns provider execution, retries, and checkpoints. `app/catalog/schema_org.py` owns shared validation directly. Catalog discovery and saves share the nonmutating classification projection in `app/catalog/metadata_projection.py`. `app/catalog/metadata_records.py` distinguishes discovered evidence from prepared sources with required snapshots and checkpoint identities.
+
 ## Extraction evidence and validation
 
 - Populate MD5-verified cache misses only from primary Backblaze; never mutate storage URLs/upload metadata ZIPs.
