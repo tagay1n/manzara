@@ -29,7 +29,8 @@ def status(run: dict) -> str:
 
 def progress_text(run: dict, width: int) -> str:
     progress = run.get("progress") or {}
-    if progress.get("phase") == "discovering":
+    phase = str(progress.get("phase") or progress.get("stage") or "working")
+    if phase == "discovering":
         scanned = progress.get("scanned")
         eligible = progress.get("eligible")
         if type(scanned) is int and scanned >= 0 and type(eligible) is int and eligible >= 0:
@@ -37,19 +38,16 @@ def progress_text(run: dict, width: int) -> str:
                     else f"discovering · {scanned}")
         return "discovering candidates"
     total = progress.get("total")
-    current = progress.get("current", 0) if run.get("task_id") == "library.extract_non_pdf" else progress.get("resolved", progress.get("current", 0))
-    if not isinstance(total, int) or isinstance(total, bool) or total <= 0:
-        if (run.get('task_id') == 'library.normalize_personalities'
-                and type(current) is int and type(progress.get('eligible_total')) is int):
-            return (f"processing · {current} resolved · {progress['eligible_total']} eligible so far" if width >= 70
-                    else f"{current} resolved")
-        return str(progress.get("phase") or "working")
-    if not isinstance(current, int) or isinstance(current, bool):
-        return str(progress.get("phase") or "working")
+    current = progress.get("current", progress.get("resolved"))
+    if type(current) is not int or current < 0:
+        return phase
+    if type(total) is not int or total < 0:
+        count = f"{current}/?"
+        return f"{phase} · {count}" if width >= 70 else count
     count = f"{current}/{total}"
     if width < 70:
         return count
-    filled = min(12, max(0, int(12 * current / total)))
+    filled = min(12, int(12 * current / total)) if total else 0
     return f"{'━' * filled}{'─' * (12 - filled)}  {count}"
 
 
