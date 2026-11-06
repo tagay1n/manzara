@@ -80,3 +80,41 @@ class CatalogRepository(MetadataStore, PersonalityNormalizationStore):
             **changes, revision=before["revision"] + 1, updated_at=datetime.now(timezone.utc),
         ).returning(table)).mappings().one()
         return dict(row)
+
+    def validate_publication_metadata(self, publication_id, *, revision, actor):
+        """Validate and permanently protect a reviewed publication from automation."""
+        from app.catalog.contracts import nonblank
+        from app.catalog.schema_org import metadata_contract_issues
+        from app.postgres_engine import configured_timeout_sql
+        from sqlalchemy import text
+
+        integer(publication_id, 'publication_id')
+        actor = nonblank(actor, 'admin actor')
+        with self.engine.begin() as conn:
+            conn.execute(text(configured_timeout_sql('lock_timeout', 'lock_timeout_seconds')))
+            publication = self._record(conn, 'publication', publication_id, revision=revision)
+            if publication['merged_into_id'] is not None:
+                raise CatalogConflict('Publication has been merged')
+            if not publication['metadata_present']:
+                raise CatalogConflict('Extract metadata before admin validation')
+            proposals = self.table('proposals')
+            if conn.execute(select(proposals.c.proposal_id).where(
+                    proposals.c.publication_id == publication_id, proposals.c.kind == 'metadata',
+                    proposals.c.status.in_(['pending', 'deferred']))).first():
+                raise CatalogConflict('Resolve pending metadata proposals before validation')
+            documents = self.table('documents')
+            md5s = conn.execute(select(documents.c.md5).where(
+                documents.c.publication_id == publication_id).order_by(documents.c.md5)).scalars().all()
+            if not md5s:
+                raise CatalogConflict('Publication has no evidence documents')
+            for md5 in md5s:
+                schema = conn.execute(text('SELECT catalog_schema_org(:md5)'), {'md5': md5}).scalar_one()
+                if metadata_contract_issues(schema):
+                    raise CatalogConflict('Publication metadata does not satisfy the metadata contract')
+            if publication['metadata_review_order'] == -1:
+                return publication
+            result = self._update(conn, 'publication', publication_id, publication, {'metadata_review_order': -1})
+            conn.execute(self.table('evidence').insert().values(record_kind='publication',
+                record_key=str(publication_id), source=actor,
+                payload={'operation': 'admin_metadata_validation', 'revision': result['revision']}))
+            return result

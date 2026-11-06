@@ -49,7 +49,10 @@ BEGIN
             OR old_publication->>'merged_into_id' IS NOT NULL THEN
         RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Publication membership changed; resume with a fresh inventory';
     END IF;
-    IF evaluation IS NULL AND (old_publication->>'metadata_present')::boolean THEN
+    IF evaluation IS NULL AND (old_publication->>'metadata_review_order')::bigint=-1 THEN
+        RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Publication metadata is admin-validated';
+    END IF;
+    IF evaluation IS NULL AND NOT (request->>'reassess')::boolean AND (old_publication->>'metadata_present')::boolean THEN
         RAISE EXCEPTION USING ERRCODE='MZ001', MESSAGE='Publication already has metadata; extraction only fills missing metadata';
     END IF;
     IF evaluation IS NOT NULL AND NOT (old_publication->>'metadata_present')::boolean THEN
@@ -74,7 +77,7 @@ BEGIN
     expected_decision := jsonb_build_object('inclusion',old_document->'inclusion',
         'classification_id',old_publication->'classification_id','evaluation_method',old_document->'evaluation_method');
 
-    IF evaluation IS NOT NULL AND (evaluation->>'applicable')::boolean THEN
+    IF evaluation IS NOT NULL AND (old_publication->>'metadata_review_order')::bigint<>-1 AND (evaluation->>'applicable')::boolean THEN
         FOR taxonomy_label IN SELECT value FROM jsonb_array_elements_text(evaluation->'path') LOOP
             SELECT n.node_id INTO taxonomy_node FROM catalog_classification_nodes n
                 WHERE n.ddc=evaluation->>'ddc' AND lower(n.label_en)=lower(taxonomy_label)
@@ -224,18 +227,27 @@ BEGIN
     END IF;
     INSERT INTO catalog_evidence(md5,record_kind,record_key,source,payload)
         VALUES(document_key,'publication',publication_key::text,actor_name,request->'schema_org');
+    IF (request->>'reassess')::boolean THEN
+        INSERT INTO catalog_evidence(md5,record_kind,record_key,source,payload)
+            VALUES(document_key,'publication',publication_key::text,actor_name || '.reassessment',
+                jsonb_build_object('method',request->>'method','fields',plan->'relations'));
+    END IF;
     UPDATE catalog_publications SET
         work_type=desired->'scalars'->>'work_type', name=desired->'scalars'->>'name',
         description=desired->'scalars'->>'description', edition=desired->'scalars'->>'edition',
         date_published=desired->'scalars'->>'date_published', page_count=(desired->'scalars'->>'page_count')::integer,
         audience_array=(desired->>'audience_array')::boolean,
-        has_metadata=true,metadata_present=true,revision=revision+1,updated_at=clock_timestamp()
+        has_metadata=true,metadata_present=true,
+        metadata_review_order=CASE WHEN evaluation IS NULL THEN nextval('catalog_metadata_review_order_seq') ELSE metadata_review_order END,revision=revision+1,updated_at=clock_timestamp()
         WHERE publication_id=publication_key RETURNING to_jsonb(catalog_publications) INTO new_publication;
-    IF evaluation IS NULL THEN
+    IF evaluation IS NULL AND NOT (request->>'reassess')::boolean THEN
         UPDATE catalog_documents SET meta_extraction_method=request->>'method',revision=revision+1,updated_at=clock_timestamp()
             WHERE md5=document_key;
-    ELSE
+    ELSIF evaluation IS NOT NULL THEN
         old_publication := new_publication;
+        IF (old_publication->>'metadata_review_order')::bigint=-1 THEN
+            classification_key := (old_publication->>'classification_id')::bigint;
+        END IF;
         SELECT COALESCE(jsonb_object_agg(change.key,change.value),'{}'::jsonb) INTO decision_changes
             FROM jsonb_each(jsonb_build_object(
                 'inclusion',CASE WHEN (evaluation->>'applicable')::boolean THEN 'included' ELSE 'excluded' END,

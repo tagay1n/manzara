@@ -13,7 +13,7 @@ Read the relevant owner and nearest `AGENTS.md`, then search symbols; do not pre
 | Execution, logs, artifacts, states | `app/tasks.py`, `app/task_runtime/logging.py`, `artifacts.py`, `reporting.py`, `app/runtime_states.py` |
 | PostgreSQL facade/repositories/pools | `app/db.py`, `app/repositories/`, `app/postgres_engine.py` |
 | Catalog commands/schema | `app/catalog/`; [catalog contract](catalog-model.md) |
-| Metadata extraction/evaluation atomic saves | `app/catalog/metadata_save.py`, `app/catalog/metadata_save.sql`; [metadata contract](../app/modules/library/guidance/metadata.md) |
+| Metadata extraction/review queue, admin validation, and evaluation atomic saves | `app/catalog/metadata_processing.py`, `app/catalog/metadata_save.py`, `app/catalog/metadata_save.sql`, `app/catalog/repository.py`; [metadata contract](../app/modules/library/guidance/metadata.md) |
 | Personality discovery/atomic decisions | `app/catalog/personality_candidates.py` / `.sql`, `app/catalog/personality_normalization.py` / `.sql`; [personality contract](personality-normalization.md) |
 | One-message pooled catalog commands | `app/catalog/command_batch.py`; metadata and personality commands share connection cleanup and uncertain-commit handling |
 | Preview discovery/atomic claims and publication | `app/catalog/book_previews.py`, `app/catalog/book_preview_preflight.sql`, `app/catalog/previews.py`, `app/catalog/previews.sql`; [preview contract](../app/modules/library/guidance/documents.md#sources-and-previews) |

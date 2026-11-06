@@ -44,10 +44,16 @@ SOURCES = """
  LEFT JOIN library_upstream_metadata u ON u.md5=d.md5
 """ + SOURCE_WHERE
 METADATA_TASK_ACTORS = ('library.metadata_extract', 'maintenance.monocorpus_meta_evaluate')
+QUEUE_ORDER = """p.metadata_review_order,
+    CASE WHEN NULLIF(BTRIM(p.name),'') IS NULL THEN 0 ELSE 1 END,
+    CASE WHEN EXISTS(SELECT 1 FROM catalog_contributions a
+        WHERE a.publication_id=p.publication_id AND a.role='author') THEN 1 ELSE 0 END,
+    p.publication_id"""
 PUBLICATION_BATCH = """
  SELECT p.* FROM catalog_publications p
  WHERE p.merged_into_id IS NULL AND ({{eligibility}})
-   AND p.publication_id > :after_id
+   AND (""" + QUEUE_ORDER + """) > (:after_order,:after_title,:after_author,:after_id)
+   AND p.metadata_review_order BETWEEN 0 AND :queue_ceiling
    AND EXISTS (SELECT 1
 """ + SOURCE_FROM + SOURCE_WHERE + """
        AND d.publication_id=p.publication_id)
@@ -55,7 +61,7 @@ PUBLICATION_BATCH = """
        SELECT 1 FROM catalog_proposals q WHERE q.publication_id=p.publication_id
        AND q.kind='metadata' AND q.status IN ('pending','deferred')
        AND q.evidence->>'actor'=ANY(:actors))
- ORDER BY p.publication_id LIMIT :batch_size
+ ORDER BY """ + QUEUE_ORDER + """ LIMIT :batch_size
 """
 METADATA_BATCH_SIZE = 200
 METADATA_ENVELOPE_QUERY = Path(__file__).with_name('metadata_extraction.sql').read_text(encoding='utf-8')
@@ -63,7 +69,7 @@ EVALUATION_FILES = "SELECT p.*,d.md5 AS evidence_md5\n" + SOURCE_FROM + """
  JOIN catalog_publications p ON p.publication_id=d.publication_id
 """ + SOURCE_WHERE + """
    AND p.merged_into_id IS NULL AND p.metadata_present IS TRUE
-   AND (d.inclusion='pending' OR (d.inclusion='included' AND p.classification_id IS NULL))
+   AND (d.inclusion='pending' OR (d.inclusion='included' AND p.classification_id IS NULL AND p.metadata_review_order<>-1))
    AND d.md5>:after_md5
    AND EXISTS (SELECT 1 FROM catalog_publication_languages language
        WHERE language.publication_id=p.publication_id AND language.language=ANY(:languages))
@@ -93,11 +99,11 @@ def _metadata_envelope(publications, *, sources=SOURCES, evaluate=False):
                             else 'AND d.publication_id IN (SELECT publication_id FROM candidates)'),
         source_match=('WHERE source.publication_id=p.publication_id AND source.md5=p.evidence_md5' if evaluate
                       else 'WHERE source.publication_id=p.publication_id'),
-        ordering='ORDER BY p.evidence_md5' if evaluate else 'ORDER BY p.publication_id')
+        ordering='ORDER BY p.evidence_md5' if evaluate else 'ORDER BY ' + QUEUE_ORDER)
 
 
 EXTRACTION_BATCH_QUERY = _metadata_envelope(
-    _render_query(PUBLICATION_BATCH, eligibility='p.metadata_present IS FALSE'))
+    _render_query(PUBLICATION_BATCH, eligibility='TRUE'))
 EVALUATION_BATCH_QUERY = _render_query(
     Path(__file__).with_name('metadata_evaluation.sql').read_text(encoding='utf-8'),
     envelope=_metadata_envelope(EVALUATION_FILES, evaluate=True))
@@ -163,8 +169,8 @@ class MetadataProcessingStore:
             if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', version_schema):
                 raise ValueError('Invalid migration version schema')
             revision = str(conn.execute(text(f'SELECT version_num FROM "{version_schema}".alembic_version_manzara')).scalar_one())
-            if not re.fullmatch(r'\d{8}_\d{4}', revision) or int(revision.split('_')[1]) < 67:
-                raise RuntimeError('Metadata processing requires catalog revision 20261012_0067 or later')
+            if not re.fullmatch(r'\d{8}_\d{4}', revision) or int(revision.split('_')[1]) < 69:
+                raise RuntimeError('Metadata processing requires catalog revision 20261106_0069 or later')
             for name, key in (('catalog_documents', ['md5']), ('catalog_publications', ['publication_id'])):
                 if inspector.get_pk_constraint(name, schema=self.schema)['constrained_columns'] != key:
                     raise RuntimeError(f'Metadata processing requires the {name} primary key {key}')
@@ -217,8 +223,16 @@ class MetadataProcessingStore:
             publications.append(publication)
         return publications
 
-    def extraction_batch(self, should_stop, *, after_id=0, batch_size=METADATA_BATCH_SIZE):
-        rows = self._batch(EXTRACTION_BATCH_QUERY, should_stop, after_id=after_id, batch_size=batch_size)
+    def extraction_ceiling(self):
+        with self.engine.connect() as conn:
+            # Include allocated positions even if their transaction has not committed.
+            return conn.execute(text('SELECT CASE WHEN is_called THEN last_value ELSE last_value-1 END FROM catalog_metadata_review_order_seq')).scalar_one()
+
+    def extraction_batch(self, should_stop, *, after_id=0, after_order=0, after_title=0, after_author=0, queue_ceiling, batch_size=METADATA_BATCH_SIZE):
+        integer(after_order, 'after_order', minimum=0)
+        integer(queue_ceiling, 'queue_ceiling')
+        rows = self._batch(EXTRACTION_BATCH_QUERY, should_stop, after_id=after_id, batch_size=batch_size,
+            parameters={'after_order': after_order, 'after_title': after_title, 'after_author': after_author, 'queue_ceiling': queue_ceiling})
         return self._publications(rows, should_stop)
 
     def evaluation_batch(self, should_stop, *, languages, after_md5='', batch_size=METADATA_BATCH_SIZE):
@@ -242,7 +256,7 @@ class MetadataProcessingStore:
             "SELECT p.*,:md5 AS evidence_md5 FROM catalog_publications p "
             "JOIN catalog_documents d USING(publication_id) WHERE d.md5=:md5 AND p.merged_into_id IS NULL "
             "AND p.metadata_present IS TRUE AND (d.inclusion='pending' "
-            "OR (d.inclusion='included' AND p.classification_id IS NULL)) "
+            "OR (d.inclusion='included' AND p.classification_id IS NULL AND p.metadata_review_order<>-1)) "
             "AND EXISTS(SELECT 1 FROM catalog_publication_languages l "
             "WHERE l.publication_id=p.publication_id AND l.language=ANY(:languages)) "
             "AND NOT EXISTS(SELECT 1 FROM catalog_proposals q WHERE q.publication_id=p.publication_id "

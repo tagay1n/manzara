@@ -84,7 +84,7 @@ All tables in this section live in `database_schema`. Integer IDs are PostgreSQL
 
 | Table / primary key | Contents and important fields |
 | --- | --- |
-| `catalog_publications` / `publication_id` | Bibliography: `name`, `work_type`, `description`, `edition`, `date_published`, `page_count`. Nullable links: `classification_id`, `collection_id`, `merged_into_id`. Also `audience_array`, `has_metadata`, `metadata_present`, collection item title/timestamps, revision/timestamp. |
+| `catalog_publications` / `publication_id` | Bibliography: `name`, `work_type`, `description`, `edition`, `date_published`, `page_count`. Nullable links: `classification_id`, `collection_id`, `merged_into_id`. Also `audience_array`, `has_metadata`, `metadata_present`, `metadata_review_order` (`-1` admin protected, `0` unextracted, positive review queue position), collection item title/timestamps, revision/timestamp. |
 | `catalog_documents` / `md5` | Required `publication_id`; `mime_type`, `complete`, `restricted`, `selected`, `inclusion`, `evaluation_method`, `content_extraction_method`, `meta_extraction_method`, revision/timestamp. Bibliographic title, ISBN, language, and credits belong to its publication. |
 | `catalog_locations` / `location_id` | File location and integrity checkpoint: `md5`, `provider`, `purpose`, `locator`, `source_path`, `resource_id`, `public_url`, `public_key`, `size`, `etag`, `verified_at`, revision/timestamp. Unique `(md5, provider, purpose)`; size is bytes and can be unknown. File bytes are outside PostgreSQL. |
 | `catalog_collections` / `collection_id` | `title`, `notes`, independent `include_in_library` boolean, derived `normalized_title`, `metadata_template_json` (JSON encoded as text), source/application timestamps, revision/timestamp. |

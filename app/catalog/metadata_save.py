@@ -143,14 +143,18 @@ def _prepare(source, schema_org, *, actor, method, evaluation):
     evaluation = _evaluation(evaluation)
     incoming = decompose_metadata(deepcopy(schema_org))
     incoming['subjects'] = unmanaged_subjects(incoming['subjects'])
-    merged, plan = _merge(saved, incoming, reset_evaluation=evaluation is None)
+    reassess = evaluation is None and saved['publication']['metadata_present']
+    locked = saved['publication']['metadata_review_order'] == -1
+    if locked and evaluation is not None:
+        incoming = deepcopy(saved['source']['metadata_record'])
+    merged, plan = _merge(saved, incoming, reset_evaluation=evaluation is None and not reassess)
     merged = _projected_record(merged)
     path = saved['source']['classification_path']
     validation = {}
     if evaluation is not None:
         # The server resolves taxonomy IDs and decides whether protections retain
         # the old decision. Validate both resulting envelopes before that request.
-        accepted = {'ddc': evaluation['ddc'], 'path_en': evaluation['path']} if evaluation['applicable'] else path
+        accepted = {'ddc': evaluation['ddc'], 'path_en': evaluation['path']} if evaluation['applicable'] and not locked else path
         validation = {name: sorted({issue['code'] for issue in metadata_contract_issues(_classified_schema(merged, value))})
                       for name, value in (('accepted', accepted), ('retained', path))}
         decision_protected = bool(set(source['publication_protections']) & {'classification_id'}
@@ -168,6 +172,7 @@ def _prepare(source, schema_org, *, actor, method, evaluation):
                                if credit_signature(row) in prior]
     return {
         'snapshot': saved, 'md5': document_md5(source['md5']),
+        'reassess': reassess,
         'actor': nonblank(actor, 'actor'), 'method': nonblank(method, 'method'),
         'schema_org': schema_org, 'expected': comparable_record(merged), 'plan': plan,
         'expected_classification_path': path, 'evaluation': evaluation, 'evaluation_validation': validation,

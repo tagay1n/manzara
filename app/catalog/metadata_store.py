@@ -1,5 +1,7 @@
 """Bibliographic writes, projections, evidence, and protected-field proposals."""
 
+from app.catalog.contracts import CatalogConflict
+
 import re
 
 from sqlalchemy import and_, select
@@ -189,6 +191,8 @@ class MetadataStore:
         doc = self._record(conn, "document", md5)
         key = doc["publication_id"]
         pub = self._record(conn, "publication", key, revision=revision)
+        if automated and pub['metadata_review_order'] == -1:
+            raise CatalogConflict('Publication metadata is admin-validated')
         before = self._metadata(conn, md5)
         # A metadata editor starts from the canonical projection. Matching names
         # keep the original observation and its explicitly resolved identity.
