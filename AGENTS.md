@@ -5,7 +5,7 @@ Owner: tans1q
 ## Routing
 
 - Use English unless the owner explicitly requests another language. Never use Russian in replies, UI, artifacts, or summaries without that request.
-- Read [architecture](docs/architecture.md) for owners, then only matching guidance and the nearest `AGENTS.md`. For `app/gemini_*.py`, also read [Gemini runtime](docs/gemini-runtime.md).
+- Read [architecture](docs/architecture.md) for owners, then the nearest `AGENTS.md` and only the linked contract sections matching the change. For `app/gemini_*.py`, also read [Gemini runtime](docs/gemini-runtime.md).
 - Flows live in `app/modules/<flow>/`; shared core lives in `app/`. Flows may import core; core must not import flow internals. Cross-flow imports go through core.
 - Retain only code reachable from the operations CLI, GitHub workflow runners, or separate Alembic bootstrap. Interactive tasks require Python handlers. [README](README.md) owns the task list; [operations](docs/operations.md) owns scheduled runners. Web/HTTP/SSE, dashboards, and conveyor state are retired.
 

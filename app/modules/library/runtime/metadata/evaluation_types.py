@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, StrictBool
 
-from app.modules.library.runtime.metadata.schema import MetadataPatch
+from app.modules.library.metadata_schema import MetadataPatch
 
 
 class Evaluation(BaseModel):

@@ -11,8 +11,8 @@ from app.modules.library.metadata_normalization import (
     _normalize_date_published as _normalize_publication_year,
     normalize_publisher_name,
 )
-from app.modules.library.runtime.metadata.schema import MetadataPatch
-from app.modules.library.runtime.metadata.url_utils import normalize_url_list
+from app.modules.library.metadata_schema import MetadataPatch
+from app.modules.library.metadata_urls import normalize_url_list
 
 from .evaluation_text import _clean_text, _extract_candidate_strings
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from sqlalchemy import inspect, select, text
 
 from app.catalog.contracts import CatalogConflict, document_md5, integer
+from app.catalog.metadata_records import MetadataPublication, MetadataSource
 from app.catalog.metadata import compose_metadata
 from app.catalog.metadata_save import save_metadata_result
 from app.catalog.metadata_store import unmanaged_subjects
@@ -114,7 +115,7 @@ SOURCE_FIELDS = (
 )
 
 
-def checkpoint_identity(publication, source):
+def checkpoint_identity(publication: MetadataPublication, source: MetadataSource) -> str:
     payload = {'publication_id': publication['publication_id'], 'revision': publication['revision'],
                'schema_org': source['schema_org'], **{key: source[key] for key in SOURCE_FIELDS}}
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -206,12 +207,12 @@ class MetadataProcessingStore:
             }).mappings().all()
         return rows
 
-    def _publications(self, rows, should_stop):
+    def _publications(self, rows, should_stop) -> list[MetadataPublication]:
         publications = []
         for row in rows:
             if should_stop():
                 raise InterruptedError('Metadata discovery stopped')
-            publication = dict(row)
+            publication: MetadataPublication = dict(row)
             for source in publication['sources']:
                 source['save_snapshot'] = {
                     'publication': deepcopy(source['publication_record']),
@@ -228,14 +229,14 @@ class MetadataProcessingStore:
             # Include allocated positions even if their transaction has not committed.
             return conn.execute(text('SELECT CASE WHEN is_called THEN last_value ELSE last_value-1 END FROM catalog_metadata_review_order_seq')).scalar_one()
 
-    def extraction_batch(self, should_stop, *, after_id=0, after_order=0, after_title=0, after_author=0, queue_ceiling, batch_size=METADATA_BATCH_SIZE):
+    def extraction_batch(self, should_stop, *, after_id=0, after_order=0, after_title=0, after_author=0, queue_ceiling, batch_size=METADATA_BATCH_SIZE) -> list[MetadataPublication]:
         integer(after_order, 'after_order', minimum=0)
         integer(queue_ceiling, 'queue_ceiling')
         rows = self._batch(EXTRACTION_BATCH_QUERY, should_stop, after_id=after_id, batch_size=batch_size,
             parameters={'after_order': after_order, 'after_title': after_title, 'after_author': after_author, 'queue_ceiling': queue_ceiling})
         return self._publications(rows, should_stop)
 
-    def evaluation_batch(self, should_stop, *, languages, after_md5='', batch_size=METADATA_BATCH_SIZE):
+    def evaluation_batch(self, should_stop, *, languages, after_md5='', batch_size=METADATA_BATCH_SIZE) -> tuple[list[MetadataPublication], list[dict]]:
         languages = _evaluation_languages(languages)
         if not isinstance(after_md5, str):
             raise ValueError('Evaluation cursor must be an MD5 string or empty string')
@@ -248,7 +249,7 @@ class MetadataProcessingStore:
         envelope = rows[0]
         return self._publications(envelope['publications'], should_stop), envelope['known_classifications']
 
-    def refresh_evaluation(self, md5, should_stop, *, languages):
+    def refresh_evaluation(self, md5, should_stop, *, languages) -> MetadataPublication | None:
         """Refresh a sibling after this run changed their shared bibliography."""
         document_md5(md5)
         languages = _evaluation_languages(languages)
@@ -271,7 +272,7 @@ class MetadataProcessingStore:
         return items[0] if items else None
 
     @contextmanager
-    def mutation(self, publication, source):
+    def mutation(self, publication: MetadataPublication, source: MetadataSource):
         with self.engine.begin() as conn:
             conn.execute(text('SET TRANSACTION READ WRITE'))
             conn.execute(text(configured_timeout_sql("lock_timeout", "lock_timeout_seconds")))
@@ -291,7 +292,7 @@ class MetadataProcessingStore:
                 raise CatalogConflict('Metadata evidence changed; resume with a fresh snapshot')
             yield conn, current
 
-    def save(self, publication, source, schema_org, *, actor, method, evaluation=None):
+    def save(self, publication: MetadataPublication, source: MetadataSource, schema_org, *, actor, method, evaluation=None):
         snapshot = source.get('save_snapshot')
         if not snapshot or publication['publication_id'] != snapshot['publication']['publication_id']:
             raise CatalogConflict('Metadata save publication does not match the selected snapshot')

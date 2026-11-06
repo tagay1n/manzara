@@ -33,12 +33,11 @@ from app.cli.commands import help_text, parse_command
 from app.cli.display import InlineApplication, TerminalDisplay, emergency_notice
 from app.cli.output import OutputFailure, TerminalOutput
 from app.cli.picker import Picker
+from app.cli.lifecycle import ForegroundLifecycle
 from app.cli.presentation import (
     duration,
-    elapsed,
     progress_text,
     provider_wait,
-    restrictions,
     summary_text,
 )
 from app.cli.state import CLIStateStore, append_command
@@ -56,7 +55,7 @@ from app.runtime_config import (
     runtime_config_snapshot,
     save_runtime_config,
 )
-from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTING, TASK_RUN_STATUS_STOPPED
+from app.runtime_states import TASK_RUN_ACTIVE_STATUSES, TASK_RUN_STATUS_STARTING
 from app.settings import load_settings
 from app.task_runtime.contracts import RunOptions
 from app.task_runtime.logging import redact
@@ -83,23 +82,21 @@ class Terminal:
         self.ready = False
         self.startup_finished = False
         self.closing = False
-        self.stopping = False
-        self.starting = False
-        self.finalizing = False
-        self.foreground = None
-        self.foreground_run_id = None
-        self.foreground_snapshot = None
-        self.foreground_started = 0.0
-        self.runtime_error = None
         self.output = TerminalOutput()
         self.display = TerminalDisplay.from_pty(
             sys.stdout, term=get_term_environment_variable(),
             default_color_depth=ColorDepth.from_env(), enable_bell=get_bell_environment_variable(),
         )
+        self.lifecycle = ForegroundLifecycle(
+            get_runner=lambda: self.runner, get_db=lambda: self.db,
+            is_closing=lambda: self.closing, output_failure=lambda: self.output.failure,
+            say=self._say, spawn=self._spawn, drain=self._drain,
+            signal_completion=self._signal_completion, emergency_notice=self._show_emergency_notice,
+            clear_message=self._clear_message,
+        )
         self._consumer_finished = False
         self._terminal_attributes = None
         self._operations = set()
-        self._stop_pending = False
         self.mode = ""
         self.history_rows = []
         self._picker_generation = 0
@@ -140,13 +137,16 @@ class Terminal:
                                   "warning": "ansiyellow", "activity": "ansigreen", "setting": "bg:ansibrightblack"}),
         )
 
+    def _clear_message(self):
+        self.message = ""
+
     @property
     def task(self):
         return next((task for task in self.descriptors if task.task_id == self.selected_id), None)
 
     @property
     def locked(self):
-        return self.foreground is not None or self.closing or self.settings_busy
+        return self.lifecycle.foreground is not None or self.closing or self.settings_busy
 
     def _spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -189,41 +189,41 @@ class Terminal:
         self.picker.index = 0
 
     def _activity_text(self):
-        if self.foreground is None:
+        if self.lifecycle.foreground is None:
             title = self.task.title if self.task else "Manzara"
             return [("", f"  Idle · {redact(title)}")]
         spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[int(time.monotonic() * 5) % 10]
-        run = self.foreground_snapshot
-        if self.finalizing or (run and run.get("status") not in TASK_RUN_ACTIVE_STATUSES):
+        run = self.lifecycle.foreground_snapshot
+        if self.lifecycle.finalizing or (run and run.get("status") not in TASK_RUN_ACTIVE_STATUSES):
             phase = "Finalizing"
-        elif self.stopping or (run and run.get("stop_mode")):
+        elif self.lifecycle.stopping or (run and run.get("stop_mode")):
             phase = "Stopping"
-        elif self.starting or (run and run.get("status") == TASK_RUN_STATUS_STARTING):
+        elif self.lifecycle.starting or (run and run.get("status") == TASK_RUN_STATUS_STARTING):
             phase = "Starting"
         else:
             phase = "Running"
-        elapsed_text = duration(max(0, int(time.monotonic() - self.foreground_started)))
-        parts = [f"  {spinner} {phase} · {redact(self.foreground.title)}"]
-        if self.runtime_error:
+        elapsed_text = duration(max(0, int(time.monotonic() - self.lifecycle.foreground_started)))
+        parts = [f"  {spinner} {phase} · {redact(self.lifecycle.foreground.title)}"]
+        if self.lifecycle.runtime_error:
             parts.append("progress unavailable · runtime read failed")
         elif run and phase == "Running":
             parts.append(redact(progress_text(run, self.app.output.get_size().columns)))
         parts.append(elapsed_text)
-        if not self.runtime_error and run:
+        if not self.lifecycle.runtime_error and run:
             wait = provider_wait(run.get("provider_wait") or {})
             if wait:
                 parts.append(redact(wait))
-        return [("class:warning" if self.runtime_error else "class:activity", "  ·  ".join(parts))]
+        return [("class:warning" if self.lifecycle.runtime_error else "class:activity", "  ·  ".join(parts))]
 
     def _hint_text(self):
         if self.mode == "settings":
             hint = "Tab move · ↑↓ adjust · Enter next · Ctrl-S save · Esc cancel"
         elif self.mode in ("task", "history", "commands"):
             hint = "↑↓ select · Enter choose · Esc dismiss"
-        elif self.stopping or self.closing:
+        elif self.lifecycle.stopping or self.closing:
             hint = "/ commands · Ctrl-C force exit"
         else:
-            hint = "/ commands · ↑↓ command history · " + ("Ctrl-C stop" if self.foreground else "Ctrl-C clear / exit")
+            hint = "/ commands · ↑↓ command history · " + ("Ctrl-C stop" if self.lifecycle.foreground else "Ctrl-C clear / exit")
         return [("class:warning" if self.message else "class:disabled",
                  redact(self.message) if self.message else hint)]
 
@@ -411,71 +411,13 @@ class Terminal:
         if self.locked:
             await self._say("Wait for the current run or settings save to finish.")
             return
-        task = self.task
-        # Claim the slot before any await, including printing or start_task I/O.
-        self.foreground = task
-        self.starting = True
-        self.finalizing = False
-        self.stopping = False
-        self.foreground_run_id = None
-        self.foreground_snapshot = None
-        self.foreground_started = time.monotonic()
-        self.runtime_error = None
-        options = self.options[task.task_id]
-        try:
-            if task.requires_full_inventory and options.limit is not None:
-                raise ValueError(f"{task.title} requires the complete inventory; clear the limit in /settings")
-            text = f"Starting · {task.title} · limit {options.limit or 'unlimited'}"
-            if task.task_id == "library.extract_non_pdf":
-                text += "\n" + restrictions(options.as_dict())
-            await self._say(text)
-            if self.stopping or self.closing:
-                await self._say(f"Stopped · {task.title} · start cancelled before execution.")
-                await self._drain()
-                await self._signal_completion({"status": TASK_RUN_STATUS_STOPPED})
-                self._release_foreground()
-                return
-            result = await asyncio.to_thread(self.runner.start_task, task.task_id, options=options)
-            self.foreground_run_id = result["run"]["run_id"]
-            self.foreground_snapshot = result["run"]
-            if self.stopping or self.closing:
-                await asyncio.to_thread(self.runner.stop_task, task.task_id, run_id=self.foreground_run_id)
-        except Exception as exc:
-            # start_task returns its run identity before doing any further I/O.
-            # If stop persistence fails after that, retain the foreground slot.
-            await self._say(f"Start/stop failed: {redact(exc)}")
-            if self.foreground_run_id is None:
-                await self._drain()
-                await self._signal_completion(None, failure=redact(exc) or type(exc).__name__)
-                self._release_foreground()
-        finally:
-            self.starting = False
+        await self.lifecycle.start(self.task, self.options[self.task.task_id])
 
     async def _stop(self, _argument):
         self._request_stop()
 
     def _request_stop(self):
-        if self.foreground is None:
-            self._spawn(self._say("No foreground task is active."))
-            return
-        if self.stopping:
-            return
-        self.stopping = True
-        self._spawn(self._say("Safe stop requested; active operations finish at checkpoint boundaries. Ctrl-C again forces exit."))
-        # During a pending start, _start delivers the stop once its ID arrives.
-        # Capture existing IDs now so a delayed stop cannot target a later run.
-        if self.foreground_run_id is not None:
-            self._spawn(self._deliver_stop(self.foreground.task_id, self.foreground_run_id))
-
-    async def _deliver_stop(self, task_id, run_id):
-        self._stop_pending = True
-        try:
-            if self.runner:
-                await asyncio.to_thread(self.runner.stop_task, task_id, run_id=run_id)
-        except Exception as exc:
-            await self._say("Safe stop recording failed: " + redact(exc) + ". Ctrl-C again forces exit.")
-        finally:
-            self._stop_pending = False
+        self.lifecycle.request_stop()
 
     async def _history(self, _argument):
         self.mode = "history"
@@ -492,18 +434,18 @@ class Terminal:
 
     async def _summary(self, _argument):
         presentation_status = None
-        if self.foreground:
-            title = self.foreground.title
-            run_id = self.foreground_run_id
+        if self.lifecycle.foreground:
+            title = self.lifecycle.foreground.title
+            run_id = self.lifecycle.foreground_run_id
             if run_id is None:
-                phase = "Stopping" if self.stopping else "Starting"
+                phase = "Stopping" if self.lifecycle.stopping else "Starting"
                 await self._say(f"{phase} · {title} · no run snapshot yet.")
                 return
             run = await asyncio.to_thread(self.db.get_run, run_id)
             if run is None:
                 raise RuntimeError(f"Run {run_id} is missing; current progress is unavailable")
             failure = await asyncio.to_thread(self.runner.get_run_error, run_id)
-            if self.foreground_run_id == run_id and run.get("status") not in TASK_RUN_ACTIVE_STATUSES:
+            if self.lifecycle.foreground_run_id == run_id and run.get("status") not in TASK_RUN_ACTIVE_STATUSES:
                 presentation_status = "finalizing"
         else:
             title = self.task.title
@@ -542,9 +484,9 @@ class Terminal:
         self._request_exit()
 
     def _request_interrupt(self):
-        if self.closing or self.stopping:
+        if self.closing or self.lifecycle.stopping:
             self._force_exit()
-        elif self.foreground:
+        elif self.lifecycle.foreground:
             self._request_stop()
         elif self.settings_busy:
             self._request_exit()
@@ -575,8 +517,8 @@ class Terminal:
         self.closing = True
         self._dismiss()
         self.message = "Exiting safely · Ctrl-C again forces exit"
-        if self.foreground:
-            self.stopping = True
+        if self.lifecycle.foreground:
+            self.lifecycle.stopping = True
         self._spawn(self._stop_for_exit())
 
     async def _stop_for_exit(self):
@@ -586,52 +528,11 @@ class Terminal:
             except Exception as exc:
                 await self._say("Safe exit recording failed: " + redact(exc) + ". Ctrl-C again forces exit.")
 
-    def _snapshot(self, run_id):
-        # Determine worker exit *before* reading the final saved result. A
-        # terminal row read before exit can still become a finalization failure.
-        idle = self.runner.is_idle()
-        finalizing = self.runner.is_finalizing(run_id) if run_id is not None else False
-        run = self.db.get_run(run_id) if run_id is not None else None
-        if run_id is not None and run is None:
-            raise RuntimeError(f"Run {run_id} is missing")
-        failure = self.runner.get_run_error(run_id) if run_id is not None else None
-        return run, idle, failure, finalizing
-
     async def _drain(self):
         try:
             await asyncio.to_thread(self.output.drain)
         except OutputFailure:
             pass  # The consumer already surfaced the failure and requested stop.
-
-    async def _finish_foreground(self, run, failure):
-        # Terminal DB state alone never releases the slot. Worker is already dead.
-        await self._drain()
-        failure = self.output.failure or failure
-        if run.get("status") in TASK_RUN_ACTIVE_STATUSES:
-            failure = failure or "Worker exited without a final persisted result; reopen Manzara for recovery."
-        if failure and self.output.failure:
-            await self._show_emergency_notice(f"Failed · {self.foreground.title} · run {run['run_id']} · {elapsed(run)}\n{failure}")
-        else:
-            await self._say(summary_text(run, self.foreground.title, completion=True, failure=failure))
-            await self._drain()
-        await self._signal_completion(run, failure=failure)
-        self._release_foreground()
-
-    async def _finish_without_snapshot(self, read_failure):
-        await self._drain()
-        failure = await asyncio.to_thread(self.runner.get_run_error, self.foreground_run_id)
-        text = (f"Failed to read final result · {self.foreground.title} · run {self.foreground_run_id} · "
-                f"{duration(max(0, int(time.monotonic() - self.foreground_started)))}\n"
-                f"{failure or read_failure}\n"
-                "Final counts/outcome are unavailable. Inspect /history after reopening; an unfinished persisted run needs recovery.")
-        if self.output.failure:
-            await self._show_emergency_notice(text)
-        else:
-            await self._say(text)
-            await self._drain()
-        await self._signal_completion(None, failure=failure or read_failure)
-        self._release_foreground()
-        self.runtime_error = read_failure
 
     async def _signal_completion(self, run, *, failure=None):
         if not self.display.enable_bell:
@@ -646,51 +547,17 @@ class Terminal:
             while self.display.pending and not self.output.failure:
                 await asyncio.sleep(config_number("terminal", "output_poll_seconds", minimum=0.001))
 
-    def _release_foreground(self):
-        self.foreground = None
-        self.foreground_run_id = None
-        self.foreground_snapshot = None
-        self.stopping = False
-        self.finalizing = False
-        self.runtime_error = None
-        if not self.closing:
-            self.message = ""
-
     async def _refresh(self):
         while True:
             if self.ready:
-                try:
-                    run_id = self.foreground_run_id
-                    run, idle, failure, finalizing = await asyncio.to_thread(self._snapshot, run_id)
-                    if run_id != self.foreground_run_id:
-                        continue
-                    self.foreground_snapshot = run
-                    self.finalizing = finalizing
-                    self.runtime_error = None
-                    if self.foreground and not self.starting and not self._stop_pending and idle:
-                        if run is not None:
-                            await self._finish_foreground(run, failure)
-                    if self.closing and self.startup_finished and not self.foreground and idle:
-                        await self._drain()
-                        if self.app.is_running:
-                            self.app.exit()
-                        return
-                except Exception as exc:
-                    message = "Runtime read failed: " + redact(exc)
-                    if self.runtime_error != message:
-                        await self._say(message + ". Current progress is unavailable; /stop or /quit remain available.")
-                    self.runtime_error = message
-                    self.foreground_snapshot = None
-                                # Worker exit and output drain are knowable without DB
-                    # reads. Never strand the UI slot or claim stale success.
-                    idle = await asyncio.to_thread(self.runner.is_idle)
-                    if self.foreground and not self.starting and not self._stop_pending and idle:
-                        await self._finish_without_snapshot(message)
-                    if self.closing and self.startup_finished and not self.foreground and idle:
-                        await self._drain()
-                        if self.app.is_running:
-                            self.app.exit()
-                        return
+                idle = await self.lifecycle.poll()
+                if idle is None:
+                    continue
+                if self.closing and self.startup_finished and not self.lifecycle.foreground and idle:
+                    await self._drain()
+                    if self.app.is_running:
+                        self.app.exit()
+                    return
             elif self.closing and self.startup_finished:
                 await self._drain()
                 if self.app.is_running:

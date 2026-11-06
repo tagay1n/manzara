@@ -8,6 +8,7 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extras import Json
 
+from app.catalog.metadata_records import MetadataSaveSnapshot, MetadataSource
 from app.catalog.command_batch import execute_catalog_batch
 from app.catalog.contracts import CatalogConflict, boolean, document_md5, nonblank
 from app.catalog.metadata import SCALARS, compose_metadata, decompose_metadata, items
@@ -56,7 +57,7 @@ def _decision(document, protected):
     return changes, {}
 
 
-def _merge(snapshot, incoming, *, reset_evaluation):
+def _merge(snapshot: MetadataSaveSnapshot, incoming, *, reset_evaluation):
     source = snapshot['source']
     before = source['metadata_record']
     protected = set(source['publication_protections'])
@@ -136,7 +137,7 @@ def _evaluation(evaluation):
     return {'applicable': applicable, 'reason': reason, 'ddc': ddc, 'path': deepcopy(path)}
 
 
-def _prepare(source, schema_org, *, actor, method, evaluation):
+def _prepare(source: MetadataSource, schema_org, *, actor, method, evaluation):
     if 'save_snapshot' not in source:
         raise CatalogConflict('Metadata save snapshot is missing; resume with a fresh batch')
     saved = source['save_snapshot']
@@ -179,7 +180,7 @@ def _prepare(source, schema_org, *, actor, method, evaluation):
     }
 
 
-def save_metadata_result(engine, schema, source, schema_org, *, actor, method, evaluation, snapshot_query):
+def save_metadata_result(engine, schema, source: MetadataSource, schema_org, *, actor, method, evaluation, snapshot_query):
     payload = _prepare(source, schema_org, actor=actor, method=method, evaluation=evaluation)
     try:
         return execute_catalog_batch(engine, schema, _BATCH.replace('{{snapshot_query}}', snapshot_query), {

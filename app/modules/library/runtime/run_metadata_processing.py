@@ -1,11 +1,14 @@
 """Sequential publication metadata extraction and individual file evaluation."""
 
+from __future__ import annotations
+
 import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from app.artifacts import workspace_dir
 from app.catalog.contracts import CatalogConflict
+from app.catalog.metadata_records import MetadataPublication, MetadataSource
 from app.catalog.metadata_processing import METADATA_BATCH_SIZE, MetadataProcessingStore
 from app.document_storage import load_document_storage_settings, prune_document_cache
 from app.gemini_config import load_required_gemini_model_pool
@@ -25,7 +28,7 @@ from app.modules.library.corrupt_document import (
     build_corrupt_cleanup_plan,
 )
 from app.modules.library.metadata_contract import metadata_contract_issues
-from app.modules.library.runtime.metadata.schema import MetadataPatch
+from app.modules.library.metadata_schema import MetadataPatch
 from app.gemini_model_pool import GeminiModelResponseError
 from app.modules.library.metadata_evidence import MetadataExtractionCandidate
 from app.modules.library.metadata_extraction import (
@@ -80,7 +83,7 @@ def _can_retry(state, *, version, models):
     return True
 
 
-def _candidate(source):
+def _candidate(source: MetadataSource):
     path = str(source.get('source_path') or '').replace('\\', '/')
     return MetadataExtractionCandidate(md5=source['md5'], mime_type=str(source['mime_type'] or '').lower().strip(),
         document_url=source['document_url'], content_url=source['content_url'],
@@ -137,7 +140,7 @@ class Processor:
     def log(self, text):
         self.context.log(text)
 
-    def _checkpoint_args(self, source):
+    def _checkpoint_args(self, source: MetadataSource):
         return dict(flow_id=self.flow, item_id=source['checkpoint_id'], contract_version=self.version,
                     models=self.models, run_id=self.context.run_id)
 
@@ -224,7 +227,7 @@ class Processor:
         finally:
             repository.dispose()
 
-    def process(self, publication):
+    def process(self, publication: MetadataPublication):
         if self.stopped():
             return
         if not publication['sources']:
@@ -356,7 +359,7 @@ class Processor:
         self.finish(publication, 'terminal' if terminal == len(publication['sources']) and terminal else 'source_deferred', error=last_error)
 
 
-def _retry_eligible(publication, *, mode, checkpoints, version, models):
+def _retry_eligible(publication: MetadataPublication, *, mode, checkpoints, version, models):
     if not publication['sources']:
         return True
     states = checkpoints.get_many(FLOWS[mode], [source['checkpoint_id'] for source in publication['sources']])

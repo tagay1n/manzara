@@ -13,7 +13,7 @@ from app.modules.library.metadata_contract import (
 )
 from app.catalog.isbn import canonicalize_isbn_values
 from app.catalog.languages import canonical_language_tag
-from app.modules.library.runtime.metadata.url_utils import normalize_url_list
+from app.modules.library.metadata_urls import normalize_url_list
 
 UNKNOWN_VALUES = {"", "unknown", "неизвестно", "none", "null", "n/a"}
 WHITESPACE_RE = re.compile(r"\s+")

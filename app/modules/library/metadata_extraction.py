@@ -32,7 +32,7 @@ from app.modules.library.metadata_prompt import (
     DEFINE_META_PROMPT_PDF_HEADER,
     DEFINE_META_PROMPT_TT_FOOTER,
 )
-from app.modules.library.runtime.metadata.schema import Book
+from app.modules.library.metadata_schema import Book
 from app.modules.library.upstream_metadata import sanitize_upstream_metadata
 
 PROMPT_VERSION = "prompt.v13"

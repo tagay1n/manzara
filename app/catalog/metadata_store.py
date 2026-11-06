@@ -1,13 +1,9 @@
-"""Bibliographic writes, projections, evidence, and protected-field proposals."""
-
-from app.catalog.contracts import CatalogConflict
-
-import re
+"""Normalized bibliographic reader and shared comparison helpers."""
 
 from sqlalchemy import and_, select
-from sqlalchemy.dialects.postgresql import insert
 
-from app.catalog.metadata import SCALARS, items
+from app.catalog.metadata import SCALARS
+
 
 
 RELATIONAL_FIELDS = {"credits", "identifiers", "genres", "subjects", "audiences", "based_on"}
@@ -30,13 +26,6 @@ def credit_signature(credit):
 
 
 class MetadataStore:
-
-    def _name(self, conn, kind, raw_name):
-        table = self.table("names")
-        statement = insert(table).values(kind=kind, raw_name=raw_name)
-        return conn.execute(statement.on_conflict_do_update(
-            index_elements=[table.c.kind, table.c.raw_name], set_={"raw_name": raw_name},
-        ).returning(table.c.name_id)).scalar_one()
 
     def _metadata(self, conn, md5, *, lock=True):
         def record(kind, key):
@@ -121,139 +110,3 @@ class MetadataStore:
             "sufficient_modes": sufficient,
             "based_on": based_on,
         }
-
-
-    def _replace_relations(self, conn, publication_id, fields, record):
-        for field in fields:
-            if field == "credits":
-                table = self.table("contributions")
-                names = self.table("names")
-                groups = self.table("credit_groups")
-                old = {credit_signature(row): row for row in conn.execute(select(table, groups.c.role_name, names.c.kind, names.c.raw_name)
-                    .join(groups, and_(groups.c.publication_id == table.c.publication_id,
-                                      groups.c.role == table.c.role, groups.c.position == table.c.position))
-                    .join(names, names.c.name_id == table.c.name_id).where(table.c.publication_id == publication_id)).mappings()}
-                retained = [old[credit_signature(credit)]["contribution_id"] for credit in record[field] if credit_signature(credit) in old]
-                conn.execute(table.delete().where(table.c.publication_id == publication_id, ~table.c.contribution_id.in_(retained)))
-                desired = {(credit["role"], credit["position"]): credit["role_name"] for credit in record[field]}
-                for group in conn.execute(select(groups).where(groups.c.publication_id == publication_id)).mappings():
-                    if (group["role"], group["position"]) not in desired:
-                        conn.execute(groups.delete().where(groups.c.publication_id == publication_id,
-                            groups.c.role == group["role"], groups.c.position == group["position"]))
-                for (role, position), role_name in desired.items():
-                    statement = insert(groups).values(publication_id=publication_id, role=role, position=position, role_name=role_name)
-                    conn.execute(statement.on_conflict_do_update(
-                        index_elements=[groups.c.publication_id, groups.c.role, groups.c.position], set_={"role_name": role_name}))
-                for credit in record[field]:
-                    if credit_signature(credit) in old:
-                        continue
-                    values = {key: credit[key] for key in ("role", "position", "nested_position")}
-                    name_id = self._name(conn, credit["kind"], credit["raw_name"])
-                    conn.execute(table.insert().values(publication_id=publication_id, name_id=name_id, **values))
-            elif field == "based_on":
-                table = self.table("references")
-                conn.execute(table.delete().where(table.c.publication_id == publication_id))
-                source = record[field]
-                if source is not None:
-                    if set(source) - {"@type", "name", "inLanguage", "url", "author"}:
-                        raise ValueError("unsupported source-work reference")
-                    conn.execute(self.table("references").insert().values(publication_id=publication_id,
-                        work_type=source.get("@type"), name=source.get("name"), language=source.get("inLanguage"), urls_present="url" in source))
-                    for position, url in enumerate(source.get("url", [])):
-                        conn.execute(self.table("reference_urls").insert().values(publication_id=publication_id, position=position, url=url))
-                    for position, entity in enumerate(items(source.get("author"))):
-                        conn.execute(self.table("reference_authors").insert().values(publication_id=publication_id,
-                            kind=entity["@type"], name=entity["name"], position=position))
-            else:
-                table = self.table(field)
-                predicate = table.c.publication_id == publication_id
-                if field == "identifiers":
-                    predicate = and_(predicate, table.c.kind == "isbn")
-                conn.execute(table.delete().where(predicate))
-                for position, item in enumerate(record[field]):
-                    values = {"publication_id": publication_id, "position": position}
-                    if field == "identifiers":
-                        values.update(kind="isbn", value=item, normalized=re.sub(r"[^0-9X]", "", item.upper()))
-                    elif field == "genres":
-                        values["value"] = item
-                    elif field == "subjects":
-                        termset = item["inDefinedTermSet"]
-                        values.update(name=item.get("name"), term_code=item.get("termCode"),
-                            set_is_url=isinstance(termset, str), set_name=termset.get("name") if isinstance(termset, dict) else None,
-                            set_url=termset if isinstance(termset, str) else termset.get("url"))
-                    elif field == "audiences":
-                        values.update(kind=item["@type"], audience_type=item.get("audienceType"),
-                                      min_age=item.get("suggestedMinAge"), max_age=item.get("suggestedMaxAge"))
-                    conn.execute(table.insert().values(**values))
-
-
-    def _apply_metadata(self, conn, md5, incoming, source, actor, automated, revision):
-        doc = self._record(conn, "document", md5)
-        key = doc["publication_id"]
-        pub = self._record(conn, "publication", key, revision=revision)
-        if automated and pub['metadata_review_order'] == -1:
-            raise CatalogConflict('Publication metadata is admin-validated')
-        before = self._metadata(conn, md5)
-        # A metadata editor starts from the canonical projection. Matching names
-        # keep the original observation and its explicitly resolved identity.
-        prior = {(row["role"], row["position"], row["nested_position"]): row for row in before["credits"]}
-        for credit in incoming["credits"]:
-            current = prior.get((credit["role"], credit["position"], credit["nested_position"]))
-            if current and credit["kind"] == current["kind"] and credit["role_name"] == current["role_name"]:
-                if credit["raw_name"] == current.get("display_name"):
-                    credit["raw_name"] = current["raw_name"]
-        if pub["classification_id"] is not None:
-            incoming["subjects"] = unmanaged_subjects(incoming["subjects"])
-        protected = self._protected(conn, "publication", key) if automated else set()
-        changed = {field for field in RELATIONAL_FIELDS - {"credits"} if incoming[field] != before[field]}
-        if comparable_credits(incoming["credits"]) != comparable_credits(before["credits"]):
-            changed.add("credits")
-        scalars = {field: incoming["scalars"].get(field) for field in SCALARS.values()
-                   if pub[field] != incoming["scalars"].get(field)}
-        if before["languages"] != incoming["languages"]:
-            scalars["languages"] = incoming["languages"]
-        # Automated replacement must not erase or rewrite reviewed occurrences.
-        if automated and "credits" in changed:
-            signatures = {credit_signature(row) for row in incoming["credits"]}
-            if any(row["resolution"] == "confirmed" and credit_signature(row) not in signatures for row in before["credits"]):
-                protected.add("credits")
-        blocked = {field: scalars[field] for field in scalars.keys() & protected}
-        blocked.update({field: incoming[field] for field in changed & protected})
-        if "audiences" in blocked:
-            blocked["audience_array"] = incoming["audience_array"]
-        doc_protected = self._protected(conn, "document", md5) if automated else set()
-        file_changes = {field: incoming[field] for field in {"access_modes", "sufficient_modes"} if incoming[field] != before[field]}
-        blocked.update({field: value for field, value in file_changes.items() if field in doc_protected})
-        if blocked:
-            conn.execute(self.table("proposals").insert().values(kind="metadata", publication_id=key,
-                evidence={"actor": actor, "md5": md5, "publication_revision": pub["revision"]}, field_changes=blocked))
-        values = {field: value for field, value in scalars.items() if field not in protected and field != "languages"}
-        if "languages" in scalars and "languages" not in protected:
-            languages = self.table("publication_languages")
-            conn.execute(languages.delete().where(languages.c.publication_id == key))
-            for position, language in enumerate(incoming["languages"]):
-                conn.execute(languages.insert().values(publication_id=key, position=position, language=language))
-        values["audience_array"] = incoming["audience_array"] if "audiences" not in protected else pub["audience_array"]
-        self._replace_relations(conn, key, changed - protected, incoming)
-        if not automated:
-            self._protect(conn, "publication", key, set(scalars) | changed, actor)
-        if "sufficient_modes" in file_changes and "sufficient_modes" not in doc_protected:
-            modes = self.table("sufficient_modes")
-            conn.execute(modes.delete().where(modes.c.md5 == md5))
-            for position, item in enumerate(incoming["sufficient_modes"]):
-                conn.execute(modes.insert().values(md5=md5, position=position))
-                for child_position, mode in enumerate(item):
-                    conn.execute(self.table("sufficient_mode_items").insert().values(
-                        md5=md5, group_position=position, position=child_position, mode=mode))
-        if "access_modes" in file_changes and "access_modes" not in doc_protected:
-            access = self.table("document_access_modes")
-            conn.execute(access.delete().where(access.c.md5 == md5))
-            for position, mode in enumerate(incoming["access_modes"]):
-                conn.execute(access.insert().values(md5=md5, position=position, mode=mode))
-        if file_changes.keys() - doc_protected:
-            self._update(conn, "document", md5, doc, {})
-        if not automated:
-            self._protect(conn, "document", md5, {"access_modes", "sufficient_modes"}, actor)
-        conn.execute(self.table("evidence").insert().values(md5=md5, record_kind="publication", record_key=str(key), source=actor, payload=source))
-        self._update(conn, "publication", key, pub, values)
-        return self._metadata(conn, md5)
